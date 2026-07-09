@@ -21,7 +21,7 @@ import {
   findFeature,
   type CreateFeature,
   type FeatureColor,
-} from "../data/features";
+} from "../featureCatalog";
 import "./CreatePage.css";
 
 const iconMap: Record<string, ReactNode> = {
