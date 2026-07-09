@@ -31,5 +31,7 @@ htmlcov/
 # 本地数据
 data/
 uploads/
+tmp_cend/
+tmp/
 *.sqlite
 *.db

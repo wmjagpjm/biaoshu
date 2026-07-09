@@ -184,3 +184,256 @@
     grid-template-columns: 1fr;
   }
 }
+
+.ef-editor-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.ef-editor-tab {
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--hover-bg);
+}
+
+.ef-editor-tab.is-active {
+  color: #fff;
+  background: var(--primary-grad-strong);
+}
+
+.ef-section {
+  display: grid;
+  gap: 12px;
+}
+
+.ef-section-title {
+  margin: 8px 0 0;
+  font-size: var(--fs-md);
+}
+
+.ef-hint {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+
+.ef-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.ef-preset-card {
+  text-align: left;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: #fff;
+  display: grid;
+  gap: 6px;
+  transition: border-color var(--duration), box-shadow var(--duration);
+}
+
+.ef-preset-card:hover:not(:disabled) {
+  border-color: rgba(100, 56, 255, 0.4);
+  box-shadow: var(--shadow-sm);
+}
+
+.ef-preset-card strong {
+  font-size: var(--fs-sm);
+}
+
+.ef-preset-card span {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.ef-theme-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ef-theme-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #fff;
+  font-size: var(--fs-sm);
+}
+
+.ef-theme-swatches {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.ef-theme-swatches i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: block;
+}
+
+.ef-heading-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.ef-heading-card__head {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  text-align: left;
+  background: var(--hover-bg);
+}
+
+.ef-heading-card__head span {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+
+.ef-heading-card__body {
+  padding: 12px 14px 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.ef-form.is-readonly {
+  opacity: 0.95;
+}
+
+.ef-editor-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.ef-editor-preview {
+  position: sticky;
+  top: 12px;
+}
+
+.ef-editor-preview__title {
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.ef-default-banner {
+  display: grid;
+  grid-template-columns: 1fr 280px;
+  gap: 16px;
+  margin-bottom: 20px;
+  align-items: center;
+  background: var(--primary-soft);
+  border-color: rgba(100, 56, 255, 0.15);
+}
+
+.ef-default-banner p {
+  margin: 6px 0 0;
+  font-size: var(--fs-sm);
+  color: var(--text-body);
+}
+
+.ef-default-banner__preview {
+  max-height: 280px;
+  overflow: hidden;
+}
+
+.ef-block-title {
+  font-size: var(--fs-md);
+  margin: 0 0 6px;
+}
+
+.ef-block-desc {
+  margin: 0 0 12px;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+
+.ef-library {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.9fr) minmax(0, 1.1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.ef-library-list {
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 70vh;
+  overflow: auto;
+}
+
+.ef-library-item {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.ef-library-item.is-active {
+  border-color: rgba(100, 56, 255, 0.4);
+  box-shadow: 0 0 0 1px rgba(100, 56, 255, 0.12);
+}
+
+.ef-library-item__main {
+  width: 100%;
+  text-align: left;
+  padding: 12px 14px;
+  display: grid;
+  gap: 4px;
+}
+
+.ef-library-item__main small {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.ef-library-item__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 10px 10px;
+}
+
+.ef-library-preview__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.ef-library-preview__head h3 {
+  margin: 6px 0 0;
+  font-size: var(--fs-lg);
+}
+
+@media (max-width: 960px) {
+  .ef-editor-layout,
+  .ef-library,
+  .ef-default-banner {
+    grid-template-columns: 1fr;
+  }
+  .ef-editor-preview {
+    position: static;
+  }
+}

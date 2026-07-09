@@ -1,13 +1,16 @@
 import { useCallback, useMemo, useState } from "react";
-import { SYSTEM_PRESETS } from "../systemPresets";
-import type { ExportStyleConfig, ExportTemplate } from "../types";
-import { createDefaultStyle } from "../types";
+import type { ExportFormatConfig, ExportTemplateRecord } from "../model/exportFormat";
+import { createDefaultExportFormat, withExportFormatDefaults } from "../model/cloneConfig";
+import {
+  applyExportLayoutPreset,
+  applyExportThemePreset,
+  EXPORT_LAYOUT_PRESETS,
+} from "../model/exportFormatPresets";
 
-const STORAGE_KEY = "biaoshu.exportTemplates.v1";
+const STORAGE_KEY = "biaoshu.exportTemplates.v2";
 
 type StoredState = {
-  userTemplates: ExportTemplate[];
-  /** 当前默认模板 id（系统或用户） */
+  templates: ExportTemplateRecord[];
   defaultId: string;
 };
 
@@ -15,15 +18,31 @@ function loadStored(): StoredState {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) {
-      return { userTemplates: [], defaultId: "sys_gov" };
+      // 用标准投标版初始化一条系统默认，方便导出页有默认项
+      const config = applyExportLayoutPreset(
+        createDefaultExportFormat("标准投标版"),
+        "standard-bid",
+      );
+      const now = new Date().toISOString();
+      const seed: ExportTemplateRecord = {
+        template_id: "sys_standard_bid",
+        template_name: "标准投标版",
+        config,
+        created_at: now,
+        updated_at: now,
+      };
+      return { templates: [seed], defaultId: seed.template_id };
     }
     const parsed = JSON.parse(raw) as StoredState;
     return {
-      userTemplates: parsed.userTemplates ?? [],
-      defaultId: parsed.defaultId || "sys_gov",
+      templates: (parsed.templates || []).map((t) => ({
+        ...t,
+        config: withExportFormatDefaults(t.config),
+      })),
+      defaultId: parsed.defaultId || parsed.templates?.[0]?.template_id || "",
     };
   } catch {
-    return { userTemplates: [], defaultId: "sys_gov" };
+    return { templates: [], defaultId: "" };
   }
 }
 
@@ -33,48 +52,30 @@ function persist(next: StoredState) {
 }
 
 /**
- * 导出模板状态
- * 用途：对齐 C 端 templateStore——系统预设 + 用户模板 CRUD + 默认模板。
- * 后端就绪后改为 API，localStorage 仅作前端原型持久化。
+ * 导出模板仓库（对齐 C 端 templateStore）
+ * - 用户模板 CRUD
+ * - 默认模板
+ * - 版面/主题预设应用（保存进 config）
  */
 export function useExportTemplates() {
   const [stored, setStored] = useState<StoredState>(() => loadStored());
 
-  /** 同步写入 localStorage，避免跳转后新页面读到旧数据 */
   const commit = useCallback((updater: (prev: StoredState) => StoredState) => {
     setStored((prev) => persist(updater(prev)));
   }, []);
 
-  const allTemplates: ExportTemplate[] = useMemo(() => {
-    const system = SYSTEM_PRESETS.map((p) => ({
-      ...p,
-      isDefault: p.id === stored.defaultId,
-    }));
-    const users = stored.userTemplates.map((t) => ({
-      ...t,
-      isDefault: t.id === stored.defaultId,
-    }));
-    return [...system, ...users];
-  }, [stored]);
-
-  const userTemplates = useMemo(
-    () => allTemplates.filter((t) => t.source === "user"),
-    [allTemplates],
-  );
-
-  const systemTemplates = useMemo(
-    () => allTemplates.filter((t) => t.source === "system"),
-    [allTemplates],
-  );
-
+  const templates = stored.templates;
   const defaultTemplate = useMemo(
-    () => allTemplates.find((t) => t.isDefault) ?? allTemplates[0],
-    [allTemplates],
+    () =>
+      templates.find((t) => t.template_id === stored.defaultId) ||
+      templates[0] ||
+      null,
+    [templates, stored.defaultId],
   );
 
   const getById = useCallback(
-    (id: string) => allTemplates.find((t) => t.id === id),
-    [allTemplates],
+    (id: string) => templates.find((t) => t.template_id === id),
+    [templates],
   );
 
   const setDefault = useCallback(
@@ -87,25 +88,25 @@ export function useExportTemplates() {
   const createTemplate = useCallback(
     (input: {
       name: string;
-      description: string;
-      style?: Partial<ExportStyleConfig>;
+      config?: ExportFormatConfig;
       setAsDefault?: boolean;
     }) => {
       const now = new Date().toISOString();
       const id = `user_${Date.now()}`;
-      const tpl: ExportTemplate = {
-        id,
-        name: input.name.trim() || "未命名模板",
-        description: input.description.trim() || "自定义导出模板",
-        source: "user",
-        isDefault: false,
-        createdAt: now,
-        updatedAt: now,
-        style: { ...createDefaultStyle(), ...input.style },
+      const config = withExportFormatDefaults(
+        input.config || createDefaultExportFormat(input.name),
+      );
+      config.template_name = input.name.trim() || "未命名模板";
+      const record: ExportTemplateRecord = {
+        template_id: id,
+        template_name: config.template_name,
+        config,
+        created_at: now,
+        updated_at: now,
       };
       commit((prev) => ({
-        userTemplates: [tpl, ...prev.userTemplates],
-        defaultId: input.setAsDefault ? id : prev.defaultId,
+        templates: [record, ...prev.templates],
+        defaultId: input.setAsDefault ? id : prev.defaultId || id,
       }));
       return id;
     },
@@ -113,29 +114,20 @@ export function useExportTemplates() {
   );
 
   const updateTemplate = useCallback(
-    (
-      id: string,
-      patch: {
-        name?: string;
-        description?: string;
-        style?: Partial<ExportStyleConfig>;
-      },
-    ) => {
+    (id: string, config: ExportFormatConfig) => {
+      const next = withExportFormatDefaults(config);
       commit((prev) => ({
         ...prev,
-        userTemplates: prev.userTemplates.map((t) => {
-          if (t.id !== id) return t;
-          return {
-            ...t,
-            name: patch.name?.trim() || t.name,
-            description:
-              patch.description !== undefined
-                ? patch.description.trim()
-                : t.description,
-            style: patch.style ? { ...t.style, ...patch.style } : t.style,
-            updatedAt: new Date().toISOString(),
-          };
-        }),
+        templates: prev.templates.map((t) =>
+          t.template_id === id
+            ? {
+                ...t,
+                template_name: next.template_name || t.template_name,
+                config: next,
+                updated_at: new Date().toISOString(),
+              }
+            : t,
+        ),
       }));
     },
     [commit],
@@ -144,41 +136,56 @@ export function useExportTemplates() {
   const deleteTemplate = useCallback(
     (id: string) => {
       commit((prev) => {
-        const nextUsers = prev.userTemplates.filter((t) => t.id !== id);
+        const nextTemplates = prev.templates.filter((t) => t.template_id !== id);
         const nextDefault =
           prev.defaultId === id
-            ? nextUsers[0]?.id ?? "sys_gov"
+            ? nextTemplates[0]?.template_id || ""
             : prev.defaultId;
-        return { userTemplates: nextUsers, defaultId: nextDefault };
+        return { templates: nextTemplates, defaultId: nextDefault };
       });
     },
     [commit],
   );
 
-  /** 从系统预设复制为用户模板 */
-  const cloneFrom = useCallback(
-    (sourceId: string, name?: string) => {
-      const src = allTemplates.find((t) => t.id === sourceId);
-      if (!src) return null;
+  /** 从版面预设新建一条模板 */
+  const createFromLayoutPreset = useCallback(
+    (layoutId: string) => {
+      const preset = EXPORT_LAYOUT_PRESETS.find((p) => p.id === layoutId);
+      const base = createDefaultExportFormat(preset?.label || "自定义模板");
+      const config = applyExportLayoutPreset(base, layoutId);
       return createTemplate({
-        name: name || `${src.name}（副本）`,
-        description: `基于「${src.name}」自定义`,
-        style: { ...src.style },
+        name: preset?.label || "自定义模板",
+        config,
+        setAsDefault: false,
       });
     },
-    [allTemplates, createTemplate],
+    [createTemplate],
+  );
+
+  const applyLayoutToConfig = useCallback(
+    (config: ExportFormatConfig, layoutId: string) =>
+      applyExportLayoutPreset(withExportFormatDefaults(config), layoutId),
+    [],
+  );
+
+  const applyThemeToConfig = useCallback(
+    (config: ExportFormatConfig, themeId: string) =>
+      applyExportThemePreset(withExportFormatDefaults(config), themeId),
+    [],
   );
 
   return {
-    allTemplates,
-    systemTemplates,
-    userTemplates,
+    templates,
     defaultTemplate,
+    defaultId: stored.defaultId,
+    layoutPresets: EXPORT_LAYOUT_PRESETS,
     getById,
     setDefault,
     createTemplate,
     updateTemplate,
     deleteTemplate,
-    cloneFrom,
+    createFromLayoutPreset,
+    applyLayoutToConfig,
+    applyThemeToConfig,
   };
 }

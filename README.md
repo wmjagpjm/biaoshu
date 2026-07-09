@@ -40,9 +40,9 @@ npm run preview  # 预览构建产物
 | 商务标 | `/business-bid` | 商务标工作区（占位可二开） |
 | 标讯 | `/bid-opportunity` | 标讯入口（占位可二开） |
 | 本地解析插件 | `/local-parser` | MinerU 本地助手说明与对接 |
-| 模板设置 | `/export-format` | 系统导出预设、默认模板 |
-| 我的模板 | `/export-format/my-templates` | 查看/编辑/删除自定义导出模板 |
-| 新建模板 | `/export-format/new` | 自定义字体、字号、页边距等 |
+| 模板设置 | `/export-format` | C 端对齐：版面预设、默认模板、已保存列表 |
+| 我的模板 | `/export-format/my-templates` | 查看/编辑/删除 + 右侧实时预览 |
+| 新建/编辑模板 | `/export-format/new`、`/:id/edit` | 六级标题、中文字号、纸张、页眉页脚、表格图片、主题色 |
 | 设置 | `/settings` | API Key、模型、解析策略 |
 
 ## 设计原则

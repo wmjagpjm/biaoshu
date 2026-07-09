@@ -1,19 +1,32 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
-import { Eye, Pencil, Plus, Star, Trash2 } from "lucide-react";
+import { Pencil, Plus, Trash2 } from "lucide-react";
 import { TemplateNav } from "../components/TemplateNav";
+import { TemplatePreview } from "../components/TemplatePreview";
 import { useExportTemplates } from "../hooks/useExportTemplates";
+import { createDefaultExportFormat } from "../model/cloneConfig";
 import "./ExportFormat.css";
 
 /**
- * 我的模板页
- * 用途：对齐 C 端 MyTemplatesPage——查看、编辑、删除已保存的标书导出模板。
+ * 我的模板
+ * 用途：对齐 C 端 MyTemplatesPage——左侧列表查看/编辑/删除，右侧实时预览。
  */
 export function MyTemplatesPage() {
-  const { userTemplates, setDefault, deleteTemplate } = useExportTemplates();
+  const { templates, deleteTemplate, defaultTemplate, setDefault } =
+    useExportTemplates();
+  const [selectedId, setSelectedId] = useState(
+    () => defaultTemplate?.template_id || templates[0]?.template_id || "",
+  );
+
+  const selected =
+    templates.find((t) => t.template_id === selectedId) || templates[0] || null;
 
   function handleDelete(id: string, name: string) {
-    const ok = window.confirm(`确定删除模板「${name}」？删除后不可恢复。`);
-    if (ok) deleteTemplate(id);
+    if (!window.confirm(`确定删除模板「${name}」？删除后无法恢复。`)) return;
+    deleteTemplate(id);
+    if (selectedId === id) {
+      setSelectedId("");
+    }
   }
 
   return (
@@ -21,7 +34,7 @@ export function MyTemplatesPage() {
       <header className="page-header">
         <div>
           <h1>我的模板</h1>
-          <p>查看、编辑和删除已保存的标书导出模板。系统预设请在「模板设置」中管理。</p>
+          <p>查看、编辑和删除已保存的标书导出模板。</p>
         </div>
         <div className="page-actions">
           <Link to="/export-format/new" className="btn btn-primary">
@@ -32,92 +45,93 @@ export function MyTemplatesPage() {
 
       <TemplateNav />
 
-      {userTemplates.length === 0 ? (
+      {templates.length === 0 ? (
         <div className="card ef-empty">
-          <strong>还没有自定义模板</strong>
-          可从系统预设「复制为自定义」，或直接新建模板。
+          <strong>还没有保存模板</strong>
+          进入新建模板页配置排版样式，或从模板设置使用版面预设。
           <div style={{ marginTop: 16, display: "flex", gap: 8, justifyContent: "center" }}>
             <Link to="/export-format" className="btn btn-ghost">
-              查看系统预设
+              模板设置
             </Link>
             <Link to="/export-format/new" className="btn btn-primary">
-              新建模板
+              新建第一个模板
             </Link>
           </div>
         </div>
       ) : (
-        <div className="card" style={{ overflow: "hidden" }}>
-          <table className="project-table">
-            <thead>
-              <tr>
-                <th>模板名称</th>
-                <th>说明</th>
-                <th>字体</th>
-                <th>更新时间</th>
-                <th>状态</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {userTemplates.map((t) => (
-                <tr key={t.id}>
-                  <td>
-                    <strong>{t.name}</strong>
-                  </td>
-                  <td style={{ maxWidth: 220, color: "var(--text-secondary)" }}>
-                    {t.description || "—"}
-                  </td>
-                  <td className="mono" style={{ fontSize: "var(--fs-xs)" }}>
-                    {t.style.headingFont}/{t.style.bodyFont} · {t.style.bodySize}磅
-                  </td>
-                  <td style={{ whiteSpace: "nowrap" }}>
-                    {new Date(t.updatedAt).toLocaleString("zh-CN")}
-                  </td>
-                  <td>
-                    {t.isDefault ? (
-                      <span className="badge badge-primary">默认</span>
-                    ) : (
-                      <span className="badge badge-muted">自定义</span>
-                    )}
-                  </td>
-                  <td>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                      <Link
-                        to={`/export-format/${t.id}`}
-                        className="btn btn-ghost btn-sm"
-                        title="查看"
-                      >
-                        <Eye size={14} /> 查看
-                      </Link>
-                      <Link
-                        to={`/export-format/${t.id}/edit`}
-                        className="btn btn-ghost btn-sm"
-                        title="编辑"
-                      >
-                        <Pencil size={14} /> 编辑
-                      </Link>
-                      {!t.isDefault && (
-                        <button
-                          type="button"
-                          className="btn btn-soft btn-sm"
-                          onClick={() => setDefault(t.id)}
-                        >
-                          <Star size={14} /> 默认
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm ef-danger"
-                        onClick={() => handleDelete(t.id, t.name)}
-                      >
-                        <Trash2 size={14} /> 删除
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="ef-library">
+          <section className="ef-library-list card">
+            {templates.map((t) => {
+              const active =
+                (selected?.template_id || "") === t.template_id;
+              return (
+                <article
+                  key={t.template_id}
+                  className={`ef-library-item${active ? " is-active" : ""}`}
+                >
+                  <button
+                    type="button"
+                    className="ef-library-item__main"
+                    onClick={() => setSelectedId(t.template_id)}
+                  >
+                    <strong>{t.template_name}</strong>
+                    <small>
+                      更新于 {new Date(t.updated_at).toLocaleString("zh-CN")}
+                    </small>
+                  </button>
+                  <div className="ef-library-item__actions">
+                    <Link
+                      to={`/export-format/${t.template_id}/edit`}
+                      className="btn btn-ghost btn-sm"
+                    >
+                      <Pencil size={14} /> 编辑
+                    </Link>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => setDefault(t.template_id)}
+                    >
+                      默认
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm ef-danger"
+                      onClick={() =>
+                        handleDelete(t.template_id, t.template_name)
+                      }
+                    >
+                      <Trash2 size={14} /> 删除
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
+          </section>
+
+          <section className="ef-library-preview card card-pad">
+            {selected ? (
+              <>
+                <div className="ef-library-preview__head">
+                  <div>
+                    <span className="badge badge-primary">实时预览</span>
+                    <h3>{selected.template_name}</h3>
+                  </div>
+                  <Link
+                    to={`/export-format/${selected.template_id}/edit`}
+                    className="btn btn-primary btn-sm"
+                  >
+                    编辑模板
+                  </Link>
+                </div>
+                <TemplatePreview config={selected.config} />
+              </>
+            ) : (
+              <div className="ef-empty">
+                <strong>暂无模板可预览</strong>
+                <TemplatePreview config={createDefaultExportFormat()} />
+              </div>
+            )}
+          </section>
         </div>
       )}
     </div>
