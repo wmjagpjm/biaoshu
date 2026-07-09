@@ -1,0 +1,35 @@
+# 依赖
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# 构建
+frontend/dist/
+backend/dist/
+*.egg-info/
+
+# 环境与密钥
+.env
+.env.*
+!.env.example
+
+# 系统与 IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# 日志与缓存
+*.log
+.cache/
+.coverage
+htmlcov/
+
+# 本地数据
+data/
+uploads/
+*.sqlite
+*.db
