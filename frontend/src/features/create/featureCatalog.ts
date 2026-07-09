@@ -204,6 +204,20 @@ export const featureGroups: FeatureGroup[] = [
         routeTo: "/local-parser",
         cta: "查看插件说明",
       },
+      {
+        id: "export-template",
+        title: "导出模板设置",
+        description:
+          "对齐 C 端：系统预设、我的模板（查看/编辑/删除）、新建自定义 Word 导出样式。",
+        tags: ["模板设置", "我的模板"],
+        color: "indigo",
+        highlights: ["系统预设", "自定义字体边距", "默认模板"],
+        uploadTitle: "无需上传文件",
+        uploadDesc: "进入模板设置管理导出样式，或新建自定义模板。",
+        fileTypes: "—",
+        routeTo: "/export-format",
+        cta: "打开模板设置",
+      },
     ],
   },
 ];

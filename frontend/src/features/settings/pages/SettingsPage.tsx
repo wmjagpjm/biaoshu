@@ -1,4 +1,5 @@
-import { Save } from "lucide-react";
+import { Link } from "react-router-dom";
+import { FileType, Save } from "lucide-react";
 
 /**
  * 设置页
@@ -13,6 +14,24 @@ export function SettingsPage() {
           <p>个人版：算力走你自己的 API Key。服务器只做编排与存储。</p>
         </div>
       </header>
+
+      <div className="card card-pad" style={{ marginBottom: 16 }}>
+        <strong>导出模板</strong>
+        <p style={{ margin: "8px 0 12px", fontSize: "var(--fs-sm)", color: "var(--text-secondary)" }}>
+          对齐 C 端：模板设置、我的模板（查看/编辑/删除）、新建自定义模板。
+        </p>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          <Link to="/export-format" className="btn btn-soft btn-sm">
+            <FileType size={14} /> 模板设置
+          </Link>
+          <Link to="/export-format/my-templates" className="btn btn-ghost btn-sm">
+            我的模板
+          </Link>
+          <Link to="/export-format/new" className="btn btn-ghost btn-sm">
+            新建模板
+          </Link>
+        </div>
+      </div>
 
       <form
         className="card card-pad"

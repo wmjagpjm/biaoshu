@@ -1,0 +1,83 @@
+import type { ExportTemplate } from "./types";
+import { createDefaultStyle } from "./types";
+
+/**
+ * 系统内置导出预设
+ * 对齐 C 端 exportFormatPresets：政务 / 企业等开箱样式。
+ */
+export const SYSTEM_PRESETS: ExportTemplate[] = [
+  {
+    id: "sys_gov",
+    name: "政务投标通用",
+    description: "标题黑体、正文宋体小四，页边距适中，适合多数政务/国企招标格式。",
+    source: "system",
+    isDefault: true,
+    createdAt: "2026-01-01T00:00:00+08:00",
+    updatedAt: "2026-01-01T00:00:00+08:00",
+    style: {
+      ...createDefaultStyle(),
+      headingFont: "黑体",
+      bodyFont: "宋体",
+      bodySize: 12,
+      h1Size: 16,
+      h2Size: 14,
+      h3Size: 12,
+      lineHeight: 1.5,
+      firstLineIndent: 2,
+      includeToc: true,
+      showPageNumber: true,
+      coverTitle: "技术方案",
+    },
+  },
+  {
+    id: "sys_enterprise",
+    name: "企业方案风",
+    description: "更紧凑行距，微软雅黑正文，强调封面与目录，适合企业方案书风格。",
+    source: "system",
+    isDefault: false,
+    createdAt: "2026-01-01T00:00:00+08:00",
+    updatedAt: "2026-01-01T00:00:00+08:00",
+    style: {
+      ...createDefaultStyle(),
+      headingFont: "微软雅黑",
+      bodyFont: "微软雅黑",
+      bodySize: 11,
+      h1Size: 18,
+      h2Size: 14,
+      h3Size: 12,
+      lineHeight: 1.35,
+      firstLineIndent: 2,
+      marginTop: 20,
+      marginBottom: 20,
+      marginLeft: 22,
+      marginRight: 22,
+      includeToc: true,
+      showPageNumber: true,
+      coverTitle: "技术响应文件",
+    },
+  },
+  {
+    id: "sys_construction",
+    name: "施工组织设计",
+    description: "仿宋正文、一级标题加重，适合施工标与附表较多的场景。",
+    source: "system",
+    isDefault: false,
+    createdAt: "2026-01-01T00:00:00+08:00",
+    updatedAt: "2026-01-01T00:00:00+08:00",
+    style: {
+      ...createDefaultStyle(),
+      headingFont: "黑体",
+      bodyFont: "仿宋",
+      bodySize: 12,
+      h1Size: 16,
+      h2Size: 14,
+      h3Size: 12,
+      lineHeight: 1.5,
+      firstLineIndent: 2,
+      includeToc: true,
+      showPageNumber: true,
+      headerText: "施工组织设计",
+      coverTitle: "施工组织设计",
+    },
+  },
+];

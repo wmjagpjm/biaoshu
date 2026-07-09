@@ -11,11 +11,13 @@ import { BusinessBidPage } from "../features/business-bid/pages/BusinessBidPage"
 import { BidOpportunityPage } from "../features/bid-opportunity/pages/BidOpportunityPage";
 import { LocalParserPage } from "../features/local-parser/pages/LocalParserPage";
 import { ExportFormatPage } from "../features/export-format/pages/ExportFormatPage";
+import { MyTemplatesPage } from "../features/export-format/pages/MyTemplatesPage";
+import { TemplateEditorPage } from "../features/export-format/pages/TemplateEditorPage";
 import { SettingsPage } from "../features/settings/pages/SettingsPage";
 
 /**
  * 前端路由
- * 默认进入 /create（喜鹊风格创建页）；技术方案工作流与其它工具页保留。
+ * 对齐 C 端模块：创建、技术方案、知识库、查重、废标、商务标、导出模板、设置等。
  */
 export function AppRouter() {
   return (
@@ -38,7 +40,20 @@ export function AppRouter() {
           <Route path="business-bid" element={<BusinessBidPage />} />
           <Route path="bid-opportunity" element={<BidOpportunityPage />} />
           <Route path="local-parser" element={<LocalParserPage />} />
+
+          {/* 导出模板：设置 / 我的模板 / 新建 / 查看 / 编辑 */}
           <Route path="export-format" element={<ExportFormatPage />} />
+          <Route path="export-format/my-templates" element={<MyTemplatesPage />} />
+          <Route path="export-format/new" element={<TemplateEditorPage mode="new" />} />
+          <Route
+            path="export-format/:templateId/edit"
+            element={<TemplateEditorPage mode="edit" />}
+          />
+          <Route
+            path="export-format/:templateId"
+            element={<TemplateEditorPage mode="view" />}
+          />
+
           <Route path="settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/create" replace />} />
         </Route>

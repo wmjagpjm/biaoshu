@@ -7,6 +7,7 @@ import {
   FileStack,
   HardHat,
   FileSearch,
+  FileType,
   FileWarning,
   FolderTree,
   Layers3,
@@ -37,6 +38,7 @@ const iconMap: Record<string, ReactNode> = {
   duplicate: <FileSearch size={20} />,
   rejection: <FileWarning size={20} />,
   "local-parser": <Plug size={20} />,
+  "export-template": <FileType size={20} />,
 };
 
 function FeatureIcon({ id, color }: { id: string; color: FeatureColor }) {

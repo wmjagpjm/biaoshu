@@ -44,6 +44,14 @@ export function AppShell() {
               知识库
             </NavLink>
             <NavLink
+              to="/export-format"
+              className={({ isActive }) =>
+                isActive || pathname.startsWith("/export-format") ? "is-active" : ""
+              }
+            >
+              模板设置
+            </NavLink>
+            <NavLink
               to="/settings"
               className={({ isActive }) => (isActive ? "is-active" : "")}
             >
