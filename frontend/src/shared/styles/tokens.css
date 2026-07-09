@@ -37,11 +37,22 @@
   --hover-bg: #f5f7fa;
   --active-bg: #f3efff;
 
-  /* 文字 */
-  --text-primary: #1d1d1d;
-  --text-secondary: #83899b;
-  --text-tertiary: #b0b7c5;
-  --text-body: #485366;
+  /* 文字（略加深次要色，提升可读性） */
+  --text-primary: #151515;
+  --text-secondary: #5c6475;
+  --text-tertiary: #7a8496;
+  --text-body: #3a4252;
+
+  /* 字号阶梯 */
+  --fs-xs: 13px;
+  --fs-sm: 14px;
+  --fs-md: 15px;
+  --fs-base: 16px;
+  --fs-lg: 17px;
+  --fs-xl: 20px;
+  --fs-2xl: 26px;
+  --fs-3xl: 28px;
+  --lh: 1.6;
 
   /* 边框阴影 */
   --border: #ececef;
@@ -57,8 +68,8 @@
   --warning: #f59e0b;
 
   /* 布局 */
-  --header-h: 56px;
-  --feature-rail-w: 300px;
+  --header-h: 60px;
+  --feature-rail-w: 320px;
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 16px;
