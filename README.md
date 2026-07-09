@@ -56,10 +56,11 @@ npm run preview  # 预览构建产物
 4. **商务标六步**、知识库、资源、查重/废标对照、标讯、导出模板、站点背景  
 5. **数据层**：mock + localStorage；**后端与真实 LLM 待做**  
 
-## 后端（当前进度）
+## 后端与主链路（当前进度）
 
-见 **[docs/HANDOFF-backend.md](docs/HANDOFF-backend.md)**。  
-已落地：health、项目 CRUD、设置（Key **明文**）、LLM 测试、revise、**editor-state 持久化**、侧栏 API 状态、联调清单。
+**新会话请读：[docs/HANDOFF-next.md](docs/HANDOFF-next.md)**（以 GitHub `main` 最新提交为准）。
+
+已落地：技术标本机日用主链路（上传/解析/分析结构化/大纲/章节/全书空章/Word）、异步任务、MinerU 回传、Key 明文、导出模板轻量接入。
 
 ```powershell
 # 推荐：仓库根
@@ -69,7 +70,7 @@ npm run preview  # 预览构建产物
 ```
 
 联调步骤见 **[docs/integration-checklist.md](docs/integration-checklist.md)**。  
-前端 Vite 将 `/api` 代理到 `8000`。  
+前端 Vite：`/api` → `8000`，host 固定 `127.0.0.1`。  
 
 ## 设计原则
 
