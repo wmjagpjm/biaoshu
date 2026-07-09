@@ -4,6 +4,7 @@ import {
   Briefcase,
   Check,
   ClipboardList,
+  FileStack,
   HardHat,
   FileSearch,
   FileWarning,
@@ -26,7 +27,8 @@ import "./CreatePage.css";
 
 const iconMap: Record<string, ReactNode> = {
   core: <Sparkles size={20} />,
-  "business-bid": <Briefcase size={20} />,
+  business: <Briefcase size={20} />,
+  "full-bid": <FileStack size={20} />,
   engineering: <HardHat size={20} />,
   yibiaoxiebiao: <RefreshCcw size={20} />,
   "single-chapter": <Layers3 size={20} />,
@@ -76,7 +78,17 @@ export function CreatePage() {
       navigate(feature.routeTo);
       return;
     }
-    // 有文件则进入演示项目工作流，否则仍可进入
+    // 按能力类型进入对应工作区（前端 mock）
+    if (feature.id === "business" || feature.id === "business-list") {
+      navigate("/business-bid");
+      return;
+    }
+    if (feature.id === "full-bid") {
+      // 完整标书：先进入技术标演示流，商务册入口在商务标页继续
+      navigate("/technical-plan/proj_01/document");
+      return;
+    }
+    // 技术标 / 施工 / 以标写标 / 单章 / 框架 → 技术方案工作流
     navigate("/technical-plan/proj_01/document");
   }
 

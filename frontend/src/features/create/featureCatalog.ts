@@ -1,6 +1,12 @@
 /**
  * 创建页功能目录
- * 用途：对齐喜鹊 /create 左侧「方案生成类 / 资料辅助类」信息架构。
+ * 用途：对齐喜鹊 /create 左侧信息架构，并补齐独立「商务标生成」入口。
+ *
+ * 概念区分：
+ * - 技术标生成：只做技术响应（方案/实施/运维等）
+ * - 商务标生成：资格、报价、承诺、授权等商务文件
+ * - 完整投标文件：商务 + 技术一体化打包
+ * - 商务资料清单：只整理要交哪些材料，不生成正文
  */
 
 export type FeatureColor =
@@ -20,13 +26,10 @@ export type CreateFeature = {
   color: FeatureColor;
   badge?: "new" | "free";
   badgeText?: string;
-  /** 主区亮点 */
   highlights: string[];
-  /** 上传区文案 */
   uploadTitle: string;
   uploadDesc: string;
   fileTypes: string;
-  /** 可选：跳到其它路由而非上传流 */
   routeTo?: string;
   cta: string;
 };
@@ -42,39 +45,57 @@ export const featureGroups: FeatureGroup[] = [
     features: [
       {
         id: "core",
-        title: "技术方案生成",
+        title: "技术标生成",
         description:
-          "根据招标文件生成完整技术方案，支持长文档智能解析，自动匹配评分点并规划大纲与正文。",
-        tags: ["全行业通用", "图文并茂"],
+          "即技术标 / 技术方案。根据招标文件生成技术响应内容：解析评分点 → 大纲 → 正文 → 导出，对应 C 端「技术方案」主流程。",
+        tags: ["技术标", "全行业通用", "图文并茂"],
         color: "purple",
         highlights: [
           "智能解析评分标准",
-          "支持上千页长文档",
-          "自动生成图文并茂排版",
+          "大纲与正文分步可编辑",
+          "支持长文档与图文排版",
         ],
-        uploadTitle: "点击上传招标文件",
-        uploadDesc: "拖拽文件到此处，或点击选择。解析后进入大纲与正文工作流。",
+        uploadTitle: "上传招标文件，生成技术标",
+        uploadDesc: "拖拽或点击选择文件。解析后进入技术标六步工作流（分析 → 大纲 → 事实 → 正文 → 导出）。",
         fileTypes: "PDF / Word / 图片扫描件",
-        cta: "开始生成技术方案",
+        cta: "开始生成技术标",
       },
       {
-        id: "business-bid",
-        title: "完整投标文件",
-        description: "覆盖商务标与技术方案的一体化生成入口，适合需要整套投标文件的场景。",
-        tags: ["商务标", "技术方案"],
+        id: "business",
+        title: "商务标生成",
+        description:
+          "独立生成商务标部分：资格证明编排、商务响应、报价说明、授权与诚信承诺等，不强制同时写技术正文。",
+        tags: ["资格文件", "报价说明", "商务响应"],
         color: "indigo",
         badge: "new",
         badgeText: "NEW",
-        highlights: ["商务+技术一体", "资料清单联动", "导出 Word"],
+        highlights: [
+          "资格条件逐条响应",
+          "商务目录与附件清单",
+          "与技术标可分可合",
+        ],
+        uploadTitle: "上传招标文件，生成商务标",
+        uploadDesc: "系统提取资格条件、递交要求与商务评分点，组织商务标目录与正文草稿。",
+        fileTypes: "PDF / Word",
+        cta: "开始生成商务标",
+      },
+      {
+        id: "full-bid",
+        title: "完整投标文件",
+        description:
+          "商务标 + 技术标一体化生成，一次出整套投标文件。适合「两册都要、统一项目上下文」的场景。",
+        tags: ["商务标", "技术标", "整套交付"],
+        color: "violet",
+        highlights: ["一套项目上下文", "商务与技术同步规划", "统一导出"],
         uploadTitle: "上传招标文件，生成完整投标文件",
-        uploadDesc: "系统将按评分与资格要求组织商务与技术响应结构。",
+        uploadDesc: "将同时规划商务标与技术标结构，后续可分别进入两册工作区深化。",
         fileTypes: "PDF / Word",
         cta: "开始生成完整标书",
       },
       {
         id: "engineering",
         title: "施工标专项",
-        description: "面向施工组织设计场景，强调工艺、进度与附表类内容组织。",
+        description: "面向施工组织设计场景，强调工艺、进度与附表类内容组织（偏技术标细分）。",
         tags: ["带施工附表", "带横道图"],
         color: "blue",
         highlights: ["施工工艺响应", "进度与附表", "工程量关联"],
@@ -98,7 +119,7 @@ export const featureGroups: FeatureGroup[] = [
       {
         id: "single-chapter",
         title: "单章节专项",
-        description: "只生成或扩写某一个章节，适合补强弱项或局部返工。",
+        description: "只生成或扩写某一个章节，适合补强弱项或局部返工（技术/商务章节均可）。",
         tags: ["生成单个章节", "灵活输入"],
         color: "orange",
         highlights: ["指定章节", "字数可控", "快速迭代"],
@@ -129,12 +150,13 @@ export const featureGroups: FeatureGroup[] = [
       {
         id: "business-list",
         title: "商务资料清单整理",
-        description: "一键整理投标所需商务资料清单，减少漏交废标。",
+        description:
+          "只整理「要交哪些商务材料」，不做商务标正文撰写。与「商务标生成」不同：清单=目录勾选，生成=写内容。",
         tags: ["一键整理所需资料"],
         color: "violet",
         highlights: ["资格文件清单", "盖章材料", "递交检查"],
         uploadTitle: "上传招标文件，整理资料清单",
-        uploadDesc: "解析资格条件与递交要求，输出勾选式清单。",
+        uploadDesc: "解析资格条件与递交要求，输出勾选式清单（非正文）。",
         fileTypes: "PDF / Word",
         cta: "整理资料清单",
       },
