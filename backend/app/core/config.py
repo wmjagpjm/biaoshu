@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     upload_dir: str = "./uploads"
     # 单文件上限（字节），默认 50MB
     max_upload_bytes: int = 50 * 1024 * 1024
+    # 本地 MinerU 回传 Token；空字符串表示不校验（保密机默认）
+    local_parser_token: str = ""
 
     def cors_origin_list(self) -> list[str]:
         """用途：将 cors_origins 字符串拆成列表，供 CORSMiddleware 使用。"""

@@ -96,7 +96,10 @@ export function TechnicalPlanWorkspace() {
   const [taskTip, setTaskTip] = useState("");
 
   useEffect(() => {
-    if (projectId) void pipeline.refreshFiles();
+    if (projectId) {
+      void pipeline.refreshFiles();
+      void pipeline.refreshTasks();
+    }
   }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 解析正文：优先服务端 parsedMarkdown，否则演示占位
@@ -211,6 +214,65 @@ export function TechnicalPlanWorkspace() {
           role="status"
         >
           {pipeline.error || taskTip}
+          {pipeline.error &&
+          /Key|配置|模型|API/i.test(pipeline.error) ? (
+            <>
+              {" · "}
+              <Link to="/settings">去设置页检查 Key</Link>
+            </>
+          ) : null}
+        </div>
+      )}
+
+      {(pipeline.busy || pipeline.lastTask) && (
+        <div className="card card-pad" style={{ padding: "10px 14px" }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              fontSize: 13,
+            }}
+          >
+            <strong>
+              {pipeline.busy ? "任务进行中" : "最近任务"}
+            </strong>
+            <span style={{ color: "var(--text-secondary)" }}>
+              {pipeline.lastTask
+                ? `${pipeline.lastTask.type} · ${pipeline.lastTask.status} · ${pipeline.lastTask.progress}% · ${pipeline.lastTask.message}`
+                : "…"}
+            </span>
+          </div>
+          <div
+            style={{
+              marginTop: 8,
+              height: 6,
+              borderRadius: 4,
+              background: "var(--border)",
+              overflow: "hidden",
+            }}
+          >
+            <div
+              style={{
+                height: "100%",
+                width: `${pipeline.lastTask?.progress ?? (pipeline.busy ? 8 : 0)}%`,
+                background: "var(--primary)",
+                transition: "width 0.3s ease",
+              }}
+            />
+          </div>
+          {pipeline.recentTasks.length > 0 && (
+            <details style={{ marginTop: 8, fontSize: 12 }}>
+              <summary style={{ cursor: "pointer" }}>最近任务列表</summary>
+              <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+                {pipeline.recentTasks.map((t) => (
+                  <li key={t.id}>
+                    {t.type} / {t.status} / {t.progress}% — {t.message}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
         </div>
       )}
 
@@ -634,6 +696,30 @@ export function TechnicalPlanWorkspace() {
               左侧选章，右侧编辑；点「AI 生成本章」调用模型
             </span>
             <div className="tp-toolbar__spacer" />
+            <button
+              type="button"
+              className="btn btn-soft btn-sm"
+              disabled={pipeline.busy}
+              onClick={() => {
+                void (async () => {
+                  try {
+                    const t = await pipeline.runTask("chapters", {
+                      onlyEmpty: true,
+                    });
+                    if (t.status === "success") {
+                      await editors.reloadFromApi();
+                      setTaskTip(
+                        `全书空章生成完成（${String(t.result?.generated ?? "")} 章）`,
+                      );
+                    }
+                  } catch {
+                    /* */
+                  }
+                })();
+              }}
+            >
+              {pipeline.busy ? "批量生成中…" : "生成全部空章节"}
+            </button>
             <button
               type="button"
               className="btn btn-primary btn-sm"

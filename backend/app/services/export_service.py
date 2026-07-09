@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import io
 import json
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.entities import Project, ProjectEditorStateRow
+from app.models.entities import ProjectEditorStateRow
 from app.services.project_service import get_project
 
 
@@ -32,12 +33,13 @@ def build_docx_bytes(
     project_id: str,
 ) -> tuple[bytes, str]:
     """
-    用途：生成 Word 文档。
+    用途：生成 Word 文档（含封面信息）。
     返回：(文件字节, 下载文件名)
     """
     try:
         from docx import Document  # type: ignore
-        from docx.shared import Pt  # type: ignore
+        from docx.enum.text import WD_ALIGN_PARAGRAPH  # type: ignore
+        from docx.shared import Pt, RGBColor  # type: ignore
     except ImportError as exc:
         raise RuntimeError("未安装 python-docx，无法导出 Word") from exc
 
@@ -46,6 +48,33 @@ def build_docx_bytes(
 
     doc = Document()
     title = project.name or "技术标"
+
+    # 封面
+    cover = doc.add_paragraph()
+    cover.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = cover.add_run("技术标书")
+    run.bold = True
+    run.font.size = Pt(22)
+    run.font.color.rgb = RGBColor(0x1E, 0x3A, 0x5F)
+
+    t = doc.add_paragraph()
+    t.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    tr = t.add_run(title)
+    tr.bold = True
+    tr.font.size = Pt(16)
+
+    meta = doc.add_paragraph()
+    meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    meta_text = (
+        f"行业：{project.industry or '通用'}　｜　"
+        f"导出日期：{datetime.now().strftime('%Y-%m-%d')}　｜　"
+        f"状态：{project.status}"
+    )
+    mr = meta.add_run(meta_text)
+    mr.font.size = Pt(10.5)
+    mr.font.color.rgb = RGBColor(0x55, 0x55, 0x55)
+    doc.add_page_break()
+
     doc.add_heading(title, level=0)
 
     overview = (state.analysis_overview if state else None) or ""

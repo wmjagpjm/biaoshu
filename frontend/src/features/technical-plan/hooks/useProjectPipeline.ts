@@ -1,14 +1,14 @@
 /**
- * 模块：技术标本机日用流水线（上传 / 任务）
- * 用途：对接 files + tasks + export 下载，供工作区各步按钮调用。
+ * 模块：技术标本机日用流水线（上传 / 异步任务轮询）
+ * 用途：POST 创建任务后轮询进度，直到 success/failed。
  * 对接：
+ *   - POST /projects/{id}/tasks（默认异步）
+ *   - GET  /projects/{id}/tasks/{taskId}
  *   - POST /projects/{id}/files
- *   - POST /projects/{id}/tasks  type=parse|analyze|outline|chapter|export
- *   - GET  /projects/{id}/export/download/{stored}
- * 二次开发：长任务可改为轮询 GET tasks/{id}，接口形状已兼容。
+ * 二次开发：可改为 SSE；超时与间隔可配置。
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { apiFetch, apiUploadFile, getApiBase } from "../../../shared/lib/api";
 
 export type PipelineTask = {
@@ -29,11 +29,28 @@ export type ProjectFileInfo = {
   createdAt?: string;
 };
 
+export type TaskType =
+  | "parse"
+  | "analyze"
+  | "outline"
+  | "chapter"
+  | "chapters"
+  | "export";
+
+const POLL_MS = 1000;
+const POLL_MAX_MS = 10 * 60 * 1000;
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 export function useProjectPipeline(projectId: string) {
   const [busy, setBusy] = useState(false);
   const [lastTask, setLastTask] = useState<PipelineTask | null>(null);
+  const [recentTasks, setRecentTasks] = useState<PipelineTask[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [files, setFiles] = useState<ProjectFileInfo[]>([]);
+  const abortRef = useRef(false);
 
   const refreshFiles = useCallback(async () => {
     if (!projectId) return;
@@ -43,7 +60,19 @@ export function useProjectPipeline(projectId: string) {
       );
       setFiles(Array.isArray(list) ? list : []);
     } catch {
-      /* 忽略列表失败 */
+      /* ignore */
+    }
+  }, [projectId]);
+
+  const refreshTasks = useCallback(async () => {
+    if (!projectId) return;
+    try {
+      const list = await apiFetch<PipelineTask[]>(
+        `/projects/${encodeURIComponent(projectId)}/tasks`,
+      );
+      setRecentTasks(Array.isArray(list) ? list.slice(0, 8) : []);
+    } catch {
+      /* ignore */
     }
   }, [projectId]);
 
@@ -69,15 +98,16 @@ export function useProjectPipeline(projectId: string) {
     [projectId, refreshFiles],
   );
 
+  /**
+   * 用途：创建异步任务并轮询直到结束。
+   */
   const runTask = useCallback(
-    async (
-      type: "parse" | "analyze" | "outline" | "chapter" | "export",
-      payload?: Record<string, unknown>,
-    ) => {
+    async (type: TaskType, payload?: Record<string, unknown>) => {
       setBusy(true);
       setError(null);
+      abortRef.current = false;
       try {
-        const task = await apiFetch<PipelineTask>(
+        let task = await apiFetch<PipelineTask>(
           `/projects/${encodeURIComponent(projectId)}/tasks`,
           {
             method: "POST",
@@ -85,10 +115,28 @@ export function useProjectPipeline(projectId: string) {
           },
         );
         setLastTask(task);
+
+        const started = Date.now();
+        while (
+          task.status === "pending" ||
+          task.status === "running"
+        ) {
+          if (abortRef.current) break;
+          if (Date.now() - started > POLL_MAX_MS) {
+            throw new Error("任务超时（超过 10 分钟），请查看后端日志后重试");
+          }
+          await sleep(POLL_MS);
+          task = await apiFetch<PipelineTask>(
+            `/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(task.id)}`,
+          );
+          setLastTask({ ...task });
+        }
+
         if (task.status === "failed") {
           const msg = task.error || task.message || "任务失败";
           setError(msg);
         }
+        await refreshTasks();
         return task;
       } catch (err) {
         const msg = (err as { message?: string })?.message || "任务请求失败";
@@ -98,10 +146,9 @@ export function useProjectPipeline(projectId: string) {
         setBusy(false);
       }
     },
-    [projectId],
+    [projectId, refreshTasks],
   );
 
-  /** 用途：根据 export 任务结果拼下载 URL 并打开。 */
   const downloadExport = useCallback(
     (task: PipelineTask) => {
       const stored = task.result?.storedName as string | undefined;
@@ -118,10 +165,12 @@ export function useProjectPipeline(projectId: string) {
   return {
     busy,
     lastTask,
+    recentTasks,
     error,
     files,
     setError,
     refreshFiles,
+    refreshTasks,
     uploadFile,
     runTask,
     downloadExport,

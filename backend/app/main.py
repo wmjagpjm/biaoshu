@@ -23,6 +23,7 @@ from app.api import (
     files,
     health,
     llm,
+    parse_callback,
     projects,
     revise,
     settings as settings_api,
@@ -40,20 +41,21 @@ from app.models import (  # noqa: F401
     WorkspaceSettingsRow,
 )
 from app.services.project_service import ensure_default_workspace
+from app.services.task_service import fail_interrupted_tasks
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """
     用途：应用生命周期钩子。
-    启动阶段：create_all 建表 + 确保默认 workspace 存在。
-    关闭阶段：当前无资源释放；后续可关连接池/停 Worker。
+    启动阶段：建表 + seed workspace + 中断残留任务。
     """
     Base.metadata.create_all(bind=engine)
     settings = get_settings()
     db = SessionLocal()
     try:
         ensure_default_workspace(db, settings)
+        fail_interrupted_tasks(db)
     finally:
         db.close()
     yield
@@ -88,6 +90,7 @@ def create_app() -> FastAPI:
     app.include_router(files.router, prefix="/api")
     app.include_router(tasks.router, prefix="/api")
     app.include_router(export_api.router, prefix="/api")
+    app.include_router(parse_callback.router, prefix="/api")
     return app
 
 

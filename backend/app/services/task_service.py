@@ -1,29 +1,32 @@
 """
-模块：项目任务服务（本机日用同步执行）
-用途：创建并执行 parse / analyze / outline / chapter / export 任务，落库进度与结果。
-对接：POST/GET /api/projects/{id}/tasks
-二次开发：可改为后台线程或 Redis 队列；前端轮询接口形状保持不变。
+模块：项目任务服务（本机日用，默认异步线程执行）
+用途：parse / analyze / outline / chapter / chapters / export；POST 立即返回，前端轮询进度。
+对接：POST/GET /api/projects/{id}/tasks；sync=1 时阻塞跑完（测试用）。
+二次开发：可换 Redis/Celery；勿跨线程共享 Session。
 """
 
 from __future__ import annotations
 
 import json
 import secrets
+import threading
+import time
 from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.config import Settings, get_settings
-from app.models.entities import ProjectEditorStateRow, ProjectFileRow, ProjectTaskRow
+from app.core.config import get_settings
+from app.core.database import SessionLocal
+from app.models.entities import ProjectEditorStateRow, ProjectTaskRow
 from app.services import editor_state_service, file_service, llm_service, parse_service
 from app.services.export_service import build_docx_bytes
 from app.services.llm_service import LlmCallError, LlmConfigError
 from app.services.project_service import get_project, update_project
 
 ALLOWED_TYPES = frozenset(
-    {"parse", "analyze", "outline", "chapter", "export"}
+    {"parse", "analyze", "outline", "chapter", "chapters", "export"}
 )
 
 
@@ -100,7 +103,40 @@ def _set_task(
     db.refresh(task)
 
 
-def create_and_run_task(
+def _has_running_same_type(db: Session, project_id: str, task_type: str) -> bool:
+    stmt = (
+        select(ProjectTaskRow)
+        .where(
+            ProjectTaskRow.project_id == project_id,
+            ProjectTaskRow.type == task_type,
+            ProjectTaskRow.status.in_(("pending", "running")),
+        )
+        .limit(1)
+    )
+    return db.scalars(stmt).first() is not None
+
+
+def fail_interrupted_tasks(db: Session) -> int:
+    """
+    用途：进程重启时把遗留 pending/running 标为 failed。
+    对接：main.lifespan 启动时调用。
+    """
+    stmt = select(ProjectTaskRow).where(
+        ProjectTaskRow.status.in_(("pending", "running"))
+    )
+    rows = list(db.scalars(stmt).all())
+    for t in rows:
+        t.status = "failed"
+        t.progress = 100
+        t.message = "进程中断"
+        t.error = "服务重启，任务未完成，请重试"
+        t.updated_at = _now()
+    if rows:
+        db.commit()
+    return len(rows)
+
+
+def create_task_record(
     db: Session,
     workspace_id: str,
     project_id: str,
@@ -108,38 +144,54 @@ def create_and_run_task(
     task_type: str,
     payload: dict | None = None,
 ) -> ProjectTaskRow:
-    """
-    用途：创建任务并同步执行（个人版简单可靠）。
-    """
+    """用途：仅创建 pending 任务行，不执行。"""
     if task_type not in ALLOWED_TYPES:
         raise ValueError(f"不支持的任务类型: {task_type}")
     get_project(db, workspace_id, project_id)
-    payload = payload or {}
+    if _has_running_same_type(db, project_id, task_type):
+        raise ValueError(f"已有进行中的「{task_type}」任务，请等待完成或稍后重试")
     task = ProjectTaskRow(
         id=f"task_{secrets.token_hex(8)}",
         project_id=project_id,
         type=task_type,
-        status="running",
-        progress=5,
-        message="任务开始…",
+        status="pending",
+        progress=0,
+        message="排队中…",
+        payload_json=_dumps(payload or {}),
         created_at=_now(),
         updated_at=_now(),
     )
     db.add(task)
     db.commit()
     db.refresh(task)
+    return task
 
+
+def _execute_task(db: Session, workspace_id: str, task: ProjectTaskRow) -> None:
+    """用途：在给定 Session 上执行任务体。"""
+    payload: dict = {}
+    if task.payload_json:
+        try:
+            payload = json.loads(task.payload_json) or {}
+        except json.JSONDecodeError:
+            payload = {}
+    project_id = task.project_id
+    _set_task(db, task, status="running", progress=5, message="任务开始…")
     try:
-        if task_type == "parse":
+        if task.type == "parse":
             _run_parse(db, workspace_id, project_id, task)
-        elif task_type == "analyze":
+        elif task.type == "analyze":
             _run_analyze(db, workspace_id, project_id, task)
-        elif task_type == "outline":
+        elif task.type == "outline":
             _run_outline(db, workspace_id, project_id, task)
-        elif task_type == "chapter":
+        elif task.type == "chapter":
             _run_chapter(db, workspace_id, project_id, task, payload)
-        elif task_type == "export":
+        elif task.type == "chapters":
+            _run_chapters(db, workspace_id, project_id, task, payload)
+        elif task.type == "export":
             _run_export(db, workspace_id, project_id, task)
+        else:
+            raise ValueError(f"未知任务类型: {task.type}")
     except (LlmConfigError, LlmCallError, ValueError, RuntimeError, KeyError) as exc:
         _set_task(
             db,
@@ -149,7 +201,7 @@ def create_and_run_task(
             message="任务失败",
             error=str(exc),
         )
-    except Exception as exc:  # noqa: BLE001 — 个人版兜底
+    except Exception as exc:  # noqa: BLE001
         _set_task(
             db,
             task,
@@ -158,6 +210,59 @@ def create_and_run_task(
             message="任务异常",
             error=f"{type(exc).__name__}: {exc}",
         )
+
+
+def create_and_run_task(
+    db: Session,
+    workspace_id: str,
+    project_id: str,
+    *,
+    task_type: str,
+    payload: dict | None = None,
+) -> ProjectTaskRow:
+    """用途：同步创建并执行（测试 / sync=1）。"""
+    task = create_task_record(
+        db, workspace_id, project_id, task_type=task_type, payload=payload
+    )
+    _execute_task(db, workspace_id, task)
+    db.refresh(task)
+    return task
+
+
+def _bg_worker(task_id: str, workspace_id: str) -> None:
+    """用途：后台线程：独立 Session 执行任务。"""
+    db = SessionLocal()
+    try:
+        task = db.get(ProjectTaskRow, task_id)
+        if task is None:
+            return
+        _execute_task(db, workspace_id, task)
+    finally:
+        db.close()
+
+
+def enqueue_task(
+    db: Session,
+    workspace_id: str,
+    project_id: str,
+    *,
+    task_type: str,
+    payload: dict | None = None,
+) -> ProjectTaskRow:
+    """
+    用途：创建任务并后台线程执行，立即返回 pending/running 快照。
+    """
+    task = create_task_record(
+        db, workspace_id, project_id, task_type=task_type, payload=payload
+    )
+    thread = threading.Thread(
+        target=_bg_worker,
+        args=(task.id, workspace_id),
+        name=f"task-{task.id}",
+        daemon=True,
+    )
+    thread.start()
+    db.refresh(task)
     return task
 
 
@@ -182,6 +287,7 @@ def _run_parse(
     path = file_service.resolve_path(settings, project_id, files[0].stored_name)
     if not path.exists():
         raise RuntimeError("文件已丢失，请重新上传")
+    _set_task(db, task, progress=50, message="提取文本…")
     md = parse_service.parse_file_to_markdown(path, files[0].filename)
     state = _ensure_state(db, project_id)
     state.parsed_markdown = md
@@ -196,7 +302,11 @@ def _run_parse(
         status="success",
         progress=100,
         message="解析完成",
-        result={"parsedMarkdown": md[:2000], "chars": len(md), "filename": files[0].filename},
+        result={
+            "parsedMarkdown": md[:2000],
+            "chars": len(md),
+            "filename": files[0].filename,
+        },
     )
 
 
@@ -269,8 +379,8 @@ def _run_outline(
                 "role": "system",
                 "content": (
                     "你是技术标大纲专家。输出严格 JSON 数组，不要 Markdown 围栏。\n"
-                    "元素结构：{\"id\":\"n1\",\"title\":\"章节名\",\"targetWords\":3000,"
-                    "\"description\":\"要点\",\"children\":[...]}\n"
+                    '元素结构：{"id":"n1","title":"章节名","targetWords":3000,'
+                    '"description":"要点","children":[...]}\n'
                     "生成 6～12 个一级章节，二级 2～5 个；id 全局唯一。"
                 ),
             },
@@ -287,7 +397,6 @@ def _run_outline(
         timeout_sec=180.0,
     )
     outline = _parse_json_array(result.content)
-    # 同步简易章节列表
     chapters = []
     for i, node in enumerate(outline):
         if not isinstance(node, dict):
@@ -305,6 +414,7 @@ def _run_outline(
                 "targetWords": int(node.get("targetWords") or 3000),
             }
         )
+    _set_task(db, task, progress=80, message="写入大纲…")
     editor_state_service.upsert_editor_state(
         db,
         workspace_id,
@@ -324,6 +434,44 @@ def _run_outline(
         message=f"大纲已生成（{len(outline)} 章）",
         result={"outlineCount": len(outline), "chapterCount": len(chapters)},
     )
+
+
+def _generate_one_chapter_body(
+    db: Session,
+    workspace_id: str,
+    *,
+    title: str,
+    target_words: int,
+    overview: str,
+    facts_txt: str,
+) -> str:
+    """用途：单章 LLM 生成，供 chapter / chapters 复用。"""
+    result = llm_service.chat_completion(
+        db,
+        workspace_id,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "你是技术标正文写手。用正式中文 Markdown 撰写指定章节，"
+                    "结构清晰、少空话，可含小标题与条目。不要输出与本章无关的全书目录。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"章节标题：{title}\n"
+                    f"目标字数约：{target_words}\n"
+                    f"项目概述：\n{str(overview)[:4000]}\n"
+                    f"全局事实：\n{facts_txt[:3000] or '无'}\n"
+                    "请直接输出本章正文。"
+                ),
+            },
+        ],
+        temperature=0.4,
+        timeout_sec=240.0,
+    )
+    return result.content
 
 
 def _run_chapter(
@@ -346,7 +494,11 @@ def _run_chapter(
         )
     if target is None:
         target = next(
-            (c for c in chapters if isinstance(c, dict) and not (c.get("body") or "").strip()),
+            (
+                c
+                for c in chapters
+                if isinstance(c, dict) and not (c.get("body") or "").strip()
+            ),
             chapters[0] if isinstance(chapters[0], dict) else None,
         )
     if not isinstance(target, dict):
@@ -357,35 +509,19 @@ def _run_chapter(
     facts_txt = ""
     if isinstance(facts, list):
         facts_txt = "\n".join(
-            f"- {f.get('content')}" for f in facts if isinstance(f, dict) and f.get("content")
+            f"- {f.get('content')}"
+            for f in facts
+            if isinstance(f, dict) and f.get("content")
         )
     _set_task(db, task, progress=30, message=f"生成章节：{title}")
-    result = llm_service.chat_completion(
+    body = _generate_one_chapter_body(
         db,
         workspace_id,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "你是技术标正文写手。用正式中文 Markdown 撰写指定章节，"
-                    "结构清晰、少空话，可含小标题与条目。不要输出与本章无关的全书目录。"
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"章节标题：{title}\n"
-                    f"目标字数约：{target.get('targetWords') or 3000}\n"
-                    f"项目概述：\n{str(overview)[:4000]}\n"
-                    f"全局事实：\n{facts_txt[:3000] or '无'}\n"
-                    "请直接输出本章正文。"
-                ),
-            },
-        ],
-        temperature=0.4,
-        timeout_sec=240.0,
+        title=title,
+        target_words=int(target.get("targetWords") or 3000),
+        overview=str(overview),
+        facts_txt=facts_txt,
     )
-    body = result.content
     new_chapters = []
     for c in chapters:
         if not isinstance(c, dict):
@@ -419,13 +555,109 @@ def _run_chapter(
     )
 
 
+def _run_chapters(
+    db: Session,
+    workspace_id: str,
+    project_id: str,
+    task: ProjectTaskRow,
+    payload: dict,
+) -> None:
+    """
+    用途：串行生成全部（或仅空）章节；progress 按章递增。
+    payload.onlyEmpty 默认 true。
+    """
+    only_empty = payload.get("onlyEmpty", payload.get("only_empty", True))
+    if isinstance(only_empty, str):
+        only_empty = only_empty.lower() not in ("0", "false", "no")
+    state_data = editor_state_service.get_editor_state(db, workspace_id, project_id)
+    chapters = state_data.get("chapters") or []
+    if not isinstance(chapters, list) or not chapters:
+        raise ValueError("尚无章节列表，请先生成大纲")
+    targets = [
+        c
+        for c in chapters
+        if isinstance(c, dict)
+        and (not only_empty or not (c.get("body") or "").strip())
+    ]
+    if not targets:
+        _set_task(
+            db,
+            task,
+            status="success",
+            progress=100,
+            message="没有需要生成的空章节",
+            result={"generated": 0},
+        )
+        return
+
+    overview = state_data.get("analysisOverview") or ""
+    facts = state_data.get("facts") or []
+    facts_txt = ""
+    if isinstance(facts, list):
+        facts_txt = "\n".join(
+            f"- {f.get('content')}"
+            for f in facts
+            if isinstance(f, dict) and f.get("content")
+        )
+
+    # 工作用可变副本
+    working = [dict(c) if isinstance(c, dict) else c for c in chapters]
+    done = 0
+    total = len(targets)
+    for tgt in targets:
+        tid = tgt.get("id")
+        title = str(tgt.get("title") or "章节")
+        pct = int(10 + (done / total) * 85)
+        _set_task(
+            db,
+            task,
+            progress=pct,
+            message=f"生成章节 {done + 1}/{total}：{title}",
+        )
+        body = _generate_one_chapter_body(
+            db,
+            workspace_id,
+            title=title,
+            target_words=int(tgt.get("targetWords") or 3000),
+            overview=str(overview),
+            facts_txt=facts_txt,
+        )
+        plain = body.replace(" ", "")
+        for i, c in enumerate(working):
+            if isinstance(c, dict) and c.get("id") == tid:
+                working[i] = {
+                    **c,
+                    "body": body,
+                    "preview": body[:96].replace("\n", " "),
+                    "wordCount": len(plain),
+                    "status": "needs_review",
+                }
+                break
+        editor_state_service.upsert_editor_state(
+            db, workspace_id, project_id, chapters=working
+        )
+        done += 1
+        time.sleep(0.6)  # 轻微限流，避免打爆上游
+
+    update_project(
+        db, workspace_id, project_id, status="writing", technical_plan_step=5
+    )
+    _set_task(
+        db,
+        task,
+        status="success",
+        progress=100,
+        message=f"已生成 {done} 章",
+        result={"generated": done, "onlyEmpty": bool(only_empty)},
+    )
+
+
 def _run_export(
     db: Session, workspace_id: str, project_id: str, task: ProjectTaskRow
 ) -> None:
     settings = get_settings()
     _set_task(db, task, progress=40, message="组装 Word…")
     data, filename = build_docx_bytes(db, workspace_id, project_id)
-    # 落盘便于下载
     out_dir = file_service._upload_root(settings) / project_id / "exports"
     out_dir.mkdir(parents=True, exist_ok=True)
     stored = f"export_{secrets.token_hex(4)}.docx"

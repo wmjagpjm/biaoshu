@@ -97,17 +97,21 @@ npm run build
 | POST | `/api/llm/test` |
 | POST | `/api/projects/{id}/artifacts/{artifactId}/revise` |
 
-## 7. 本机日用主链路（目标 A，已接）
+## 7. 本机日用主链路（目标 A 加强版）
 
 | 步骤 | 操作 |
 |------|------|
 | 上传 | document 步选择 PDF/DOCX/TXT |
-| 解析 | 「轻量解析」→ `POST .../tasks` type=parse |
+| 解析 | 「轻量解析」（**异步任务**，顶部进度条） |
+| 本地 MinerU | `/local-parser` 粘贴 Markdown 回传，或 `POST .../parse-callback` |
 | 分析 | 「AI 招标分析」（需设置页 Key） |
 | 大纲 | 「AI 生成大纲」 |
-| 正文 | 选章 → 「AI 生成本章」 |
-| 导出 | 「生成并下载 Word」 |
+| 正文 | 「AI 生成本章」或 **「生成全部空章节」** |
+| 导出 | 「生成并下载 Word」（含封面信息） |
+
+任务默认异步：`POST /tasks` 立即返回，前端轮询 `GET /tasks/{id}`。  
+测试可用：`POST /tasks?sync=true`。
 
 ## 8. 仍未接（后续）
 
-异步 SSE/Worker、MinerU 回传、知识库 RAG、商务标/查重/废标 API、多用户鉴权。
+SSE 推送、Celery、真 MinerU 安装包、知识库 RAG、商务标/查重 API、多用户鉴权。

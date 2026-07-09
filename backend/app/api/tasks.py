@@ -1,12 +1,12 @@
 """
 模块：项目任务路由
-用途：创建/查询/列表任务（parse/analyze/outline/chapter/export）。
+用途：创建/查询/列表任务；默认异步，?sync=1 同步执行。
 对接：POST/GET /api/projects/{id}/tasks
 """
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
@@ -23,7 +23,9 @@ class TaskCreate(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    type: str = Field(description="parse|analyze|outline|chapter|export")
+    type: str = Field(
+        description="parse|analyze|outline|chapter|chapters|export"
+    )
     payload: dict[str, Any] | None = None
 
 
@@ -62,18 +64,30 @@ def create_task(
     body: TaskCreate,
     db: Annotated[Session, Depends(get_db)],
     workspace_id: Annotated[str, Depends(get_workspace_id)],
+    sync: Annotated[
+        bool, Query(description="true 时阻塞执行完再返回（测试用）")
+    ] = False,
 ) -> dict:
     """
-    用途：创建并同步执行任务，返回最终状态（个人版）。
+    用途：默认异步入队；sync=true 同步跑完（pytest / 冒烟）。
     """
     try:
-        task = task_service.create_and_run_task(
-            db,
-            workspace_id,
-            project_id,
-            task_type=body.type,
-            payload=body.payload,
-        )
+        if sync:
+            task = task_service.create_and_run_task(
+                db,
+                workspace_id,
+                project_id,
+                task_type=body.type,
+                payload=body.payload,
+            )
+        else:
+            task = task_service.enqueue_task(
+                db,
+                workspace_id,
+                project_id,
+                task_type=body.type,
+                payload=body.payload,
+            )
     except ProjectNotFoundError:
         raise HTTPException(status_code=404, detail="项目不存在") from None
     except ValueError as exc:

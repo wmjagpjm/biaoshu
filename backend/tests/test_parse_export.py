@@ -20,7 +20,7 @@ def test_upload_parse_and_export(client):
     assert len(listed) == 1
 
     parse_task = client.post(
-        f"/api/projects/{pid}/tasks",
+        f"/api/projects/{pid}/tasks?sync=true",
         json={"type": "parse"},
     )
     assert parse_task.status_code == 201
@@ -52,7 +52,7 @@ def test_upload_parse_and_export(client):
     )
 
     export_task = client.post(
-        f"/api/projects/{pid}/tasks",
+        f"/api/projects/{pid}/tasks?sync=true",
         json={"type": "export"},
     )
     assert export_task.status_code == 201
