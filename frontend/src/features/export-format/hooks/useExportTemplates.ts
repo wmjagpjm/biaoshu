@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
+import { apiFetch } from "../../../shared/lib/api";
 import type { ExportFormatConfig, ExportTemplateRecord } from "../model/exportFormat";
 import { createDefaultExportFormat, withExportFormatDefaults } from "../model/cloneConfig";
 import {
@@ -8,6 +9,18 @@ import {
 } from "../model/exportFormatPresets";
 
 const STORAGE_KEY = "biaoshu.exportTemplates.v2";
+
+/** 用途：把默认模板配置同步到后端 settings.exportFormat */
+async function syncDefaultToBackend(config: ExportFormatConfig | null) {
+  try {
+    await apiFetch("/settings", {
+      method: "PUT",
+      body: JSON.stringify({ exportFormat: config }),
+    });
+  } catch {
+    /* 后端未起时忽略 */
+  }
+}
 
 type StoredState = {
   templates: ExportTemplateRecord[];
@@ -80,7 +93,13 @@ export function useExportTemplates() {
 
   const setDefault = useCallback(
     (id: string) => {
-      commit((prev) => ({ ...prev, defaultId: id }));
+      commit((prev) => {
+        const next = { ...prev, defaultId: id };
+        const cfg =
+          next.templates.find((t) => t.template_id === id)?.config || null;
+        void syncDefaultToBackend(cfg);
+        return next;
+      });
     },
     [commit],
   );
@@ -104,10 +123,17 @@ export function useExportTemplates() {
         created_at: now,
         updated_at: now,
       };
-      commit((prev) => ({
-        templates: [record, ...prev.templates],
-        defaultId: input.setAsDefault ? id : prev.defaultId || id,
-      }));
+      commit((prev) => {
+        const defaultId = input.setAsDefault ? id : prev.defaultId || id;
+        const state = {
+          templates: [record, ...prev.templates],
+          defaultId,
+        };
+        if (input.setAsDefault || !prev.defaultId) {
+          void syncDefaultToBackend(config);
+        }
+        return state;
+      });
       return id;
     },
     [commit],
@@ -116,19 +142,25 @@ export function useExportTemplates() {
   const updateTemplate = useCallback(
     (id: string, config: ExportFormatConfig) => {
       const next = withExportFormatDefaults(config);
-      commit((prev) => ({
-        ...prev,
-        templates: prev.templates.map((t) =>
-          t.template_id === id
-            ? {
-                ...t,
-                template_name: next.template_name || t.template_name,
-                config: next,
-                updated_at: new Date().toISOString(),
-              }
-            : t,
-        ),
-      }));
+      commit((prev) => {
+        const state = {
+          ...prev,
+          templates: prev.templates.map((t) =>
+            t.template_id === id
+              ? {
+                  ...t,
+                  template_name: next.template_name || t.template_name,
+                  config: next,
+                  updated_at: new Date().toISOString(),
+                }
+              : t,
+          ),
+        };
+        if (prev.defaultId === id) {
+          void syncDefaultToBackend(next);
+        }
+        return state;
+      });
     },
     [commit],
   );

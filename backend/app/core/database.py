@@ -86,3 +86,31 @@ def get_db() -> Generator[Session, None, None]:
         yield db
     finally:
         db.close()
+
+
+def ensure_schema_columns() -> None:
+    """
+    用途：SQLite 个人版轻量加列（create_all 不会改已有表）。
+    对接：main.lifespan 启动时调用；列已存在则忽略。
+    """
+    statements = [
+        "ALTER TABLE project_editor_states ADD COLUMN analysis_json TEXT",
+        "ALTER TABLE project_editor_states ADD COLUMN parsed_markdown TEXT",
+        "ALTER TABLE project_editor_states ADD COLUMN payload_json TEXT",
+        "ALTER TABLE project_tasks ADD COLUMN payload_json TEXT",
+        "ALTER TABLE workspace_settings ADD COLUMN export_format_json TEXT",
+    ]
+    # payload_json 在 tasks 表；editor_states 无 payload — 去掉错误那行
+    statements = [
+        "ALTER TABLE project_editor_states ADD COLUMN analysis_json TEXT",
+        "ALTER TABLE project_editor_states ADD COLUMN parsed_markdown TEXT",
+        "ALTER TABLE project_tasks ADD COLUMN payload_json TEXT",
+        "ALTER TABLE workspace_settings ADD COLUMN export_format_json TEXT",
+    ]
+    with engine.begin() as conn:
+        for sql in statements:
+            try:
+                conn.exec_driver_sql(sql)
+            except Exception:
+                # 列已存在或其它可忽略错误
+                pass

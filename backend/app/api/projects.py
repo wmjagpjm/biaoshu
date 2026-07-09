@@ -171,6 +171,8 @@ def put_editor_state(
         kwargs["facts"] = payload["facts"]
     if "mode" in payload:
         kwargs["mode"] = payload["mode"]
+    if "analysis" in payload:
+        kwargs["analysis"] = payload["analysis"]
     if "analysis_overview" in payload:
         kwargs["analysis_overview"] = payload["analysis_overview"]
     if "guidance" in payload:
@@ -189,7 +191,7 @@ def put_editor_state(
 
 
 def _editor_out(data: dict) -> EditorStateOut:
-    """用途：service dict → EditorStateOut（含 parsedMarkdown）。"""
+    """用途：service dict → EditorStateOut（含 analysis / parsedMarkdown）。"""
     return EditorStateOut.model_validate(
         {
             "project_id": data["projectId"],
@@ -198,6 +200,7 @@ def _editor_out(data: dict) -> EditorStateOut:
             "facts": data["facts"],
             "mode": data["mode"],
             "analysis_overview": data["analysisOverview"],
+            "analysis": data.get("analysis"),
             "guidance": data["guidance"],
             "parsed_markdown": data.get("parsedMarkdown"),
             "updated_at": data["updatedAt"],

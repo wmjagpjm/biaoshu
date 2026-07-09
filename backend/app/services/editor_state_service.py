@@ -1,8 +1,7 @@
 """
 模块：项目编辑器状态服务
-用途：读写技术标大纲/章节/事实/分析概述/guidance 的整包 JSON。
+用途：读写大纲/章节/事实/结构化分析/guidance/解析文。
 对接：GET|PUT /api/projects/{id}/editor-state
-二次开发：字段级 PATCH、版本号、冲突检测可在此扩展。
 """
 
 from __future__ import annotations
@@ -32,10 +31,49 @@ def _dumps(value: Any) -> str | None:
     return json.dumps(value, ensure_ascii=False)
 
 
+def empty_analysis() -> dict:
+    """用途：空结构化分析。"""
+    return {
+        "overview": "",
+        "techRequirements": [],
+        "rejectionRisks": [],
+        "scoringPoints": [],
+    }
+
+
+def normalize_analysis(raw: Any, fallback_overview: str = "") -> dict:
+    """用途：规范 analysis 对象，兼容缺字段。"""
+    base = empty_analysis()
+    if isinstance(raw, dict):
+        base["overview"] = str(raw.get("overview") or fallback_overview or "")
+        tr = raw.get("techRequirements") or raw.get("tech_requirements") or []
+        rr = raw.get("rejectionRisks") or raw.get("rejection_risks") or []
+        sp = raw.get("scoringPoints") or raw.get("scoring_points") or []
+        if isinstance(tr, list):
+            base["techRequirements"] = [str(x) for x in tr if str(x).strip()]
+        if isinstance(rr, list):
+            base["rejectionRisks"] = [str(x) for x in rr if str(x).strip()]
+        if isinstance(sp, list):
+            points = []
+            for p in sp:
+                if isinstance(p, dict):
+                    points.append(
+                        {
+                            "name": str(p.get("name") or ""),
+                            "weight": str(p.get("weight") or ""),
+                        }
+                    )
+                elif p:
+                    points.append({"name": str(p), "weight": ""})
+            base["scoringPoints"] = points
+    elif fallback_overview:
+        base["overview"] = fallback_overview
+    return base
+
+
 def get_editor_state(db: Session, workspace_id: str, project_id: str) -> dict:
     """
-    用途：返回编辑器状态字典（camelCase 键，便于前端直接用）。
-    无行时返回空结构（非 404），项目不存在仍抛 ProjectNotFoundError。
+    用途：返回编辑器状态字典（camelCase）。
     """
     get_project(db, workspace_id, project_id)
     row = db.get(ProjectEditorStateRow, project_id)
@@ -47,17 +85,26 @@ def get_editor_state(db: Session, workspace_id: str, project_id: str) -> dict:
             "facts": None,
             "mode": "ALIGNED",
             "analysisOverview": None,
+            "analysis": empty_analysis(),
             "guidance": None,
             "parsedMarkdown": None,
             "updatedAt": None,
         }
+    analysis = normalize_analysis(
+        _loads(row.analysis_json),
+        fallback_overview=row.analysis_overview or "",
+    )
+    # 若 JSON 空但有 overview 字段，回填
+    if not analysis.get("overview") and row.analysis_overview:
+        analysis["overview"] = row.analysis_overview
     return {
         "projectId": project_id,
         "outline": _loads(row.outline_json),
         "chapters": _loads(row.chapters_json),
         "facts": _loads(row.facts_json),
         "mode": row.mode or "ALIGNED",
-        "analysisOverview": row.analysis_overview,
+        "analysisOverview": analysis.get("overview") or row.analysis_overview,
+        "analysis": analysis,
         "guidance": _loads(row.guidance_json),
         "parsedMarkdown": row.parsed_markdown,
         "updatedAt": row.updated_at.isoformat() if row.updated_at else None,
@@ -74,11 +121,12 @@ def upsert_editor_state(
     facts: Any = ...,
     mode: str | None = None,
     analysis_overview: str | None = ...,
+    analysis: Any = ...,
     guidance: Any = ...,
     parsed_markdown: str | None = ...,
 ) -> dict:
     """
-    用途：部分更新编辑器状态；未传的字段（Ellipsis）保持原值。
+    用途：部分更新；analysis 与 analysis_overview 双写。
     """
     get_project(db, workspace_id, project_id)
     row = db.get(ProjectEditorStateRow, project_id)
@@ -94,8 +142,16 @@ def upsert_editor_state(
         row.facts_json = _dumps(facts)
     if mode is not None:
         row.mode = mode if mode in ("ALIGNED", "FREE") else "ALIGNED"
-    if analysis_overview is not ...:
+    if analysis is not ...:
+        norm = normalize_analysis(analysis)
+        row.analysis_json = _dumps(norm)
+        row.analysis_overview = norm.get("overview") or ""
+    elif analysis_overview is not ...:
         row.analysis_overview = analysis_overview
+        # 合并进 analysis_json
+        prev = normalize_analysis(_loads(row.analysis_json), analysis_overview or "")
+        prev["overview"] = analysis_overview or ""
+        row.analysis_json = _dumps(prev)
     if guidance is not ...:
         row.guidance_json = _dumps(guidance)
     if parsed_markdown is not ...:

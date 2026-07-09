@@ -50,3 +50,49 @@ export type ChapterContent = {
   /** 可编辑 Markdown 正文 */
   body: string;
 };
+
+/** 结构化招标分析（对接 analysis_json） */
+export type ScoringPoint = {
+  name: string;
+  weight: string;
+};
+
+export type BidAnalysis = {
+  overview: string;
+  techRequirements: string[];
+  rejectionRisks: string[];
+  scoringPoints: ScoringPoint[];
+};
+
+export function emptyBidAnalysis(): BidAnalysis {
+  return {
+    overview: "",
+    techRequirements: [],
+    rejectionRisks: [],
+    scoringPoints: [],
+  };
+}
+
+/** 用途：序列化分析供 revise baseContent */
+export function serializeBidAnalysis(a: BidAnalysis): string {
+  const lines = [
+    "【项目概述】",
+    a.overview || "（空）",
+    "",
+    "【技术要求】",
+    ...(a.techRequirements.length
+      ? a.techRequirements.map((t, i) => `${i + 1}. ${t}`)
+      : ["（空）"]),
+    "",
+    "【废标风险】",
+    ...(a.rejectionRisks.length
+      ? a.rejectionRisks.map((t, i) => `${i + 1}. ${t}`)
+      : ["（空）"]),
+    "",
+    "【评分点】",
+    ...(a.scoringPoints.length
+      ? a.scoringPoints.map((s) => `- ${s.name}　${s.weight}`)
+      : ["（空）"]),
+  ];
+  return lines.join("\n");
+}

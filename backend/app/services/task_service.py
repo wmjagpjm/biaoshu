@@ -313,13 +313,15 @@ def _run_parse(
 def _run_analyze(
     db: Session, workspace_id: str, project_id: str, task: ProjectTaskRow
 ) -> None:
+    from app.services.editor_state_service import normalize_analysis
+
     _set_task(db, task, progress=15, message="读取解析文本…")
     state = _ensure_state(db, project_id)
     source = (state.parsed_markdown or state.analysis_overview or "").strip()
     if not source:
         raise ValueError("尚无解析文本，请先上传并解析招标文件")
     clip = source[:18000]
-    _set_task(db, task, progress=40, message="调用模型生成招标分析…")
+    _set_task(db, task, progress=40, message="调用模型生成结构化招标分析…")
     result = llm_service.chat_completion(
         db,
         workspace_id,
@@ -327,12 +329,13 @@ def _run_analyze(
             {
                 "role": "system",
                 "content": (
-                    "你是招投标技术标分析助手。根据招标文件摘录，用中文输出：\n"
-                    "1) 项目概述（200～400字）\n"
-                    "2) 关键技术要求（条目）\n"
-                    "3) 评分关注点\n"
-                    "4) 潜在废标/风险点\n"
-                    "不要编造原文没有的硬性数字。"
+                    "你是招投标技术标分析助手。只输出一个 JSON 对象，不要 Markdown 围栏。\n"
+                    "结构：\n"
+                    '{"overview":"200-400字项目概述",'
+                    '"techRequirements":["技术要求1","…"],'
+                    '"rejectionRisks":["废标/风险1","…"],'
+                    '"scoringPoints":[{"name":"评分项","weight":"20%"}]}\n'
+                    "不要编造原文没有的硬性数字；列表各 3～8 条。"
                 ),
             },
             {"role": "user", "content": f"招标文件摘录：\n\n{clip}"},
@@ -340,10 +343,27 @@ def _run_analyze(
         temperature=0.3,
         timeout_sec=180.0,
     )
-    overview = result.content
-    state.analysis_overview = overview
-    state.updated_at = _now()
-    db.commit()
+    parsed = _try_parse_analysis_json(result.content)
+    if parsed is None:
+        analysis = normalize_analysis(
+            {
+                "overview": result.content,
+                "techRequirements": [],
+                "rejectionRisks": [],
+                "scoringPoints": [],
+            }
+        )
+        msg = "招标分析完成（结构解析失败，已保存原文概述）"
+    else:
+        analysis = normalize_analysis(parsed)
+        msg = "招标分析完成（结构化）"
+    editor_state_service.upsert_editor_state(
+        db,
+        workspace_id,
+        project_id,
+        analysis=analysis,
+        analysis_overview=analysis.get("overview") or "",
+    )
     update_project(
         db, workspace_id, project_id, status="analyzing", technical_plan_step=2
     )
@@ -352,8 +372,8 @@ def _run_analyze(
         task,
         status="success",
         progress=100,
-        message="招标分析完成",
-        result={"analysisOverview": overview, "model": result.model},
+        message=msg,
+        result={"analysis": analysis, "model": result.model},
     )
 
 
@@ -367,9 +387,22 @@ def _run_outline(
             guidance = json.loads(state.guidance_json) or {}
         except json.JSONDecodeError:
             guidance = {}
-    ctx = (state.analysis_overview or state.parsed_markdown or "")[:12000]
+    from app.services.editor_state_service import normalize_analysis
+
+    raw_a = None
+    if state.analysis_json:
+        try:
+            raw_a = json.loads(state.analysis_json)
+        except json.JSONDecodeError:
+            raw_a = None
+    analysis = normalize_analysis(
+        raw_a,
+        fallback_overview=state.analysis_overview or "",
+    )
+    ctx = (analysis.get("overview") or state.parsed_markdown or "")[:12000]
     if not ctx.strip():
         raise ValueError("请先完成解析或招标分析")
+    struct_hint = _analysis_prompt_block(analysis)
     _set_task(db, task, progress=35, message="生成三级大纲…")
     result = llm_service.chat_completion(
         db,
@@ -382,6 +415,7 @@ def _run_outline(
                     '元素结构：{"id":"n1","title":"章节名","targetWords":3000,'
                     '"description":"要点","children":[...]}\n'
                     "生成 6～12 个一级章节，二级 2～5 个；id 全局唯一。"
+                    "大纲应覆盖评分点与关键技术要求。"
                 ),
             },
             {
@@ -389,6 +423,7 @@ def _run_outline(
                 "content": (
                     f"目标字数：{guidance.get('targetWordCount') or guidance.get('target_word_count') or 80000}\n"
                     f"侧重：{guidance.get('chapterFocus') or guidance.get('chapter_focus') or '无'}\n"
+                    f"{struct_hint}\n"
                     f"材料：\n{ctx}"
                 ),
             },
@@ -436,6 +471,53 @@ def _run_outline(
     )
 
 
+def _analysis_prompt_block(analysis: dict) -> str:
+    """用途：把结构化分析压成短摘要注入生成 prompt。"""
+    lines = ["【招标分析结构】"]
+    tr = analysis.get("techRequirements") or []
+    if tr:
+        lines.append("技术要求：" + "；".join(str(x) for x in tr[:8]))
+    sp = analysis.get("scoringPoints") or []
+    if sp:
+        parts = []
+        for p in sp[:8]:
+            if isinstance(p, dict):
+                parts.append(f"{p.get('name','')}({p.get('weight','')})")
+        if parts:
+            lines.append("评分点：" + "；".join(parts))
+    rr = analysis.get("rejectionRisks") or []
+    if rr:
+        lines.append("废标风险：" + "；".join(str(x) for x in rr[:6]))
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
+def _try_parse_analysis_json(text: str) -> dict | None:
+    """用途：从模型输出抠 analysis JSON。"""
+    raw = (text or "").strip()
+    if raw.startswith("```"):
+        raw = raw.strip("`")
+        if raw.lower().startswith("json"):
+            raw = raw[4:].strip()
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict) and (
+            "overview" in data or "techRequirements" in data or "scoringPoints" in data
+        ):
+            return data
+    except json.JSONDecodeError:
+        pass
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            data = json.loads(raw[start : end + 1])
+            if isinstance(data, dict):
+                return data
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
 def _generate_one_chapter_body(
     db: Session,
     workspace_id: str,
@@ -444,6 +526,7 @@ def _generate_one_chapter_body(
     target_words: int,
     overview: str,
     facts_txt: str,
+    analysis_block: str = "",
 ) -> str:
     """用途：单章 LLM 生成，供 chapter / chapters 复用。"""
     result = llm_service.chat_completion(
@@ -455,6 +538,7 @@ def _generate_one_chapter_body(
                 "content": (
                     "你是技术标正文写手。用正式中文 Markdown 撰写指定章节，"
                     "结构清晰、少空话，可含小标题与条目。不要输出与本章无关的全书目录。"
+                    "应呼应评分点与技术要求。"
                 ),
             },
             {
@@ -463,6 +547,7 @@ def _generate_one_chapter_body(
                     f"章节标题：{title}\n"
                     f"目标字数约：{target_words}\n"
                     f"项目概述：\n{str(overview)[:4000]}\n"
+                    f"{analysis_block}\n"
                     f"全局事实：\n{facts_txt[:3000] or '无'}\n"
                     "请直接输出本章正文。"
                 ),
@@ -505,6 +590,9 @@ def _run_chapter(
         raise ValueError("未找到可生成的章节")
     title = str(target.get("title") or "章节")
     overview = state_data.get("analysisOverview") or ""
+    analysis = state_data.get("analysis") or {}
+    if not isinstance(analysis, dict):
+        analysis = {}
     facts = state_data.get("facts") or []
     facts_txt = ""
     if isinstance(facts, list):
@@ -521,6 +609,7 @@ def _run_chapter(
         target_words=int(target.get("targetWords") or 3000),
         overview=str(overview),
         facts_txt=facts_txt,
+        analysis_block=_analysis_prompt_block(analysis),
     )
     new_chapters = []
     for c in chapters:
@@ -591,6 +680,10 @@ def _run_chapters(
         return
 
     overview = state_data.get("analysisOverview") or ""
+    analysis = state_data.get("analysis") or {}
+    if not isinstance(analysis, dict):
+        analysis = {}
+    analysis_block = _analysis_prompt_block(analysis)
     facts = state_data.get("facts") or []
     facts_txt = ""
     if isinstance(facts, list):
@@ -621,6 +714,7 @@ def _run_chapters(
             target_words=int(tgt.get("targetWords") or 3000),
             overview=str(overview),
             facts_txt=facts_txt,
+            analysis_block=analysis_block,
         )
         plain = body.replace(" ", "")
         for i, c in enumerate(working):

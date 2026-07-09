@@ -17,13 +17,15 @@ import {
   removeNode,
   updateNode,
 } from "../lib/outlineTree";
-import { mockChapters, mockFacts, mockOutline, mockAnalysis } from "../mock";
+import { mockChapters, mockFacts, mockOutline } from "../mock";
 import type {
+  BidAnalysis,
   ChapterContent,
   GlobalFact,
   OutlineExpansionMode,
   OutlineNode,
 } from "../types";
+import { emptyBidAnalysis } from "../types";
 
 type StoredEditors = {
   outline: OutlineNode[];
@@ -31,6 +33,7 @@ type StoredEditors = {
   facts: GlobalFact[];
   mode: OutlineExpansionMode;
   analysisOverview: string;
+  analysis: BidAnalysis;
   parsedMarkdown: string;
 };
 
@@ -41,10 +44,40 @@ type EditorStateApi = {
   facts?: GlobalFact[] | null;
   mode?: string;
   analysisOverview?: string | null;
+  analysis?: BidAnalysis | null;
   parsedMarkdown?: string | null;
   guidance?: Record<string, unknown> | null;
   updatedAt?: string | null;
 };
+
+function normalizeAnalysis(
+  raw: Partial<BidAnalysis> | null | undefined,
+  overviewFallback = "",
+): BidAnalysis {
+  const base = emptyBidAnalysis();
+  if (!raw || typeof raw !== "object") {
+    base.overview = overviewFallback;
+    return base;
+  }
+  base.overview = String(raw.overview ?? overviewFallback ?? "");
+  base.techRequirements = Array.isArray(raw.techRequirements)
+    ? raw.techRequirements.map(String)
+    : [];
+  base.rejectionRisks = Array.isArray(raw.rejectionRisks)
+    ? raw.rejectionRisks.map(String)
+    : [];
+  base.scoringPoints = Array.isArray(raw.scoringPoints)
+    ? raw.scoringPoints.map((p) =>
+        typeof p === "object" && p
+          ? {
+              name: String((p as { name?: string }).name ?? ""),
+              weight: String((p as { weight?: string }).weight ?? ""),
+            }
+          : { name: String(p), weight: "" },
+      )
+    : [];
+  return base;
+}
 
 const storageKey = (projectId: string) =>
   `biaoshu.technicalPlan.editors.${projectId}`;
@@ -68,7 +101,8 @@ function defaultState(): StoredEditors {
     chapters: mockChapters.map((c) => ({ ...c })),
     facts: mockFacts.map((f) => ({ ...f })),
     mode: "ALIGNED",
-    analysisOverview: mockAnalysis.overview,
+    analysisOverview: "",
+    analysis: emptyBidAnalysis(),
     parsedMarkdown: "",
   };
 }
@@ -96,6 +130,12 @@ function loadLocal(projectId: string): StoredEditors {
         typeof parsed.analysisOverview === "string"
           ? parsed.analysisOverview
           : empty.analysisOverview,
+      analysis: normalizeAnalysis(
+        parsed.analysis,
+        typeof parsed.analysisOverview === "string"
+          ? parsed.analysisOverview
+          : "",
+      ),
       parsedMarkdown:
         typeof parsed.parsedMarkdown === "string"
           ? parsed.parsedMarkdown
@@ -111,6 +151,10 @@ function saveLocal(projectId: string, state: StoredEditors) {
 }
 
 function fromApi(data: EditorStateApi, fallback: StoredEditors): StoredEditors {
+  const analysis = normalizeAnalysis(
+    data.analysis,
+    data.analysisOverview || fallback.analysisOverview || "",
+  );
   return {
     outline: Array.isArray(data.outline) && data.outline.length
       ? (data.outline as OutlineNode[])
@@ -122,10 +166,8 @@ function fromApi(data: EditorStateApi, fallback: StoredEditors): StoredEditors {
       ? (data.facts as GlobalFact[])
       : fallback.facts,
     mode: data.mode === "FREE" ? "FREE" : "ALIGNED",
-    analysisOverview:
-      typeof data.analysisOverview === "string" && data.analysisOverview
-        ? data.analysisOverview
-        : fallback.analysisOverview,
+    analysisOverview: analysis.overview || data.analysisOverview || "",
+    analysis,
     parsedMarkdown:
       typeof data.parsedMarkdown === "string" && data.parsedMarkdown
         ? data.parsedMarkdown
@@ -202,6 +244,7 @@ export function useTechnicalPlanEditors(projectId: string) {
           (Array.isArray(remote.outline) && remote.outline.length > 0) ||
           (Array.isArray(remote.chapters) && remote.chapters.length > 0) ||
           !!remote.analysisOverview ||
+          !!remote.analysis?.overview ||
           !!remote.parsedMarkdown;
         const next = hasRemote ? fromApi(remote, local) : local;
         setState(next);
@@ -244,7 +287,8 @@ export function useTechnicalPlanEditors(projectId: string) {
           chapters: state.chapters,
           facts: state.facts,
           mode: state.mode,
-          analysisOverview: state.analysisOverview,
+          analysisOverview: state.analysis.overview || state.analysisOverview,
+          analysis: state.analysis,
         }),
       })
         .then(() => setPersistSource("api"))
@@ -275,8 +319,58 @@ export function useTechnicalPlanEditors(projectId: string) {
   }, []);
 
   const setAnalysisOverview = useCallback((analysisOverview: string) => {
-    setState((prev) => ({ ...prev, analysisOverview }));
+    setState((prev) => ({
+      ...prev,
+      analysisOverview,
+      analysis: { ...prev.analysis, overview: analysisOverview },
+    }));
   }, []);
+
+  const setAnalysis = useCallback((analysis: BidAnalysis) => {
+    setState((prev) => ({
+      ...prev,
+      analysis,
+      analysisOverview: analysis.overview,
+    }));
+  }, []);
+
+  const patchAnalysis = useCallback((partial: Partial<BidAnalysis>) => {
+    setState((prev) => {
+      const next = { ...prev.analysis, ...partial };
+      return {
+        ...prev,
+        analysis: next,
+        analysisOverview: next.overview,
+      };
+    });
+  }, []);
+
+  const fillDemoAnalysis = useCallback(() => {
+    const demo: BidAnalysis = {
+      overview:
+        "建设覆盖城市主干路网的智慧交通综合管理平台，实现信号优化、违法抓拍汇聚、运行监测与指挥调度一体化。要求国产化适配、等保三级，并与现有交警业务系统对接。",
+      techRequirements: [
+        "支持视频流接入不少于 2000 路，可横向扩展",
+        "提供开放 API 与消息总线对接现有指挥平台",
+        "关键组件支持信创环境部署",
+        "提供完整的权限、审计与备份恢复方案",
+      ],
+      rejectionRisks: [
+        "未按招标文件规定目录编制",
+        "未响应★号关键条款",
+        "业绩证明材料不齐",
+      ],
+      scoringPoints: [
+        { name: "总体架构与技术路线", weight: "20%" },
+        { name: "功能模块完整性", weight: "25%" },
+        { name: "实施与运维保障", weight: "15%" },
+        { name: "业绩与团队", weight: "15%" },
+        { name: "售后与培训", weight: "10%" },
+        { name: "报价合理性", weight: "15%" },
+      ],
+    };
+    setAnalysis(demo);
+  }, [setAnalysis]);
 
   const setParsedMarkdown = useCallback((parsedMarkdown: string) => {
     setState((prev) => ({ ...prev, parsedMarkdown }));
@@ -452,8 +546,12 @@ export function useTechnicalPlanEditors(projectId: string) {
     chapters: state.chapters,
     facts: state.facts,
     mode: state.mode,
-    analysisOverview: state.analysisOverview,
+    analysisOverview: state.analysis.overview || state.analysisOverview,
+    analysis: state.analysis,
     setAnalysisOverview,
+    setAnalysis,
+    patchAnalysis,
+    fillDemoAnalysis,
     parsedMarkdown: state.parsedMarkdown,
     setParsedMarkdown,
     reloadFromApi,

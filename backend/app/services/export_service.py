@@ -1,8 +1,7 @@
 """
 模块：Word 导出服务
-用途：将 editor-state 中的大纲/章节/概述导出为 .docx 字节流。
-对接：POST/GET 导出任务与下载
-二次开发：对齐 export-format 模板样式（字体/页边距）。
+用途：将 editor-state 导出为 .docx；应用 workspace 默认 ExportFormat 核心样式。
+对接：export 任务；settings.export_format_json
 """
 
 from __future__ import annotations
@@ -16,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.models.entities import ProjectEditorStateRow
 from app.services.project_service import get_project
+from app.services import settings_service
 
 
 def _loads(raw: str | None) -> Any:
@@ -27,14 +27,118 @@ def _loads(raw: str | None) -> Any:
         return None
 
 
+# 中文字号 → 磅值
+_CN_SIZE_PT: dict[str, float] = {
+    "初号": 42,
+    "小初": 36,
+    "一号": 26,
+    "小一": 24,
+    "二号": 22,
+    "小二": 18,
+    "三号": 16,
+    "小三": 15,
+    "四号": 14,
+    "小四": 12,
+    "五号": 10.5,
+    "小五": 9,
+    "六号": 7.5,
+    "小六": 6.5,
+}
+
+
+def _pt(size_name: str | None, default: float = 12.0) -> float:
+    if not size_name:
+        return default
+    if size_name in _CN_SIZE_PT:
+        return _CN_SIZE_PT[size_name]
+    try:
+        return float(str(size_name).replace("pt", "").strip())
+    except ValueError:
+        return default
+
+
+def _align(name: str | None):
+    from docx.enum.text import WD_ALIGN_PARAGRAPH  # type: ignore
+
+    m = {
+        "居中对齐": WD_ALIGN_PARAGRAPH.CENTER,
+        "居中": WD_ALIGN_PARAGRAPH.CENTER,
+        "两端对齐": WD_ALIGN_PARAGRAPH.JUSTIFY,
+        "左对齐": WD_ALIGN_PARAGRAPH.LEFT,
+        "右对齐": WD_ALIGN_PARAGRAPH.RIGHT,
+    }
+    return m.get(name or "", WD_ALIGN_PARAGRAPH.LEFT)
+
+
+def _apply_template_styles(doc, cfg: dict) -> None:
+    """用途：把 ExportFormatConfig 核心字段应用到 docx 样式。"""
+    from docx.shared import Pt, Twips  # type: ignore
+
+    body = cfg.get("body_text") or cfg.get("bodyText") or {}
+    if isinstance(body, dict):
+        style = doc.styles["Normal"]
+        font = style.font
+        font.name = body.get("font") or "宋体"
+        font.size = Pt(_pt(body.get("size"), 12))
+        pf = style.paragraph_format
+        try:
+            pf.line_spacing = float(body.get("line_spacing_multiple") or body.get("lineSpacingMultiple") or 1.5)
+        except (TypeError, ValueError):
+            pf.line_spacing = 1.5
+        indent = body.get("first_line_indent_chars") or body.get("firstLineIndentChars") or 0
+        try:
+            # 约 1 字符 ≈ 210 twips（小四）
+            pf.first_line_indent = Twips(int(float(indent) * 210))
+        except (TypeError, ValueError):
+            pass
+
+    headings = cfg.get("headings") or []
+    if isinstance(headings, list):
+        for i, h in enumerate(headings[:3]):
+            if not isinstance(h, dict):
+                continue
+            style_name = f"Heading {i + 1}"
+            try:
+                st = doc.styles[style_name]
+            except KeyError:
+                continue
+            st.font.name = h.get("font") or "黑体"
+            st.font.size = Pt(_pt(h.get("size"), 16 - i * 2))
+            st.font.bold = bool(h.get("bold", True))
+            try:
+                st.paragraph_format.alignment = _align(h.get("alignment"))
+            except Exception:
+                pass
+
+    # 页边距（若有 page / margins）
+    page = cfg.get("page") or cfg.get("page_setup") or {}
+    if isinstance(page, dict):
+        section = doc.sections[0]
+        from docx.shared import Cm  # type: ignore
+
+        def margin(key_cm: str, key_pt: str, default_cm: float):
+            v = page.get(key_cm)
+            if v is None:
+                v = page.get(key_pt)
+            try:
+                return Cm(float(v))
+            except (TypeError, ValueError):
+                return Cm(default_cm)
+
+        # 常见字段名兼容
+        section.top_margin = margin("margin_top_cm", "top", 2.54)
+        section.bottom_margin = margin("margin_bottom_cm", "bottom", 2.54)
+        section.left_margin = margin("margin_left_cm", "left", 3.17)
+        section.right_margin = margin("margin_right_cm", "right", 3.17)
+
+
 def build_docx_bytes(
     db: Session,
     workspace_id: str,
     project_id: str,
 ) -> tuple[bytes, str]:
     """
-    用途：生成 Word 文档（含封面信息）。
-    返回：(文件字节, 下载文件名)
+    用途：生成 Word 文档（封面 + 正文，应用默认导出模板）。
     """
     try:
         from docx import Document  # type: ignore
@@ -45,11 +149,17 @@ def build_docx_bytes(
 
     project = get_project(db, workspace_id, project_id)
     state = db.get(ProjectEditorStateRow, project_id)
+    template = settings_service.get_export_format(db, workspace_id)
 
     doc = Document()
+    if template:
+        try:
+            _apply_template_styles(doc, template)
+        except Exception:
+            pass
+
     title = project.name or "技术标"
 
-    # 封面
     cover = doc.add_paragraph()
     cover.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = cover.add_run("技术标书")
@@ -65,10 +175,14 @@ def build_docx_bytes(
 
     meta = doc.add_paragraph()
     meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    tpl_name = ""
+    if template:
+        tpl_name = str(template.get("template_name") or template.get("name") or "")
     meta_text = (
         f"行业：{project.industry or '通用'}　｜　"
         f"导出日期：{datetime.now().strftime('%Y-%m-%d')}　｜　"
         f"状态：{project.status}"
+        + (f"　｜　模板：{tpl_name}" if tpl_name else "")
     )
     mr = meta.add_run(meta_text)
     mr.font.size = Pt(10.5)
@@ -78,16 +192,40 @@ def build_docx_bytes(
     doc.add_heading(title, level=0)
 
     overview = (state.analysis_overview if state else None) or ""
+    analysis = _loads(state.analysis_json) if state else None
+    if isinstance(analysis, dict) and analysis.get("overview"):
+        overview = analysis["overview"]
+
     if overview.strip():
         doc.add_heading("一、项目概述 / 招标分析", level=1)
         for para in overview.strip().split("\n"):
             if para.strip():
                 doc.add_paragraph(para.strip())
 
+    if isinstance(analysis, dict):
+        tr = analysis.get("techRequirements") or []
+        if tr:
+            doc.add_heading("技术要求", level=2)
+            for item in tr:
+                doc.add_paragraph(str(item), style="List Bullet")
+        sp = analysis.get("scoringPoints") or []
+        if sp:
+            doc.add_heading("评分点", level=2)
+            for p in sp:
+                if isinstance(p, dict):
+                    doc.add_paragraph(
+                        f"{p.get('name', '')}　{p.get('weight', '')}",
+                        style="List Bullet",
+                    )
+        rr = analysis.get("rejectionRisks") or []
+        if rr:
+            doc.add_heading("废标风险", level=2)
+            for item in rr:
+                doc.add_paragraph(str(item), style="List Bullet")
+
     parsed = (state.parsed_markdown if state else None) or ""
     if parsed.strip():
         doc.add_heading("二、招标文件解析摘录", level=1)
-        # 控制长度，避免超大文档
         clip = parsed.strip()
         if len(clip) > 20000:
             clip = clip[:20000] + "\n\n…（导出已截断）"

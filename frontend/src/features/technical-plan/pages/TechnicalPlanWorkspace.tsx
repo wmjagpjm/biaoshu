@@ -29,8 +29,8 @@ import {
   getPendingFileNames,
   getProjectAsync,
 } from "../lib/projectStore";
-import { mockAnalysis } from "../mock";
 import type { TechnicalPlanStepId } from "../types";
+import { serializeBidAnalysis } from "../types";
 import "./TechnicalPlan.css";
 
 /** 用途：联调展示最近一次 revise 正文；文本步可一键替换。 */
@@ -440,8 +440,9 @@ export function TechnicalPlanWorkspace() {
               <div className="analysis-block">
                 <h3>项目概述（可编辑）</h3>
                 <textarea
-                  value={editors.analysisOverview}
+                  value={editors.analysis.overview}
                   onChange={(e) => editors.setAnalysisOverview(e.target.value)}
+                  placeholder="点击「AI 招标分析」或手动填写概述…"
                   style={{
                     width: "100%",
                     minHeight: 120,
@@ -454,26 +455,114 @@ export function TechnicalPlanWorkspace() {
                 />
               </div>
               <div className="analysis-block">
-                <h3>技术要求摘录</h3>
-                <ul>
-                  {mockAnalysis.techRequirements.map((t) => (
-                    <li key={t}>{t}</li>
-                  ))}
-                </ul>
+                <div className="tp-toolbar" style={{ marginBottom: 8 }}>
+                  <h3 style={{ margin: 0 }}>技术要求摘录</h3>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() =>
+                      editors.patchAnalysis({
+                        techRequirements: [
+                          ...editors.analysis.techRequirements,
+                          "",
+                        ],
+                      })
+                    }
+                  >
+                    添加
+                  </button>
+                </div>
+                {editors.analysis.techRequirements.length === 0 ? (
+                  <p style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+                    暂无。可 AI 分析或手动添加。
+                  </p>
+                ) : (
+                  editors.analysis.techRequirements.map((t, i) => (
+                    <div key={i} style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                      <input
+                        value={t}
+                        onChange={(e) => {
+                          const next = [...editors.analysis.techRequirements];
+                          next[i] = e.target.value;
+                          editors.patchAnalysis({ techRequirements: next });
+                        }}
+                        style={{ flex: 1 }}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => {
+                          const next = editors.analysis.techRequirements.filter(
+                            (_, j) => j !== i,
+                          );
+                          editors.patchAnalysis({ techRequirements: next });
+                        }}
+                      >
+                        删
+                      </button>
+                    </div>
+                  ))
+                )}
               </div>
               <div className="analysis-block">
-                <h3>潜在废标风险</h3>
-                <ul>
-                  {mockAnalysis.rejectionRisks.map((t) => (
-                    <li key={t}>{t}</li>
-                  ))}
-                </ul>
+                <div className="tp-toolbar" style={{ marginBottom: 8 }}>
+                  <h3 style={{ margin: 0 }}>潜在废标风险</h3>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() =>
+                      editors.patchAnalysis({
+                        rejectionRisks: [...editors.analysis.rejectionRisks, ""],
+                      })
+                    }
+                  >
+                    添加
+                  </button>
+                </div>
+                {editors.analysis.rejectionRisks.length === 0 ? (
+                  <p style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+                    暂无。
+                  </p>
+                ) : (
+                  editors.analysis.rejectionRisks.map((t, i) => (
+                    <div key={i} style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                      <input
+                        value={t}
+                        onChange={(e) => {
+                          const next = [...editors.analysis.rejectionRisks];
+                          next[i] = e.target.value;
+                          editors.patchAnalysis({ rejectionRisks: next });
+                        }}
+                        style={{ flex: 1 }}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => {
+                          const next = editors.analysis.rejectionRisks.filter(
+                            (_, j) => j !== i,
+                          );
+                          editors.patchAnalysis({ rejectionRisks: next });
+                        }}
+                      >
+                        删
+                      </button>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
             <div className="card card-pad">
               <div className="tp-toolbar">
-                <strong>评分点（演示列表）</strong>
+                <strong>评分点</strong>
                 <div className="tp-toolbar__spacer" />
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => editors.fillDemoAnalysis()}
+                >
+                  填入演示数据
+                </button>
                 <button
                   type="button"
                   className="btn btn-primary btn-sm"
@@ -484,7 +573,7 @@ export function TechnicalPlanWorkspace() {
                         const t = await pipeline.runTask("analyze");
                         if (t.status === "success") {
                           await editors.reloadFromApi();
-                          setTaskTip("招标分析已写入概述");
+                          setTaskTip(t.message || "招标分析已写入结构化结果");
                         }
                       } catch {
                         /* */
@@ -500,18 +589,75 @@ export function TechnicalPlanWorkspace() {
                   <tr>
                     <th>评分项</th>
                     <th>权重</th>
+                    <th style={{ width: 56 }} />
                   </tr>
                 </thead>
                 <tbody>
-                  {mockAnalysis.scoringPoints.map((s) => (
-                    <tr key={s.name}>
-                      <td>{s.name}</td>
-                      <td className="mono">{s.weight}</td>
+                  {editors.analysis.scoringPoints.length === 0 ? (
+                    <tr>
+                      <td colSpan={3} style={{ color: "var(--text-secondary)" }}>
+                        暂无评分点，请 AI 分析或添加
+                      </td>
                     </tr>
-                  ))}
+                  ) : (
+                    editors.analysis.scoringPoints.map((s, i) => (
+                      <tr key={i}>
+                        <td>
+                          <input
+                            value={s.name}
+                            onChange={(e) => {
+                              const next = [...editors.analysis.scoringPoints];
+                              next[i] = { ...next[i], name: e.target.value };
+                              editors.patchAnalysis({ scoringPoints: next });
+                            }}
+                          />
+                        </td>
+                        <td>
+                          <input
+                            className="mono"
+                            value={s.weight}
+                            onChange={(e) => {
+                              const next = [...editors.analysis.scoringPoints];
+                              next[i] = { ...next[i], weight: e.target.value };
+                              editors.patchAnalysis({ scoringPoints: next });
+                            }}
+                            style={{ width: 72 }}
+                          />
+                        </td>
+                        <td>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => {
+                              const next = editors.analysis.scoringPoints.filter(
+                                (_, j) => j !== i,
+                              );
+                              editors.patchAnalysis({ scoringPoints: next });
+                            }}
+                          >
+                            删
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
-              <div className="tp-toolbar" style={{ marginTop: 16, marginBottom: 0 }}>
+              <div className="tp-toolbar" style={{ marginTop: 12, marginBottom: 0 }}>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() =>
+                    editors.patchAnalysis({
+                      scoringPoints: [
+                        ...editors.analysis.scoringPoints,
+                        { name: "", weight: "" },
+                      ],
+                    })
+                  }
+                >
+                  添加评分点
+                </button>
                 <div className="tp-toolbar__spacer" />
                 <Link to={`/technical-plan/${project.id}/outline`} className="btn btn-primary">
                   下一步：生成大纲
@@ -541,7 +687,7 @@ export function TechnicalPlanWorkspace() {
                   preserveStructure,
                   targetId,
                   targetLabel,
-                  baseContent: editors.analysisOverview,
+                  baseContent: serializeBidAnalysis(editors.analysis),
                 })
               }
               onRegenerate={() => undefined}
@@ -814,17 +960,13 @@ export function TechnicalPlanWorkspace() {
               </p>
             </div>
           </div>
-          <div className="field" style={{ marginBottom: 14 }}>
-            <label>导出模板</label>
-            <select defaultValue="gov-standard">
-              <option value="gov-standard">政务投标通用（宋体标题）</option>
-              <option value="enterprise">企业方案风</option>
-              <option value="custom">自定义（见导出格式页）</option>
-            </select>
-          </div>
+          <p style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 12 }}>
+            将使用「模板设置」中同步到后端的<strong>默认导出模板</strong>核心样式（字体/标题/页边距）。
+            未配置时使用内置默认。
+          </p>
           <div className="tp-toolbar" style={{ marginBottom: 0 }}>
             <Link to="/export-format" className="btn btn-ghost">
-              管理模板
+              管理模板 / 设为默认
             </Link>
             <div className="tp-toolbar__spacer" />
             <button

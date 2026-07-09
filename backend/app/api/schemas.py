@@ -103,6 +103,9 @@ class WorkspaceSettingsOut(BaseModel):
     api_key: str = Field(serialization_alias="apiKey")
     model: str
     parse_strategy: str = Field(serialization_alias="parseStrategy")
+    export_format: dict | None = Field(
+        default=None, serialization_alias="exportFormat"
+    )
     updated_at: datetime | None = Field(default=None, serialization_alias="updatedAt")
 
 
@@ -118,6 +121,7 @@ class WorkspaceSettingsUpdate(BaseModel):
     api_key: str | None = Field(default=None, alias="apiKey")
     model: str | None = None
     parse_strategy: str | None = Field(default=None, alias="parseStrategy")
+    export_format: dict | None = Field(default=None, alias="exportFormat")
 
 
 # ---------- LLM / revise ----------
@@ -186,6 +190,7 @@ class EditorStateOut(BaseModel):
     facts: list | dict | None = None
     mode: str = "ALIGNED"
     analysis_overview: str | None = Field(default=None, serialization_alias="analysisOverview")
+    analysis: dict | None = None
     guidance: dict | None = None
     parsed_markdown: str | None = Field(default=None, serialization_alias="parsedMarkdown")
     updated_at: str | None = Field(default=None, serialization_alias="updatedAt")
@@ -201,5 +206,6 @@ class EditorStateUpdate(BaseModel):
     facts: list | dict | None = None
     mode: str | None = None
     analysis_overview: str | None = Field(default=None, alias="analysisOverview")
+    analysis: dict | None = None
     guidance: dict | None = None
     parsed_markdown: str | None = Field(default=None, alias="parsedMarkdown")

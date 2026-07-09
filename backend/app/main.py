@@ -30,7 +30,7 @@ from app.api import (
     tasks,
 )
 from app.core.config import get_settings
-from app.core.database import Base, SessionLocal, engine
+from app.core.database import Base, SessionLocal, engine, ensure_schema_columns
 # 导入实体以注册 Base.metadata（create_all 依赖）
 from app.models import (  # noqa: F401
     Project,
@@ -51,6 +51,7 @@ async def lifespan(_app: FastAPI):
     启动阶段：建表 + seed workspace + 中断残留任务。
     """
     Base.metadata.create_all(bind=engine)
+    ensure_schema_columns()
     settings = get_settings()
     db = SessionLocal()
     try:

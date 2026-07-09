@@ -1,12 +1,10 @@
 """
 模块：工作空间设置路由
-用途：读写模型供应商、Base URL、API Key（明文）、模型名、解析策略。
-对接：
-  - GET|PUT /api/settings
-  - 前端 useWorkspaceSettings / features/settings/types.ts
-二次开发：Key 明文回显为产品决策（保密机）；勿提交含 Key 的数据库文件。
+用途：读写模型配置 + 默认导出模板。
+对接：GET|PUT /api/settings
 """
 
+import json
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -21,13 +19,20 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 
 
 def _to_out(row) -> WorkspaceSettingsOut:
-    """用途：ORM → 前端 WorkspaceSettings（camelCase）。"""
+    """用途：ORM → 响应（含 exportFormat）。"""
+    export_format = None
+    if getattr(row, "export_format_json", None):
+        try:
+            export_format = json.loads(row.export_format_json)
+        except json.JSONDecodeError:
+            export_format = None
     return WorkspaceSettingsOut(
         provider=row.provider,
         api_base_url=row.api_base_url,
         api_key=row.api_key,
         model=row.model,
         parse_strategy=row.parse_strategy,
+        export_format=export_format if isinstance(export_format, dict) else None,
         updated_at=row.updated_at,
     )
 
@@ -37,10 +42,6 @@ def get_settings(
     db: Annotated[Session, Depends(get_db)],
     workspace_id: Annotated[str, Depends(get_workspace_id)],
 ) -> WorkspaceSettingsOut:
-    """
-    用途：读取当前 workspace 设置；apiKey 明文返回以便设置页正常显示。
-    对接：前端 useWorkspaceSettings 初始加载
-    """
     row = settings_service.get_or_create_settings(db, workspace_id)
     return _to_out(row)
 
@@ -51,20 +52,15 @@ def put_settings(
     db: Annotated[Session, Depends(get_db)],
     workspace_id: Annotated[str, Depends(get_workspace_id)],
 ) -> WorkspaceSettingsOut:
-    """
-    用途：整包/部分更新设置并落库（明文 Key）。
-    对接：设置页「保存」
-    """
+    dumped = body.model_dump(by_alias=False, exclude_unset=True)
+    kwargs: dict = {}
+    for key in ("provider", "api_base_url", "api_key", "model", "parse_strategy"):
+        if key in dumped:
+            kwargs[key] = dumped[key]
+    if "export_format" in dumped:
+        kwargs["export_format"] = dumped["export_format"]
     try:
-        row = settings_service.update_settings(
-            db,
-            workspace_id,
-            provider=body.provider,
-            api_base_url=body.api_base_url,
-            api_key=body.api_key,
-            model=body.model,
-            parse_strategy=body.parse_strategy,
-        )
+        row = settings_service.update_settings(db, workspace_id, **kwargs)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
     return _to_out(row)

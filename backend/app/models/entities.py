@@ -106,6 +106,8 @@ class WorkspaceSettingsRow(Base):
     model: Mapped[str] = mapped_column(String(200), nullable=False, default="deepseek-chat")
     # light | local | ask
     parse_strategy: Mapped[str] = mapped_column(String(32), nullable=False, default="light")
+    # 默认导出模板 JSON（对齐前端 ExportFormatConfig，明文）
+    export_format_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -132,6 +134,8 @@ class ProjectEditorStateRow(Base):
     facts_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     mode: Mapped[str] = mapped_column(String(32), nullable=False, default="ALIGNED")
     analysis_overview: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 结构化招标分析：overview + techRequirements + rejectionRisks + scoringPoints
+    analysis_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     guidance_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 轻量解析后的招标文件 Markdown（document 步）
     parsed_markdown: Mapped[str | None] = mapped_column(Text, nullable=True)
