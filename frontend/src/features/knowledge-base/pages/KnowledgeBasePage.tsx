@@ -1,16 +1,21 @@
 import { useMemo, useState, type DragEvent } from "react";
 import {
   BookOpen,
-  FolderPlus,
+  FolderInput,
   ImageIcon,
   Images,
+  RefreshCw,
   Search,
   Trash2,
   Upload,
   X,
 } from "lucide-react";
-import { imageCategories, mockDocs, mockImages } from "../mock";
-import type { KbTab, KnowledgeImage } from "../types";
+import { EmptyState } from "../../../shared/components/EmptyState/EmptyState";
+import { FolderTree } from "../components/FolderTree";
+import { useKnowledgeBase } from "../hooks/useKnowledgeBase";
+import { imageCategories, mockImages } from "../mock";
+import type { DocParseStatus, KnowledgeImage } from "../types";
+import { DOC_STATUS_LABEL } from "../types";
 import "./KnowledgeBase.css";
 
 const STORAGE_KEY = "biaoshu.knowledgeImages.v1";
@@ -29,34 +34,35 @@ function saveUserImages(list: KnowledgeImage[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
 }
 
+function statusClass(status: DocParseStatus): string {
+  if (status === "ready") return "is-ready";
+  if (status === "failed") return "is-failed";
+  if (status === "pending") return "is-pending";
+  return "is-busy";
+}
+
 /**
- * 知识库页
- * 用途：文档知识库 + 图片知识库（B 端补齐图文素材管理，供正文配图/架构图复用）。
+ * 模块：知识库页
+ * 用途：文档（文件夹树 + 状态筛选 + 批量操作）+ 图片素材库。
+ * 对接：索引/上传后端待接；文档状态见 useKnowledgeBase。
  */
 export function KnowledgeBasePage() {
-  const [tab, setTab] = useState<KbTab>("documents");
-  const [docQuery, setDocQuery] = useState("");
+  const [tab, setTab] = useState<"documents" | "images">("documents");
+  const kb = useKnowledgeBase();
+
   const [imgQuery, setImgQuery] = useState("");
   const [imgCategory, setImgCategory] = useState("全部");
-  const [userImages, setUserImages] = useState<KnowledgeImage[]>(() => loadUserImages());
+  const [userImages, setUserImages] = useState<KnowledgeImage[]>(() =>
+    loadUserImages(),
+  );
   const [dragOver, setDragOver] = useState(false);
   const [preview, setPreview] = useState<KnowledgeImage | null>(null);
+  const [moveTarget, setMoveTarget] = useState("");
 
   const allImages = useMemo(
     () => [...userImages, ...mockImages],
     [userImages],
   );
-
-  const filteredDocs = useMemo(() => {
-    const q = docQuery.trim().toLowerCase();
-    if (!q) return mockDocs;
-    return mockDocs.filter(
-      (d) =>
-        d.name.toLowerCase().includes(q) ||
-        d.tags.some((t) => t.includes(q)) ||
-        d.category.includes(q),
-    );
-  }, [docQuery]);
 
   const filteredImages = useMemo(() => {
     const q = imgQuery.trim().toLowerCase();
@@ -71,6 +77,10 @@ export function KnowledgeBasePage() {
       );
     });
   }, [allImages, imgCategory, imgQuery]);
+
+  const allFilteredSelected =
+    kb.filteredDocs.length > 0 &&
+    kb.filteredDocs.every((d) => kb.selectedIds.includes(d.id));
 
   function addImagesFromFiles(files: FileList | File[]) {
     const list = Array.from(files).filter((f) => f.type.startsWith("image/"));
@@ -133,42 +143,46 @@ export function KnowledgeBasePage() {
     }
   }
 
+  function handleBatchMove() {
+    if (!moveTarget || !kb.selectedIds.length) return;
+    kb.moveDocs(kb.selectedIds, moveTarget);
+    setMoveTarget("");
+  }
+
   return (
     <div className="page">
       <header className="page-header">
         <div>
           <h1>知识库</h1>
           <p>
-            文档知识库沉淀方案与规范；图片知识库管理架构图、部署图、效果图等配图素材，
-            正文生成时可检索引用（后端 RAG / 配图链路待接）。
+            文档按文件夹管理并展示解析/索引状态；图片库管理架构图等配图素材。
+            正文生成时可检索引用（后端 RAG 待接）。
           </p>
         </div>
         <div className="page-actions">
           {tab === "documents" ? (
-            <>
-              <button type="button" className="btn btn-ghost">
-                <FolderPlus size={16} /> 新建分类
-              </button>
-              <button type="button" className="btn btn-primary">
-                <Upload size={16} /> 上传文档
-              </button>
-            </>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={kb.addDemoDoc}
+              title="前端演示上传"
+            >
+              <Upload size={16} /> 上传文档
+            </button>
           ) : (
-            <>
-              <label className="btn btn-primary" style={{ cursor: "pointer" }}>
-                <Upload size={16} /> 上传图片
-                <input
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  hidden
-                  onChange={(e) => {
-                    if (e.target.files?.length) addImagesFromFiles(e.target.files);
-                    e.target.value = "";
-                  }}
-                />
-              </label>
-            </>
+            <label className="btn btn-primary" style={{ cursor: "pointer" }}>
+              <Upload size={16} /> 上传图片
+              <input
+                type="file"
+                accept="image/*"
+                multiple
+                hidden
+                onChange={(e) => {
+                  if (e.target.files?.length) addImagesFromFiles(e.target.files);
+                  e.target.value = "";
+                }}
+              />
+            </label>
           )}
         </div>
       </header>
@@ -180,7 +194,7 @@ export function KnowledgeBasePage() {
           onClick={() => setTab("documents")}
         >
           <BookOpen size={16} /> 文档知识库
-          <span className="badge badge-muted">{mockDocs.length}</span>
+          <span className="badge badge-muted">{kb.totalDocCount}</span>
         </button>
         <button
           type="button"
@@ -193,75 +207,225 @@ export function KnowledgeBasePage() {
       </nav>
 
       {tab === "documents" && (
-        <>
-          <div className="card card-pad" style={{ marginBottom: 16 }}>
-            <div className="field">
-              <label htmlFor="kb-search">检索文档</label>
-              <div style={{ position: "relative" }}>
-                <Search
-                  size={16}
-                  style={{
-                    position: "absolute",
-                    left: 12,
-                    top: 14,
-                    color: "var(--text-tertiary)",
-                  }}
-                />
-                <input
-                  id="kb-search"
-                  value={docQuery}
-                  onChange={(e) => setDocQuery(e.target.value)}
-                  placeholder="例如：等保、信创部署、视频接入规模…"
-                  style={{ paddingLeft: 36 }}
-                />
+        <div className="kb-docs-layout">
+          <FolderTree
+            folders={kb.folders}
+            counts={kb.folderCounts}
+            totalCount={kb.totalDocCount}
+            selectedId={kb.selectedFolderId}
+            onSelect={kb.setSelectedFolderId}
+            onCreate={kb.createFolder}
+          />
+
+          <div className="kb-docs-main">
+            <div className="kb-docs-toolbar card card-pad">
+              <div className="field" style={{ margin: 0, flex: 1, minWidth: 180 }}>
+                <label htmlFor="kb-search">检索文档</label>
+                <div style={{ position: "relative" }}>
+                  <Search
+                    size={16}
+                    style={{
+                      position: "absolute",
+                      left: 12,
+                      top: 14,
+                      color: "var(--text-tertiary)",
+                    }}
+                  />
+                  <input
+                    id="kb-search"
+                    value={kb.docQuery}
+                    onChange={(e) => kb.setDocQuery(e.target.value)}
+                    placeholder="名称、标签、状态说明…"
+                    style={{ paddingLeft: 36 }}
+                  />
+                </div>
+              </div>
+              <div className="field" style={{ margin: 0, minWidth: 140 }}>
+                <label htmlFor="kb-status">状态</label>
+                <select
+                  id="kb-status"
+                  value={kb.statusFilter}
+                  onChange={(e) =>
+                    kb.setStatusFilter(
+                      e.target.value as DocParseStatus | "all",
+                    )
+                  }
+                >
+                  <option value="all">全部状态</option>
+                  <option value="ready">已就绪</option>
+                  <option value="parsing">解析中</option>
+                  <option value="indexing">索引中</option>
+                  <option value="failed">失败</option>
+                  <option value="pending">待处理</option>
+                </select>
               </div>
             </div>
-          </div>
 
-          <div className="card" style={{ overflow: "hidden" }}>
-            <table className="project-table">
-              <thead>
-                <tr>
-                  <th>资料</th>
-                  <th>分类</th>
-                  <th>标签</th>
-                  <th>分块</th>
-                  <th>更新</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {filteredDocs.map((d) => (
-                  <tr key={d.id}>
-                    <td>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <BookOpen size={16} color="var(--primary)" />
-                        <strong>{d.name}</strong>
-                      </div>
-                    </td>
-                    <td>{d.category}</td>
-                    <td>
-                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                        {d.tags.map((t) => (
-                          <span key={t} className="badge badge-muted">
-                            {t}
-                          </span>
-                        ))}
-                      </div>
-                    </td>
-                    <td className="mono">{d.chunks}</td>
-                    <td>{d.updated}</td>
-                    <td>
-                      <button type="button" className="btn btn-ghost btn-sm">
-                        管理
-                      </button>
-                    </td>
+            {kb.selectedIds.length > 0 && (
+              <div className="kb-batch-bar">
+                <span>
+                  已选 <strong>{kb.selectedIds.length}</strong> 项
+                </span>
+                <div className="kb-batch-bar__actions">
+                  <select
+                    value={moveTarget}
+                    onChange={(e) => setMoveTarget(e.target.value)}
+                    aria-label="移入文件夹"
+                  >
+                    <option value="">移入文件夹…</option>
+                    {kb.folders.map((f) => (
+                      <option key={f.id} value={f.id}>
+                        {f.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="btn btn-soft btn-sm"
+                    disabled={!moveTarget}
+                    onClick={handleBatchMove}
+                  >
+                    <FolderInput size={14} /> 移动
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => kb.retryParse(kb.selectedIds)}
+                  >
+                    <RefreshCw size={14} /> 重试索引
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={kb.clearSelection}
+                  >
+                    取消选择
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="card" style={{ overflow: "hidden" }}>
+              <table className="project-table kb-doc-table">
+                <thead>
+                  <tr>
+                    <th style={{ width: 40 }}>
+                      <input
+                        type="checkbox"
+                        checked={allFilteredSelected}
+                        onChange={kb.toggleSelectAllFiltered}
+                        aria-label="全选当前列表"
+                      />
+                    </th>
+                    <th>资料</th>
+                    <th>状态</th>
+                    <th>文件夹</th>
+                    <th>标签</th>
+                    <th>分块</th>
+                    <th>更新</th>
+                    <th />
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {kb.filteredDocs.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} style={{ padding: 0 }}>
+                        <EmptyState
+                          title="当前筛选下无文档"
+                          description="切换文件夹、状态或关键词后再试。"
+                        />
+                      </td>
+                    </tr>
+                  ) : (
+                    kb.filteredDocs.map((d) => {
+                      const folderName =
+                        kb.folders.find((f) => f.id === d.folderId)?.name ??
+                        d.category;
+                      return (
+                        <tr key={d.id}>
+                          <td>
+                            <input
+                              type="checkbox"
+                              checked={kb.selectedIds.includes(d.id)}
+                              onChange={() => kb.toggleSelect(d.id)}
+                              aria-label={`选择 ${d.name}`}
+                            />
+                          </td>
+                          <td>
+                            <div
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 8,
+                              }}
+                            >
+                              <BookOpen size={16} color="var(--primary)" />
+                              <div>
+                                <strong>{d.name}</strong>
+                                {d.sizeLabel && (
+                                  <div
+                                    className="mono"
+                                    style={{
+                                      fontSize: 11,
+                                      color: "var(--text-tertiary)",
+                                    }}
+                                  >
+                                    {d.sizeLabel}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+                          <td>
+                            <span
+                              className={`kb-status-pill ${statusClass(d.status)}`}
+                              title={d.statusMessage}
+                            >
+                              {DOC_STATUS_LABEL[d.status]}
+                            </span>
+                            {d.statusMessage && (
+                              <div className="kb-status-msg">{d.statusMessage}</div>
+                            )}
+                          </td>
+                          <td>{folderName}</td>
+                          <td>
+                            <div
+                              style={{
+                                display: "flex",
+                                gap: 6,
+                                flexWrap: "wrap",
+                              }}
+                            >
+                              {d.tags.map((t) => (
+                                <span key={t} className="badge badge-muted">
+                                  {t}
+                                </span>
+                              ))}
+                            </div>
+                          </td>
+                          <td className="mono">{d.chunks || "—"}</td>
+                          <td>{d.updated}</td>
+                          <td>
+                            {(d.status === "failed" ||
+                              d.status === "pending") && (
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm"
+                                onClick={() => kb.retryParse([d.id])}
+                              >
+                                <RefreshCw size={14} /> 重试
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </>
+        </div>
       )}
 
       {tab === "images" && (
@@ -278,12 +442,15 @@ export function KnowledgeBasePage() {
             role="button"
             tabIndex={0}
             onKeyDown={(e) => {
-              if (e.key === "Enter") document.getElementById("kb-image-input")?.click();
+              if (e.key === "Enter")
+                document.getElementById("kb-image-input")?.click();
             }}
           >
             <ImageIcon size={28} color="var(--primary)" />
             <strong>拖拽图片到此处，或点击上传</strong>
-            <p>支持 PNG / JPG / WEBP / GIF；建议单张 ≤ 10MB。上传后可供技术标配图引用。</p>
+            <p>
+              支持 PNG / JPG / WEBP / GIF；建议单张 ≤ 10MB。上传后可供技术标配图引用。
+            </p>
             <input
               id="kb-image-input"
               type="file"
@@ -357,7 +524,10 @@ export function KnowledgeBasePage() {
                     {img.url || img.thumbUrl ? (
                       <img src={img.url || img.thumbUrl} alt={img.name} />
                     ) : (
-                      <ImageIcon size={36} style={{ position: "relative", zIndex: 1 }} />
+                      <ImageIcon
+                        size={36}
+                        style={{ position: "relative", zIndex: 1 }}
+                      />
                     )}
                     <span className="kb-image-card__badge badge badge-primary">
                       {img.category}
@@ -434,14 +604,22 @@ export function KnowledgeBasePage() {
               {preview.url || preview.thumbUrl ? (
                 <img src={preview.url || preview.thumbUrl} alt={preview.name} />
               ) : (
-                <div style={{ color: "#94a3b8", textAlign: "center", padding: 24 }}>
+                <div
+                  style={{ color: "#94a3b8", textAlign: "center", padding: 24 }}
+                >
                   <ImageIcon size={48} />
                   <p>演示占位图（上传本地图片可预览真实内容）</p>
                 </div>
               )}
             </div>
             <div className="kb-modal__side">
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: 8,
+                }}
+              >
                 <h3>{preview.name}</h3>
                 <button
                   type="button"
@@ -458,7 +636,12 @@ export function KnowledgeBasePage() {
               </div>
               <div className="field">
                 <label>说明（检索/配图用）</label>
-                <div style={{ fontSize: "var(--fs-sm)", color: "var(--text-body)" }}>
+                <div
+                  style={{
+                    fontSize: "var(--fs-sm)",
+                    color: "var(--text-body)",
+                  }}
+                >
                   {preview.caption}
                 </div>
               </div>
@@ -488,7 +671,9 @@ export function KnowledgeBasePage() {
                   type="button"
                   className="btn btn-primary"
                   onClick={() =>
-                    window.alert("演示：已加入当前项目配图候选（后端待接）。")
+                    window.alert(
+                      "演示：已加入当前项目配图候选（后端待接）。",
+                    )
                   }
                 >
                   用于配图

@@ -1,6 +1,7 @@
 /**
- * 技术方案域类型
+ * 模块：技术方案域类型
  * 用途：对齐 C 端 technical-plan 工作流的数据结构。
+ * 对接：大纲/正文字段将进入 revise 与生成任务 body；后端可原样复用。
  */
 
 export type TechnicalPlanStepId =
@@ -18,11 +19,17 @@ export type TechnicalPlanStepMeta = {
   description: string;
 };
 
+/** 大纲扩展模式（对齐 C 端 FREE / ALIGNED 展示） */
+export type OutlineExpansionMode = "ALIGNED" | "FREE";
+
 export type OutlineNode = {
   id: string;
   title: string;
   level: 1 | 2 | 3;
+  /** 目标字数（二级/三级常用） */
   targetWords?: number;
+  /** 章节说明（可选，便于 AI 扩写） */
+  description?: string;
   children?: OutlineNode[];
 };
 
@@ -38,5 +45,8 @@ export type ChapterContent = {
   title: string;
   wordCount: number;
   status: "pending" | "generating" | "done" | "needs_review";
+  /** 列表摘要（可由 body 派生） */
   preview: string;
+  /** 可编辑 Markdown 正文 */
+  body: string;
 };

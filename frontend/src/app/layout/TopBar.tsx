@@ -17,7 +17,7 @@ const titleMap: Record<string, string> = {
 
 function resolveTitle(pathname: string): string {
   if (pathname.startsWith("/technical-plan")) return "技术方案";
-  return titleMap[pathname] ?? "标书工坊";
+  return titleMap[pathname] ?? "标书";
 }
 
 export function TopBar() {
@@ -37,8 +37,8 @@ export function TopBar() {
           {currentWorkspace.name}
         </div>
         <div className="user-chip">
-          演示用户
-          <span className="user-chip__avatar">演</span>
+          本机用户
+          <span className="user-chip__avatar">用</span>
         </div>
       </div>
     </header>

@@ -1,4 +1,17 @@
-import type { KnowledgeDoc, KnowledgeImage } from "./types";
+/**
+ * 模块：知识库 mock
+ * 用途：文件夹 + 文档状态 + 图片素材演示数据。
+ */
+
+import type { KbFolder, KnowledgeDoc, KnowledgeImage } from "./types";
+
+export const mockFolders: KbFolder[] = [
+  { id: "fld_perf", name: "业绩材料", parentId: null },
+  { id: "fld_tpl", name: "规范模板", parentId: null },
+  { id: "fld_tech", name: "技术方案", parentId: null },
+  { id: "fld_ops", name: "运维服务", parentId: null },
+  { id: "fld_inbox", name: "待整理", parentId: null },
+];
 
 export const mockDocs: KnowledgeDoc[] = [
   {
@@ -7,7 +20,11 @@ export const mockDocs: KnowledgeDoc[] = [
     tags: ["业绩", "交通"],
     chunks: 42,
     updated: "3 天前",
+    updatedAt: "2026-07-06T10:00:00+08:00",
     category: "业绩材料",
+    folderId: "fld_perf",
+    status: "ready",
+    sizeLabel: "2.4 MB",
   },
   {
     id: "kb2",
@@ -15,7 +32,11 @@ export const mockDocs: KnowledgeDoc[] = [
     tags: ["安全", "模板"],
     chunks: 28,
     updated: "1 周前",
+    updatedAt: "2026-07-02T09:00:00+08:00",
     category: "规范模板",
+    folderId: "fld_tpl",
+    status: "ready",
+    sizeLabel: "186 KB",
   },
   {
     id: "kb3",
@@ -23,7 +44,12 @@ export const mockDocs: KnowledgeDoc[] = [
     tags: ["架构"],
     chunks: 65,
     updated: "2 周前",
+    updatedAt: "2026-06-25T14:00:00+08:00",
     category: "技术方案",
+    folderId: "fld_tech",
+    status: "indexing",
+    statusMessage: "向量索引进行中…",
+    sizeLabel: "5.1 MB",
   },
   {
     id: "kb4",
@@ -31,11 +57,53 @@ export const mockDocs: KnowledgeDoc[] = [
     tags: ["运维", "培训"],
     chunks: 19,
     updated: "1 月前",
+    updatedAt: "2026-06-09T11:00:00+08:00",
     category: "运维服务",
+    folderId: "fld_ops",
+    status: "ready",
+    sizeLabel: "890 KB",
+  },
+  {
+    id: "kb5",
+    name: "扫描件-资格材料合集.pdf",
+    tags: ["扫描", "资格"],
+    chunks: 0,
+    updated: "今天",
+    updatedAt: "2026-07-09T08:30:00+08:00",
+    category: "待整理",
+    folderId: "fld_inbox",
+    status: "failed",
+    statusMessage: "OCR 超时，请重试或改用本地 MinerU",
+    sizeLabel: "18.2 MB",
+  },
+  {
+    id: "kb6",
+    name: "历史中标方案-园区能耗.docx",
+    tags: ["以标写标", "能源"],
+    chunks: 0,
+    updated: "昨天",
+    updatedAt: "2026-07-08T16:00:00+08:00",
+    category: "待整理",
+    folderId: "fld_inbox",
+    status: "pending",
+    sizeLabel: "3.3 MB",
+  },
+  {
+    id: "kb7",
+    name: "信创适配清单.xlsx",
+    tags: ["信创"],
+    chunks: 12,
+    updated: "5 天前",
+    updatedAt: "2026-07-04T12:00:00+08:00",
+    category: "规范模板",
+    folderId: "fld_tpl",
+    status: "parsing",
+    statusMessage: "表格抽取中…",
+    sizeLabel: "420 KB",
   },
 ];
 
-/** 占位图：使用 CSS 渐变 data-uri 风格的纯色块由页面渲染，此处给稳定 id 与元数据 */
+/** 占位图：元数据演示，无真实 URL 时由页面渲染渐变块 */
 export const mockImages: KnowledgeImage[] = [
   {
     id: "img1",

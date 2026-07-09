@@ -5,19 +5,19 @@ import {
   Check,
   ClipboardList,
   FileStack,
-  HardHat,
-  FileSearch,
-  FileType,
-  FileWarning,
   FolderTree,
+  HardHat,
   Layers3,
-  Plug,
   RefreshCcw,
   ShieldCheck,
   Sparkles,
   Upload,
   X,
 } from "lucide-react";
+import {
+  createProjectAsync,
+  industryFromFeature,
+} from "../../technical-plan/lib/projectStore";
 import {
   featureGroups,
   findFeature,
@@ -26,6 +26,7 @@ import {
 } from "../featureCatalog";
 import "./CreatePage.css";
 
+/** 仅开工类能力图标（质检工具见全局侧栏） */
 const iconMap: Record<string, ReactNode> = {
   core: <Sparkles size={20} />,
   business: <Briefcase size={20} />,
@@ -35,10 +36,6 @@ const iconMap: Record<string, ReactNode> = {
   "single-chapter": <Layers3 size={20} />,
   framework: <FolderTree size={20} />,
   "business-list": <ClipboardList size={20} />,
-  duplicate: <FileSearch size={20} />,
-  rejection: <FileWarning size={20} />,
-  "local-parser": <Plug size={20} />,
-  "export-template": <FileType size={20} />,
 };
 
 function FeatureIcon({ id, color }: { id: string; color: FeatureColor }) {
@@ -48,9 +45,13 @@ function FeatureIcon({ id, color }: { id: string; color: FeatureColor }) {
 type LocalFile = { id: string; name: string; sizeLabel: string };
 
 /**
- * 创建投标方案页
- * 用途：对齐喜鹊标书 https://www.xiquebiaoshu.com/create
- * 布局：左侧功能入口轨 + 右侧标题/亮点/上传区 + 底部主操作。
+ * 模块：创建投标方案页
+ * 用途：选开工能力 → 选/模拟招标文件 → 创建项目并进入对应工作区。
+ * 布局：左侧功能入口轨 + 右侧标题/亮点/上传区 + 底部主操作（对齐喜鹊式交互）。
+ * 对接：
+ *   - createProjectAsync（技术标等）→ 后端 POST /api/projects 或本地兜底
+ *   - 商务类能力直接 navigate 到 /business-bid
+ * 二次开发：真实文件上传改为 multipart + 后端解析任务，勿在页面散落 API。
  */
 export function CreatePage() {
   const navigate = useNavigate();
@@ -75,23 +76,30 @@ export function CreatePage() {
     setFiles((prev) => prev.filter((f) => f.id !== id));
   }
 
-  function handleStart() {
-    if (feature.routeTo) {
-      navigate(feature.routeTo);
-      return;
-    }
-    // 按能力类型进入对应工作区（前端 mock）
+  async function handleStart() {
+    // 商务类：进入商务标工作区入口
     if (feature.id === "business" || feature.id === "business-list") {
       navigate("/business-bid");
       return;
     }
-    if (feature.id === "full-bid") {
-      // 完整标书：先进入技术标演示流，商务册入口在商务标页继续
-      navigate("/technical-plan/proj_01/document");
-      return;
-    }
-    // 技术标 / 施工 / 以标写标 / 单章 / 框架 → 技术方案工作流
-    navigate("/technical-plan/proj_01/document");
+
+    // 技术标类 / 完整投标 / 框架等：创建项目并进入文档解析步
+    const fileNames = files.map((f) => f.name);
+    const baseName =
+      fileNames[0]?.replace(/\.[^.]+$/, "") ||
+      feature.title.replace(/生成$/, "");
+    const project = await createProjectAsync({
+      name: `${baseName} · ${feature.title}`,
+      industry: industryFromFeature(feature.id),
+      featureId: feature.id,
+      fileNames: fileNames.length
+        ? fileNames
+        : ["招标文件-正式稿.pdf"],
+      technicalPlanStep: feature.id === "framework" ? 3 : 1,
+      status: "draft",
+    });
+    const step = feature.id === "framework" ? "outline" : "document";
+    navigate(`/technical-plan/${project.id}/${step}`);
   }
 
   return (
@@ -118,12 +126,6 @@ export function CreatePage() {
                         <div className="feature-item__body">
                           <div className="feature-item__title-row">
                             <span className="feature-item__title">{f.title}</span>
-                            {f.badge === "new" && (
-                              <span className="badge badge-new">{f.badgeText ?? "NEW"}</span>
-                            )}
-                            {f.badge === "free" && (
-                              <span className="badge badge-free">{f.badgeText ?? "限免"}</span>
-                            )}
                           </div>
                           <div className="feature-item__tags">
                             {f.tags.map((t) => (
@@ -148,18 +150,49 @@ export function CreatePage() {
             <header className="content-header">
               <div className="content-heading">
                 <div className="content-heading__icon">
-                  {iconMap[feature.id] ?? <Sparkles size={24} />}
+                  {iconMap[feature.id] ?? <Sparkles size={22} />}
                 </div>
                 <div>
                   <h1 className="content-title">{feature.title}</h1>
                   <p className="content-desc">{feature.description}</p>
                 </div>
               </div>
+
+              {/* 技术标六步示意 */}
+              {(feature.id === "core" ||
+                feature.id === "full-bid" ||
+                feature.id === "engineering" ||
+                feature.id === "yibiaoxiebiao" ||
+                feature.id === "framework") && (
+                <div className="flow-steps" aria-label="工作流程">
+                  {[
+                    "文档解析",
+                    "招标分析",
+                    "目录生成",
+                    "全局事实",
+                    "正文撰写",
+                    "导出交付",
+                  ].map((label, i, arr) => (
+                    <span key={label} style={{ display: "inline-flex", alignItems: "center" }}>
+                      <span className="flow-step">
+                        <span className="flow-step__n">{i + 1}</span>
+                        {label}
+                      </span>
+                      {i < arr.length - 1 ? (
+                        <span className="flow-step__arrow" aria-hidden>
+                          →
+                        </span>
+                      ) : null}
+                    </span>
+                  ))}
+                </div>
+              )}
+
               <div className="highlights">
                 {feature.highlights.map((h) => (
                   <div className="highlight" key={h}>
                     <span className="highlight__dot">
-                      <Check size={14} strokeWidth={3} />
+                      <Check size={12} strokeWidth={2.5} />
                     </span>
                     <span>{h}</span>
                   </div>
@@ -172,13 +205,11 @@ export function CreatePage() {
                 className={`upload-card${dragOver ? " is-drag" : ""}`}
                 role="button"
                 tabIndex={0}
-                onClick={() => {
-                  if (!feature.routeTo) pickDemoFile();
-                }}
+                onClick={() => pickDemoFile()}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
-                    if (!feature.routeTo) pickDemoFile();
+                    pickDemoFile();
                   }
                 }}
                 onDragOver={(e) => {
@@ -189,7 +220,6 @@ export function CreatePage() {
                 onDrop={(e) => {
                   e.preventDefault();
                   setDragOver(false);
-                  if (feature.routeTo) return;
                   const name = e.dataTransfer.files?.[0]?.name;
                   if (name) {
                     setFiles((prev) => [
@@ -226,24 +256,22 @@ export function CreatePage() {
 
               <div className="privacy-bar">
                 <ShieldCheck size={14} color="var(--primary)" />
-                文件仅用于当前工作空间解析与生成，API Key 与文档不会用于公开训练（策略可配置）。
+                文件仅用于当前工作空间解析与编写，不会用于公开模型训练。
               </div>
             </div>
           </div>
 
           <footer className="create-footer">
             <div className="create-footer__tip">
-              {feature.routeTo
-                ? "该能力将跳转到对应工具页"
-                : files.length > 0
-                  ? `已选择 ${files.length} 个文件 · 前端演示将进入技术方案工作流`
-                  : "也可不上传，直接进入演示项目查看完整流程"}
+              {files.length > 0
+                ? `已选择 ${files.length} 个文件，将创建项目并进入工作区`
+                : "可不上传文件，直接进入工作区"}
             </div>
             <button type="button" className="btn btn-primary btn-lg" onClick={handleStart}>
               {feature.cta}
-              <Sparkles size={16} />
             </button>
           </footer>
+
         </section>
       </div>
     </div>

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { MessageSquarePlus, Sparkles, Wand2 } from "lucide-react";
+import { MessageSquarePlus, RefreshCw, Send } from "lucide-react";
 import type { AiFeedbackRecord, FeedbackStage } from "../../types/aiFeedback";
 import { FEEDBACK_STAGE_LABEL } from "../../types/aiFeedback";
 import "./AiFeedbackPanel.css";
@@ -91,7 +91,7 @@ export function AiFeedbackPanel({
       });
       setText("");
       setActivePresets([]);
-      setToast("已提交调整要求（演示：AI 将基于原文定向修订，非整页重写）");
+      setToast("已记录修改意见，将在当前内容基础上修订");
       window.setTimeout(() => setToast(""), 4000);
     } finally {
       setSubmitting(false);
@@ -101,19 +101,18 @@ export function AiFeedbackPanel({
   const stageHistory = history.filter((h) => h.stage === stage).slice(0, 5);
 
   return (
-    <section className="ai-feedback" aria-label={`${stageLabel} AI 反馈调整`}>
+    <section className="ai-feedback" aria-label={`${stageLabel} 修改意见`}>
       <div className="ai-feedback__head">
         <div>
           <h3 className="ai-feedback__title">
             <MessageSquarePlus size={18} color="var(--primary)" />
-            人工反馈 · AI 定向调整
+            修改意见
             <span className="badge badge-primary">{stageLabel}</span>
             {targetLabel ? <span className="badge badge-muted">{targetLabel}</span> : null}
           </h3>
           <p className="ai-feedback__desc">
-            用文字说明要改什么（重点、篇幅、结构、表达方向）。AI 将<strong>基于当前结果</strong>
-            修订，而不是简单「重试」或完全推倒重来
-            {preserveStructure ? "；默认尽量保持现有结构连贯" : ""}。
+            说明需要调整的重点、篇幅或结构。系统将在现有内容上修改
+            {preserveStructure ? "，并尽量保持现有结构" : ""}，避免整段推倒重写。
           </p>
         </div>
       </div>
@@ -160,9 +159,9 @@ export function AiFeedbackPanel({
                 className="btn btn-ghost btn-sm"
                 onClick={onRegenerate}
                 disabled={disabled || submitting}
-                title="整段重新生成，不携带本次文字反馈"
+                title="重新生成本段，不带入本次修改意见"
               >
-                <Sparkles size={14} /> 整段重生成
+                <RefreshCw size={14} /> 重新生成
               </button>
             )}
             <button
@@ -175,8 +174,8 @@ export function AiFeedbackPanel({
                 (!text.trim() && activePresets.length === 0)
               }
             >
-              <Wand2 size={14} />
-              {submitting ? "提交中…" : "按反馈调整"}
+              <Send size={14} />
+              {submitting ? "提交中…" : "按意见修改"}
             </button>
           </div>
         </div>

@@ -1,0 +1,131 @@
+/**
+ * 设置页分区样式
+ */
+
+.settings-page {
+  max-width: 760px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settings-section__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.settings-section__icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--primary-soft);
+  color: var(--primary);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.settings-section__head h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.settings-section__head p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.settings-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.settings-flash {
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  background: rgba(16, 185, 129, 0.12);
+  color: var(--success);
+  font-size: 13px;
+  font-weight: 400;
+}
+
+/* 保存/连通失败提示 */
+.settings-flash--error {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--danger, #dc2626);
+}
+
+.settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  position: sticky;
+  bottom: 12px;
+  padding: 12px 0 0;
+  background: linear-gradient(180deg, transparent, var(--bg-content-solid) 30%);
+}
+
+/* 站点背景 */
+.settings-bg {
+  display: grid;
+  grid-template-columns: minmax(160px, 220px) 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.settings-bg__preview {
+  aspect-ratio: 16 / 10;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-content-solid);
+  background-size: cover;
+  background-position: center;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.settings-bg__placeholder {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  padding: 8px;
+  text-align: center;
+}
+
+.settings-bg__controls {
+  min-width: 0;
+}
+
+.settings-bg__hint {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  line-height: 1.5;
+}
+
+.settings-bg__error {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--danger);
+}
+
+.settings-bg input[type="range"] {
+  width: 100%;
+  accent-color: var(--primary);
+}
+
+@media (max-width: 640px) {
+  .settings-bg {
+    grid-template-columns: 1fr;
+  }
+}

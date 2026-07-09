@@ -5,9 +5,11 @@ import { TechnicalPlanListPage } from "../features/technical-plan/pages/Technica
 import { TechnicalPlanNewPage } from "../features/technical-plan/pages/TechnicalPlanNewPage";
 import { TechnicalPlanWorkspace } from "../features/technical-plan/pages/TechnicalPlanWorkspace";
 import { KnowledgeBasePage } from "../features/knowledge-base/pages/KnowledgeBasePage";
+import { ResourcesPage } from "../features/resources/pages/ResourcesPage";
 import { DuplicateCheckPage } from "../features/duplicate-check/pages/DuplicateCheckPage";
 import { RejectionCheckPage } from "../features/rejection-check/pages/RejectionCheckPage";
 import { BusinessBidPage } from "../features/business-bid/pages/BusinessBidPage";
+import { BusinessBidWorkspace } from "../features/business-bid/pages/BusinessBidWorkspace";
 import { BidOpportunityPage } from "../features/bid-opportunity/pages/BidOpportunityPage";
 import { LocalParserPage } from "../features/local-parser/pages/LocalParserPage";
 import { ExportFormatPage } from "../features/export-format/pages/ExportFormatPage";
@@ -17,7 +19,8 @@ import { SettingsPage } from "../features/settings/pages/SettingsPage";
 
 /**
  * 前端路由
- * 对齐 C 端模块：创建、技术方案、知识库、查重、废标、商务标、导出模板、设置等。
+ * 用途：对齐 C 端模块地图；商务标含分步工作区子路由。
+ * 对接：页面均挂 AppShell；后端就绪后无需改路径形状。
  */
 export function AppRouter() {
   return (
@@ -35,9 +38,18 @@ export function AppRouter() {
             element={<TechnicalPlanWorkspace />}
           />
           <Route path="knowledge-base" element={<KnowledgeBasePage />} />
+          <Route path="resources" element={<ResourcesPage />} />
           <Route path="duplicate-check" element={<DuplicateCheckPage />} />
           <Route path="rejection-check" element={<RejectionCheckPage />} />
+
+          {/* 商务标：入口列表 + 分步工作区 */}
           <Route path="business-bid" element={<BusinessBidPage />} />
+          <Route path="business-bid/:projectId" element={<BusinessBidWorkspace />} />
+          <Route
+            path="business-bid/:projectId/:step"
+            element={<BusinessBidWorkspace />}
+          />
+
           <Route path="bid-opportunity" element={<BidOpportunityPage />} />
           <Route path="local-parser" element={<LocalParserPage />} />
 

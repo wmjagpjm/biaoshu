@@ -1,0 +1,143 @@
+/**
+ * 标讯列表样式
+ */
+
+.opp-filters {
+  display: grid;
+  grid-template-columns: 1.4fr 0.8fr auto;
+  gap: 12px;
+  align-items: flex-end;
+  margin-bottom: 14px;
+}
+
+.opp-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.opp-chip {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #fff;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.opp-chip.is-active {
+  border-color: transparent;
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.opp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.opp-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: #fff;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.opp-card__top {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.opp-card__title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.opp-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.opp-card__meta strong {
+  color: var(--text-body);
+  font-weight: 400;
+}
+
+.opp-card__summary {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.opp-card__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.opp-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding-top: 4px;
+}
+
+.opp-card__source {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.opp-status {
+  display: inline-flex;
+  height: 24px;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.opp-status.is-open {
+  background: rgba(16, 185, 129, 0.12);
+  color: var(--success);
+}
+
+.opp-status.is-closing_soon {
+  background: rgba(245, 158, 11, 0.14);
+  color: var(--warning);
+}
+
+.opp-status.is-closed {
+  background: var(--hover-bg);
+  color: var(--text-tertiary);
+}
+
+@media (max-width: 800px) {
+  .opp-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .opp-card__source {
+    margin-left: 0;
+  }
+}

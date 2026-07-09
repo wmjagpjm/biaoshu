@@ -1,12 +1,12 @@
 /**
- * 创建页功能目录
- * 用途：对齐喜鹊 /create 左侧信息架构，并补齐独立「商务标生成」入口。
+ * 创建页功能目录（仅「开工 / 生成」能力）
+ * 查重、废标、模板、本地解析等日常工具只在全局侧栏，避免入口重复。
  *
  * 概念区分：
- * - 技术标生成：只做技术响应（方案/实施/运维等）
- * - 商务标生成：资格、报价、承诺、授权等商务文件
- * - 完整投标文件：商务 + 技术一体化打包
- * - 商务资料清单：只整理要交哪些材料，不生成正文
+ * - 技术标：技术方案主流程
+ * - 商务标：资格、报价、授权等
+ * - 完整投标：两册统一上下文
+ * - 商务资料清单：只整理要交什么，不写正文
  */
 
 export type FeatureColor =
@@ -24,8 +24,6 @@ export type CreateFeature = {
   description: string;
   tags: string[];
   color: FeatureColor;
-  badge?: "new" | "free";
-  badgeText?: string;
   highlights: string[];
   uploadTitle: string;
   uploadDesc: string;
@@ -47,28 +45,26 @@ export const featureGroups: FeatureGroup[] = [
         id: "core",
         title: "技术标生成",
         description:
-          "即技术标 / 技术方案。根据招标文件生成技术响应内容：解析评分点 → 大纲 → 正文 → 导出，对应 C 端「技术方案」主流程。",
-        tags: ["技术标", "全行业通用", "图文并茂"],
+          "上传招标文件后，按评分点梳理、目录、正文到导出，完成技术方案全流程。",
+        tags: ["技术标", "全流程"],
         color: "purple",
         highlights: [
-          "智能解析评分标准",
-          "大纲与正文分步可编辑",
-          "支持长文档与图文排版",
+          "评分点与招标要求对齐",
+          "目录与正文分步可改",
+          "支持长文档结构",
         ],
-        uploadTitle: "上传招标文件，生成技术标",
-        uploadDesc: "拖拽或点击选择文件。解析后进入技术标六步工作流（分析 → 大纲 → 事实 → 正文 → 导出）。",
-        fileTypes: "PDF / Word / 图片扫描件",
+        uploadTitle: "拖拽或点击上传招标文件",
+        uploadDesc: "解析完成后进入六步工作区，可随时返回修改。",
+        fileTypes: "PDF / Word / 扫描件",
         cta: "开始生成技术标",
       },
       {
         id: "business",
         title: "商务标生成",
         description:
-          "独立生成商务标部分：资格证明编排、商务响应、报价说明、授权与诚信承诺等，不强制同时写技术正文。",
+          "独立编写商务标：资格证明编排、商务响应、报价说明、授权与诚信承诺等，不强制同时写技术正文。",
         tags: ["资格文件", "报价说明", "商务响应"],
         color: "indigo",
-        badge: "new",
-        badgeText: "NEW",
         highlights: [
           "资格条件逐条响应",
           "商务目录与附件清单",
@@ -83,50 +79,50 @@ export const featureGroups: FeatureGroup[] = [
         id: "full-bid",
         title: "完整投标文件",
         description:
-          "商务标 + 技术标一体化生成，一次出整套投标文件。适合「两册都要、统一项目上下文」的场景。",
+          "商务标与技术标一并规划，统一项目上下文后分册深化。",
         tags: ["商务标", "技术标", "整套交付"],
         color: "violet",
-        highlights: ["一套项目上下文", "商务与技术同步规划", "统一导出"],
-        uploadTitle: "上传招标文件，生成完整投标文件",
-        uploadDesc: "将同时规划商务标与技术标结构，后续可分别进入两册工作区深化。",
+        highlights: ["统一项目上下文", "商务与技术分册", "统一导出"],
+        uploadTitle: "上传招标文件，编制完整投标文件",
+        uploadDesc: "同时规划商务标与技术标结构，后续可分别进入两册工作区。",
         fileTypes: "PDF / Word",
-        cta: "开始生成完整标书",
+        cta: "开始编制完整标书",
       },
       {
         id: "engineering",
         title: "施工标专项",
-        description: "面向施工组织设计场景，强调工艺、进度与附表类内容组织（偏技术标细分）。",
-        tags: ["带施工附表", "带横道图"],
+        description: "面向施工组织设计，侧重工艺、进度与附表类内容组织。",
+        tags: ["施工附表", "进度横道"],
         color: "blue",
         highlights: ["施工工艺响应", "进度与附表", "工程量关联"],
         uploadTitle: "上传施工类招标文件",
-        uploadDesc: "可附加工程量清单、图纸说明等辅助资料（后续支持）。",
+        uploadDesc: "可附加工程量清单、图纸说明等辅助资料。",
         fileTypes: "PDF / Word / Excel",
-        cta: "开始生成施工标",
+        cta: "开始编制施工标",
       },
       {
         id: "yibiaoxiebiao",
         title: "以标写标",
-        description: "基于历史中标/参考方案精准复用，针对新项目做替换与改写。",
-        tags: ["精准复用", "针对性替换"],
+        description: "基于历史中标或参考方案复用，针对新项目替换与改写。",
+        tags: ["历史方案", "差异改写"],
         color: "rose",
-        highlights: ["引用知识库历史方案", "差异化改写", "降低重复风险"],
+        highlights: ["引用知识库历史方案", "差异化改写", "控制重复表述"],
         uploadTitle: "上传新项目招标文件",
-        uploadDesc: "建议同时在知识库中准备历史参考方案，以提升复用质量。",
+        uploadDesc: "建议同时在知识库中准备历史参考方案。",
         fileTypes: "PDF / Word",
         cta: "开始以标写标",
       },
       {
         id: "single-chapter",
         title: "单章节专项",
-        description: "只生成或扩写某一个章节，适合补强弱项或局部返工（技术/商务章节均可）。",
-        tags: ["生成单个章节", "灵活输入"],
+        description: "只编写或扩写某一章节，适合补强弱项或局部返工。",
+        tags: ["单章", "局部返工"],
         color: "orange",
-        highlights: ["指定章节", "字数可控", "快速迭代"],
+        highlights: ["指定章节", "字数可控", "便于返工"],
         uploadTitle: "上传招标文件或粘贴章节要求",
-        uploadDesc: "也可先进入已有项目，对单章继续生成（后续对接）。",
+        uploadDesc: "也可先进入已有项目，对单章继续编写。",
         fileTypes: "PDF / Word / 文本",
-        cta: "生成单章节",
+        cta: "编写单章节",
       },
     ],
   },
@@ -136,14 +132,12 @@ export const featureGroups: FeatureGroup[] = [
       {
         id: "framework",
         title: "投标文件框架提取",
-        description: "快速从招标文件提取完整大纲框架，便于人工确认后再扩写正文。",
-        tags: ["快速生成完整标书大纲"],
+        description: "从招标文件提取大纲框架，便于人工确认后再写正文。",
+        tags: ["大纲框架", "目录结构"],
         color: "emerald",
-        badge: "free",
-        badgeText: "限免",
         highlights: ["一级目录对齐", "评分项映射", "可编辑大纲"],
         uploadTitle: "上传招标文件，提取框架",
-        uploadDesc: "仅生成目录结构，不消耗正文生成额度（策略可配置）。",
+        uploadDesc: "仅整理目录结构，不直接写正文。",
         fileTypes: "PDF / Word",
         cta: "提取标书框架",
       },
@@ -151,72 +145,14 @@ export const featureGroups: FeatureGroup[] = [
         id: "business-list",
         title: "商务资料清单整理",
         description:
-          "只整理「要交哪些商务材料」，不做商务标正文撰写。与「商务标生成」不同：清单=目录勾选，生成=写内容。",
-        tags: ["一键整理所需资料"],
+          "只整理要交哪些商务材料，不做商务标正文。清单侧重勾选，生成侧重写内容。",
+        tags: ["资料清单", "递交检查"],
         color: "violet",
         highlights: ["资格文件清单", "盖章材料", "递交检查"],
         uploadTitle: "上传招标文件，整理资料清单",
-        uploadDesc: "解析资格条件与递交要求，输出勾选式清单（非正文）。",
+        uploadDesc: "解析资格条件与递交要求，输出勾选式清单。",
         fileTypes: "PDF / Word",
         cta: "整理资料清单",
-      },
-    ],
-  },
-  {
-    title: "质检与工具",
-    features: [
-      {
-        id: "duplicate",
-        title: "标书查重",
-        description: "检测与知识库、历史稿的重复表达，辅助改写降重。",
-        tags: ["相似度", "段落定位"],
-        color: "blue",
-        highlights: ["章节级定位", "知识库对比", "改写建议占位"],
-        uploadTitle: "选择项目或上传待查正文",
-        uploadDesc: "也可从「我的项目」进入已有正文查重。",
-        fileTypes: "Word / Markdown",
-        routeTo: "/duplicate-check",
-        cta: "前往查重",
-      },
-      {
-        id: "rejection",
-        title: "废标项检查",
-        description: "对照硬性条款与★号要求，输出废标风险清单。",
-        tags: ["形式评审", "★号条款"],
-        color: "rose",
-        highlights: ["风险分级", "条款对照", "修改建议"],
-        uploadTitle: "上传招标与投标文件进行检查",
-        uploadDesc: "前端阶段为演示交互，后端接入后跑真实规则。",
-        fileTypes: "PDF / Word",
-        routeTo: "/rejection-check",
-        cta: "前往废标检查",
-      },
-      {
-        id: "local-parser",
-        title: "本地解析插件",
-        description: "MinerU 本机解析，结果回传工作空间，服务器保持轻量。",
-        tags: ["易用外壳", "自备算力"],
-        color: "emerald",
-        highlights: ["安装即用", "Token 绑定", "自动回传"],
-        uploadTitle: "配置本地解析助手",
-        uploadDesc: "无需在此上传；请下载助手后在本机解析。",
-        fileTypes: "—",
-        routeTo: "/local-parser",
-        cta: "查看插件说明",
-      },
-      {
-        id: "export-template",
-        title: "导出模板设置",
-        description:
-          "对齐 C 端：系统预设、我的模板（查看/编辑/删除）、新建自定义 Word 导出样式。",
-        tags: ["模板设置", "我的模板"],
-        color: "indigo",
-        highlights: ["系统预设", "自定义字体边距", "默认模板"],
-        uploadTitle: "无需上传文件",
-        uploadDesc: "进入模板设置管理导出样式，或新建自定义模板。",
-        fileTypes: "—",
-        routeTo: "/export-format",
-        cta: "打开模板设置",
       },
     ],
   },

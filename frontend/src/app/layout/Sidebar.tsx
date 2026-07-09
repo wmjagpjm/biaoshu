@@ -59,6 +59,11 @@ function NavGroup({ title, items }: { title: string; items: NavItem[] }) {
   );
 }
 
+/**
+ * 侧栏导航（遗留/可选）
+ * 用途：曾规划左侧栏布局；当前壳层以 AppShell 顶栏为准。
+ * 注意：勿与 AppShell 双开导致入口漂移；若启用侧栏，请与顶栏配置同源。
+ */
 export function Sidebar() {
   return (
     <aside className="sidebar" aria-label="主导航">
@@ -67,8 +72,8 @@ export function Sidebar() {
           标
         </div>
         <div className="sidebar__titles">
-          <div className="sidebar__name">标书工坊</div>
-          <div className="sidebar__tag">Bid Studio</div>
+          <div className="sidebar__name">标书</div>
+          <div className="sidebar__tag">投标工作台</div>
         </div>
       </div>
 
@@ -81,10 +86,10 @@ export function Sidebar() {
       <div className="sidebar__foot">
         <div className="sidebar__foot-title">
           <ShieldCheck size={14} style={{ display: "inline", marginRight: 6 }} />
-          本地优先 · 自备 Key
+          本机工作空间
         </div>
         <div className="sidebar__foot-desc">
-          一账号一工作空间。重解析可走本地 MinerU 插件，服务器保持轻量。
+          一账号一工作空间。复杂版式可使用本地解析插件。
         </div>
         <NavLink to="/local-parser" className="btn btn-soft btn-sm" style={{ width: "100%" }}>
           配置本地解析

@@ -1,23 +1,22 @@
 /**
- * 设计 Token — 对齐喜鹊标书 /create 风格
- * 浅色 SaaS + 紫蓝主色 + 左侧功能轨 + 右侧工作面
+ * 设计 Token — 易标式现代 SaaS
+ * 主色 #6366F1，浅紫高亮，浅蓝紫渐变底，大圆角，系统无衬线
  */
 
 :root {
-  /* 品牌主色（喜鹊系：紫 → 蓝） */
-  --primary: #6438ff;
-  --primary-rgb: 100, 56, 255;
-  --primary-deep: #4f22e8;
-  --primary-soft: #f3efff;
-  --primary-grad: linear-gradient(225deg, #9b66fd, #6871ff);
-  --primary-grad-strong: linear-gradient(225deg, #9b66fd, #1a3dff);
+  --primary: #6366f1;
+  --primary-rgb: 99, 102, 241;
+  --primary-deep: #4f46e5;
+  --primary-soft: #eef2ff;
+  --primary-lighter: #e0e7ff;
+  --primary-grad: linear-gradient(135deg, #818cf8, #6366f1);
+  --primary-grad-strong: linear-gradient(135deg, #818cf8, #4f46e5);
 
-  /* 功能色块 */
   --feat-purple: #7c3aed;
   --feat-purple-soft: #f3e8ff;
   --feat-blue: #2563eb;
   --feat-blue-soft: #eff6ff;
-  --feat-indigo: #4f46e5;
+  --feat-indigo: #6366f1;
   --feat-indigo-soft: #eef2ff;
   --feat-rose: #e11d48;
   --feat-rose-soft: #fff1f2;
@@ -28,58 +27,57 @@
   --feat-violet: #8b5cf6;
   --feat-violet-soft: #f5f3ff;
 
-  /* 表面 */
   --surface: #ffffff;
-  --surface-card: #f7f8fd;
-  --bg-deep: #f0f4ff;
-  --bg-content: #fafbff;
-  --sidebar-bg: #fbfcff;
-  --hover-bg: #f5f7fa;
-  --active-bg: #f3efff;
+  --surface-card: #f8fafc;
+  --bg-deep: #eef2ff;
+  --bg-content: linear-gradient(160deg, #f5f7ff 0%, #eef4ff 45%, #f8fafc 100%);
+  --bg-content-solid: #f5f7ff;
+  --sidebar-bg: #ffffff;
+  --sidebar-w: 220px;
+  --hover-bg: #f1f5f9;
+  --active-bg: #eef2ff;
 
-  /* 文字（略加深次要色，提升可读性） */
-  --text-primary: #151515;
-  --text-secondary: #5c6475;
-  --text-tertiary: #7a8496;
-  --text-body: #3a4252;
+  --text-primary: #0f172a;
+  --text-secondary: #64748b;
+  --text-tertiary: #94a3b8;
+  --text-body: #334155;
 
-  /* 字号阶梯 */
-  --fs-xs: 13px;
-  --fs-sm: 14px;
-  --fs-md: 15px;
-  --fs-base: 16px;
-  --fs-lg: 17px;
-  --fs-xl: 20px;
-  --fs-2xl: 26px;
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-md: 14px;
+  --fs-base: 15px;
+  --fs-lg: 16px;
+  --fs-xl: 18px;
+  --fs-2xl: 22px;
   --fs-3xl: 28px;
   --lh: 1.6;
 
-  /* 边框阴影 */
-  --border: #ececef;
-  --border-strong: #dde0e8;
-  --shadow-xs: 0 1px 2px rgba(29, 29, 29, 0.04);
-  --shadow-sm: 0 4px 12px rgba(29, 29, 29, 0.06);
-  --shadow-md: 0 12px 32px rgba(29, 29, 29, 0.08);
-  --shadow-main: 0 0 12px rgba(29, 29, 29, 0.1);
+  --border: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-sm: 0 4px 16px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 12px 32px rgba(15, 23, 42, 0.08);
+  --shadow-main: 0 8px 24px rgba(99, 102, 241, 0.08);
 
-  /* 语义 */
-  --danger: #ff3460;
-  --success: #6eca58;
+  --danger: #ef4444;
+  --success: #22c55e;
   --warning: #f59e0b;
 
-  /* 布局 */
-  --header-h: 60px;
-  --feature-rail-w: 320px;
-  --radius-sm: 8px;
+  --header-h: 0px;
+  --feature-rail-w: 300px;
+  --radius-sm: 10px;
   --radius-md: 12px;
   --radius-lg: 16px;
-  --radius-xl: 18px;
+  --radius-xl: 20px;
   --radius-pill: 999px;
 
-  /* 字体：现代产品感 */
-  --font-body: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --font-body: system-ui, -apple-system, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
 
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
   --duration: 200ms;
+
+  --rule-color: #e2e8f0;
+  --seal-red: #ef4444;
 }

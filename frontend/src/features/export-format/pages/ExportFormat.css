@@ -10,7 +10,7 @@
   padding: 0 16px;
   border-radius: 999px;
   font-size: var(--fs-sm);
-  font-weight: 600;
+  font-weight: 400;
   color: var(--text-secondary);
   border: 1px solid transparent;
   background: transparent;
@@ -24,7 +24,7 @@
 .ef-tab.is-active {
   color: var(--primary);
   background: var(--primary-soft);
-  border-color: rgba(100, 56, 255, 0.2);
+  border-color: rgba(var(--primary-rgb), 0.2);
 }
 
 .ef-grid {
@@ -47,13 +47,13 @@
 }
 
 .ef-card:hover {
-  border-color: rgba(100, 56, 255, 0.28);
+  border-color: rgba(var(--primary-rgb), 0.28);
   box-shadow: var(--shadow-sm);
 }
 
 .ef-card.is-default {
-  border-color: rgba(100, 56, 255, 0.4);
-  box-shadow: 0 0 0 1px rgba(100, 56, 255, 0.12);
+  border-color: rgba(var(--primary-rgb), 0.4);
+  box-shadow: 0 0 0 1px rgba(var(--primary-rgb), 0.12);
 }
 
 .ef-card__icon {
@@ -68,7 +68,7 @@
 
 .ef-card__name {
   font-size: var(--fs-md);
-  font-weight: 700;
+  font-weight: 400;
   margin: 0;
 }
 
@@ -121,17 +121,17 @@
 }
 
 .ef-preview__h1 {
-  font-weight: 700;
+  font-weight: 400;
   margin: 0 0 10px;
 }
 
 .ef-preview__h2 {
-  font-weight: 700;
+  font-weight: 400;
   margin: 0 0 8px;
 }
 
 .ef-preview__h3 {
-  font-weight: 600;
+  font-weight: 400;
   margin: 0 0 8px;
 }
 
@@ -197,7 +197,7 @@
   padding: 0 14px;
   border-radius: 999px;
   font-size: var(--fs-sm);
-  font-weight: 600;
+  font-weight: 400;
   color: var(--text-secondary);
   background: var(--hover-bg);
 }
@@ -241,7 +241,7 @@
 }
 
 .ef-preset-card:hover:not(:disabled) {
-  border-color: rgba(100, 56, 255, 0.4);
+  border-color: rgba(var(--primary-rgb), 0.4);
   box-shadow: var(--shadow-sm);
 }
 
@@ -330,7 +330,7 @@
 }
 
 .ef-editor-preview__title {
-  font-weight: 700;
+  font-weight: 400;
   margin-bottom: 10px;
 }
 
@@ -341,7 +341,7 @@
   margin-bottom: 20px;
   align-items: center;
   background: var(--primary-soft);
-  border-color: rgba(100, 56, 255, 0.15);
+  border-color: rgba(var(--primary-rgb), 0.15);
 }
 
 .ef-default-banner p {
@@ -390,8 +390,8 @@
 }
 
 .ef-library-item.is-active {
-  border-color: rgba(100, 56, 255, 0.4);
-  box-shadow: 0 0 0 1px rgba(100, 56, 255, 0.12);
+  border-color: rgba(var(--primary-rgb), 0.4);
+  box-shadow: 0 0 0 1px rgba(var(--primary-rgb), 0.12);
 }
 
 .ef-library-item__main {
