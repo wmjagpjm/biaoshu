@@ -68,7 +68,7 @@ export function DuplicateCheckPage() {
           <div key={h.id} className="card card-pad chapter-item" style={{ display: "grid" }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 8 }}>
               <strong>{h.chapter}</strong>
-              <span className="badge badge-seal">相似度 {(h.similarity * 100).toFixed(0)}%</span>
+              <span className="badge badge-primary">相似度 {(h.similarity * 100).toFixed(0)}%</span>
             </div>
             <p style={{ margin: "0 0 8px", color: "var(--text-secondary)", fontSize: 13 }}>
               {h.snippet}

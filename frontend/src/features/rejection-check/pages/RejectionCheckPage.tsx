@@ -42,16 +42,16 @@ export function RejectionCheckPage() {
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 16 }}>
         <div className="card card-pad" style={{ textAlign: "center" }}>
-          <div className="display" style={{ fontSize: 32, color: "var(--seal)" }}>1</div>
-          <div style={{ fontSize: 12, color: "var(--text-muted)" }}>高风险</div>
+          <div style={{ fontSize: 32, fontWeight: 700, color: "var(--danger)" }}>1</div>
+          <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>高风险</div>
         </div>
         <div className="card card-pad" style={{ textAlign: "center" }}>
-          <div className="display" style={{ fontSize: 32, color: "var(--gold)" }}>1</div>
-          <div style={{ fontSize: 12, color: "var(--text-muted)" }}>中风险</div>
+          <div style={{ fontSize: 32, fontWeight: 700, color: "var(--warning)" }}>1</div>
+          <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>中风险</div>
         </div>
         <div className="card card-pad" style={{ textAlign: "center" }}>
-          <div className="display" style={{ fontSize: 32, color: "var(--teal)" }}>1</div>
-          <div style={{ fontSize: 12, color: "var(--text-muted)" }}>低风险</div>
+          <div style={{ fontSize: 32, fontWeight: 700, color: "var(--success)" }}>1</div>
+          <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>低风险</div>
         </div>
       </div>
 
@@ -60,11 +60,11 @@ export function RejectionCheckPage() {
           <div key={item.id} className="card card-pad">
             <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
               {item.level === "high" ? (
-                <AlertTriangle color="var(--seal)" size={20} />
+                <AlertTriangle color="var(--danger)" size={20} />
               ) : item.level === "medium" ? (
-                <FileWarning color="var(--gold)" size={20} />
+                <FileWarning color="var(--warning)" size={20} />
               ) : (
-                <ShieldCheck color="var(--teal)" size={20} />
+                <ShieldCheck color="var(--success)" size={20} />
               )}
               <div>
                 <strong>{item.title}</strong>

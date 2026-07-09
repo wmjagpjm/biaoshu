@@ -1,60 +1,74 @@
 /**
- * 设计 Token — 标书工坊
- * 美学方向：印鉴工坊 / 编辑室工业风
- * 墨色底 + 宣纸色内容区 + 朱砂强调，避免通用紫渐变 AI 风。
+ * 设计 Token — 对齐喜鹊标书 /create 风格
+ * 浅色 SaaS + 紫蓝主色 + 左侧功能轨 + 右侧工作面
  */
 
 :root {
-  /* 品牌与强调 */
-  --ink: #141a24;
-  --ink-soft: #1e2736;
-  --ink-muted: #2a3548;
-  --paper: #f3ebe0;
-  --paper-elevated: #faf6ef;
-  --paper-dark: #e6dccf;
-  --seal: #c23b22;
-  --seal-deep: #9a2c18;
-  --seal-soft: rgba(194, 59, 34, 0.12);
-  --gold: #b8954a;
-  --gold-soft: rgba(184, 149, 74, 0.16);
-  --teal: #2f6f6a;
-  --teal-soft: rgba(47, 111, 106, 0.12);
+  /* 品牌主色（喜鹊系：紫 → 蓝） */
+  --primary: #6438ff;
+  --primary-rgb: 100, 56, 255;
+  --primary-deep: #4f22e8;
+  --primary-soft: #f3efff;
+  --primary-grad: linear-gradient(225deg, #9b66fd, #6871ff);
+  --primary-grad-strong: linear-gradient(225deg, #9b66fd, #1a3dff);
 
-  /* 语义色 */
-  --success: #2f6f4e;
-  --warning: #b87a2c;
-  --danger: #c23b22;
-  --info: #3a5f8a;
+  /* 功能色块 */
+  --feat-purple: #7c3aed;
+  --feat-purple-soft: #f3e8ff;
+  --feat-blue: #2563eb;
+  --feat-blue-soft: #eff6ff;
+  --feat-indigo: #4f46e5;
+  --feat-indigo-soft: #eef2ff;
+  --feat-rose: #e11d48;
+  --feat-rose-soft: #fff1f2;
+  --feat-orange: #ea580c;
+  --feat-orange-soft: #fff7ed;
+  --feat-emerald: #059669;
+  --feat-emerald-soft: #ecfdf5;
+  --feat-violet: #8b5cf6;
+  --feat-violet-soft: #f5f3ff;
+
+  /* 表面 */
+  --surface: #ffffff;
+  --surface-card: #f7f8fd;
+  --bg-deep: #f0f4ff;
+  --bg-content: #fafbff;
+  --sidebar-bg: #fbfcff;
+  --hover-bg: #f5f7fa;
+  --active-bg: #f3efff;
 
   /* 文字 */
-  --text-primary: #141a24;
-  --text-secondary: #4a5568;
-  --text-muted: #7a8494;
-  --text-on-ink: #f3ebe0;
-  --text-on-ink-muted: rgba(243, 235, 224, 0.62);
+  --text-primary: #1d1d1d;
+  --text-secondary: #83899b;
+  --text-tertiary: #b0b7c5;
+  --text-body: #485366;
 
-  /* 边框与阴影 */
-  --border: rgba(20, 26, 36, 0.1);
-  --border-strong: rgba(20, 26, 36, 0.18);
-  --shadow-sm: 0 1px 2px rgba(20, 26, 36, 0.06);
-  --shadow-md: 0 8px 24px rgba(20, 26, 36, 0.08);
-  --shadow-lg: 0 20px 48px rgba(20, 26, 36, 0.12);
+  /* 边框阴影 */
+  --border: #ececef;
+  --border-strong: #dde0e8;
+  --shadow-xs: 0 1px 2px rgba(29, 29, 29, 0.04);
+  --shadow-sm: 0 4px 12px rgba(29, 29, 29, 0.06);
+  --shadow-md: 0 12px 32px rgba(29, 29, 29, 0.08);
+  --shadow-main: 0 0 12px rgba(29, 29, 29, 0.1);
+
+  /* 语义 */
+  --danger: #ff3460;
+  --success: #6eca58;
+  --warning: #f59e0b;
 
   /* 布局 */
-  --sidebar-width: 248px;
-  --topbar-height: 56px;
-  --radius-sm: 6px;
-  --radius-md: 10px;
+  --header-h: 56px;
+  --feature-rail-w: 300px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
   --radius-lg: 16px;
-  --radius-xl: 22px;
+  --radius-xl: 18px;
+  --radius-pill: 999px;
 
-  /* 字体 */
-  --font-display: "Instrument Serif", "Noto Serif SC", "Songti SC", serif;
-  --font-body: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
-  --font-mono: "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
+  /* 字体：现代产品感 */
+  --font-body: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
 
-  /* 动效 */
-  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
-  --duration-fast: 150ms;
-  --duration: 280ms;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --duration: 200ms;
 }

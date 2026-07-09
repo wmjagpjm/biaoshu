@@ -13,13 +13,16 @@ export function TechnicalPlanListPage() {
     <div className="page">
       <header className="page-header">
         <div>
-          <h1>技术方案</h1>
+          <h1>我的项目</h1>
           <p>
-            对齐 C 端主流程：文档解析 → 招标分析 → 大纲 → 全局事实 → 正文 → 导出。
-            每一步可回看、可编辑，长任务支持进度展示。
+            技术方案工作流：文档解析 → 招标分析 → 大纲 → 全局事实 → 正文 → 导出。
+            也可从「创建方案」页上传招标文件后进入。
           </p>
         </div>
         <div className="page-actions">
+          <Link to="/create" className="btn btn-ghost">
+            去创建
+          </Link>
           <Link to="/technical-plan/new" className="btn btn-primary">
             <Plus size={16} /> 新建项目
           </Link>

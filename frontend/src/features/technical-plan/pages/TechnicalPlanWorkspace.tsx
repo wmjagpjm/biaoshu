@@ -45,9 +45,9 @@ function sourceLabel(s: "tender" | "knowledge" | "manual") {
 }
 
 function chapterStatusBadge(status: string) {
-  if (status === "done") return <span className="badge badge-seal">已完成</span>;
-  if (status === "generating") return <span className="badge badge-teal">生成中</span>;
-  if (status === "needs_review") return <span className="badge badge-gold">待审</span>;
+  if (status === "done") return <span className="badge badge-primary">已完成</span>;
+  if (status === "generating") return <span className="badge badge-primary">生成中</span>;
+  if (status === "needs_review") return <span className="badge badge-free">待审</span>;
   return <span className="badge badge-muted">待生成</span>;
 }
 
@@ -85,7 +85,7 @@ export function TechnicalPlanWorkspace() {
           <Link to="/technical-plan" className="btn btn-ghost">
             项目列表
           </Link>
-          <button type="button" className="btn btn-ink" disabled title="后端接入后可用">
+          <button type="button" className="btn btn-ghost" disabled title="后端接入后可用">
             <Pause size={16} /> 暂停任务
           </button>
         </div>
@@ -125,10 +125,10 @@ export function TechnicalPlanWorkspace() {
                 <span className="file-chip">
                   <FileText size={14} /> 招标文件-正式稿.pdf
                 </span>
-                <span className="badge badge-teal">轻量解析完成</span>
+                <span className="badge badge-primary">轻量解析完成</span>
               </div>
             </div>
-            <div className="card card-pad" style={{ background: "var(--paper)" }}>
+            <div className="card card-pad" style={{ background: "var(--surface-card)" }}>
               <h3 style={{ marginTop: 0, fontSize: 14 }}>解析预览（Markdown）</h3>
               <pre
                 className="mono"
@@ -232,7 +232,7 @@ export function TechnicalPlanWorkspace() {
       {active === "outline" && (
         <section className="card card-pad">
           <div className="tp-toolbar">
-            <span className="badge badge-gold">模式：ALIGNED（对齐技术要求）</span>
+            <span className="badge badge-primary">模式：ALIGNED（对齐技术要求）</span>
             <button type="button" className="btn btn-ghost btn-sm">
               切换 FREE
             </button>
@@ -308,7 +308,7 @@ export function TechnicalPlanWorkspace() {
       {active === "content" && (
         <section className="card card-pad">
           <div className="tp-toolbar">
-            <span className="badge badge-teal">任务进行中 · 62%</span>
+            <span className="badge badge-primary">任务进行中 · 62%</span>
             <span style={{ fontSize: 13, color: "var(--text-muted)" }}>
               按章生成 · 支持扩写至目标字数
             </span>
@@ -351,7 +351,7 @@ export function TechnicalPlanWorkspace() {
       {active === "export" && (
         <section className="card card-pad" style={{ maxWidth: 720 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
-            <CheckCircle2 size={28} color="var(--teal)" />
+            <CheckCircle2 size={28} color="var(--success)" />
             <div>
               <strong style={{ fontSize: 16 }}>准备导出 Word</strong>
               <p style={{ margin: "4px 0 0", color: "var(--text-secondary)", fontSize: 13 }}>

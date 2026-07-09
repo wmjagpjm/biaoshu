@@ -45,13 +45,13 @@ export function ExportFormatPage() {
               boxShadow: p.active ? "0 0 0 1px rgba(194,59,34,0.15)" : undefined,
             }}
           >
-            <FileType size={20} color="var(--seal)" style={{ marginBottom: 10 }} />
+            <FileType size={20} color="var(--primary)" style={{ marginBottom: 10 }} />
             <strong>{p.name}</strong>
             <p style={{ margin: "8px 0 14px", fontSize: 13, color: "var(--text-secondary)" }}>
               {p.desc}
             </p>
             {p.active ? (
-              <span className="badge badge-seal">当前默认</span>
+              <span className="badge badge-primary">当前默认</span>
             ) : (
               <button type="button" className="btn btn-ghost btn-sm">
                 设为默认

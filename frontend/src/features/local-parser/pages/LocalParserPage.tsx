@@ -48,17 +48,17 @@ export function LocalParserPage() {
               width: 44,
               height: 44,
               borderRadius: 12,
-              background: "var(--seal-soft)",
+              background: "var(--primary-soft)",
               display: "grid",
               placeItems: "center",
-              color: "var(--seal)",
+              color: "var(--primary)",
             }}
           >
             <Plug size={22} />
           </div>
           <div>
             <strong>连接状态</strong>
-            <div style={{ fontSize: 13, color: "var(--text-muted)" }}>
+            <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>
               未检测到本机助手 · 后端就绪后将轮询 / 助手主动心跳
             </div>
           </div>
@@ -82,12 +82,12 @@ export function LocalParserPage() {
           <div key={s.title} className="card card-pad">
             <div
               className="mono"
-              style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}
+              style={{ fontSize: 12, color: "var(--text-tertiary)", marginBottom: 8 }}
             >
               STEP 0{i + 1}
             </div>
             <strong style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <Check size={16} color="var(--teal)" />
+              <Check size={16} color="var(--success)" />
               {s.title}
             </strong>
             <p style={{ margin: "8px 0 0", fontSize: 13, color: "var(--text-secondary)" }}>

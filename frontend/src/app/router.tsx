@@ -1,6 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "./layout/AppShell";
-import { HomePage } from "../features/home/pages/HomePage";
+import { CreatePage } from "../features/create/pages/CreatePage";
 import { TechnicalPlanListPage } from "../features/technical-plan/pages/TechnicalPlanListPage";
 import { TechnicalPlanNewPage } from "../features/technical-plan/pages/TechnicalPlanNewPage";
 import { TechnicalPlanWorkspace } from "../features/technical-plan/pages/TechnicalPlanWorkspace";
@@ -14,15 +14,17 @@ import { ExportFormatPage } from "../features/export-format/pages/ExportFormatPa
 import { SettingsPage } from "../features/settings/pages/SettingsPage";
 
 /**
- * 前端路由表
- * 用途：对齐 C 端功能模块的信息架构；后续可按权限裁剪路由。
+ * 前端路由
+ * 默认进入 /create（喜鹊风格创建页）；技术方案工作流与其它工具页保留。
  */
 export function AppRouter() {
   return (
     <BrowserRouter>
       <Routes>
         <Route element={<AppShell />}>
-          <Route index element={<HomePage />} />
+          <Route index element={<Navigate to="/create" replace />} />
+          <Route path="create" element={<CreatePage />} />
+          <Route path="projects" element={<TechnicalPlanListPage />} />
           <Route path="technical-plan" element={<TechnicalPlanListPage />} />
           <Route path="technical-plan/new" element={<TechnicalPlanNewPage />} />
           <Route path="technical-plan/:projectId" element={<TechnicalPlanWorkspace />} />
@@ -38,7 +40,7 @@ export function AppRouter() {
           <Route path="local-parser" element={<LocalParserPage />} />
           <Route path="export-format" element={<ExportFormatPage />} />
           <Route path="settings" element={<SettingsPage />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
+          <Route path="*" element={<Navigate to="/create" replace />} />
         </Route>
       </Routes>
     </BrowserRouter>

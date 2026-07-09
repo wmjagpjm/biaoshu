@@ -64,7 +64,7 @@ export function KnowledgeBasePage() {
               <tr key={d.id}>
                 <td>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <BookOpen size={16} color="var(--seal)" />
+                    <BookOpen size={16} color="var(--primary)" />
                     <strong>{d.name}</strong>
                   </div>
                 </td>
