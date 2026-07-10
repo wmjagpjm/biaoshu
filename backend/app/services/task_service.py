@@ -1,8 +1,15 @@
 """
 模块：项目任务服务（本机日用，默认异步线程执行）
-用途：parse / analyze / outline / chapter / chapters / export；POST 立即返回，前端轮询进度。
-对接：POST/GET /api/projects/{id}/tasks；sync=1 时阻塞跑完（测试用）。
-二次开发：可换 Redis/Celery；勿跨线程共享 Session。
+用途：
+  - 创建/执行 parse|analyze|outline|chapter|chapters|export
+  - 默认后台线程 + 前端轮询；sync=1 同步跑完（测试）
+  - 协作式取消（cancel_task + 检查点 TaskCancelled）
+  - 大纲/正文生成时注入知识库检索（_kb_search_block，读 guidance.kb*）
+对接：
+  - POST/GET /api/projects/{id}/tasks；POST .../tasks/{id}/cancel
+  - knowledge_service、export_service、llm_service、editor_state_service
+  - 前端 useProjectPipeline
+二次开发：可换 Redis/Celery/SSE；勿跨线程共享 Session；analyze 禁止注入知识库。
 """
 
 from __future__ import annotations
@@ -28,6 +35,13 @@ from app.services.project_service import get_project, update_project
 ALLOWED_TYPES = frozenset(
     {"parse", "analyze", "outline", "chapter", "chapters", "export"}
 )
+
+# 进行中状态：取消与防重入共用
+ACTIVE_STATUSES = frozenset({"pending", "running"})
+
+
+class TaskCancelled(Exception):
+    """用途：协作式取消；worker 在检查点抛出，不覆盖 cancelled 状态。"""
 
 
 def _now() -> datetime:
@@ -87,7 +101,19 @@ def _set_task(
     message: str | None = None,
     result: Any = None,
     error: str | None = None,
+    force: bool = False,
 ) -> None:
+    """
+    用途：更新任务行并 commit。
+    force=False 时若库中已是 cancelled，拒绝再改写为其它终态（除保留 cancelled）。
+    """
+    if not force:
+        db.refresh(task)
+        if task.status == "cancelled" and status not in (None, "cancelled"):
+            raise TaskCancelled()
+        if task.status == "cancelled" and status is None:
+            # 进度心跳也不覆盖已取消
+            raise TaskCancelled()
     if status is not None:
         task.status = status
     if progress is not None:
@@ -103,17 +129,44 @@ def _set_task(
     db.refresh(task)
 
 
+def _assert_not_cancelled(db: Session, task: ProjectTaskRow) -> None:
+    """用途：检查点协作式取消。"""
+    db.refresh(task)
+    if task.status == "cancelled":
+        raise TaskCancelled()
+
+
 def _has_running_same_type(db: Session, project_id: str, task_type: str) -> bool:
     stmt = (
         select(ProjectTaskRow)
         .where(
             ProjectTaskRow.project_id == project_id,
             ProjectTaskRow.type == task_type,
-            ProjectTaskRow.status.in_(("pending", "running")),
+            ProjectTaskRow.status.in_(tuple(ACTIVE_STATUSES)),
         )
         .limit(1)
     )
     return db.scalars(stmt).first() is not None
+
+
+def cancel_task(
+    db: Session, workspace_id: str, project_id: str, task_id: str
+) -> ProjectTaskRow:
+    """
+    用途：将 pending/running 任务标为 cancelled；worker 在检查点退出。
+    对接：POST /api/projects/{id}/tasks/{taskId}/cancel
+    """
+    task = get_task(db, workspace_id, project_id, task_id)
+    if task.status not in ACTIVE_STATUSES:
+        raise ValueError(f"任务已结束（{task.status}），无法取消")
+    task.status = "cancelled"
+    task.message = "已取消"
+    task.error = "用户取消"
+    # 进度保留当前值，便于 UI 展示中断点
+    task.updated_at = _now()
+    db.commit()
+    db.refresh(task)
+    return task
 
 
 def fail_interrupted_tasks(db: Session) -> int:
@@ -122,7 +175,7 @@ def fail_interrupted_tasks(db: Session) -> int:
     对接：main.lifespan 启动时调用。
     """
     stmt = select(ProjectTaskRow).where(
-        ProjectTaskRow.status.in_(("pending", "running"))
+        ProjectTaskRow.status.in_(tuple(ACTIVE_STATUSES))
     )
     rows = list(db.scalars(stmt).all())
     for t in rows:
@@ -168,7 +221,7 @@ def create_task_record(
 
 
 def _execute_task(db: Session, workspace_id: str, task: ProjectTaskRow) -> None:
-    """用途：在给定 Session 上执行任务体。"""
+    """用途：在给定 Session 上执行任务体；支持协作式取消。"""
     payload: dict = {}
     if task.payload_json:
         try:
@@ -176,8 +229,9 @@ def _execute_task(db: Session, workspace_id: str, task: ProjectTaskRow) -> None:
         except json.JSONDecodeError:
             payload = {}
     project_id = task.project_id
-    _set_task(db, task, status="running", progress=5, message="任务开始…")
     try:
+        _assert_not_cancelled(db, task)
+        _set_task(db, task, status="running", progress=5, message="任务开始…")
         if task.type == "parse":
             _run_parse(db, workspace_id, project_id, task)
         elif task.type == "analyze":
@@ -192,24 +246,39 @@ def _execute_task(db: Session, workspace_id: str, task: ProjectTaskRow) -> None:
             _run_export(db, workspace_id, project_id, task)
         else:
             raise ValueError(f"未知任务类型: {task.type}")
+    except TaskCancelled:
+        # 保持 cancel_task 写入的状态，仅补全 message
+        db.refresh(task)
+        if task.status == "cancelled":
+            if not task.message:
+                task.message = "已取消"
+            task.updated_at = _now()
+            db.commit()
+        return
     except (LlmConfigError, LlmCallError, ValueError, RuntimeError, KeyError) as exc:
-        _set_task(
-            db,
-            task,
-            status="failed",
-            progress=100,
-            message="任务失败",
-            error=str(exc),
-        )
+        try:
+            _set_task(
+                db,
+                task,
+                status="failed",
+                progress=100,
+                message="任务失败",
+                error=str(exc),
+            )
+        except TaskCancelled:
+            return
     except Exception as exc:  # noqa: BLE001
-        _set_task(
-            db,
-            task,
-            status="failed",
-            progress=100,
-            message="任务异常",
-            error=f"{type(exc).__name__}: {exc}",
-        )
+        try:
+            _set_task(
+                db,
+                task,
+                status="failed",
+                progress=100,
+                message="任务异常",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+        except TaskCancelled:
+            return
 
 
 def create_and_run_task(
@@ -283,10 +352,12 @@ def _run_parse(
     files = file_service.list_files(db, workspace_id, project_id)
     if not files:
         raise ValueError("请先上传招标文件")
+    _assert_not_cancelled(db, task)
     _set_task(db, task, progress=20, message=f"解析 {files[0].filename}…")
     path = file_service.resolve_path(settings, project_id, files[0].stored_name)
     if not path.exists():
         raise RuntimeError("文件已丢失，请重新上传")
+    _assert_not_cancelled(db, task)
     _set_task(db, task, progress=50, message="提取文本…")
     md = parse_service.parse_file_to_markdown(path, files[0].filename)
     state = _ensure_state(db, project_id)
@@ -321,6 +392,7 @@ def _run_analyze(
     if not source:
         raise ValueError("尚无解析文本，请先上传并解析招标文件")
     clip = source[:18000]
+    _assert_not_cancelled(db, task)
     _set_task(db, task, progress=40, message="调用模型生成结构化招标分析…")
     result = llm_service.chat_completion(
         db,
@@ -403,6 +475,12 @@ def _run_outline(
     if not ctx.strip():
         raise ValueError("请先完成解析或招标分析")
     struct_hint = _analysis_prompt_block(analysis)
+    focus = guidance.get("chapterFocus") or guidance.get("chapter_focus") or ""
+    kb_query = f"{(analysis.get('overview') or '')[:800]}\n{focus}".strip()
+    kb_block, kb_citations = _kb_search_block(
+        db, workspace_id, kb_query, project_id=project_id
+    )
+    _assert_not_cancelled(db, task)
     _set_task(db, task, progress=35, message="生成三级大纲…")
     result = llm_service.chat_completion(
         db,
@@ -416,14 +494,16 @@ def _run_outline(
                     '"description":"要点","children":[...]}\n'
                     "生成 6～12 个一级章节，二级 2～5 个；id 全局唯一。"
                     "大纲应覆盖评分点与关键技术要求。"
+                    "若提供知识库参考，可借鉴目录组织方式，但不得引入招标文件未要求的硬性指标。"
                 ),
             },
             {
                 "role": "user",
                 "content": (
                     f"目标字数：{guidance.get('targetWordCount') or guidance.get('target_word_count') or 80000}\n"
-                    f"侧重：{guidance.get('chapterFocus') or guidance.get('chapter_focus') or '无'}\n"
+                    f"侧重：{focus or '无'}\n"
                     f"{struct_hint}\n"
+                    f"{kb_block}\n"
                     f"材料：\n{ctx}"
                 ),
             },
@@ -467,8 +547,76 @@ def _run_outline(
         status="success",
         progress=100,
         message=f"大纲已生成（{len(outline)} 章）",
-        result={"outlineCount": len(outline), "chapterCount": len(chapters)},
+        result={
+            "outlineCount": len(outline),
+            "chapterCount": len(chapters),
+            "kbCitations": kb_citations[:8],
+        },
     )
+
+
+def _load_guidance_dict(db: Session, project_id: str) -> dict:
+    """用途：从 editor-state 读取 guidance JSON。"""
+    state = db.get(ProjectEditorStateRow, project_id)
+    if state is None or not state.guidance_json:
+        return {}
+    try:
+        data = json.loads(state.guidance_json) or {}
+        return data if isinstance(data, dict) else {}
+    except json.JSONDecodeError:
+        return {}
+
+
+def _guidance_kb_opts(guidance: dict) -> tuple[bool, list[str] | None]:
+    """
+    用途：解析 guidance 中的知识库开关与文件夹范围。
+    返回：(enabled, folder_ids|None)
+    - kbEnabled/kb_enabled 为 false 时不检索
+    - kbFolderIds 非空则限定文件夹；空/缺省 = 全库
+    """
+    enabled = guidance.get("kbEnabled")
+    if enabled is None:
+        enabled = guidance.get("kb_enabled")
+    if enabled is False or enabled == 0 or enabled == "false":
+        return False, None
+    raw = guidance.get("kbFolderIds")
+    if raw is None:
+        raw = guidance.get("kb_folder_ids")
+    folder_ids: list[str] | None = None
+    if isinstance(raw, list) and raw:
+        folder_ids = [str(x) for x in raw if x]
+    return True, folder_ids
+
+
+def _kb_search_block(
+    db: Session,
+    workspace_id: str,
+    query: str,
+    *,
+    project_id: str | None = None,
+) -> tuple[str, list]:
+    """
+    用途：检索知识库并返回 prompt 块与 citations；失败/空库静默跳过。
+    对接：knowledge_service.search_prompt_block；可读项目 guidance 过滤文件夹
+    """
+    try:
+        from app.services import knowledge_service
+
+        folder_ids: list[str] | None = None
+        if project_id:
+            g = _load_guidance_dict(db, project_id)
+            ok, folder_ids = _guidance_kb_opts(g)
+            if not ok:
+                return "", []
+        return knowledge_service.search_prompt_block(
+            db,
+            workspace_id,
+            query,
+            top_k=5,
+            folder_ids=folder_ids,
+        )
+    except Exception:  # noqa: BLE001
+        return "", []
 
 
 def _analysis_prompt_block(analysis: dict) -> str:
@@ -527,8 +675,16 @@ def _generate_one_chapter_body(
     overview: str,
     facts_txt: str,
     analysis_block: str = "",
-) -> str:
-    """用途：单章 LLM 生成，供 chapter / chapters 复用。"""
+    project_id: str | None = None,
+) -> tuple[str, list]:
+    """
+    用途：单章 LLM 生成，供 chapter / chapters 复用。
+    返回：(正文, kbCitations)
+    """
+    kb_query = f"{title}\n{str(overview)[:500]}"
+    kb_block, kb_citations = _kb_search_block(
+        db, workspace_id, kb_query, project_id=project_id
+    )
     result = llm_service.chat_completion(
         db,
         workspace_id,
@@ -539,6 +695,8 @@ def _generate_one_chapter_body(
                     "你是技术标正文写手。用正式中文 Markdown 撰写指定章节，"
                     "结构清晰、少空话，可含小标题与条目。不要输出与本章无关的全书目录。"
                     "应呼应评分点与技术要求。"
+                    "若提供知识库参考，可借鉴写法与要点；禁止编造招标中不存在的硬性指标；"
+                    "与招标文件或全局事实冲突时，以招标与事实为准。"
                 ),
             },
             {
@@ -549,6 +707,7 @@ def _generate_one_chapter_body(
                     f"项目概述：\n{str(overview)[:4000]}\n"
                     f"{analysis_block}\n"
                     f"全局事实：\n{facts_txt[:3000] or '无'}\n"
+                    f"{kb_block}\n"
                     "请直接输出本章正文。"
                 ),
             },
@@ -556,7 +715,7 @@ def _generate_one_chapter_body(
         temperature=0.4,
         timeout_sec=240.0,
     )
-    return result.content
+    return result.content, kb_citations
 
 
 def _run_chapter(
@@ -601,8 +760,9 @@ def _run_chapter(
             for f in facts
             if isinstance(f, dict) and f.get("content")
         )
+    _assert_not_cancelled(db, task)
     _set_task(db, task, progress=30, message=f"生成章节：{title}")
-    body = _generate_one_chapter_body(
+    body, kb_citations = _generate_one_chapter_body(
         db,
         workspace_id,
         title=title,
@@ -610,6 +770,7 @@ def _run_chapter(
         overview=str(overview),
         facts_txt=facts_txt,
         analysis_block=_analysis_prompt_block(analysis),
+        project_id=project_id,
     )
     new_chapters = []
     for c in chapters:
@@ -640,7 +801,12 @@ def _run_chapter(
         status="success",
         progress=100,
         message=f"章节「{title}」已生成",
-        result={"chapterId": target.get("id"), "title": title, "chars": len(body)},
+        result={
+            "chapterId": target.get("id"),
+            "title": title,
+            "chars": len(body),
+            "kbCitations": kb_citations[:8],
+        },
     )
 
 
@@ -697,7 +863,9 @@ def _run_chapters(
     working = [dict(c) if isinstance(c, dict) else c for c in chapters]
     done = 0
     total = len(targets)
+    all_cites: list = []
     for tgt in targets:
+        _assert_not_cancelled(db, task)
         tid = tgt.get("id")
         title = str(tgt.get("title") or "章节")
         pct = int(10 + (done / total) * 85)
@@ -707,7 +875,7 @@ def _run_chapters(
             progress=pct,
             message=f"生成章节 {done + 1}/{total}：{title}",
         )
-        body = _generate_one_chapter_body(
+        body, kb_cites = _generate_one_chapter_body(
             db,
             workspace_id,
             title=title,
@@ -715,7 +883,9 @@ def _run_chapters(
             overview=str(overview),
             facts_txt=facts_txt,
             analysis_block=analysis_block,
+            project_id=project_id,
         )
+        all_cites.extend(kb_cites[:3])
         plain = body.replace(" ", "")
         for i, c in enumerate(working):
             if isinstance(c, dict) and c.get("id") == tid:
@@ -742,7 +912,11 @@ def _run_chapters(
         status="success",
         progress=100,
         message=f"已生成 {done} 章",
-        result={"generated": done, "onlyEmpty": bool(only_empty)},
+        result={
+            "generated": done,
+            "onlyEmpty": bool(only_empty),
+            "kbCitations": all_cites[:12],
+        },
     )
 
 
@@ -750,6 +924,7 @@ def _run_export(
     db: Session, workspace_id: str, project_id: str, task: ProjectTaskRow
 ) -> None:
     settings = get_settings()
+    _assert_not_cancelled(db, task)
     _set_task(db, task, progress=40, message="组装 Word…")
     data, filename = build_docx_bytes(db, workspace_id, project_id)
     out_dir = file_service._upload_root(settings) / project_id / "exports"

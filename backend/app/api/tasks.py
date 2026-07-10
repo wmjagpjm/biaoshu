@@ -1,7 +1,7 @@
 """
 模块：项目任务路由
-用途：创建/查询/列表任务；默认异步，?sync=1 同步执行。
-对接：POST/GET /api/projects/{id}/tasks
+用途：创建/查询/列表/取消任务；默认异步，?sync=1 同步执行。
+对接：POST/GET /api/projects/{id}/tasks；POST .../tasks/{id}/cancel
 """
 
 from typing import Annotated, Any
@@ -55,6 +55,28 @@ def get_task(
         raise HTTPException(status_code=404, detail="项目不存在") from None
     except KeyError:
         raise HTTPException(status_code=404, detail="任务不存在") from None
+    return task_service.task_to_dict(task)
+
+
+@router.post("/{project_id}/tasks/{task_id}/cancel")
+def cancel_task(
+    project_id: str,
+    task_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    workspace_id: Annotated[str, Depends(get_workspace_id)],
+) -> dict:
+    """
+    用途：取消 pending/running 任务；worker 在检查点协作退出。
+    对接：前端 useProjectPipeline.cancelTask
+    """
+    try:
+        task = task_service.cancel_task(db, workspace_id, project_id, task_id)
+    except ProjectNotFoundError:
+        raise HTTPException(status_code=404, detail="项目不存在") from None
+    except KeyError:
+        raise HTTPException(status_code=404, detail="任务不存在") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
     return task_service.task_to_dict(task)
 
 

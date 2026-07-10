@@ -53,6 +53,16 @@ export type ProjectGenerationGuidance = {
   extraRequirements?: string;
   /** 用户确认已锁定，可进入下一阶段 */
   lockedForNextStage?: boolean;
+  /**
+   * 是否启用知识库检索注入（大纲/正文）。
+   * 缺省 true；false 时生成不查知识库。
+   */
+  kbEnabled?: boolean;
+  /**
+   * 限定检索的知识库文件夹 id 列表。
+   * 空/缺省 = 全库；非空 = 仅这些文件夹。
+   */
+  kbFolderIds?: string[];
   updatedAt?: string;
 };
 

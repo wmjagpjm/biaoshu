@@ -1,7 +1,8 @@
 /**
  * 模块：大纲树纯函数
- * 用途：增删改移节点，不依赖 React；便于二开与单测。
- * 对接：后续若后端存扁平路径，可在此做 import/export 适配。
+ * 用途：增删改移节点；markdownToOutline 将 revise 正文解析回树。
+ * 对接：useTechnicalPlanEditors、TechnicalPlanWorkspace 大纲步。
+ * 二次开发：不依赖 React；后端若存扁平路径可在此做适配。
  */
 
 import type { OutlineNode } from "../types";
@@ -205,4 +206,72 @@ export function canMove(
     up: loc.index > 0,
     down: loc.index < loc.siblings.length - 1,
   };
+}
+
+/**
+ * 用途：将 revise 返回的 Markdown 大纲解析回树（# / ## / ###）。
+ * 对接：TechnicalPlanWorkspace 大纲步「应用到大纲树」。
+ * 支持行：标题、（目标字数：N）、普通说明行（写入 description）。
+ */
+export function markdownToOutline(md: string): OutlineNode[] {
+  const lines = (md || "").replace(/\r\n/g, "\n").split("\n");
+  const roots: OutlineNode[] = [];
+  const stack: OutlineNode[] = [];
+  let seq = 0;
+
+  const makeId = () => {
+    seq += 1;
+    return `ol_rev_${Date.now().toString(36)}_${seq}`;
+  };
+
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+
+    const heading = /^(#{1,6})\s+(.+)$/.exec(line);
+    if (heading) {
+      const depth = Math.min(heading[1].length, 3) as 1 | 2 | 3;
+      const title = heading[2].trim();
+      if (!title) continue;
+      const node: OutlineNode = {
+        id: makeId(),
+        title,
+        level: depth,
+        targetWords: depth === 1 ? undefined : 1200,
+        children: depth < 3 ? [] : undefined,
+      };
+      while (stack.length && stack[stack.length - 1].level >= depth) {
+        stack.pop();
+      }
+      if (stack.length === 0) {
+        roots.push(node);
+      } else {
+        const parent = stack[stack.length - 1];
+        if (!parent.children) parent.children = [];
+        parent.children.push(node);
+      }
+      stack.push(node);
+      continue;
+    }
+
+    // 目标字数行
+    const tw = /[（(]目标字数[：:]\s*(\d+)[）)]/.exec(line);
+    if (tw && stack.length) {
+      const n = Number(tw[1]);
+      if (Number.isFinite(n) && n > 0) {
+        stack[stack.length - 1].targetWords = n;
+      }
+      continue;
+    }
+
+    // 其它非空行 → 最近节点 description
+    if (stack.length) {
+      const cur = stack[stack.length - 1];
+      cur.description = cur.description
+        ? `${cur.description}\n${line}`
+        : line;
+    }
+  }
+
+  return roots;
 }

@@ -430,6 +430,60 @@ export function useTechnicalPlanEditors(projectId: string) {
     setSelectedOutlineId((cur) => (cur === id ? null : cur));
   }, []);
 
+  /**
+   * 用途：用 revise 解析后的大纲整树替换；按标题尽量保留已有章节正文。
+   * 对接：大纲步「应用到大纲树」
+   */
+  const replaceOutline = useCallback((outline: OutlineNode[]) => {
+    setState((prev) => {
+      const byTitle = new Map(
+        prev.chapters.map((c) => [c.title.trim(), c] as const),
+      );
+      const byId = new Map(prev.chapters.map((c) => [c.id, c] as const));
+      const nextChapters: ChapterContent[] = [];
+      const walkTop = (nodes: OutlineNode[]) => {
+        for (const n of nodes) {
+          if (n.level === 1) {
+            const old = byId.get(n.id) || byTitle.get(n.title.trim());
+            if (old) {
+              nextChapters.push({
+                ...old,
+                id: n.id,
+                title: n.title,
+              });
+            } else {
+              nextChapters.push({
+                id: n.id,
+                title: n.title,
+                body: "",
+                preview: "（待生成）",
+                wordCount: 0,
+                status: "pending",
+              });
+            }
+          }
+          if (n.children?.length) walkTop(n.children);
+        }
+      };
+      walkTop(outline);
+      // 若没有一级标题，用根节点当章
+      if (nextChapters.length === 0) {
+        for (const n of outline) {
+          nextChapters.push({
+            id: n.id,
+            title: n.title,
+            body: "",
+            preview: "（待生成）",
+            wordCount: 0,
+            status: "pending",
+          });
+        }
+      }
+      return { ...prev, outline, chapters: nextChapters };
+    });
+    setSelectedOutlineId(outline[0]?.id ?? null);
+  }, []);
+
   const addOutlineSibling = useCallback((afterId: string | null) => {
     setState((prev) => {
       const outline = addSibling(prev.outline, afterId);
@@ -567,6 +621,7 @@ export function useTechnicalPlanEditors(projectId: string) {
     setMode,
     patchOutlineNode,
     deleteOutlineNode,
+    replaceOutline,
     addOutlineSibling,
     addOutlineChild,
     moveOutline,

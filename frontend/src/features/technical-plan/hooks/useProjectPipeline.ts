@@ -1,9 +1,10 @@
 /**
- * 模块：技术标本机日用流水线（上传 / 异步任务轮询）
- * 用途：POST 创建任务后轮询进度，直到 success/failed。
+ * 模块：技术标本机日用流水线（上传 / 异步任务轮询 / 取消）
+ * 用途：POST 创建任务后轮询进度，直到 success/failed/cancelled；可主动取消。
  * 对接：
  *   - POST /projects/{id}/tasks（默认异步）
  *   - GET  /projects/{id}/tasks/{taskId}
+ *   - POST /projects/{id}/tasks/{taskId}/cancel
  *   - POST /projects/{id}/files
  * 二次开发：可改为 SSE；超时与间隔可配置。
  */
@@ -15,7 +16,7 @@ export type PipelineTask = {
   id: string;
   projectId: string;
   type: string;
-  status: "pending" | "running" | "success" | "failed" | string;
+  status: "pending" | "running" | "success" | "failed" | "cancelled" | string;
   progress: number;
   message: string;
   result?: Record<string, unknown> | null;
@@ -121,7 +122,18 @@ export function useProjectPipeline(projectId: string) {
           task.status === "pending" ||
           task.status === "running"
         ) {
-          if (abortRef.current) break;
+          if (abortRef.current) {
+            // 本地已请求取消，再拉一次最终状态
+            try {
+              task = await apiFetch<PipelineTask>(
+                `/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(task.id)}`,
+              );
+              setLastTask({ ...task });
+            } catch {
+              /* ignore */
+            }
+            break;
+          }
           if (Date.now() - started > POLL_MAX_MS) {
             throw new Error("任务超时（超过 10 分钟），请查看后端日志后重试");
           }
@@ -135,6 +147,8 @@ export function useProjectPipeline(projectId: string) {
         if (task.status === "failed") {
           const msg = task.error || task.message || "任务失败";
           setError(msg);
+        } else if (task.status === "cancelled") {
+          setError(null);
         }
         await refreshTasks();
         return task;
@@ -149,6 +163,37 @@ export function useProjectPipeline(projectId: string) {
     [projectId, refreshTasks],
   );
 
+  /**
+   * 用途：取消当前进行中任务（协作式，章间/步骤间生效）。
+   * 对接：POST .../tasks/{id}/cancel
+   */
+  const cancelTask = useCallback(async () => {
+    const tid = lastTask?.id;
+    if (!tid || !projectId) return null;
+    if (
+      lastTask &&
+      lastTask.status !== "pending" &&
+      lastTask.status !== "running"
+    ) {
+      return lastTask;
+    }
+    abortRef.current = true;
+    try {
+      const task = await apiFetch<PipelineTask>(
+        `/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(tid)}/cancel`,
+        { method: "POST" },
+      );
+      setLastTask(task);
+      setError(null);
+      await refreshTasks();
+      return task;
+    } catch (err) {
+      const msg = (err as { message?: string })?.message || "取消失败";
+      setError(msg);
+      throw err;
+    }
+  }, [lastTask, projectId, refreshTasks]);
+
   const downloadExport = useCallback(
     (task: PipelineTask) => {
       const stored = task.result?.storedName as string | undefined;
@@ -162,17 +207,24 @@ export function useProjectPipeline(projectId: string) {
     [projectId],
   );
 
+  const canCancel =
+    busy &&
+    !!lastTask &&
+    (lastTask.status === "pending" || lastTask.status === "running");
+
   return {
     busy,
     lastTask,
     recentTasks,
     error,
     files,
+    canCancel,
     setError,
     refreshFiles,
     refreshTasks,
     uploadFile,
     runTask,
+    cancelTask,
     downloadExport,
   };
 }

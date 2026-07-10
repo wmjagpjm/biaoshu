@@ -25,6 +25,7 @@ import {
   outlineToMarkdown,
   useTechnicalPlanEditors,
 } from "../hooks/useTechnicalPlanEditors";
+import { markdownToOutline } from "../lib/outlineTree";
 import {
   getPendingFileNames,
   getProjectAsync,
@@ -32,6 +33,27 @@ import {
 import type { TechnicalPlanStepId } from "../types";
 import { serializeBidAnalysis } from "../types";
 import "./TechnicalPlan.css";
+
+/** 用途：从任务 result 提取知识库引用摘要文案。 */
+function formatKbCitationsTip(task: {
+  result?: Record<string, unknown> | null;
+}): string {
+  const raw = task.result?.kbCitations;
+  if (!Array.isArray(raw) || raw.length === 0) return "";
+  const names = raw
+    .map((c) => {
+      if (c && typeof c === "object" && "docName" in c) {
+        return String((c as { docName?: string }).docName || "");
+      }
+      return "";
+    })
+    .filter(Boolean);
+  const uniq = [...new Set(names)];
+  if (!uniq.length) return `已引用知识库 ${raw.length} 条片段`;
+  const shown = uniq.slice(0, 3).join("、");
+  const more = uniq.length > 3 ? ` 等 ${uniq.length} 篇` : "";
+  return `已引用知识库：${shown}${more}（${raw.length} 条）`;
+}
 
 /** 用途：联调展示最近一次 revise 正文；文本步可一键替换。 */
 function RevisePreviewPanel(props: {
@@ -49,7 +71,7 @@ function RevisePreviewPanel(props: {
         <span style={{ color: "var(--text-secondary)", flex: 1 }}>
           {props.canApply
             ? "可应用到当前编辑区"
-            : "大纲等结构化内容仅预览，请人工对照修改"}
+            : "当前为预览；结构化内容可在支持写回的步骤一键应用"}
         </span>
         {props.canApply && props.onApply && (
           <button type="button" className="btn btn-primary btn-sm" onClick={props.onApply}>
@@ -76,9 +98,12 @@ const STEP_IDS: TechnicalPlanStepId[] = [
 
 /**
  * 模块：技术方案工作区
- * 用途：六步流水线 + 反馈修订；传 baseContent、展示 revisedContent。
- * 对接：getProjectAsync、editor-state、POST .../revise
- * 二次开发：上传解析后 document 步 baseContent 改为真实 Markdown。
+ * 用途：六步流水线 + 异步任务 + 反馈修订 + 知识库引用展示。
+ *   - 取消任务、大纲 revise「应用到大纲树」、生成后展示 kbCitations
+ * 对接：
+ *   - useProjectPipeline / useTechnicalPlanEditors / useProjectGuidance
+ *   - editor-state、POST .../tasks、POST .../revise
+ * 二次开发：勿在此堆业务；任务与持久化进 hooks。
  */
 export function TechnicalPlanWorkspace() {
   const { projectId = "", step } = useParams<{ projectId: string; step?: string }>();
@@ -200,10 +225,26 @@ export function TechnicalPlanWorkspace() {
           <button
             type="button"
             className="btn btn-ghost"
-            disabled
-            title="个人版任务同步执行，暂无暂停"
+            disabled={!pipeline.canCancel}
+            title={
+              pipeline.canCancel
+                ? "取消当前进行中的任务（章间/步骤检查点生效）"
+                : "无进行中的可取消任务"
+            }
+            onClick={() => {
+              void (async () => {
+                try {
+                  const t = await pipeline.cancelTask();
+                  if (t?.status === "cancelled") {
+                    setTaskTip("任务已取消");
+                  }
+                } catch {
+                  /* error 已在 pipeline */
+                }
+              })();
+            }}
           >
-            <Pause size={16} /> 暂停任务
+            <Pause size={16} /> 取消任务
           </button>
         </div>
       </header>
@@ -273,6 +314,43 @@ export function TechnicalPlanWorkspace() {
               </ul>
             </details>
           )}
+          {(() => {
+            const raw = pipeline.lastTask?.result?.kbCitations;
+            if (!Array.isArray(raw) || raw.length === 0) return null;
+            return (
+              <details style={{ marginTop: 10, fontSize: 12 }} open>
+                <summary style={{ cursor: "pointer" }}>
+                  知识库引用（{raw.length}）
+                </summary>
+                <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+                  {raw.map((c, i) => {
+                    const item = c as {
+                      docName?: string;
+                      title?: string;
+                      excerpt?: string;
+                    };
+                    return (
+                      <li key={i} style={{ marginBottom: 4 }}>
+                        <strong>{item.docName || "文档"}</strong>
+                        {item.title ? ` · ${item.title}` : ""}
+                        {item.excerpt ? (
+                          <div
+                            style={{
+                              color: "var(--text-secondary)",
+                              marginTop: 2,
+                            }}
+                          >
+                            {item.excerpt}
+                            {item.excerpt.length >= 160 ? "…" : ""}
+                          </div>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </details>
+            );
+          })()}
         </div>
       )}
 
@@ -719,7 +797,12 @@ export function TechnicalPlanWorkspace() {
                     const t = await pipeline.runTask("outline");
                     if (t.status === "success") {
                       await editors.reloadFromApi();
-                      setTaskTip("大纲与章节列表已生成");
+                      const cite = formatKbCitationsTip(t);
+                      setTaskTip(
+                        cite
+                          ? `大纲与章节列表已生成 · ${cite}`
+                          : "大纲与章节列表已生成",
+                      );
                     }
                   } catch {
                     /* */
@@ -770,7 +853,19 @@ export function TechnicalPlanWorkspace() {
             />
             <RevisePreviewPanel
               text={revisePreviewStep === "outline" ? revisePreview : null}
-              canApply={false}
+              canApply={!!revisePreview}
+              applyLabel="应用到大纲树"
+              onApply={() => {
+                if (!revisePreview) return;
+                const tree = markdownToOutline(revisePreview);
+                if (!tree.length) {
+                  setTaskTip("无法从修订结果解析出大纲标题（需含 # 标题）");
+                  return;
+                }
+                editors.replaceOutline(tree);
+                setRevisePreview(null);
+                setTaskTip(`已写回大纲（${tree.length} 个一级节点），可继续编辑`);
+              }}
               onClear={() => setRevisePreview(null)}
             />
           </div>
@@ -854,8 +949,10 @@ export function TechnicalPlanWorkspace() {
                     });
                     if (t.status === "success") {
                       await editors.reloadFromApi();
+                      const cite = formatKbCitationsTip(t);
                       setTaskTip(
-                        `全书空章生成完成（${String(t.result?.generated ?? "")} 章）`,
+                        `全书空章生成完成（${String(t.result?.generated ?? "")} 章）` +
+                          (cite ? ` · ${cite}` : ""),
                       );
                     }
                   } catch {
@@ -878,7 +975,11 @@ export function TechnicalPlanWorkspace() {
                     });
                     if (t.status === "success") {
                       await editors.reloadFromApi();
-                      setTaskTip(`章节已生成：${selectedChapter?.title ?? ""}`);
+                      const cite = formatKbCitationsTip(t);
+                      setTaskTip(
+                        `章节已生成：${selectedChapter?.title ?? ""}` +
+                          (cite ? ` · ${cite}` : ""),
+                      );
                     }
                   } catch {
                     /* */
