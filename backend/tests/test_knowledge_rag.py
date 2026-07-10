@@ -7,6 +7,17 @@
 from io import BytesIO
 
 
+def test_local_embedding_and_hybrid_search():
+    """用途：本地向量余弦 + 入库后 hybrid 字段。"""
+    from app.services import embedding_service
+
+    a = embedding_service.local_embed("云原生微服务架构高可用")
+    b = embedding_service.local_embed("微服务架构与云原生高可用部署")
+    c = embedding_service.local_embed("今日天气适合郊游野餐")
+    assert embedding_service.cosine(a, b) > embedding_service.cosine(a, c)
+    assert abs(sum(x * x for x in a) - 1.0) < 1e-5
+
+
 def test_upload_search_delete(client):
     content = (
         "# 等保与售后规范\n\n"
@@ -34,6 +45,8 @@ def test_upload_search_delete(client):
     body = search.json()
     assert body["count"] >= 1
     assert any("等保" in (it.get("content") or "") for it in body["items"])
+    # hybrid 应带向量分字段
+    assert "vectorScore" in body["items"][0] or body["items"][0].get("score", 0) > 0
 
     # reindex
     ri = client.post(f"/api/knowledge/docs/{doc['id']}/reindex")

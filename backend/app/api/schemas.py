@@ -114,6 +114,7 @@ class WorkspaceSettingsOut(BaseModel):
     api_key: str = Field(serialization_alias="apiKey")
     model: str
     parse_strategy: str = Field(serialization_alias="parseStrategy")
+    embedding_model: str = Field(default="", serialization_alias="embeddingModel")
     export_format: dict | None = Field(
         default=None, serialization_alias="exportFormat"
     )
@@ -132,6 +133,7 @@ class WorkspaceSettingsUpdate(BaseModel):
     api_key: str | None = Field(default=None, alias="apiKey")
     model: str | None = None
     parse_strategy: str | None = Field(default=None, alias="parseStrategy")
+    embedding_model: str | None = Field(default=None, alias="embeddingModel")
     export_format: dict | None = Field(default=None, alias="exportFormat")
 
 

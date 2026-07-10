@@ -111,6 +111,8 @@ class WorkspaceSettingsRow(Base):
     model: Mapped[str] = mapped_column(String(200), nullable=False, default="deepseek-chat")
     # light | local | ask
     parse_strategy: Mapped[str] = mapped_column(String(32), nullable=False, default="light")
+    # 可选 embedding 模型名；空=仅用本地哈希向量
+    embedding_model: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     # 默认导出模板 JSON（对齐前端 ExportFormatConfig，明文）
     export_format_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
@@ -249,8 +251,9 @@ class KbDocumentRow(Base):
 
 class KbChunkRow(Base):
     """
-    用途：知识库文本分块，供关键词检索与生成注入。
+    用途：知识库文本分块，供关键词/向量混合检索与生成注入。
     对接：knowledge_service.search_chunks；task_service RAG 注入
+    embedding_json：本地哈希或 API embedding 的 float 数组 JSON
     """
 
     __tablename__ = "kb_chunks"
@@ -271,6 +274,7 @@ class KbChunkRow(Base):
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     title: Mapped[str | None] = mapped_column(String(500), nullable=True)
     content: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    embedding_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

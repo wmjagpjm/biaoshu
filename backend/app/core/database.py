@@ -109,6 +109,8 @@ def ensure_schema_columns() -> None:
         "ALTER TABLE workspace_settings ADD COLUMN export_format_json TEXT",
         "ALTER TABLE projects ADD COLUMN kind VARCHAR(32) DEFAULT 'technical'",
         "ALTER TABLE projects ADD COLUMN linked_project_id VARCHAR(64)",
+        "ALTER TABLE kb_chunks ADD COLUMN embedding_json TEXT",
+        "ALTER TABLE workspace_settings ADD COLUMN embedding_model VARCHAR(200) DEFAULT ''",
     ]
     with engine.begin() as conn:
         for sql in statements:

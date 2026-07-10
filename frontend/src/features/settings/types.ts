@@ -12,6 +12,8 @@ export type WorkspaceSettings = {
   apiKey: string;
   model: string;
   parseStrategy: ParseStrategy;
+  /** 空=仅本地哈希向量；可填 text-embedding-3-small 等 */
+  embeddingModel?: string;
   updatedAt?: string;
 };
 
@@ -21,4 +23,5 @@ export const DEFAULT_SETTINGS: WorkspaceSettings = {
   apiKey: "",
   model: "deepseek-chat",
   parseStrategy: "light",
+  embeddingModel: "",
 };

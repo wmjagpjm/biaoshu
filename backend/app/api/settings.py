@@ -32,6 +32,7 @@ def _to_out(row) -> WorkspaceSettingsOut:
         api_key=row.api_key,
         model=row.model,
         parse_strategy=row.parse_strategy,
+        embedding_model=getattr(row, "embedding_model", None) or "",
         export_format=export_format if isinstance(export_format, dict) else None,
         updated_at=row.updated_at,
     )
@@ -54,7 +55,14 @@ def put_settings(
 ) -> WorkspaceSettingsOut:
     dumped = body.model_dump(by_alias=False, exclude_unset=True)
     kwargs: dict = {}
-    for key in ("provider", "api_base_url", "api_key", "model", "parse_strategy"):
+    for key in (
+        "provider",
+        "api_base_url",
+        "api_key",
+        "model",
+        "parse_strategy",
+        "embedding_model",
+    ):
         if key in dumped:
             kwargs[key] = dumped[key]
     if "export_format" in dumped:

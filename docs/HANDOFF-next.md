@@ -95,7 +95,7 @@ frontend/src/features/business-bid/
 |--------|----|------|
 | 业务 | 标讯 / 资源中心 | mock |
 | 业务 | 查重 / 废标 | **已接 API**（字符 n-gram；非向量） |
-| RAG | 向量 embedding | 未做 |
+| RAG | 向量 embedding | **混合检索已做**（本地哈希默认；可选 API embedding_model） |
 | 导出 | 标题边框、图片 | 未做 |
 | 体验 | SSE 推送 | 仍 1s 轮询 |
 | 库 | Alembic | 仅 create_all + ALTER |
@@ -106,10 +106,10 @@ frontend/src/features/business-bid/
 
 ## 6. 建议下一会话方向
 
-1. 向量检索（复用 text_similarity 预筛）  
-2. 导出边框/图片  
-3. SSE 替代轮询  
-4. 标讯 / 资源中心后端化  
+1. 导出边框/图片  
+2. SSE 替代轮询  
+3. 真语义 embedding 模型调优 / 标讯资源  
+4. 内网多人（登录·PG）  
 
 ---
 
@@ -118,7 +118,7 @@ frontend/src/features/business-bid/
 ```powershell
 cd C:\Users\Administrator\biaoshu\backend
 .\.venv\Scripts\python -m pytest -q
-# 期望：43+ passed
+# 期望：44+ passed
 
 cd ..\frontend
 npm run build

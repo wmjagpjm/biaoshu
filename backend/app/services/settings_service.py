@@ -62,10 +62,12 @@ def update_settings(
     api_key: str | None = None,
     model: str | None = None,
     parse_strategy: str | None = None,
+    embedding_model: str | None = None,
     export_format: dict | Any | None = ...,
 ) -> WorkspaceSettingsRow:
     """
     用途：部分更新；export_format 用 Ellipsis 表示未传，None 可清空。
+    embedding_model：空字符串表示仅用本地哈希向量。
     """
     row = get_or_create_settings(db, workspace_id)
     if provider is not None:
@@ -81,6 +83,8 @@ def update_settings(
         if ps not in ALLOWED_PARSE:
             raise ValueError(f"非法 parseStrategy: {parse_strategy}")
         row.parse_strategy = ps
+    if embedding_model is not None:
+        row.embedding_model = embedding_model.strip()
     if export_format is not ...:
         if export_format is None:
             row.export_format_json = None

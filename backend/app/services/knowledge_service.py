@@ -1,16 +1,15 @@
 """
-模块：知识库服务（RAG 简版：入库 + 关键词分块检索）
+模块：知识库服务（RAG：入库 + 关键词/向量混合检索）
 用途：
-  - 文件夹/文档 CRUD；上传落盘 → parse → chunk → ready
-  - search_chunks 关键词打分；可选 folder_ids 过滤
+  - 文件夹/文档 CRUD；上传落盘 → parse → chunk → embedding → ready
+  - search_chunks：关键词分 + 向量余弦混合；可选 folder_ids
   - build_kb_prompt_block / search_prompt_block 供生成注入
 对接：
   - 路由 /api/knowledge/*
   - task_service._kb_search_block（outline/chapter）
-  - parse_service.parse_file_to_markdown
-  - 磁盘 data/knowledge/{workspace_id}/{doc_id}/（相对 upload_dir 父目录）
+  - embedding_service（本地哈希 / 可选 API）
 二次开发：
-  - 可换 FTS5/向量；勿与 project_files（项目招标文件）混表混目录
+  - 可换 FTS5/真语义模型；勿与 project_files 混表混目录
   - 注入硬顶见 _PROMPT_MAX_CHARS；analyze 任务禁止调用本检索
 """
 
@@ -29,7 +28,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.models.entities import KbChunkRow, KbDocumentRow, KbFolderRow
-from app.services import parse_service
+from app.services import embedding_service, parse_service
 
 # 分块参数
 _CHUNK_SIZE = 1000
@@ -295,19 +294,28 @@ def _replace_chunks(
     for c in old:
         db.delete(c)
     db.flush()
-    n = 0
+    # 批量向量化（API 或本地）
+    texts: list[str] = []
+    metas: list[tuple[int, str, str]] = []  # ordinal, title, content
     for i, p in enumerate(pieces):
         content = (p.get("content") or "").strip()
         if not content:
             continue
+        title = (p.get("title") or "")[:500]
+        texts.append(f"{title}\n{content}" if title else content)
+        metas.append((i, title, content))
+    vectors = embedding_service.embed_texts(db, workspace_id, texts)
+    n = 0
+    for (i, title, content), vec in zip(metas, vectors):
         db.add(
             KbChunkRow(
                 id=f"chk_{secrets.token_hex(8)}",
                 document_id=doc.id,
                 workspace_id=workspace_id,
                 ordinal=i,
-                title=(p.get("title") or "")[:500] or None,
+                title=title or None,
                 content=content,
+                embedding_json=embedding_service.dumps_embedding(vec),
                 created_at=_now(),
             )
         )
@@ -474,20 +482,20 @@ def search_chunks(
     folder_ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """
-    用途：关键词打分检索 ready 文档的分块。
+    用途：混合检索 ready 文档分块 = 关键词分 + 向量余弦。
     folder_ids：非空时只搜这些文件夹；None/[] 表示全库。
-    返回：[{chunkId, documentId, docName, title, content, score}, ...]
+    返回：[{chunkId, documentId, docName, title, content, score, keywordScore, vectorScore}, ...]
     """
-    tokens = _tokenize_query(query)
-    if not tokens:
+    q = (query or "").strip()
+    tokens = _tokenize_query(q)
+    # 无 token 时仍可用向量（整句 local embed）
+    if not tokens and not q:
         return []
 
-    # 仅 ready 文档
     stmt_docs = select(KbDocumentRow).where(
         KbDocumentRow.workspace_id == workspace_id,
         KbDocumentRow.status == "ready",
     )
-    # 空列表也视为「未限制」；仅当有明确 folder id 时过滤
     folder_filter = [f for f in (folder_ids or []) if f]
     if folder_filter:
         stmt_docs = stmt_docs.where(KbDocumentRow.folder_id.in_(folder_filter))
@@ -507,25 +515,43 @@ def search_chunks(
         ).all()
     )
 
-    scored: list[tuple[float, KbChunkRow]] = []
+    q_vec = embedding_service.embed_one(q, db=db, workspace_id=workspace_id)
+    scored: list[tuple[float, float, float, KbChunkRow]] = []
+    # (hybrid, kw, vec, chunk)
     for ch in chunks:
         text = (ch.content or "").lower()
         title = (ch.title or "").lower()
-        score = 0.0
+        kw = 0.0
         for t in tokens:
             if t in title:
-                score += 3.0
-            # 子串命中次数（封顶）
+                kw += 3.0
             c = text.count(t)
             if c:
-                score += min(c, 5) * 1.0
-        if score > 0:
-            scored.append((score, ch))
+                kw += min(c, 5) * 1.0
+        emb = embedding_service.loads_embedding(
+            getattr(ch, "embedding_json", None)
+        )
+        if emb is None and (ch.content or "").strip():
+            # 旧数据无向量：即时本地补算（不写库，避免检索侧写）
+            emb = embedding_service.local_embed(
+                f"{ch.title or ''}\n{ch.content or ''}"
+            )
+        vec_s = embedding_service.cosine(q_vec, emb) if emb else 0.0
+        # 混合：关键词归一近似 + 向量加权
+        kw_norm = min(kw / 10.0, 1.0)
+        hybrid = kw_norm * 4.0 + vec_s * 6.0
+        # 无任何信号则跳过
+        if hybrid <= 0 and kw <= 0 and vec_s < 0.15:
+            continue
+        # 纯向量弱相关也保留（改写查询）
+        if kw <= 0 and vec_s < 0.22:
+            continue
+        scored.append((hybrid, kw, vec_s, ch))
 
-    scored.sort(key=lambda x: (-x[0], x[1].ordinal))
+    scored.sort(key=lambda x: (-x[0], x[3].ordinal))
     top_k = max(1, min(int(top_k or _DEFAULT_TOP_K), 20))
     results: list[dict[str, Any]] = []
-    for score, ch in scored[:top_k]:
+    for hybrid, kw, vec_s, ch in scored[:top_k]:
         doc = docs.get(ch.document_id)
         results.append(
             {
@@ -535,7 +561,9 @@ def search_chunks(
                 "folderId": doc.folder_id if doc else None,
                 "title": ch.title or "",
                 "content": ch.content,
-                "score": score,
+                "score": round(hybrid, 4),
+                "keywordScore": round(kw, 4),
+                "vectorScore": round(vec_s, 4),
             }
         )
     return results

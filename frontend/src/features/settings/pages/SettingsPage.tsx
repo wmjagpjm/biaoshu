@@ -202,6 +202,25 @@ export function SettingsPage() {
               onChange={(e) => patch({ model: e.target.value })}
             />
           </div>
+          <div className="field">
+            <label htmlFor="emb">Embedding 模型（可选）</label>
+            <input
+              id="emb"
+              className="mono"
+              value={settings.embeddingModel ?? ""}
+              onChange={(e) => patch({ embeddingModel: e.target.value })}
+              placeholder="留空=本地哈希向量；如 text-embedding-3-small"
+            />
+            <p
+              style={{
+                margin: "6px 0 0",
+                fontSize: 12,
+                color: "var(--text-tertiary)",
+              }}
+            >
+              知识库检索默认本地向量+关键词混合；填写后将优先调用兼容 /embeddings。
+            </p>
+          </div>
         </div>
       </section>
 

@@ -96,6 +96,7 @@ export function useWorkspaceSettings() {
             apiKey: next.apiKey,
             model: next.model,
             parseStrategy: next.parseStrategy,
+            embeddingModel: next.embeddingModel ?? "",
           }),
         });
         const merged = { ...DEFAULT_SETTINGS, ...remote };

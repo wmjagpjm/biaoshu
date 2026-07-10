@@ -134,9 +134,15 @@ npm run build
 2. `/duplicate-check` 选项目 → 开始查重 → 有命中可左右对照  
 3. `/rejection-check` 选项目 → 运行检查 → 见 analysis 风险或规则命中  
 
-## 10. 仍未接（后续）
+## 10. 知识库混合检索
 
-SSE 推送、Celery、真 MinerU 安装包、向量检索、标讯/资源 API、多用户鉴权。
+1. 上传文档后 chunk 带 embedding（本地哈希默认）  
+2. `GET /api/knowledge/search?q=` 结果可含 `vectorScore`  
+3. 设置页可选 `embeddingModel`（OpenAI 兼容 /embeddings）  
+
+## 11. 仍未接（后续）
+
+SSE 推送、Celery、真 MinerU 安装包、标讯/资源 API、多用户鉴权、导出标题边框。
 
 ## 7. 知识库 RAG 简版
 
