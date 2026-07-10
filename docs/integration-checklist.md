@@ -128,9 +128,15 @@ npm run build
 手改字段防抖写回 `PUT .../editor-state`。技术标列表应带 `kind=technical` 以免混入。  
 新建真实项目不应出现演示假资格行（空数组保持空）。
 
-## 9. 仍未接（后续）
+## 9. 查重 / 废标（合规）
 
-SSE 推送、Celery、真 MinerU 安装包、向量检索、查重 API、多用户鉴权。
+1. 技术标有章节正文；知识库有 ready 文档  
+2. `/duplicate-check` 选项目 → 开始查重 → 有命中可左右对照  
+3. `/rejection-check` 选项目 → 运行检查 → 见 analysis 风险或规则命中  
+
+## 10. 仍未接（后续）
+
+SSE 推送、Celery、真 MinerU 安装包、向量检索、标讯/资源 API、多用户鉴权。
 
 ## 7. 知识库 RAG 简版
 

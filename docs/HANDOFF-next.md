@@ -68,6 +68,8 @@
 | 测试 | `backend/tests/test_business_bid_mvp.py` |
 | revise 写回 | `business_qualify|toc|quote|commit` 解析 JSON 写 editor-state；`business_parse` 写解析文 |
 | 空态 | API 空数组不回填演示 mock |
+| 查重 | `POST .../duplicate-check`；kb/self/history |
+| 废标 | `POST .../rejection-check`；analysis + 关键词规则 |
 
 ### 4.3 关键路径
 
@@ -91,7 +93,8 @@ frontend/src/features/business-bid/
 
 | 优先级 | 项 | 现状 |
 |--------|----|------|
-| 业务 | 查重 / 废标 / 标讯 / 资源中心 | mock |
+| 业务 | 标讯 / 资源中心 | mock |
+| 业务 | 查重 / 废标 | **已接 API**（字符 n-gram；非向量） |
 | RAG | 向量 embedding | 未做 |
 | 导出 | 标题边框、图片 | 未做 |
 | 体验 | SSE 推送 | 仍 1s 轮询 |
@@ -103,9 +106,10 @@ frontend/src/features/business-bid/
 
 ## 6. 建议下一会话方向
 
-1. 向量检索或导出边框/图片  
-2. 查重/废标等 mock 模块（按产品优先级）  
-3. SSE 替代轮询（体验）  
+1. 向量检索（复用 text_similarity 预筛）  
+2. 导出边框/图片  
+3. SSE 替代轮询  
+4. 标讯 / 资源中心后端化  
 
 ---
 
@@ -114,7 +118,7 @@ frontend/src/features/business-bid/
 ```powershell
 cd C:\Users\Administrator\biaoshu\backend
 .\.venv\Scripts\python -m pytest -q
-# 期望：38+ passed
+# 期望：43+ passed
 
 cd ..\frontend
 npm run build
