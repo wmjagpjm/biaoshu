@@ -25,6 +25,9 @@ ProjectStatus = Literal[
 ]
 
 
+ProjectKind = Literal["technical", "business"]
+
+
 class ProjectOut(BaseModel):
     """
     用途：项目响应体，一一对应前端 Project。
@@ -41,6 +44,10 @@ class ProjectOut(BaseModel):
     updated_at: datetime = Field(serialization_alias="updatedAt")
     technical_plan_step: int = Field(serialization_alias="technicalPlanStep")
     word_count: int = Field(serialization_alias="wordCount")
+    kind: str = "technical"
+    linked_project_id: str | None = Field(
+        default=None, serialization_alias="linkedProjectId"
+    )
 
 
 class ProjectCreate(BaseModel):
@@ -55,6 +62,8 @@ class ProjectCreate(BaseModel):
     industry: str | None = None
     status: ProjectStatus | None = None
     technical_plan_step: int | None = Field(default=None, alias="technicalPlanStep")
+    kind: ProjectKind | None = None
+    linked_project_id: str | None = Field(default=None, alias="linkedProjectId")
 
 
 class ProjectUpdate(BaseModel):
@@ -69,6 +78,8 @@ class ProjectUpdate(BaseModel):
     status: ProjectStatus | None = None
     technical_plan_step: int | None = Field(default=None, alias="technicalPlanStep")
     word_count: int | None = Field(default=None, alias="wordCount")
+    kind: ProjectKind | None = None
+    linked_project_id: str | None = Field(default=None, alias="linkedProjectId")
 
 
 class HealthOut(BaseModel):
@@ -178,8 +189,8 @@ class ReviseOut(BaseModel):
 
 class EditorStateOut(BaseModel):
     """
-    用途：技术标编辑器整包状态（JSON 透传 outline/chapters/facts/guidance）。
-    对接：useTechnicalPlanEditors / useProjectGuidance
+    用途：编辑器整包状态（技术标 outline/chapters + 商务标 business*）。
+    对接：useTechnicalPlanEditors / useProjectGuidance / useBusinessBidWorkspace
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -193,6 +204,16 @@ class EditorStateOut(BaseModel):
     analysis: dict | None = None
     guidance: dict | None = None
     parsed_markdown: str | None = Field(default=None, serialization_alias="parsedMarkdown")
+    business_qualify: list | None = Field(
+        default=None, serialization_alias="businessQualify"
+    )
+    business_toc: list | None = Field(default=None, serialization_alias="businessToc")
+    business_quote: dict | None = Field(
+        default=None, serialization_alias="businessQuote"
+    )
+    business_commit: list | None = Field(
+        default=None, serialization_alias="businessCommit"
+    )
     updated_at: str | None = Field(default=None, serialization_alias="updatedAt")
 
 
@@ -209,3 +230,7 @@ class EditorStateUpdate(BaseModel):
     analysis: dict | None = None
     guidance: dict | None = None
     parsed_markdown: str | None = Field(default=None, alias="parsedMarkdown")
+    business_qualify: list | None = Field(default=None, alias="businessQualify")
+    business_toc: list | None = Field(default=None, alias="businessToc")
+    business_quote: dict | None = Field(default=None, alias="businessQuote")
+    business_commit: list | None = Field(default=None, alias="businessCommit")

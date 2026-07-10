@@ -104,8 +104,11 @@ def ensure_schema_columns() -> None:
     statements = [
         "ALTER TABLE project_editor_states ADD COLUMN analysis_json TEXT",
         "ALTER TABLE project_editor_states ADD COLUMN parsed_markdown TEXT",
+        "ALTER TABLE project_editor_states ADD COLUMN business_json TEXT",
         "ALTER TABLE project_tasks ADD COLUMN payload_json TEXT",
         "ALTER TABLE workspace_settings ADD COLUMN export_format_json TEXT",
+        "ALTER TABLE projects ADD COLUMN kind VARCHAR(32) DEFAULT 'technical'",
+        "ALTER TABLE projects ADD COLUMN linked_project_id VARCHAR(64)",
     ]
     with engine.begin() as conn:
         for sql in statements:

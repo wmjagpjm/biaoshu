@@ -33,7 +33,18 @@ from app.services.llm_service import LlmCallError, LlmConfigError
 from app.services.project_service import get_project, update_project
 
 ALLOWED_TYPES = frozenset(
-    {"parse", "analyze", "outline", "chapter", "chapters", "export"}
+    {
+        "parse",
+        "analyze",
+        "outline",
+        "chapter",
+        "chapters",
+        "export",
+        "biz_qualify",
+        "biz_toc",
+        "biz_quote",
+        "biz_commit",
+    }
 )
 
 # 进行中状态：取消与防重入共用
@@ -243,7 +254,9 @@ def _execute_task(db: Session, workspace_id: str, task: ProjectTaskRow) -> None:
         elif task.type == "chapters":
             _run_chapters(db, workspace_id, project_id, task, payload)
         elif task.type == "export":
-            _run_export(db, workspace_id, project_id, task)
+            _run_export(db, workspace_id, project_id, task, payload)
+        elif task.type in ("biz_qualify", "biz_toc", "biz_quote", "biz_commit"):
+            _run_business(db, workspace_id, project_id, task)
         else:
             raise ValueError(f"未知任务类型: {task.type}")
     except TaskCancelled:
@@ -920,13 +933,50 @@ def _run_chapters(
     )
 
 
-def _run_export(
+def _run_business(
     db: Session, workspace_id: str, project_id: str, task: ProjectTaskRow
+) -> None:
+    """用途：分发商务标 biz_* 任务到 business_task_service。"""
+    from app.services import business_task_service
+
+    runners = {
+        "biz_qualify": business_task_service.run_biz_qualify,
+        "biz_toc": business_task_service.run_biz_toc,
+        "biz_quote": business_task_service.run_biz_quote,
+        "biz_commit": business_task_service.run_biz_commit,
+    }
+    runner = runners.get(task.type)
+    if runner is None:
+        raise ValueError(f"未知商务任务类型: {task.type}")
+    runner(
+        db,
+        workspace_id,
+        project_id,
+        task,
+        set_task=_set_task,
+        assert_not_cancelled=_assert_not_cancelled,
+    )
+
+
+def _run_export(
+    db: Session,
+    workspace_id: str,
+    project_id: str,
+    task: ProjectTaskRow,
+    payload: dict | None = None,
 ) -> None:
     settings = get_settings()
     _assert_not_cancelled(db, task)
     _set_task(db, task, progress=40, message="组装 Word…")
-    data, filename = build_docx_bytes(db, workspace_id, project_id)
+    mode = None
+    if isinstance(payload, dict):
+        mode = payload.get("mode") or payload.get("exportMode")
+    project = get_project(db, workspace_id, project_id)
+    if not mode and getattr(project, "kind", None) == "business":
+        mode = "business"
+    data, filename = build_docx_bytes(
+        db, workspace_id, project_id, mode=mode if mode else None
+    )
     out_dir = file_service._upload_root(settings) / project_id / "exports"
     out_dir.mkdir(parents=True, exist_ok=True)
     stored = f"export_{secrets.token_hex(4)}.docx"
@@ -946,6 +996,7 @@ def _run_export(
             "storedName": stored,
             "downloadPath": f"/projects/{project_id}/export/download/{stored}",
             "size": len(data),
+            "mode": mode or "technical",
         },
     )
 

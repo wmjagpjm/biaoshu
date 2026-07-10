@@ -46,7 +46,7 @@ class Workspace(Base):
 
 class Project(Base):
     """
-    用途：技术标（及后续可扩展）项目列表实体，工作区入口。
+    用途：技术标 / 商务标共用项目列表实体，工作区入口。
     字段（Python snake_case / API camelCase）：
       - id → id
       - workspace_id → workspaceId
@@ -54,8 +54,10 @@ class Project(Base):
       - industry → industry
       - status → status（draft|analyzing|writing|reviewing|exported）
       - updated_at → updatedAt
-      - technical_plan_step → technicalPlanStep（1–6）
+      - technical_plan_step → technicalPlanStep（1–6，商务标复用为六步序号）
       - word_count → wordCount
+      - kind → kind（technical|business，默认 technical）
+      - linked_project_id → linkedProjectId（可选关联另一册项目）
     """
 
     __tablename__ = "projects"
@@ -77,6 +79,9 @@ class Project(Base):
     )
     technical_plan_step: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     word_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # technical | business
+    kind: Mapped[str] = mapped_column(String(32), nullable=False, default="technical")
+    linked_project_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     workspace: Mapped["Workspace"] = relationship(back_populates="projects")
 
@@ -117,8 +122,10 @@ class WorkspaceSettingsRow(Base):
 
 class ProjectEditorStateRow(Base):
     """
-    用途：技术标工作区最小持久化（大纲/章节/事实/分析概述/guidance）。
-    对接：GET|PUT /api/projects/{id}/editor-state；前端 useTechnicalPlanEditors / guidance。
+    用途：技术标 + 商务标工作区最小持久化。
+    对接：GET|PUT /api/projects/{id}/editor-state；
+      技术标 useTechnicalPlanEditors / guidance；
+      商务标 useBusinessBidWorkspace（business_json → businessQualify 等）。
     二次开发：正式产物版本库可拆 artifact 表，本表可作缓存或草稿。
     """
 
@@ -139,6 +146,8 @@ class ProjectEditorStateRow(Base):
     guidance_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 轻量解析后的招标文件 Markdown（document 步）
     parsed_markdown: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 商务标整包：qualify / toc / quote / commit
+    business_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

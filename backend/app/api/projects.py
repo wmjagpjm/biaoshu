@@ -11,7 +11,7 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_workspace_id
@@ -38,12 +38,13 @@ def _to_out(project) -> ProjectOut:
 def list_projects(
     db: Annotated[Session, Depends(get_db)],
     workspace_id: Annotated[str, Depends(get_workspace_id)],
+    kind: Annotated[str | None, Query(description="technical|business，空=全部")] = None,
 ) -> list[ProjectOut]:
     """
     用途：当前 workspace 的项目列表（updatedAt 倒序）。
-    对接：前端 listProjectsAsync → GET /projects
+    对接：前端 listProjectsAsync → GET /projects?kind=
     """
-    items = project_service.list_projects(db, workspace_id)
+    items = project_service.list_projects(db, workspace_id, kind=kind)
     return [_to_out(p) for p in items]
 
 
@@ -55,7 +56,7 @@ def create_project(
 ) -> ProjectOut:
     """
     用途：创建项目，201 + ProjectOut。
-    对接：前端 createProjectAsync → POST /projects
+    对接：前端 createProjectAsync → POST /projects（可带 kind=business）
     """
     project = project_service.create_project(
         db,
@@ -64,6 +65,8 @@ def create_project(
         industry=body.industry or "通用",
         status=body.status or "draft",
         technical_plan_step=body.technical_plan_step or 1,
+        kind=body.kind or "technical",
+        linked_project_id=body.linked_project_id,
     )
     return _to_out(project)
 
@@ -97,15 +100,25 @@ def patch_project(
     对接：前端 updateProjectAsync → PATCH /projects/{id}
     """
     try:
+        patch = body.model_dump(by_alias=False, exclude_unset=True)
+        kwargs: dict = {}
+        for key in (
+            "name",
+            "industry",
+            "status",
+            "technical_plan_step",
+            "word_count",
+            "kind",
+        ):
+            if key in patch:
+                kwargs[key] = patch[key]
+        if "linked_project_id" in patch:
+            kwargs["linked_project_id"] = patch["linked_project_id"]
         project = project_service.update_project(
             db,
             workspace_id,
             project_id,
-            name=body.name,
-            industry=body.industry,
-            status=body.status,
-            technical_plan_step=body.technical_plan_step,
-            word_count=body.word_count,
+            **kwargs,
         )
     except ProjectNotFoundError:
         raise HTTPException(status_code=404, detail="项目不存在") from None
@@ -179,6 +192,14 @@ def put_editor_state(
         kwargs["guidance"] = payload["guidance"]
     if "parsed_markdown" in payload:
         kwargs["parsed_markdown"] = payload["parsed_markdown"]
+    if "business_qualify" in payload:
+        kwargs["business_qualify"] = payload["business_qualify"]
+    if "business_toc" in payload:
+        kwargs["business_toc"] = payload["business_toc"]
+    if "business_quote" in payload:
+        kwargs["business_quote"] = payload["business_quote"]
+    if "business_commit" in payload:
+        kwargs["business_commit"] = payload["business_commit"]
 
     try:
         data = editor_state_service.upsert_editor_state(
@@ -191,7 +212,7 @@ def put_editor_state(
 
 
 def _editor_out(data: dict) -> EditorStateOut:
-    """用途：service dict → EditorStateOut（含 analysis / parsedMarkdown）。"""
+    """用途：service dict → EditorStateOut（含 analysis / 商务字段）。"""
     return EditorStateOut.model_validate(
         {
             "project_id": data["projectId"],
@@ -203,6 +224,10 @@ def _editor_out(data: dict) -> EditorStateOut:
             "analysis": data.get("analysis"),
             "guidance": data["guidance"],
             "parsed_markdown": data.get("parsedMarkdown"),
+            "business_qualify": data.get("businessQualify"),
+            "business_toc": data.get("businessToc"),
+            "business_quote": data.get("businessQuote"),
+            "business_commit": data.get("businessCommit"),
             "updated_at": data["updatedAt"],
         }
     )

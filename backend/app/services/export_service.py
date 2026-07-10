@@ -803,9 +803,12 @@ def build_docx_bytes(
     db: Session,
     workspace_id: str,
     project_id: str,
+    *,
+    mode: str | None = None,
 ) -> tuple[bytes, str]:
     """
     用途：生成 Word 文档（封面 + 正文，应用默认导出模板）。
+    mode：technical（默认）| business（商务标册，读 business_json）。
     """
     try:
         from docx import Document  # type: ignore
@@ -817,6 +820,12 @@ def build_docx_bytes(
     project = get_project(db, workspace_id, project_id)
     state = db.get(ProjectEditorStateRow, project_id)
     template = settings_service.get_export_format(db, workspace_id)
+
+    export_mode = (mode or "").strip().lower()
+    if not export_mode and getattr(project, "kind", None) == "business":
+        export_mode = "business"
+    if export_mode not in ("business", "technical"):
+        export_mode = "technical"
 
     doc = Document()
     h1_page_break = False
@@ -840,11 +849,13 @@ def build_docx_bytes(
         except Exception:
             pass
 
-    title = project.name or "技术标"
+    is_business = export_mode == "business"
+    title = project.name or ("商务标" if is_business else "技术标")
+    cover_label = "商务标书" if is_business else "技术标书"
 
     cover = doc.add_paragraph()
     cover.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = cover.add_run("技术标书")
+    run = cover.add_run(cover_label)
     run.bold = True
     run.font.size = Pt(22)
     run.font.color.rgb = RGBColor(0x1E, 0x3A, 0x5F)
@@ -874,6 +885,18 @@ def build_docx_bytes(
     doc.add_page_break()
 
     doc.add_heading(title, level=0)
+
+    # —— 商务标：整包 Markdown 导出 ——
+    if is_business:
+        from app.services import business_task_service, editor_state_service
+
+        ed = editor_state_service.get_editor_state(db, workspace_id, project_id)
+        md = business_task_service.build_business_markdown(ed, title)
+        write_markdown_body(doc, md, list_cfg=list_cfg, table_cfg=table_cfg)
+        buf = io.BytesIO()
+        doc.save(buf)
+        filename = f"{title}.docx".replace("/", "_").replace("\\", "_")
+        return buf.getvalue(), filename
 
     overview = (state.analysis_overview if state else None) or ""
     analysis = _loads(state.analysis_json) if state else None

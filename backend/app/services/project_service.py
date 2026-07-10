@@ -27,6 +27,9 @@ ALLOWED_STATUS = frozenset(
     {"draft", "analyzing", "writing", "reviewing", "exported"}
 )
 
+# technical=技术标；business=商务标
+ALLOWED_KINDS = frozenset({"technical", "business"})
+
 
 class ProjectNotFoundError(Exception):
     """
@@ -61,16 +64,21 @@ def _new_project_id() -> str:
     return f"proj_{secrets.token_hex(4)}_{secrets.token_hex(2)}"
 
 
-def list_projects(db: Session, workspace_id: str) -> list[Project]:
+def list_projects(
+    db: Session,
+    workspace_id: str,
+    *,
+    kind: str | None = None,
+) -> list[Project]:
     """
-    用途：列出某工作空间下全部项目，按更新时间倒序。
-    对接：GET /api/projects
+    用途：列出某工作空间下项目，按更新时间倒序。
+    对接：GET /api/projects?kind=technical|business
+    说明：kind 为空则返回全部（兼容旧客户端）。
     """
-    stmt = (
-        select(Project)
-        .where(Project.workspace_id == workspace_id)
-        .order_by(Project.updated_at.desc())
-    )
+    stmt = select(Project).where(Project.workspace_id == workspace_id)
+    if kind and kind in ALLOWED_KINDS:
+        stmt = stmt.where(Project.kind == kind)
+    stmt = stmt.order_by(Project.updated_at.desc())
     return list(db.scalars(stmt).all())
 
 
@@ -95,13 +103,20 @@ def create_project(
     status: str = "draft",
     technical_plan_step: int = 1,
     word_count: int = 0,
+    kind: str = "technical",
+    linked_project_id: str | None = None,
 ) -> Project:
     """
     用途：创建项目并落库。
-    规则：空名称→未命名；非法 status→draft；步骤钳制 1–6；word_count≥0。
+    规则：空名称→未命名；非法 status→draft；步骤钳制 1–6；word_count≥0；
+      kind 非法则 technical。
     对接：POST /api/projects
     """
-    cleaned_name = name.strip() or "未命名技术标项目"
+    cleaned_kind = kind if kind in ALLOWED_KINDS else "technical"
+    default_name = (
+        "未命名商务标项目" if cleaned_kind == "business" else "未命名技术标项目"
+    )
+    cleaned_name = name.strip() or default_name
     cleaned_industry = industry.strip() or "通用"
     if status not in ALLOWED_STATUS:
         status = "draft"
@@ -115,6 +130,8 @@ def create_project(
         updated_at=datetime.now(timezone.utc),
         technical_plan_step=step,
         word_count=max(0, word_count),
+        kind=cleaned_kind,
+        linked_project_id=linked_project_id,
     )
     db.add(project)
     db.commit()
@@ -132,11 +149,14 @@ def update_project(
     status: str | None = None,
     technical_plan_step: int | None = None,
     word_count: int | None = None,
+    kind: str | None = None,
+    linked_project_id: str | None = ...,  # type: ignore[assignment]
 ) -> Project:
     """
     用途：部分更新项目；仅非 None 字段生效；自动刷新 updated_at。
     对接：PATCH /api/projects/{id}
     异常：ProjectNotFoundError；非法 status 时 ValueError
+    说明：linked_project_id 传 ... 表示不改；传 None 表示清空关联。
     """
     project = get_project(db, workspace_id, project_id)
     if name is not None:
@@ -151,6 +171,12 @@ def update_project(
         project.technical_plan_step = max(1, min(6, technical_plan_step))
     if word_count is not None:
         project.word_count = max(0, word_count)
+    if kind is not None:
+        if kind not in ALLOWED_KINDS:
+            raise ValueError(f"非法 kind: {kind}")
+        project.kind = kind
+    if linked_project_id is not ...:
+        project.linked_project_id = linked_project_id
     project.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(project)
