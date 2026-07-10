@@ -13,7 +13,7 @@ import type {
   AiFeedbackRecord,
   FeedbackStage,
 } from "../../../shared/types/aiFeedback";
-import { createInitialWorkspace } from "../mock";
+import { createDemoWorkspace, createEmptyWorkspace } from "../mock";
 import type {
   BusinessBidWorkspaceState,
   CommitBlock,
@@ -27,6 +27,11 @@ const storageKey = (projectId: string) =>
 const feedbackKey = (projectId: string) =>
   `biaoshu.businessBid.feedback.${projectId}`;
 
+/** 演示 id 前缀：离线仍可看满数据 */
+function isDemoProjectId(projectId: string): boolean {
+  return projectId.startsWith("bb_");
+}
+
 type EditorStateApi = {
   projectId: string;
   parsedMarkdown?: string | null;
@@ -37,13 +42,16 @@ type EditorStateApi = {
 };
 
 function loadLocalWorkspace(projectId: string): BusinessBidWorkspaceState {
+  const fallback = isDemoProjectId(projectId)
+    ? createDemoWorkspace(projectId)
+    : createEmptyWorkspace(projectId);
   try {
     const raw = localStorage.getItem(storageKey(projectId));
-    if (!raw) return createInitialWorkspace(projectId);
+    if (!raw) return fallback;
     const parsed = JSON.parse(raw) as BusinessBidWorkspaceState;
-    return { ...createInitialWorkspace(projectId), ...parsed, projectId };
+    return { ...fallback, ...parsed, projectId };
   } catch {
-    return createInitialWorkspace(projectId);
+    return fallback;
   }
 }
 
@@ -57,29 +65,32 @@ function loadHistory(projectId: string): AiFeedbackRecord[] {
   }
 }
 
-function fromApi(projectId: string, remote: EditorStateApi): BusinessBidWorkspaceState {
-  const base = createInitialWorkspace(projectId);
+/**
+ * 用途：远端 editor-state → 工作区；空数组保留为空，不回填演示 mock。
+ */
+function fromApi(
+  projectId: string,
+  remote: EditorStateApi,
+): BusinessBidWorkspaceState {
+  const empty = createEmptyWorkspace(projectId);
   const quote = remote.businessQuote;
   return {
     projectId,
-    parseMarkdown: remote.parsedMarkdown ?? base.parseMarkdown,
-    qualifyItems:
-      Array.isArray(remote.businessQualify) && remote.businessQualify.length
-        ? remote.businessQualify
-        : base.qualifyItems,
-    tocItems:
-      Array.isArray(remote.businessToc) && remote.businessToc.length
-        ? remote.businessToc
-        : base.tocItems,
+    parseMarkdown:
+      remote.parsedMarkdown != null ? String(remote.parsedMarkdown) : "",
+    qualifyItems: Array.isArray(remote.businessQualify)
+      ? remote.businessQualify
+      : empty.qualifyItems,
+    tocItems: Array.isArray(remote.businessToc)
+      ? remote.businessToc
+      : empty.tocItems,
     quoteRows:
-      quote && Array.isArray(quote.rows) && quote.rows.length
-        ? quote.rows
-        : base.quoteRows,
-    quoteNotes: quote?.notes ?? base.quoteNotes,
-    commitBlocks:
-      Array.isArray(remote.businessCommit) && remote.businessCommit.length
-        ? remote.businessCommit
-        : base.commitBlocks,
+      quote && Array.isArray(quote.rows) ? quote.rows : empty.quoteRows,
+    quoteNotes:
+      quote && typeof quote.notes === "string" ? quote.notes : empty.quoteNotes,
+    commitBlocks: Array.isArray(remote.businessCommit)
+      ? remote.businessCommit
+      : empty.commitBlocks,
   };
 }
 
@@ -300,13 +311,15 @@ export function useBusinessBidWorkspace(projectId: string) {
           ),
         );
 
-        // 解析文阶段可写回
+        // 后端已写 editor-state（结构化/解析）；刷新对齐表格
         if (
-          input.stage === "business_parse" &&
-          res.revisedContent &&
-          res.revisedContent.trim()
+          input.stage === "business_parse" ||
+          input.stage === "business_qualify" ||
+          input.stage === "business_toc" ||
+          input.stage === "business_quote" ||
+          input.stage === "business_commit"
         ) {
-          setParseMarkdown(res.revisedContent);
+          await refreshFromApi();
         }
         return res;
       } catch (err) {
@@ -321,7 +334,7 @@ export function useBusinessBidWorkspace(projectId: string) {
         throw err;
       }
     },
-    [projectId, setParseMarkdown, workspace],
+    [projectId, refreshFromApi, workspace],
   );
 
   return {

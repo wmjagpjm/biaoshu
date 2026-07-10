@@ -220,8 +220,29 @@ export const mockCommitBlocks: CommitBlock[] = [
   },
 ];
 
-/** 按项目构造工作区初始状态 */
-export function createInitialWorkspace(
+/**
+ * 用途：真实 API 项目空工作区（无演示假数据）。
+ * 对接：useBusinessBidWorkspace.fromApi
+ */
+export function createEmptyWorkspace(
+  projectId: string,
+): BusinessBidWorkspaceState {
+  return {
+    projectId,
+    parseMarkdown: "",
+    qualifyItems: [],
+    tocItems: [],
+    quoteRows: [],
+    quoteNotes: "",
+    commitBlocks: [],
+  };
+}
+
+/**
+ * 用途：演示/离线 mock 满数据初始状态。
+ * 对接：localStorage 兜底、bb_* 演示 id
+ */
+export function createDemoWorkspace(
   projectId: string,
 ): BusinessBidWorkspaceState {
   return {
@@ -234,4 +255,11 @@ export function createInitialWorkspace(
       "总价含税；付款节点与招标一致。偏离表如无负偏离可填「无」。",
     commitBlocks: mockCommitBlocks.map((x) => ({ ...x })),
   };
+}
+
+/** @deprecated 请按场景用 createEmptyWorkspace / createDemoWorkspace */
+export function createInitialWorkspace(
+  projectId: string,
+): BusinessBidWorkspaceState {
+  return createDemoWorkspace(projectId);
 }

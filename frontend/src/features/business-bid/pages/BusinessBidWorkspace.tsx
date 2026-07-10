@@ -20,7 +20,10 @@ import { AiFeedbackPanel } from "../../../shared/components/AiFeedbackPanel/AiFe
 import { getApiBase } from "../../../shared/lib/api";
 import type { Project } from "../../../shared/types/workspace";
 import { useProjectPipeline } from "../../technical-plan/hooks/useProjectPipeline";
-import { getProjectAsync } from "../../technical-plan/lib/projectStore";
+import {
+  getProjectAsync,
+  updateProjectAsync,
+} from "../../technical-plan/lib/projectStore";
 import {
   BusinessStepStepper,
   BUSINESS_STEPS,
@@ -31,6 +34,16 @@ import type { BusinessBidStepId, QualifyItemStatus } from "../types";
 import "./BusinessBid.css";
 
 const STEP_IDS: BusinessBidStepId[] = BUSINESS_STEPS.map((s) => s.id);
+
+/** 任务成功后的六步进度（与后端 technical_plan_step 对齐） */
+const STEP_BY_TASK: Record<string, number> = {
+  parse: 1,
+  biz_qualify: 2,
+  biz_toc: 3,
+  biz_quote: 4,
+  biz_commit: 5,
+  export: 6,
+};
 
 function qualifyStatusLabel(s: QualifyItemStatus): string {
   if (s === "matched") return "已响应";
@@ -130,8 +143,21 @@ export function BusinessBidWorkspace() {
       const t = await pipeline.runTask(type, payload);
       if (t.status === "success") {
         await refreshFromApi();
-        const remote = await getProjectAsync(projectId);
-        if (remote) setProject(remote);
+        const step = STEP_BY_TASK[type];
+        if (step) {
+          const patched = await updateProjectAsync(projectId, {
+            technicalPlanStep: step,
+          });
+          if (patched) {
+            setProject(patched);
+          } else {
+            const remote = await getProjectAsync(projectId);
+            if (remote) setProject(remote);
+          }
+        } else {
+          const remote = await getProjectAsync(projectId);
+          if (remote) setProject(remote);
+        }
       }
       return t;
     },

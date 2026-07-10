@@ -151,6 +151,100 @@ def test_biz_qualify_with_mocked_llm(client, monkeypatch):
     assert state["businessQualify"][0]["requirement"] == "独立法人"
 
 
+def test_business_qualify_revise_writes_editor_state(client, monkeypatch):
+    """用途：mock LLM 后 business_qualify revise 写回资格表。"""
+    from app.services import llm_service
+
+    revised_items = [
+        {
+            "id": "q1",
+            "requirement": "独立法人（修订）",
+            "response": "我司具备",
+            "evidence": "执照.pdf",
+            "status": "matched",
+        }
+    ]
+
+    def fake_chat(db, workspace_id, messages, **kwargs):
+        body = "已按意见强化法人条款。\n\n" + json.dumps(
+            revised_items, ensure_ascii=False
+        )
+        return SimpleNamespace(content=body, model="mock")
+
+    monkeypatch.setattr(llm_service, "chat_completion", fake_chat)
+
+    proj = client.post(
+        "/api/projects", json={"name": "商务修订", "kind": "business"}
+    ).json()
+    pid = proj["id"]
+    client.put(
+        f"/api/projects/{pid}/editor-state",
+        json={
+            "businessQualify": [
+                {
+                    "id": "q1",
+                    "requirement": "法人",
+                    "response": "有",
+                    "evidence": "",
+                    "status": "pending",
+                }
+            ]
+        },
+    )
+
+    res = client.post(
+        f"/api/projects/{pid}/artifacts/workspace/revise",
+        json={
+            "stage": "business_qualify",
+            "message": "强化法人响应说明",
+            "preserveStructure": True,
+            "baseContent": json.dumps(
+                [
+                    {
+                        "id": "q1",
+                        "requirement": "法人",
+                        "response": "有",
+                        "evidence": "",
+                        "status": "pending",
+                    }
+                ],
+                ensure_ascii=False,
+            ),
+        },
+    )
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert data["status"] == "applied"
+    assert data.get("revisedContent")
+
+    state = client.get(f"/api/projects/{pid}/editor-state").json()
+    assert len(state["businessQualify"]) == 1
+    assert "修订" in state["businessQualify"][0]["requirement"]
+
+
+def test_apply_business_struct_revise_unit():
+    """用途：纯函数解析资格 JSON。"""
+    from app.services.revise_service import apply_business_struct_revise
+
+    raw = json.dumps(
+        [
+            {
+                "id": "q1",
+                "requirement": "业绩",
+                "response": "两项",
+                "evidence": "",
+                "status": "partial",
+            }
+        ],
+        ensure_ascii=False,
+    )
+    applied = apply_business_struct_revise("business_qualify", raw)
+    assert applied is not None
+    kwargs, j = applied
+    assert len(kwargs["business_qualify"]) == 1
+    assert "业绩" in kwargs["business_qualify"][0]["requirement"]
+
+
 def test_business_export_nonempty(client, monkeypatch):
     """用途：商务标 export 生成非空 docx。"""
     proj = client.post(
