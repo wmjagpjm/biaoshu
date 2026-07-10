@@ -25,7 +25,7 @@ export function TechnicalPlanListPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await listProjectsAsync();
+      const res = await listProjectsAsync({ kind: "technical" });
       setProjects(res.projects);
       setSource(res.source);
       setOfflineHint(res.offlineHint);

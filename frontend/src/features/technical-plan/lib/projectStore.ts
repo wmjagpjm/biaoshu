@@ -22,6 +22,8 @@ export type CreateProjectInput = {
   fileNames?: string[];
   technicalPlanStep?: number;
   status?: ProjectStatus;
+  kind?: "technical" | "business";
+  linkedProjectId?: string | null;
 };
 
 /** 列表加载结果：带来源与离线提示，便于联调观测 */
@@ -93,13 +95,31 @@ export function listProjects(): Project[] {
 
 /**
  * 用途：异步列表；API 成功 source=api；失败带 offlineHint。
+ * @param kind 可选 technical|business，传给 GET /projects?kind=
  */
-export async function listProjectsAsync(): Promise<ListProjectsResult> {
+export async function listProjectsAsync(options?: {
+  kind?: "technical" | "business";
+}): Promise<ListProjectsResult> {
+  const kind = options?.kind;
   if (useApiProjects()) {
     try {
-      const remote = await apiFetch<Project[]>("/projects");
+      const q = kind ? `?kind=${encodeURIComponent(kind)}` : "";
+      const remote = await apiFetch<Project[]>(`/projects${q}`);
       if (Array.isArray(remote)) {
-        return { projects: mergeWithMock(remote), source: "api" };
+        // 技术标列表默认不混入商务；显式 kind 时也不合 mock 演示（避免 id 混淆）
+        const projects =
+          kind === "business"
+            ? [...remote].sort(
+                (a, b) =>
+                  new Date(b.updatedAt).getTime() -
+                  new Date(a.updatedAt).getTime(),
+              )
+            : kind === "technical"
+              ? mergeWithMock(
+                  remote.filter((p) => !p.kind || p.kind === "technical"),
+                )
+              : mergeWithMock(remote);
+        return { projects, source: "api" };
       }
     } catch (err) {
       const message =
@@ -133,15 +153,20 @@ export async function getProjectAsync(
 
 export function createProjectLocal(input: CreateProjectInput): Project {
   const id = `proj_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+  const kind = input.kind ?? "technical";
   const project: Project = {
     id,
     workspaceId: currentWorkspace.id,
-    name: input.name.trim() || "未命名技术标项目",
+    name:
+      input.name.trim() ||
+      (kind === "business" ? "未命名商务标项目" : "未命名技术标项目"),
     industry: input.industry?.trim() || "通用",
     status: input.status ?? "draft",
     updatedAt: new Date().toISOString(),
     technicalPlanStep: input.technicalPlanStep ?? 1,
     wordCount: 0,
+    kind,
+    linkedProjectId: input.linkedProjectId ?? null,
   };
   saveUserProjects([project, ...loadUserProjects()]);
   rememberPendingFiles(id, input.fileNames);
@@ -156,15 +181,20 @@ export function createProject(input: CreateProjectInput): Project {
 export async function createProjectAsync(
   input: CreateProjectInput,
 ): Promise<Project> {
+  const kind = input.kind ?? "technical";
+  const defaultName =
+    kind === "business" ? "未命名商务标项目" : "未命名技术标项目";
   if (useApiProjects()) {
     try {
       const project = await apiFetch<Project>("/projects", {
         method: "POST",
         body: JSON.stringify({
-          name: input.name.trim() || "未命名技术标项目",
+          name: input.name.trim() || defaultName,
           industry: input.industry?.trim() || "通用",
           status: input.status ?? "draft",
           technicalPlanStep: input.technicalPlanStep ?? 1,
+          kind,
+          linkedProjectId: input.linkedProjectId ?? undefined,
         }),
       });
       rememberPendingFiles(project.id, input.fileNames);

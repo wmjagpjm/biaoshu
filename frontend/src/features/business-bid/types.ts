@@ -1,7 +1,11 @@
 /**
  * 模块：商务标领域类型
  * 用途：对齐 C 端 business-bid 信息架构，落地 B 端「分步工作区」数据结构。
- * 对接：后续 POST /api/business-bid/projects、/revise 等；当前前端 mock。
+ * 对接：
+ *   - 项目：POST/GET /api/projects?kind=business
+ *   - 状态：editor-state businessQualify/Toc/Quote/Commit
+ *   - 任务：parse / biz_qualify / biz_toc / biz_quote / biz_commit / export
+ *   - 修订：POST .../artifacts/{id}/revise stage=business_*
  */
 
 /** 商务标六步流水线（与技术方案六步对位，但内容不同） */

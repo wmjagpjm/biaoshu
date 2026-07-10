@@ -1,3 +1,10 @@
+/**
+ * 模块：商务标入口页
+ * 用途：项目列表 + 概念区分 + 进入分步工作区；列表走 API kind=business。
+ * 对接：listProjectsAsync / createProjectAsync；路由 /business-bid/:id/:step
+ */
+
+import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   Briefcase,
@@ -6,28 +13,88 @@ import {
   Sparkles,
 } from "lucide-react";
 import { formatRelativeTime } from "../../../shared/mock/projects";
+import type { Project } from "../../../shared/types/workspace";
+import {
+  createProjectAsync,
+  listProjectsAsync,
+} from "../../technical-plan/lib/projectStore";
 import { BUSINESS_STEPS } from "../components/BusinessStepStepper";
 import { mockBusinessProjects } from "../mock";
 import "./BusinessBid.css";
 
-/**
- * 模块：商务标入口页
- * 用途：项目列表 + 概念区分 + 进入分步工作区。
- * 说明：与「技术标」「完整投标文件」「商务资料清单」入口语义分离（见创建页 featureCatalog）。
- */
+function stepIdFromIndex(stepIndex: number): string {
+  return (
+    BUSINESS_STEPS[Math.max(0, Math.min(stepIndex, BUSINESS_STEPS.length) - 1)]
+      ?.id ?? "parse"
+  );
+}
+
 export function BusinessBidPage() {
   const navigate = useNavigate();
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [source, setSource] = useState<"api" | "local" | "mock">("mock");
+  const [offlineHint, setOfflineHint] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  const reload = useCallback(async () => {
+    try {
+      const res = await listProjectsAsync({ kind: "business" });
+      if (res.projects.length) {
+        setProjects(res.projects);
+        setSource(res.source);
+        setOfflineHint(res.offlineHint ?? null);
+        return;
+      }
+      // API 空列表时仍展示演示项目，便于首次体验
+      if (res.source === "api") {
+        setProjects([]);
+        setSource("api");
+        setOfflineHint(null);
+        return;
+      }
+    } catch {
+      /* fallthrough */
+    }
+    setProjects(
+      mockBusinessProjects.map((p) => ({
+        id: p.id,
+        workspaceId: p.workspaceId,
+        name: p.name,
+        industry: p.industry,
+        status: "draft" as const,
+        updatedAt: p.updatedAt,
+        technicalPlanStep: p.currentStep,
+        wordCount: 0,
+        kind: "business" as const,
+        linkedProjectId: p.linkedTechnicalProjectId,
+      })),
+    );
+    setSource("mock");
+  }, []);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
 
   function openProject(id: string, stepIndex: number) {
-    const step =
-      BUSINESS_STEPS[Math.max(0, Math.min(stepIndex, BUSINESS_STEPS.length) - 1)]
-        ?.id ?? "parse";
-    navigate(`/business-bid/${id}/${step}`);
+    navigate(`/business-bid/${id}/${stepIdFromIndex(stepIndex)}`);
   }
 
-  function createDemo() {
-    // 前端阶段复用首个 demo 项目；后端应 POST 新建后跳转
-    openProject(mockBusinessProjects[0].id, 1);
+  async function createProject() {
+    setCreating(true);
+    try {
+      const p = await createProjectAsync({
+        name: `商务标 ${new Date().toLocaleDateString("zh-CN")}`,
+        industry: "通用",
+        kind: "business",
+      });
+      navigate(`/business-bid/${p.id}/parse`);
+    } catch {
+      // 回退演示
+      openProject(mockBusinessProjects[0].id, 1);
+    } finally {
+      setCreating(false);
+    }
   }
 
   return (
@@ -44,8 +111,13 @@ export function BusinessBidPage() {
           <Link to="/create" className="btn btn-ghost">
             返回创建
           </Link>
-          <button type="button" className="btn btn-primary" onClick={createDemo}>
-            <Plus size={16} /> 从招标文件开始
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => void createProject()}
+            disabled={creating}
+          >
+            <Plus size={16} /> {creating ? "创建中…" : "从招标文件开始"}
           </button>
         </div>
       </header>
@@ -73,52 +145,72 @@ export function BusinessBidPage() {
           <strong>商务标项目</strong>
           <div className="bb-toolbar__spacer" />
           <span style={{ fontSize: 12, color: "var(--text-tertiary)" }}>
-            前端 mock · 数据存 localStorage
+            {source === "api"
+              ? "已接后端 · kind=business"
+              : source === "local"
+                ? "本地回退"
+                : "演示 mock"}
+            {offlineHint ? ` · ${offlineHint}` : ""}
           </span>
         </div>
-        <div className="bb-project-grid">
-          {mockBusinessProjects.map((p) => {
-            const stepMeta = BUSINESS_STEPS[p.currentStep - 1] ?? BUSINESS_STEPS[0];
-            return (
-              <div key={p.id} className="card card-pad bb-project-card">
-                <div>
-                  <strong style={{ display: "block", marginBottom: 6, lineHeight: 1.45 }}>
-                    {p.name}
-                  </strong>
-                  <div className="bb-project-card__meta">
-                    {p.industry} · 更新 {formatRelativeTime(p.updatedAt)}
+        {projects.length === 0 ? (
+          <div className="card card-pad" style={{ textAlign: "center" }}>
+            <FileStack size={28} style={{ opacity: 0.5, marginBottom: 8 }} />
+            <p>暂无商务标项目，点击「从招标文件开始」创建。</p>
+          </div>
+        ) : (
+          <div className="bb-project-grid">
+            {projects.map((p) => {
+              const step = p.technicalPlanStep || 1;
+              const stepMeta =
+                BUSINESS_STEPS[step - 1] ?? BUSINESS_STEPS[0];
+              return (
+                <div key={p.id} className="card card-pad bb-project-card">
+                  <div>
+                    <strong
+                      style={{
+                        display: "block",
+                        marginBottom: 6,
+                        lineHeight: 1.45,
+                      }}
+                    >
+                      {p.name}
+                    </strong>
+                    <div className="bb-project-card__meta">
+                      {p.industry} · 更新 {formatRelativeTime(p.updatedAt)}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <span className="badge badge-primary">
+                      进度 STEP {step}/{BUSINESS_STEPS.length}
+                    </span>
+                    <span className="badge badge-muted">{stepMeta.title}</span>
+                    {p.linkedProjectId && (
+                      <span className="badge badge-free">已关联技术标</span>
+                    )}
+                  </div>
+                  <div className="bb-project-card__actions">
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      onClick={() => openProject(p.id, step)}
+                    >
+                      进入工作区
+                    </button>
+                    {p.linkedProjectId && (
+                      <Link
+                        to={`/technical-plan/${p.linkedProjectId}`}
+                        className="btn btn-ghost btn-sm"
+                      >
+                        <Sparkles size={14} /> 技术标
+                      </Link>
+                    )}
                   </div>
                 </div>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  <span className="badge badge-primary">
-                    进度 STEP {p.currentStep}/{BUSINESS_STEPS.length}
-                  </span>
-                  <span className="badge badge-muted">{stepMeta.title}</span>
-                  {p.linkedTechnicalProjectId && (
-                    <span className="badge badge-free">已关联技术标</span>
-                  )}
-                </div>
-                <div className="bb-project-card__actions">
-                  <button
-                    type="button"
-                    className="btn btn-primary btn-sm"
-                    onClick={() => openProject(p.id, p.currentStep)}
-                  >
-                    进入工作区
-                  </button>
-                  {p.linkedTechnicalProjectId && (
-                    <Link
-                      to={`/technical-plan/${p.linkedTechnicalProjectId}`}
-                      className="btn btn-ghost btn-sm"
-                    >
-                      <Sparkles size={14} /> 技术标
-                    </Link>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        )}
       </section>
 
       <section className="card card-pad" style={{ marginTop: 4 }}>
@@ -126,9 +218,16 @@ export function BusinessBidPage() {
           <FileStack size={18} color="var(--primary)" />
           <strong>六步流水线预览</strong>
         </div>
-        <div className="bb-stepper" style={{ padding: 0, border: "none", background: "transparent" }}>
+        <div
+          className="bb-stepper"
+          style={{ padding: 0, border: "none", background: "transparent" }}
+        >
           {BUSINESS_STEPS.map((s) => (
-            <div key={s.id} className="bb-step is-done" style={{ pointerEvents: "none" }}>
+            <div
+              key={s.id}
+              className="bb-step is-done"
+              style={{ pointerEvents: "none" }}
+            >
               <span className="bb-step__idx">STEP {s.index}</span>
               <span className="bb-step__title">{s.title}</span>
               <span className="bb-step__desc">{s.description}</span>

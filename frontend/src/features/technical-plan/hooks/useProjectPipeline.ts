@@ -36,7 +36,11 @@ export type TaskType =
   | "outline"
   | "chapter"
   | "chapters"
-  | "export";
+  | "export"
+  | "biz_qualify"
+  | "biz_toc"
+  | "biz_quote"
+  | "biz_commit";
 
 const POLL_MS = 1000;
 const POLL_MAX_MS = 10 * 60 * 1000;

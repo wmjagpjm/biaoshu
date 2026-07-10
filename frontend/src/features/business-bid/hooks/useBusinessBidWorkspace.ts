@@ -1,4 +1,14 @@
-import { useCallback, useEffect, useState } from "react";
+/**
+ * 模块：商务标工作区状态
+ * 用途：分步编辑数据 + 反馈历史；优先 editor-state API，失败回退 localStorage。
+ * 对接：
+ *   - GET|PUT /api/projects/{id}/editor-state（businessQualify/Toc/Quote/Commit、parsedMarkdown）
+ *   - POST /api/projects/{id}/artifacts/workspace/revise（stage=business_*）
+ * 二次开发：形状保持 BusinessBidWorkspaceState，勿拆 UI 信息架构。
+ */
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import { apiFetch } from "../../../shared/lib/api";
 import type {
   AiFeedbackRecord,
   FeedbackStage,
@@ -12,18 +22,21 @@ import type {
   TocItem,
 } from "../types";
 
-/**
- * 模块：商务标工作区状态
- * 用途：分步编辑数据 + 反馈历史；localStorage 演示持久化。
- * 对接：后端就绪后改为 apiFetch，状态形状尽量保持不变。
- */
-
 const storageKey = (projectId: string) =>
   `biaoshu.businessBid.workspace.${projectId}`;
 const feedbackKey = (projectId: string) =>
   `biaoshu.businessBid.feedback.${projectId}`;
 
-function loadWorkspace(projectId: string): BusinessBidWorkspaceState {
+type EditorStateApi = {
+  projectId: string;
+  parsedMarkdown?: string | null;
+  businessQualify?: QualifyItem[] | null;
+  businessToc?: TocItem[] | null;
+  businessQuote?: { rows?: QuoteRow[]; notes?: string } | null;
+  businessCommit?: CommitBlock[] | null;
+};
+
+function loadLocalWorkspace(projectId: string): BusinessBidWorkspaceState {
   try {
     const raw = localStorage.getItem(storageKey(projectId));
     if (!raw) return createInitialWorkspace(projectId);
@@ -44,19 +57,71 @@ function loadHistory(projectId: string): AiFeedbackRecord[] {
   }
 }
 
+function fromApi(projectId: string, remote: EditorStateApi): BusinessBidWorkspaceState {
+  const base = createInitialWorkspace(projectId);
+  const quote = remote.businessQuote;
+  return {
+    projectId,
+    parseMarkdown: remote.parsedMarkdown ?? base.parseMarkdown,
+    qualifyItems:
+      Array.isArray(remote.businessQualify) && remote.businessQualify.length
+        ? remote.businessQualify
+        : base.qualifyItems,
+    tocItems:
+      Array.isArray(remote.businessToc) && remote.businessToc.length
+        ? remote.businessToc
+        : base.tocItems,
+    quoteRows:
+      quote && Array.isArray(quote.rows) && quote.rows.length
+        ? quote.rows
+        : base.quoteRows,
+    quoteNotes: quote?.notes ?? base.quoteNotes,
+    commitBlocks:
+      Array.isArray(remote.businessCommit) && remote.businessCommit.length
+        ? remote.businessCommit
+        : base.commitBlocks,
+  };
+}
+
 export function useBusinessBidWorkspace(projectId: string) {
   const [workspace, setWorkspace] = useState<BusinessBidWorkspaceState>(() =>
-    loadWorkspace(projectId),
+    loadLocalWorkspace(projectId),
   );
   const [history, setHistory] = useState<AiFeedbackRecord[]>(() =>
     loadHistory(projectId),
   );
+  const [loading, setLoading] = useState(true);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [apiReady, setApiReady] = useState(false);
+  const skipNextSave = useRef(true);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
-    setWorkspace(loadWorkspace(projectId));
-    setHistory(loadHistory(projectId));
+  const refreshFromApi = useCallback(async () => {
+    if (!projectId) return;
+    try {
+      const remote = await apiFetch<EditorStateApi>(
+        `/projects/${encodeURIComponent(projectId)}/editor-state`,
+      );
+      skipNextSave.current = true;
+      setWorkspace(fromApi(projectId, remote));
+      setApiReady(true);
+      setSaveError(null);
+    } catch {
+      skipNextSave.current = true;
+      setWorkspace(loadLocalWorkspace(projectId));
+      setApiReady(false);
+    } finally {
+      setLoading(false);
+    }
   }, [projectId]);
 
+  useEffect(() => {
+    setLoading(true);
+    setHistory(loadHistory(projectId));
+    void refreshFromApi();
+  }, [projectId, refreshFromApi]);
+
+  // 本地备份
   useEffect(() => {
     localStorage.setItem(storageKey(projectId), JSON.stringify(workspace));
   }, [projectId, workspace]);
@@ -64,6 +129,46 @@ export function useBusinessBidWorkspace(projectId: string) {
   useEffect(() => {
     localStorage.setItem(feedbackKey(projectId), JSON.stringify(history));
   }, [projectId, history]);
+
+  // 防抖写回 editor-state
+  useEffect(() => {
+    if (!apiReady || !projectId) return;
+    if (skipNextSave.current) {
+      skipNextSave.current = false;
+      return;
+    }
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      void (async () => {
+        try {
+          await apiFetch(
+            `/projects/${encodeURIComponent(projectId)}/editor-state`,
+            {
+              method: "PUT",
+              body: JSON.stringify({
+                parsedMarkdown: workspace.parseMarkdown,
+                businessQualify: workspace.qualifyItems,
+                businessToc: workspace.tocItems,
+                businessQuote: {
+                  rows: workspace.quoteRows,
+                  notes: workspace.quoteNotes,
+                },
+                businessCommit: workspace.commitBlocks,
+              }),
+            },
+          );
+          setSaveError(null);
+        } catch (err) {
+          setSaveError(
+            (err as { message?: string })?.message || "保存工作区失败",
+          );
+        }
+      })();
+    }, 600);
+    return () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+    };
+  }, [apiReady, projectId, workspace]);
 
   const setParseMarkdown = useCallback((parseMarkdown: string) => {
     setWorkspace((prev) => ({ ...prev, parseMarkdown }));
@@ -124,10 +229,6 @@ export function useBusinessBidWorkspace(projectId: string) {
     [],
   );
 
-  /**
-   * 按反馈定向调整（演示）
-   * 后端应：POST .../revise + 原产物 + message
-   */
   const submitRevise = useCallback(
     async (input: {
       stage: FeedbackStage;
@@ -148,26 +249,88 @@ export function useBusinessBidWorkspace(projectId: string) {
       };
       setHistory((prev) => [applying, ...prev]);
 
-      await new Promise((r) => setTimeout(r, 650));
+      try {
+        // 按阶段取 baseContent
+        let baseContent = workspace.parseMarkdown;
+        if (input.stage === "business_qualify") {
+          baseContent = JSON.stringify(workspace.qualifyItems, null, 2);
+        } else if (input.stage === "business_toc") {
+          baseContent = JSON.stringify(workspace.tocItems, null, 2);
+        } else if (input.stage === "business_quote") {
+          baseContent = JSON.stringify(
+            { rows: workspace.quoteRows, notes: workspace.quoteNotes },
+            null,
+            2,
+          );
+        } else if (input.stage === "business_commit") {
+          baseContent = JSON.stringify(workspace.commitBlocks, null, 2);
+        }
 
-      const resultSummary = input.preserveStructure
-        ? `已基于商务标原文定向修订（尽量保留结构）。意见：「${input.message.slice(0, 48)}${input.message.length > 48 ? "…" : ""}」`
-        : `已按反馈较大幅度调整商务标结构。意见：「${input.message.slice(0, 48)}${input.message.length > 48 ? "…" : ""}」`;
+        const res = await apiFetch<{
+          resultSummary?: string;
+          revisedContent?: string | null;
+          status?: string;
+        }>(
+          `/projects/${encodeURIComponent(projectId)}/artifacts/workspace/revise`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              stage: input.stage,
+              message: input.message,
+              preserveStructure: input.preserveStructure,
+              baseContent,
+              targetId: input.targetId,
+              targetLabel: input.targetLabel,
+            }),
+          },
+        );
 
-      setHistory((prev) =>
-        prev.map((h) =>
-          h.id === id
-            ? { ...h, status: "applied" as const, resultSummary }
-            : h,
-        ),
-      );
+        setHistory((prev) =>
+          prev.map((h) =>
+            h.id === id
+              ? {
+                  ...h,
+                  status: "applied" as const,
+                  resultSummary:
+                    res.resultSummary ||
+                    res.revisedContent?.slice(0, 120) ||
+                    "已修订",
+                }
+              : h,
+          ),
+        );
+
+        // 解析文阶段可写回
+        if (
+          input.stage === "business_parse" &&
+          res.revisedContent &&
+          res.revisedContent.trim()
+        ) {
+          setParseMarkdown(res.revisedContent);
+        }
+        return res;
+      } catch (err) {
+        const msg = (err as { message?: string })?.message || "修订失败";
+        setHistory((prev) =>
+          prev.map((h) =>
+            h.id === id
+              ? { ...h, status: "failed" as const, resultSummary: msg }
+              : h,
+          ),
+        );
+        throw err;
+      }
     },
-    [],
+    [projectId, setParseMarkdown, workspace],
   );
 
   return {
     workspace,
     history,
+    loading,
+    saveError,
+    apiReady,
+    refreshFromApi,
     setParseMarkdown,
     updateQualifyItem,
     toggleTocItem,
