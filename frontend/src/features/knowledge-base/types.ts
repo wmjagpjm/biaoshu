@@ -1,7 +1,7 @@
 /**
  * 模块：知识库类型
  * 用途：文档知识库（文件夹 + 解析状态）+ 图片知识库。
- * 对接：后续 POST /api/knowledge/... 索引与上传；当前 mock + localStorage。
+ * 对接：GET|POST /api/knowledge/*；useKnowledgeBase 优先 API。
  */
 
 export type KbTab = "documents" | "images";

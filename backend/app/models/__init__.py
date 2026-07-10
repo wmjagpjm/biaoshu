@@ -6,6 +6,9 @@
 """
 
 from app.models.entities import (
+    KbChunkRow,
+    KbDocumentRow,
+    KbFolderRow,
     Project,
     ProjectEditorStateRow,
     ProjectFileRow,
@@ -21,4 +24,7 @@ __all__ = [
     "ProjectEditorStateRow",
     "ProjectFileRow",
     "ProjectTaskRow",
+    "KbFolderRow",
+    "KbDocumentRow",
+    "KbChunkRow",
 ]

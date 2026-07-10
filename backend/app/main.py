@@ -22,6 +22,7 @@ from app.api import (
     export as export_api,
     files,
     health,
+    knowledge as knowledge_api,
     llm,
     parse_callback,
     projects,
@@ -33,6 +34,9 @@ from app.core.config import get_settings
 from app.core.database import Base, SessionLocal, engine, ensure_schema_columns
 # 导入实体以注册 Base.metadata（create_all 依赖）
 from app.models import (  # noqa: F401
+    KbChunkRow,
+    KbDocumentRow,
+    KbFolderRow,
     Project,
     ProjectEditorStateRow,
     ProjectFileRow,
@@ -92,6 +96,7 @@ def create_app() -> FastAPI:
     app.include_router(tasks.router, prefix="/api")
     app.include_router(export_api.router, prefix="/api")
     app.include_router(parse_callback.router, prefix="/api")
+    app.include_router(knowledge_api.router, prefix="/api")
     return app
 
 

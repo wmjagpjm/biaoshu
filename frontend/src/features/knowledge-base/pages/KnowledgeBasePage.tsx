@@ -1,4 +1,4 @@
-import { useMemo, useState, type DragEvent } from "react";
+import { useMemo, useRef, useState, type DragEvent } from "react";
 import {
   BookOpen,
   FolderInput,
@@ -43,12 +43,13 @@ function statusClass(status: DocParseStatus): string {
 
 /**
  * 模块：知识库页
- * 用途：文档（文件夹树 + 状态筛选 + 批量操作）+ 图片素材库。
- * 对接：索引/上传后端待接；文档状态见 useKnowledgeBase。
+ * 用途：文档（文件夹树 + 状态筛选 + 批量操作 + 上传索引）+ 图片素材库。
+ * 对接：文档走 /api/knowledge；图片库仍 localStorage。
  */
 export function KnowledgeBasePage() {
   const [tab, setTab] = useState<"documents" | "images">("documents");
   const kb = useKnowledgeBase();
+  const docFileRef = useRef<HTMLInputElement>(null);
 
   const [imgQuery, setImgQuery] = useState("");
   const [imgCategory, setImgCategory] = useState("全部");
@@ -156,19 +157,45 @@ export function KnowledgeBasePage() {
           <h1>知识库</h1>
           <p>
             文档按文件夹管理并展示解析/索引状态；图片库管理架构图等配图素材。
-            正文生成时可检索引用（后端 RAG 待接）。
+            大纲/正文生成时自动关键词检索知识库参考
+            {kb.source === "api" ? "（已接后端）" : "（当前离线本地演示）"}。
           </p>
         </div>
         <div className="page-actions">
           {tab === "documents" ? (
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={kb.addDemoDoc}
-              title="前端演示上传"
-            >
-              <Upload size={16} /> 上传文档
-            </button>
+            <>
+              <input
+                ref={docFileRef}
+                type="file"
+                accept=".pdf,.docx,.txt,.md,.markdown,application/pdf"
+                multiple
+                hidden
+                onChange={(e) => {
+                  if (e.target.files?.length) {
+                    void kb.uploadFiles(e.target.files);
+                  }
+                  e.target.value = "";
+                }}
+              />
+              <button
+                type="button"
+                className="btn btn-ghost"
+                disabled={kb.busy}
+                onClick={() => void kb.refresh()}
+                title="刷新列表"
+              >
+                <RefreshCw size={16} /> 刷新
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={kb.busy}
+                onClick={() => docFileRef.current?.click()}
+                title="上传并同步解析分块"
+              >
+                <Upload size={16} /> {kb.busy ? "处理中…" : "上传文档"}
+              </button>
+            </>
           ) : (
             <label className="btn btn-primary" style={{ cursor: "pointer" }}>
               <Upload size={16} /> 上传图片
@@ -214,10 +241,17 @@ export function KnowledgeBasePage() {
             totalCount={kb.totalDocCount}
             selectedId={kb.selectedFolderId}
             onSelect={kb.setSelectedFolderId}
-            onCreate={kb.createFolder}
+            onCreate={(name) => {
+              void kb.createFolder(name);
+            }}
           />
 
           <div className="kb-docs-main">
+            {kb.error && (
+              <div className="hint-banner" role="status" style={{ marginBottom: 12 }}>
+                {kb.error}
+              </div>
+            )}
             <div className="kb-docs-toolbar card card-pad">
               <div className="field" style={{ margin: 0, flex: 1, minWidth: 180 }}>
                 <label htmlFor="kb-search">检索文档</label>
@@ -290,9 +324,26 @@ export function KnowledgeBasePage() {
                   <button
                     type="button"
                     className="btn btn-ghost btn-sm"
-                    onClick={() => kb.retryParse(kb.selectedIds)}
+                    disabled={kb.busy}
+                    onClick={() => void kb.retryParse(kb.selectedIds)}
                   >
                     <RefreshCw size={14} /> 重试索引
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    disabled={kb.busy}
+                    onClick={() => {
+                      if (
+                        window.confirm(
+                          `确定删除选中的 ${kb.selectedIds.length} 个文档？不可恢复。`,
+                        )
+                      ) {
+                        void kb.deleteDocs(kb.selectedIds);
+                      }
+                    }}
+                  >
+                    <Trash2 size={14} /> 删除
                   </button>
                   <button
                     type="button"
@@ -406,16 +457,34 @@ export function KnowledgeBasePage() {
                           <td className="mono">{d.chunks || "—"}</td>
                           <td>{d.updated}</td>
                           <td>
-                            {(d.status === "failed" ||
-                              d.status === "pending") && (
+                            <div style={{ display: "flex", gap: 4 }}>
+                              {(d.status === "failed" ||
+                                d.status === "pending" ||
+                                d.status === "ready") && (
+                                <button
+                                  type="button"
+                                  className="btn btn-ghost btn-sm"
+                                  disabled={kb.busy}
+                                  onClick={() => void kb.retryParse([d.id])}
+                                  title="重新索引"
+                                >
+                                  <RefreshCw size={14} />
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 className="btn btn-ghost btn-sm"
-                                onClick={() => kb.retryParse([d.id])}
+                                disabled={kb.busy}
+                                title="删除"
+                                onClick={() => {
+                                  if (window.confirm(`确定删除「${d.name}」？`)) {
+                                    void kb.deleteDocs([d.id]);
+                                  }
+                                }}
                               >
-                                <RefreshCw size={14} /> 重试
+                                <Trash2 size={14} />
                               </button>
-                            )}
+                            </div>
                           </td>
                         </tr>
                       );

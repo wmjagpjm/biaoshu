@@ -25,6 +25,8 @@ function emptyGuidance(): ProjectGenerationGuidance {
     formatRequirements: "",
     extraRequirements: "",
     lockedForNextStage: false,
+    kbEnabled: true,
+    kbFolderIds: [],
   };
 }
 
@@ -194,6 +196,8 @@ export function useProjectGuidance(projectId: string) {
                 chapterFocus: state.guidance.chapterFocus,
                 formatRequirements: state.guidance.formatRequirements,
                 extraRequirements: state.guidance.extraRequirements,
+                kbEnabled: state.guidance.kbEnabled !== false,
+                kbFolderIds: state.guidance.kbFolderIds ?? [],
               },
             }),
           },

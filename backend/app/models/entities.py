@@ -172,11 +172,108 @@ class ProjectFileRow(Base):
     )
 
 
+class KbFolderRow(Base):
+    """
+    用途：知识库文件夹（workspace 级）。
+    对接：/api/knowledge/folders；前端 KbFolder
+    """
+
+    __tablename__ = "kb_folders"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    parent_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
+
+
+class KbDocumentRow(Base):
+    """
+    用途：知识库文档元数据；正文在磁盘，分块在 kb_chunks。
+    status: pending|parsing|indexing|ready|failed
+    对接：/api/knowledge/docs；前端 KnowledgeDoc
+    """
+
+    __tablename__ = "kb_documents"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    folder_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("kb_folders.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    name: Mapped[str] = mapped_column(String(500), nullable=False)
+    tags_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    status_message: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    stored_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    mime: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
+
+
+class KbChunkRow(Base):
+    """
+    用途：知识库文本分块，供关键词检索与生成注入。
+    对接：knowledge_service.search_chunks；task_service RAG 注入
+    """
+
+    __tablename__ = "kb_chunks"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    document_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("kb_documents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    title: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
+
+
 class ProjectTaskRow(Base):
     """
     用途：本机日用任务（解析/分析/大纲/正文/导出）状态。
     对接：POST/GET /api/projects/{id}/tasks
-    status: pending|running|success|failed
+    status: pending|running|success|failed|cancelled
     """
 
     __tablename__ = "project_tasks"
