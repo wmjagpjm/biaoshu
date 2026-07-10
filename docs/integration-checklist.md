@@ -115,4 +115,11 @@ npm run build
 
 ## 8. 仍未接（后续）
 
-SSE 推送、Celery、真 MinerU 安装包、知识库 RAG、商务标/查重 API、多用户鉴权。
+SSE 推送、Celery、真 MinerU 安装包、向量检索、商务标/查重 API、多用户鉴权。
+
+## 7. 知识库 RAG 简版
+
+1. 打开「知识库」→ 上传 md/txt/docx/pdf → 状态「已就绪」、分块数 > 0  
+2. 浏览器或 curl：`GET http://127.0.0.1:8000/api/knowledge/search?q=关键词` 有 items  
+3. 技术标生成大纲/章节时，任务 result 可含 `kbCitations`（有相关文档时）  
+4. 无文档时生成行为与此前一致
