@@ -113,9 +113,22 @@ npm run build
 任务默认异步：`POST /tasks` 立即返回，前端轮询 `GET /tasks/{id}`。  
 测试可用：`POST /tasks?sync=true`。
 
-## 8. 仍未接（后续）
+## 8. 商务标六步（MVP）
 
-SSE 推送、Celery、真 MinerU 安装包、向量检索、商务标/查重 API、多用户鉴权。
+| 步骤 | 操作 |
+|------|------|
+| 列表 | `/business-bid` → `GET /api/projects?kind=business` |
+| 新建 | 「从招标文件开始」→ `POST /projects` `kind=business` |
+| 解析 | 上传文件 → 任务 `parse` → editor-state `parsedMarkdown` |
+| 资格 | 「生成资格草稿」→ `biz_qualify` → `businessQualify` |
+| 目录/报价/承诺 | `biz_toc` / `biz_quote` / `biz_commit` |
+| 导出 | 「生成并下载 Word」→ `export` `payload.mode=business` |
+
+手改字段防抖写回 `PUT .../editor-state`。技术标列表应带 `kind=technical` 以免混入。
+
+## 9. 仍未接（后续）
+
+SSE 推送、Celery、真 MinerU 安装包、向量检索、查重 API、多用户鉴权。
 
 ## 7. 知识库 RAG 简版
 
