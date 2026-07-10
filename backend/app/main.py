@@ -19,6 +19,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import (
+    compliance as compliance_api,
     export as export_api,
     files,
     health,
@@ -97,6 +98,7 @@ def create_app() -> FastAPI:
     app.include_router(export_api.router, prefix="/api")
     app.include_router(parse_callback.router, prefix="/api")
     app.include_router(knowledge_api.router, prefix="/api")
+    app.include_router(compliance_api.router, prefix="/api")
     return app
 
 

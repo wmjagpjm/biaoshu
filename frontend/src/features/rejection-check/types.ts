@@ -1,7 +1,7 @@
 /**
  * 模块：废标项检查类型
  * 用途：风险条目与招标条款 / 现状对照。
- * 对接：后续规则引擎 POST /api/rejection-check/run。
+ * 对接：POST /api/projects/{id}/rejection-check
  */
 
 export type RiskLevel = "high" | "medium" | "low";

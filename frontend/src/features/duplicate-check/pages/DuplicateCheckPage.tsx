@@ -1,52 +1,89 @@
-import { useMemo, useState } from "react";
+/**
+ * 模块：标书查重页
+ * 用途：命中列表 + 本文/来源对照 + 改写建议。
+ * 对接：POST /api/projects/{id}/duplicate-check；listProjectsAsync kind=technical
+ * 二次开发：改写建议可接 LLM；历史范围已由后端 kb+history 覆盖。
+ */
+
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { FileSearch, Loader2, Sparkles } from "lucide-react";
 import { EmptyState } from "../../../shared/components/EmptyState/EmptyState";
 import { LoadingBlock } from "../../../shared/components/LoadingBlock/LoadingBlock";
-import { mockDupHits } from "../mock";
+import { apiFetch } from "../../../shared/lib/api";
+import type { Project } from "../../../shared/types/workspace";
+import { listProjectsAsync } from "../../technical-plan/lib/projectStore";
 import type { DupCompareScope, DupHit } from "../types";
 import "./DuplicateCheck.css";
 
-/**
- * 模块：标书查重页
- * 用途：命中列表 + 本文/来源对照 + 改写建议（mock）。
- * 对接：后端查重任务就绪后替换「开始查重」数据源。
- */
-
 type Threshold = 0.6 | 0.7 | 0.8;
 
+type DupCheckResult = {
+  projectId: string;
+  hits: DupHit[];
+  ranAt?: string;
+  stats?: { hitCount?: number; selfParagraphs?: number };
+};
+
 export function DuplicateCheckPage() {
-  const [projectId, setProjectId] = useState("proj_01");
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectId, setProjectId] = useState("");
   const [scope, setScope] = useState<DupCompareScope>("kb+history");
   const [threshold, setThreshold] = useState<Threshold>(0.6);
-  const [hits, setHits] = useState<DupHit[]>(mockDupHits);
-  const [selectedId, setSelectedId] = useState<string>(mockDupHits[0]?.id ?? "");
+  const [hits, setHits] = useState<DupHit[]>([]);
+  const [selectedId, setSelectedId] = useState("");
   const [running, setRunning] = useState(false);
-  const [ranOnce, setRanOnce] = useState(true);
+  const [ranOnce, setRanOnce] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [loadHint, setLoadHint] = useState<string | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      const res = await listProjectsAsync({ kind: "technical" });
+      setProjects(res.projects);
+      setLoadHint(res.offlineHint ?? null);
+      if (res.projects[0]) setProjectId(res.projects[0].id);
+    })();
+  }, []);
 
   const filtered = useMemo(() => {
-    let list = hits.filter((h) => h.similarity >= threshold);
-    if (scope === "self") {
-      list = list.filter((h) => h.sourceLabel.includes("本文内部"));
-    } else if (scope === "kb") {
-      list = list.filter((h) => h.sourceLabel.includes("知识库"));
-    }
-    return list;
-  }, [hits, threshold, scope]);
+    return hits.filter((h) => h.similarity >= threshold);
+  }, [hits, threshold]);
 
   const selected =
     filtered.find((h) => h.id === selectedId) ?? filtered[0] ?? null;
 
-  function runCheck() {
+  const runCheck = useCallback(async () => {
+    if (!projectId) {
+      setError("请先选择项目");
+      return;
+    }
     setRunning(true);
+    setError(null);
     setRanOnce(true);
-    window.setTimeout(() => {
-      // 演示：轻微打乱顺序模拟新结果
-      setHits([...mockDupHits].sort((a, b) => b.similarity - a.similarity));
-      setSelectedId(mockDupHits[0]?.id ?? "");
+    try {
+      const data = await apiFetch<DupCheckResult>(
+        `/projects/${encodeURIComponent(projectId)}/duplicate-check`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            scope,
+            threshold,
+            topK: 50,
+          }),
+        },
+      );
+      const list = Array.isArray(data.hits) ? data.hits : [];
+      setHits(list);
+      setSelectedId(list[0]?.id ?? "");
+    } catch (err) {
+      setHits([]);
+      setSelectedId("");
+      setError((err as { message?: string })?.message || "查重失败");
+    } finally {
       setRunning(false);
-    }, 700);
-  }
+    }
+  }, [projectId, scope, threshold]);
 
   return (
     <div className="page">
@@ -58,11 +95,14 @@ export function DuplicateCheckPage() {
           </p>
         </div>
         <div className="page-actions">
+          <Link to="/knowledge-base" className="btn btn-ghost">
+            知识库
+          </Link>
           <button
             type="button"
             className="btn btn-primary"
-            onClick={runCheck}
-            disabled={running}
+            onClick={() => void runCheck()}
+            disabled={running || !projectId}
           >
             {running ? (
               <>
@@ -77,6 +117,20 @@ export function DuplicateCheckPage() {
         </div>
       </header>
 
+      {error && (
+        <div className="card card-pad" style={{ color: "var(--danger)" }}>
+          {error}
+        </div>
+      )}
+      {loadHint && (
+        <div
+          className="card card-pad"
+          style={{ fontSize: 13, color: "var(--text-tertiary)" }}
+        >
+          {loadHint}
+        </div>
+      )}
+
       <div className="card card-pad dup-filters">
         <div className="field" style={{ margin: 0 }}>
           <label htmlFor="dup-project">目标项目</label>
@@ -85,8 +139,15 @@ export function DuplicateCheckPage() {
             value={projectId}
             onChange={(e) => setProjectId(e.target.value)}
           >
-            <option value="proj_01">某市智慧交通综合管理平台技术标</option>
-            <option value="proj_03">医院信息集成平台改造</option>
+            {projects.length === 0 ? (
+              <option value="">暂无技术标项目</option>
+            ) : (
+              projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))
+            )}
           </select>
         </div>
         <div className="field" style={{ margin: 0 }}>
@@ -121,7 +182,7 @@ export function DuplicateCheckPage() {
         <EmptyState
           icon={<FileSearch size={28} />}
           title="尚未运行查重"
-          description="选择项目与范围后点击「开始查重」。"
+          description="选择项目与范围后点击「开始查重」。请确保项目已有章节正文，知识库已入库。"
         />
       ) : (
         <div className="dup-layout">
@@ -168,38 +229,35 @@ export function DuplicateCheckPage() {
                     相似度 {(selected.similarity * 100).toFixed(0)}%
                   </span>
                 </div>
-
-                <div className="dup-panel__cols">
-                  <div className="dup-col">
-                    <h4>本文摘录</h4>
-                    <p>{selected.currentText}</p>
+                <div className="dup-compare">
+                  <div>
+                    <div className="dup-compare__label">本文段落</div>
+                    <div className="dup-compare__body">{selected.currentText}</div>
                   </div>
-                  <div className="dup-col">
-                    <h4>对比来源</h4>
-                    <p>{selected.sourceText}</p>
+                  <div>
+                    <div className="dup-compare__label">对比来源</div>
+                    <div className="dup-compare__body">{selected.sourceText}</div>
                   </div>
                 </div>
-
                 {selected.suggestion && (
                   <div className="dup-suggest">
-                    <strong style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                      <Sparkles size={14} /> 改写建议
-                    </strong>
-                    <div style={{ marginTop: 6 }}>{selected.suggestion}</div>
+                    <Sparkles size={16} />
+                    <div>
+                      <strong>改写建议</strong>
+                      <p style={{ margin: "6px 0 0" }}>{selected.suggestion}</p>
+                    </div>
                   </div>
                 )}
-
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                  <Link
-                    to={`/technical-plan/${projectId}/content`}
-                    className="btn btn-soft btn-sm"
-                  >
-                    打开正文编辑
-                  </Link>
-                  <span style={{ fontSize: 12, color: "var(--text-tertiary)", alignSelf: "center" }}>
-                    当前为示例结果，正式环境由后端计算相似度
-                  </span>
-                </div>
+                {projectId && (
+                  <div style={{ marginTop: 12 }}>
+                    <Link
+                      to={`/technical-plan/${projectId}`}
+                      className="btn btn-soft btn-sm"
+                    >
+                      打开技术标工作区
+                    </Link>
+                  </div>
+                )}
               </>
             )}
           </div>
