@@ -4,8 +4,8 @@
 > **仓库本地**：`C:\Users\Administrator\biaoshu`  
 > **GitHub**：https://github.com/wmjagpjm/biaoshu  
 > **分支**：`main`  
-> **远程**：已 push 技术标收口 4 commits；本会话叠 **商务标 MVP**（见 §8 若未提交）  
-> **验收基线**：`pytest` **36 passed**；`frontend npm run build` 通过  
+> **远程**：商务标 MVP 已 push；本会话完善 **revise 写回 + 空态**  
+> **验收基线**：`pytest` **38+ passed**；`frontend npm run build` 通过  
 
 ---
 
@@ -66,6 +66,8 @@
 | 任务 | `biz_qualify` / `biz_toc` / `biz_quote` / `biz_commit`；`export` + `mode=business` |
 | 前端 | 列表/工作区接 API；`useProjectPipeline` 上传/解析/生成/取消/导出 |
 | 测试 | `backend/tests/test_business_bid_mvp.py` |
+| revise 写回 | `business_qualify|toc|quote|commit` 解析 JSON 写 editor-state；`business_parse` 写解析文 |
+| 空态 | API 空数组不回填演示 mock |
 
 ### 4.3 关键路径
 
@@ -95,18 +97,15 @@ frontend/src/features/business-bid/
 | 体验 | SSE 推送 | 仍 1s 轮询 |
 | 库 | Alembic | 仅 create_all + ALTER |
 | 生产 | 登录/多用户/HTTPS/Key 加密/PG/Docker | 未做 |
-| 商务 | 商务 revise 写回结构化表 | 目前主要写回解析文；表结构修订可后续强化 |
-
-**粗估**：技术标 ~90%；商务标主路径 ~70%；内网多人 ~30%。
+**粗估**：技术标 ~90%；商务标主路径 ~80%；内网多人 ~30%。
 
 ---
 
 ## 6. 建议下一会话方向
 
-1. 确认本会话 commit/push 干净  
-2. 商务 revise 结果解析写回 qualify/toc/quote/commit  
-3. 向量检索或导出边框/图片  
-4. 查重/废标等 mock 模块（按产品优先级）  
+1. 向量检索或导出边框/图片  
+2. 查重/废标等 mock 模块（按产品优先级）  
+3. SSE 替代轮询（体验）  
 
 ---
 
@@ -115,7 +114,7 @@ frontend/src/features/business-bid/
 ```powershell
 cd C:\Users\Administrator\biaoshu\backend
 .\.venv\Scripts\python -m pytest -q
-# 期望：36+ passed
+# 期望：38+ passed
 
 cd ..\frontend
 npm run build

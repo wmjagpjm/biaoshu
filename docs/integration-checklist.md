@@ -123,8 +123,10 @@ npm run build
 | 资格 | 「生成资格草稿」→ `biz_qualify` → `businessQualify` |
 | 目录/报价/承诺 | `biz_toc` / `biz_quote` / `biz_commit` |
 | 导出 | 「生成并下载 Word」→ `export` `payload.mode=business` |
+| 反馈修订 | 各步 AiFeedback 提交后，表格/解析文应变化（后端写 editor-state） |
 
-手改字段防抖写回 `PUT .../editor-state`。技术标列表应带 `kind=technical` 以免混入。
+手改字段防抖写回 `PUT .../editor-state`。技术标列表应带 `kind=technical` 以免混入。  
+新建真实项目不应出现演示假资格行（空数组保持空）。
 
 ## 9. 仍未接（后续）
 
