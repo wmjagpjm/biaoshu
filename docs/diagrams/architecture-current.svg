@@ -1,0 +1,160 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="920" viewBox="0 0 1200 920">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#4f46e5"/>
+    </linearGradient>
+    <linearGradient id="g2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0ea5e9"/>
+      <stop offset="100%" stop-color="#0284c7"/>
+    </linearGradient>
+    <linearGradient id="g3" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+    <linearGradient id="g4" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#94a3b8"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="920" fill="url(#bg)"/>
+  <text x="600" y="42" text-anchor="middle" fill="#f8fafc" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="26" font-weight="700">biaoshu 功能架构图（当前已实现）</text>
+  <text x="600" y="70" text-anchor="middle" fill="#94a3b8" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="13">Web 自托管 · 一 workspace · 技术标 ~90% · 商务标 ~80% · 2026-07</text>
+
+  <!-- Layer labels -->
+  <text x="36" y="120" fill="#64748b" font-family="Microsoft YaHei, sans-serif" font-size="12">呈现层</text>
+  <text x="36" y="280" fill="#64748b" font-family="Microsoft YaHei, sans-serif" font-size="12">接入层</text>
+  <text x="36" y="430" fill="#64748b" font-family="Microsoft YaHei, sans-serif" font-size="12">领域服务</text>
+  <text x="36" y="640" fill="#64748b" font-family="Microsoft YaHei, sans-serif" font-size="12">任务/AI</text>
+  <text x="36" y="800" fill="#64748b" font-family="Microsoft YaHei, sans-serif" font-size="12">数据层</text>
+
+  <!-- Frontend box -->
+  <rect x="80" y="90" width="1080" height="150" rx="14" fill="#1e293b" stroke="#334155" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="100" y="118" fill="#a5b4fc" font-family="Microsoft YaHei, sans-serif" font-size="15" font-weight="700">前端 React + Vite（:5173）</text>
+
+  <rect x="100" y="135" width="140" height="80" rx="10" fill="url(#g1)" filter="url(#shadow)"/>
+  <text x="170" y="170" text-anchor="middle" fill="#fff" font-family="Microsoft YaHei, sans-serif" font-size="13" font-weight="600">创建 / 列表</text>
+  <text x="170" y="192" text-anchor="middle" fill="#e0e7ff" font-family="Microsoft YaHei, sans-serif" font-size="11">projects · create</text>
+
+  <rect x="255" y="135" width="160" height="80" rx="10" fill="url(#g1)" filter="url(#shadow)"/>
+  <text x="335" y="165" text-anchor="middle" fill="#fff" font-family="Microsoft YaHei, sans-serif" font-size="13" font-weight="600">技术标六步</text>
+  <text x="335" y="185" text-anchor="middle" fill="#e0e7ff" font-family="Microsoft YaHei, sans-serif" font-size="10">解析→分析→大纲</text>
+  <text x="335" y="200" text-anchor="middle" fill="#e0e7ff" font-family="Microsoft YaHei, sans-serif" font-size="10">事实→正文→导出</text>
+
+  <rect x="430" y="135" width="160" height="80" rx="10" fill="url(#g1)" filter="url(#shadow)"/>
+  <text x="510" y="165" text-anchor="middle" fill="#fff" font-family="Microsoft YaHei, sans-serif" font-size="13" font-weight="600">商务标六步</text>
+  <text x="510" y="185" text-anchor="middle" fill="#e0e7ff" font-family="Microsoft YaHei, sans-serif" font-size="10">解析→资格→目录</text>
+  <text x="510" y="200" text-anchor="middle" fill="#e0e7ff" font-family="Microsoft YaHei, sans-serif" font-size="10">报价→承诺→导出</text>
+
+  <rect x="605" y="135" width="130" height="80" rx="10" fill="url(#g1)" filter="url(#shadow)"/>
+  <text x="670" y="170" text-anchor="middle" fill="#fff" font-family="Microsoft YaHei, sans-serif" font-size="13" font-weight="600">知识库</text>
+  <text x="670" y="192" text-anchor="middle" fill="#e0e7ff" font-family="Microsoft YaHei, sans-serif" font-size="11">文档 API</text>
+
+  <rect x="750" y="135" width="130" height="80" rx="10" fill="#334155" stroke="#475569"/>
+  <text x="815" y="165" text-anchor="middle" fill="#fbbf24" font-family="Microsoft YaHei, sans-serif" font-size="12" font-weight="600">查重/废标</text>
+  <text x="815" y="188" text-anchor="middle" fill="#94a3b8" font-family="Microsoft YaHei, sans-serif" font-size="11">mock UI</text>
+
+  <rect x="895" y="135" width="120" height="80" rx="10" fill="#334155" stroke="#475569"/>
+  <text x="955" y="165" text-anchor="middle" fill="#fbbf24" font-family="Microsoft YaHei, sans-serif" font-size="12" font-weight="600">标讯/资源</text>
+  <text x="955" y="188" text-anchor="middle" fill="#94a3b8" font-family="Microsoft YaHei, sans-serif" font-size="11">mock UI</text>
+
+  <rect x="1030" y="135" width="110" height="80" rx="10" fill="url(#g1)" filter="url(#shadow)"/>
+  <text x="1085" y="165" text-anchor="middle" fill="#fff" font-family="Microsoft YaHei, sans-serif" font-size="12" font-weight="600">设置/模板</text>
+  <text x="1085" y="188" text-anchor="middle" fill="#e0e7ff" font-family="Microsoft YaHei, sans-serif" font-size="11">Key·Export</text>
+
+  <!-- API layer -->
+  <rect x="80" y="265" width="1080" height="90" rx="14" fill="#1e293b" stroke="#334155" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="100" y="293" fill="#7dd3fc" font-family="Microsoft YaHei, sans-serif" font-size="15" font-weight="700">FastAPI 接入层（:8000 /api）</text>
+  <text x="100" y="325" fill="#e2e8f0" font-family="Consolas, monospace" font-size="12">/projects · /tasks · /files · /editor-state · /knowledge · /settings · /revise · /export · /parse-callback</text>
+  <text x="100" y="348" fill="#64748b" font-family="Microsoft YaHei, sans-serif" font-size="12">Vite 代理 /api → 8000 · workspace 头/默认 ws_local</text>
+
+  <!-- Services -->
+  <rect x="80" y="380" width="1080" height="180" rx="14" fill="#1e293b" stroke="#334155" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="100" y="408" fill="#6ee7b7" font-family="Microsoft YaHei, sans-serif" font-size="15" font-weight="700">领域服务（services/）</text>
+
+  <rect x="100" y="425" width="155" height="110" rx="10" fill="url(#g3)" filter="url(#shadow)"/>
+  <text x="177" y="460" text-anchor="middle" fill="#fff" font-family="Microsoft YaHei, sans-serif" font-size="13" font-weight="600">project_service</text>
+  <text x="177" y="485" text-anchor="middle" fill="#d1fae5" font-family="Microsoft YaHei, sans-serif" font-size="11">CRUD · kind</text>
+  <text x="177" y="505" text-anchor="middle" fill="#d1fae5" font-family="Microsoft YaHei, sans-serif" font-size="11">technical|business</text>
+
+  <rect x="270" y="425" width="155" height="110" rx="10" fill="url(#g3)" filter="url(#shadow)"/>
+  <text x="347" y="460" text-anchor="middle" fill="#fff" font-family="Microsoft YaHei, sans-serif" font-size="12" font-weight="600">editor_state</text>
+  <text x="347" y="485" text-anchor="middle" fill="#d1fae5" font-family="Microsoft YaHei, sans-serif" font-size="11">大纲/章节/事实</text>
+  <text x="347" y="505" text-anchor="middle" fill="#d1fae5" font-family="Microsoft YaHei, sans-serif" font-size="11">business_json</text>
+
+  <rect x="440" y="425" width="155" height="110" rx="10" fill="url(#g3)" filter="url(#shadow)"/>
+  <text x="517" y="460" text-anchor="middle" fill="#fff" font-family="Microsoft YaHei, sans-serif" font-size="12" font-weight="600">knowledge</text>
+  <text x="517" y="485" text-anchor="middle" fill="#d1fae5" font-family="Microsoft YaHei, sans-serif" font-size="11">入库·分块</text>
+  <text x="517" y="505" text-anchor="middle" fill="#d1fae5" font-family="Microsoft YaHei, sans-serif" font-size="11">关键词检索</text>
+
+  <rect x="610" y="425" width="155" height="110" rx="10" fill="url(#g3)" filter="url(#shadow)"/>
+  <text x="687" y="460" text-anchor="middle" fill="#fff" font-family="Microsoft YaHei, sans-serif" font-size="12" font-weight="600">export</text>
+  <text x="687" y="485" text-anchor="middle" fill="#d1fae5" font-family="Microsoft YaHei, sans-serif" font-size="11">Word 模板</text>
+  <text x="687" y="505" text-anchor="middle" fill="#d1fae5" font-family="Microsoft YaHei, sans-serif" font-size="11">编号/列表/表</text>
+
+  <rect x="780" y="425" width="155" height="110" rx="10" fill="url(#g3)" filter="url(#shadow)"/>
+  <text x="857" y="460" text-anchor="middle" fill="#fff" font-family="Microsoft YaHei, sans-serif" font-size="12" font-weight="600">revise</text>
+  <text x="857" y="485" text-anchor="middle" fill="#d1fae5" font-family="Microsoft YaHei, sans-serif" font-size="11">人工反馈</text>
+  <text x="857" y="505" text-anchor="middle" fill="#d1fae5" font-family="Microsoft YaHei, sans-serif" font-size="11">结构化写回</text>
+
+  <rect x="950" y="425" width="180" height="110" rx="10" fill="url(#g3)" filter="url(#shadow)"/>
+  <text x="1040" y="460" text-anchor="middle" fill="#fff" font-family="Microsoft YaHei, sans-serif" font-size="12" font-weight="600">parse / settings</text>
+  <text x="1040" y="485" text-anchor="middle" fill="#d1fae5" font-family="Microsoft YaHei, sans-serif" font-size="11">轻量解析·MinerU</text>
+  <text x="1040" y="505" text-anchor="middle" fill="#d1fae5" font-family="Microsoft YaHei, sans-serif" font-size="11">LLM Key 明文</text>
+
+  <!-- Task / LLM -->
+  <rect x="80" y="585" width="1080" height="150" rx="14" fill="#1e293b" stroke="#334155" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="100" y="613" fill="#fcd34d" font-family="Microsoft YaHei, sans-serif" font-size="15" font-weight="700">任务引擎 · LLM · RAG 注入</text>
+
+  <rect x="100" y="630" width="280" height="80" rx="10" fill="url(#g4)" filter="url(#shadow)"/>
+  <text x="240" y="662" text-anchor="middle" fill="#fff" font-family="Microsoft YaHei, sans-serif" font-size="13" font-weight="600">task_service（线程 + 轮询）</text>
+  <text x="240" y="685" text-anchor="middle" fill="#fef3c7" font-family="Microsoft YaHei, sans-serif" font-size="11">parse/analyze/outline/chapter · cancel</text>
+
+  <rect x="400" y="630" width="240" height="80" rx="10" fill="url(#g4)" filter="url(#shadow)"/>
+  <text x="520" y="662" text-anchor="middle" fill="#fff" font-family="Microsoft YaHei, sans-serif" font-size="13" font-weight="600">business_task_service</text>
+  <text x="520" y="685" text-anchor="middle" fill="#fef3c7" font-family="Microsoft YaHei, sans-serif" font-size="11">biz_qualify/toc/quote/commit</text>
+
+  <rect x="660" y="630" width="220" height="80" rx="10" fill="url(#g2)" filter="url(#shadow)"/>
+  <text x="770" y="662" text-anchor="middle" fill="#fff" font-family="Microsoft YaHei, sans-serif" font-size="13" font-weight="600">llm_service</text>
+  <text x="770" y="685" text-anchor="middle" fill="#e0f2fe" font-family="Microsoft YaHei, sans-serif" font-size="11">OpenAI 兼容 Chat</text>
+
+  <rect x="900" y="630" width="230" height="80" rx="10" fill="url(#g2)" filter="url(#shadow)"/>
+  <text x="1015" y="662" text-anchor="middle" fill="#fff" font-family="Microsoft YaHei, sans-serif" font-size="13" font-weight="600">RAG 注入（关键词）</text>
+  <text x="1015" y="685" text-anchor="middle" fill="#e0f2fe" font-family="Microsoft YaHei, sans-serif" font-size="11">outline/chapter · 非向量</text>
+
+  <!-- Data -->
+  <rect x="80" y="760" width="1080" height="120" rx="14" fill="#1e293b" stroke="#334155" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="100" y="788" fill="#c4b5fd" font-family="Microsoft YaHei, sans-serif" font-size="15" font-weight="700">数据与存储</text>
+
+  <rect x="100" y="805" width="240" height="55" rx="10" fill="#4c1d95" filter="url(#shadow)"/>
+  <text x="220" y="838" text-anchor="middle" fill="#fff" font-family="Microsoft YaHei, sans-serif" font-size="13">SQLite · projects / editor_state / tasks</text>
+
+  <rect x="360" y="805" width="200" height="55" rx="10" fill="#4c1d95" filter="url(#shadow)"/>
+  <text x="460" y="838" text-anchor="middle" fill="#fff" font-family="Microsoft YaHei, sans-serif" font-size="13">kb_folders / docs / chunks</text>
+
+  <rect x="580" y="805" width="220" height="55" rx="10" fill="#4c1d95" filter="url(#shadow)"/>
+  <text x="690" y="838" text-anchor="middle" fill="#fff" font-family="Microsoft YaHei, sans-serif" font-size="13">uploads/ · data/knowledge/</text>
+
+  <rect x="820" y="805" width="300" height="55" rx="10" fill="#4c1d95" filter="url(#shadow)"/>
+  <text x="970" y="838" text-anchor="middle" fill="#fff" font-family="Microsoft YaHei, sans-serif" font-size="13">workspace_settings · export_format_json</text>
+
+  <!-- arrows between layers -->
+  <line x1="600" y1="240" x2="600" y2="265" stroke="#94a3b8" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="600" y1="355" x2="600" y2="380" stroke="#94a3b8" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="600" y1="560" x2="600" y2="585" stroke="#94a3b8" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="600" y1="735" x2="600" y2="760" stroke="#94a3b8" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <text x="600" y="910" text-anchor="middle" fill="#64748b" font-family="Microsoft YaHei, sans-serif" font-size="11">实色=已接后端 · 灰黄=仍 mock · 详见 docs/HANDOFF-next.md</text>
+</svg>

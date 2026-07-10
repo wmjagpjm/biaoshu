@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="980" viewBox="0 0 1200 980">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0c1222"/>
+      <stop offset="100%" stop-color="#1a1033"/>
+    </linearGradient>
+    <linearGradient id="now" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#22c55e"/>
+      <stop offset="100%" stop-color="#15803d"/>
+    </linearGradient>
+    <linearGradient id="near" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#0284c7"/>
+    </linearGradient>
+    <linearGradient id="mid" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#a78bfa"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+    <linearGradient id="far" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#fb923c"/>
+      <stop offset="100%" stop-color="#c2410c"/>
+    </linearGradient>
+    <filter id="sh" x="-5%" y="-5%" width="110%" height="120%">
+      <feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#000" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="980" fill="url(#bg)"/>
+  <text x="600" y="40" text-anchor="middle" fill="#f8fafc" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="26" font-weight="700">biaoshu 产品目标图 / 演进路线</text>
+  <text x="600" y="68" text-anchor="middle" fill="#94a3b8" font-family="Microsoft YaHei, sans-serif" font-size="13">从本机写标书 → 内网多人协作 → 公网 SaaS（能力对齐 C 端交互，自研实现）</text>
+
+  <!-- Vision banner -->
+  <rect x="80" y="90" width="1040" height="70" rx="12" fill="#1e1b4b" stroke="#6366f1" stroke-width="1.5" filter="url(#sh)"/>
+  <text x="600" y="120" text-anchor="middle" fill="#c7d2fe" font-family="Microsoft YaHei, sans-serif" font-size="14" font-weight="600">目标形态：浏览器 → FastAPI → 任务 Worker → 解析 / RAG / 流水线 / 导出</text>
+  <text x="600" y="142" text-anchor="middle" fill="#a5b4fc" font-family="Microsoft YaHei, sans-serif" font-size="12">存储：SQLite→PG · 文件 · Redis · SSE/WebSocket · 一账号一 workspace（可扩多成员）</text>
+
+  <!-- Phase columns -->
+  <!-- P0 Now -->
+  <rect x="50" y="190" width="260" height="620" rx="16" fill="#0f172a" stroke="#22c55e" stroke-width="2" filter="url(#sh)"/>
+  <rect x="50" y="190" width="260" height="48" rx="16" fill="url(#now)"/>
+  <rect x="50" y="220" width="260" height="18" fill="url(#now)"/>
+  <text x="180" y="222" text-anchor="middle" fill="#fff" font-family="Microsoft YaHei, sans-serif" font-size="16" font-weight="700">NOW · 本机日用</text>
+  <text x="180" y="255" text-anchor="middle" fill="#86efac" font-family="Microsoft YaHei, sans-serif" font-size="12">已实现 · ~技术标90% 商务80%</text>
+
+  <text x="70" y="290" fill="#86efac" font-family="Microsoft YaHei, sans-serif" font-size="13" font-weight="600">✓ 产品内核</text>
+  <text x="70" y="315" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· 技术标六步全链路</text>
+  <text x="70" y="338" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· 商务标六步 MVP</text>
+  <text x="70" y="361" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· 异步任务 + 取消</text>
+  <text x="70" y="384" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· revise 反馈写回</text>
+  <text x="70" y="407" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· Word 导出样式</text>
+  <text x="70" y="430" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· 知识库关键词 RAG</text>
+  <text x="70" y="453" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· 用户自备 LLM Key</text>
+  <text x="70" y="476" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· MinerU 回传通道</text>
+
+  <text x="70" y="520" fill="#86efac" font-family="Microsoft YaHei, sans-serif" font-size="13" font-weight="600">✓ 工程形态</text>
+  <text x="70" y="545" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· Web 自托管</text>
+  <text x="70" y="568" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· SQLite + 本地文件</text>
+  <text x="70" y="591" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· 1s 任务轮询</text>
+  <text x="70" y="614" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· 单 workspace</text>
+  <text x="70" y="650" fill="#64748b" font-family="Microsoft YaHei, sans-serif" font-size="11">目标用户：个人/保密机写标</text>
+  <text x="180" y="780" text-anchor="middle" fill="#4ade80" font-family="Microsoft YaHei, sans-serif" font-size="28" font-weight="700">~90%</text>
+  <text x="180" y="805" text-anchor="middle" fill="#86efac" font-family="Microsoft YaHei, sans-serif" font-size="12">写技术标体验成熟度</text>
+
+  <!-- P1 Near -->
+  <rect x="330" y="190" width="260" height="620" rx="16" fill="#0f172a" stroke="#38bdf8" stroke-width="2" filter="url(#sh)"/>
+  <rect x="330" y="190" width="260" height="48" rx="16" fill="url(#near)"/>
+  <rect x="330" y="220" width="260" height="18" fill="url(#near)"/>
+  <text x="460" y="222" text-anchor="middle" fill="#fff" font-family="Microsoft YaHei, sans-serif" font-size="16" font-weight="700">NEXT · 能力打磨</text>
+  <text x="460" y="255" text-anchor="middle" fill="#7dd3fc" font-family="Microsoft YaHei, sans-serif" font-size="12">近 1～2 迭代 · HANDOFF 优先</text>
+
+  <text x="350" y="290" fill="#7dd3fc" font-family="Microsoft YaHei, sans-serif" font-size="13" font-weight="600">○ 检索与导出</text>
+  <text x="350" y="315" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· 向量 embedding RAG</text>
+  <text x="350" y="338" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· 导出标题边框/图片</text>
+  <text x="350" y="361" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· Word 原生多级列表</text>
+
+  <text x="350" y="405" fill="#7dd3fc" font-family="Microsoft YaHei, sans-serif" font-size="13" font-weight="600">○ 体验</text>
+  <text x="350" y="430" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· SSE 替代轮询</text>
+  <text x="350" y="453" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· 商务/技术关联编排</text>
+  <text x="350" y="476" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· 真 MinerU 安装包体验</text>
+
+  <text x="350" y="520" fill="#7dd3fc" font-family="Microsoft YaHei, sans-serif" font-size="13" font-weight="600">○ 合规辅助（先做）</text>
+  <text x="350" y="545" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· 查重引擎接 project</text>
+  <text x="350" y="568" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· 废标项检查引擎</text>
+  <text x="350" y="591" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· 标讯源接入</text>
+
+  <text x="350" y="640" fill="#64748b" font-family="Microsoft YaHei, sans-serif" font-size="11">目标：本机「写完一标」</text>
+  <text x="350" y="660" fill="#64748b" font-family="Microsoft YaHei, sans-serif" font-size="11">体验闭环 + 合规工具可用</text>
+  <text x="460" y="780" text-anchor="middle" fill="#38bdf8" font-family="Microsoft YaHei, sans-serif" font-size="28" font-weight="700">+15%</text>
+  <text x="460" y="805" text-anchor="middle" fill="#7dd3fc" font-family="Microsoft YaHei, sans-serif" font-size="12">相对当前的体验增量</text>
+
+  <!-- P2 Mid -->
+  <rect x="610" y="190" width="260" height="620" rx="16" fill="#0f172a" stroke="#a78bfa" stroke-width="2" filter="url(#sh)"/>
+  <rect x="610" y="190" width="260" height="48" rx="16" fill="url(#mid)"/>
+  <rect x="610" y="220" width="260" height="18" fill="url(#mid)"/>
+  <text x="740" y="222" text-anchor="middle" fill="#fff" font-family="Microsoft YaHei, sans-serif" font-size="16" font-weight="700">MID · 内网多人</text>
+  <text x="740" y="255" text-anchor="middle" fill="#c4b5fd" font-family="Microsoft YaHei, sans-serif" font-size="12">粗估成熟度 ~30%→70%</text>
+
+  <text x="630" y="290" fill="#c4b5fd" font-family="Microsoft YaHei, sans-serif" font-size="13" font-weight="600">○ 协作与身份</text>
+  <text x="630" y="315" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· 登录 / 会话</text>
+  <text x="630" y="338" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· 多用户 · 权限</text>
+  <text x="630" y="361" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· 多 workspace</text>
+
+  <text x="630" y="405" fill="#c4b5fd" font-family="Microsoft YaHei, sans-serif" font-size="13" font-weight="600">○ 工程底座</text>
+  <text x="630" y="430" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· PostgreSQL</text>
+  <text x="630" y="453" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· Alembic 迁移</text>
+  <text x="630" y="476" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· Redis + Celery/队列</text>
+  <text x="630" y="499" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· Docker Compose</text>
+
+  <text x="630" y="543" fill="#c4b5fd" font-family="Microsoft YaHei, sans-serif" font-size="13" font-weight="600">○ 安全</text>
+  <text x="630" y="568" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· Key 加密存储</text>
+  <text x="630" y="591" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· HTTPS / 审计日志</text>
+  <text x="630" y="614" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· 知识库权限隔离</text>
+
+  <text x="630" y="660" fill="#64748b" font-family="Microsoft YaHei, sans-serif" font-size="11">目标用户：投标小组/内网</text>
+  <text x="740" y="780" text-anchor="middle" fill="#a78bfa" font-family="Microsoft YaHei, sans-serif" font-size="28" font-weight="700">~30%</text>
+  <text x="740" y="805" text-anchor="middle" fill="#c4b5fd" font-family="Microsoft YaHei, sans-serif" font-size="12">当前内网就绪度</text>
+
+  <!-- P3 Far -->
+  <rect x="890" y="190" width="260" height="620" rx="16" fill="#0f172a" stroke="#fb923c" stroke-width="2" filter="url(#sh)"/>
+  <rect x="890" y="190" width="260" height="48" rx="16" fill="url(#far)"/>
+  <rect x="890" y="220" width="260" height="18" fill="url(#far)"/>
+  <text x="1020" y="222" text-anchor="middle" fill="#fff" font-family="Microsoft YaHei, sans-serif" font-size="16" font-weight="700">LATER · 公网 SaaS</text>
+  <text x="1020" y="255" text-anchor="middle" fill="#fdba74" font-family="Microsoft YaHei, sans-serif" font-size="12">粗估成熟度 ~15%→产品化</text>
+
+  <text x="910" y="290" fill="#fdba74" font-family="Microsoft YaHei, sans-serif" font-size="13" font-weight="600">○ 商业与运营</text>
+  <text x="910" y="315" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· 多租户计费</text>
+  <text x="910" y="338" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· 配额 / 套餐</text>
+  <text x="910" y="361" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· 运营后台</text>
+
+  <text x="910" y="405" fill="#fdba74" font-family="Microsoft YaHei, sans-serif" font-size="13" font-weight="600">○ 平台化</text>
+  <text x="910" y="430" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· 完整投标分册编排</text>
+  <text x="910" y="453" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· 资源中心内容运营</text>
+  <text x="910" y="476" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· 插件市场（解析/模型）</text>
+  <text x="910" y="499" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· 开放 API</text>
+
+  <text x="910" y="543" fill="#fdba74" font-family="Microsoft YaHei, sans-serif" font-size="13" font-weight="600">○ 合规与 SLA</text>
+  <text x="910" y="568" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· 数据驻留策略</text>
+  <text x="910" y="591" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· 备份容灾</text>
+  <text x="910" y="614" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="12">· 监控告警</text>
+
+  <text x="910" y="660" fill="#64748b" font-family="Microsoft YaHei, sans-serif" font-size="11">目标用户：公网订阅客户</text>
+  <text x="1020" y="780" text-anchor="middle" fill="#fb923c" font-family="Microsoft YaHei, sans-serif" font-size="28" font-weight="700">~15%</text>
+  <text x="1020" y="805" text-anchor="middle" fill="#fdba74" font-family="Microsoft YaHei, sans-serif" font-size="12">当前公网就绪度</text>
+
+  <!-- Bottom principle -->
+  <rect x="50" y="840" width="1100" height="100" rx="12" fill="#111827" stroke="#334155" stroke-width="1"/>
+  <text x="600" y="875" text-anchor="middle" fill="#e2e8f0" font-family="Microsoft YaHei, sans-serif" font-size="14" font-weight="600">原则锁定：Web 自托管优先 · 用户自备 Key · 只参考 C 端交互不抄 AGPL · 人工反馈→AI 定向调整</text>
+  <text x="600" y="905" text-anchor="middle" fill="#94a3b8" font-family="Microsoft YaHei, sans-serif" font-size="12">建议节奏：先打磨 NOW→NEXT（向量/导出/查重）→ 再上内网多人，最后考虑公网 SaaS</text>
+  <text x="600" y="925" text-anchor="middle" fill="#64748b" font-family="Microsoft YaHei, sans-serif" font-size="11">文件：docs/diagrams/target-roadmap.svg · 数据口径见 docs/HANDOFF-next.md</text>
+</svg>
