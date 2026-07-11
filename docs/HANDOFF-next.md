@@ -188,7 +188,7 @@ npm run build
 
 响应矩阵 v1：editor-state 已持久化 `responseMatrix`，覆盖技术要求/评分点到大纲节点和章节正文的手工映射。前端用稳定 `sourceKey` 合并分析结果，避免要求重排后错绑；前后端都会过滤已删除的大纲/章节引用，非 `waived` 且无有效链接时降级为 `uncovered`。`responseMatrix: null` 视为不更新，显式 `[]` 才清空。技术标 Word 导出会再次收敛失效引用，并在“六、响应矩阵”中按模板表格样式输出类型、来源、权重、响应状态、当前关联位置和备注；不输出内部 ID，商务标不含该章节。`response_match` 使用用户已配置模型生成待确认建议，结果仅在任务中返回；前端逐条勾选应用，只合并自建议生成后未被人工改动的关联，`waived`、备注与已保存的非 `uncovered` 状态不被覆盖，应用后仍收敛失效引用。
 
-多端冲突：GET/PUT 均返回稳定的 `responseMatrixVersion`（仅对收敛后矩阵内容哈希，空矩阵亦有版本；改概述/正文/updatedAt 不改变版本）。PUT 同时带 `responseMatrix` + `responseMatrixVersion` 时做乐观锁，版本不匹配返回 **409**，`detail` 含 `message`、`responseMatrix`、`currentResponseMatrixVersion`，**整包不写**；不带版本的旧客户端仍可写矩阵。前端 hook 在 409 时保留本地矩阵、停止携带旧版本重试，面板提示中文冲突并仅提供「重新载入远端矩阵」显式恢复保存，无静默强制覆盖。暂不做多端字段级合并与端到端 UI 自动化；剩余风险为候选截断、分析刷新后批量失效需人工确认。
+多端冲突（已实现）：GET/PUT 均返回稳定的 `responseMatrixVersion`（仅对收敛后矩阵内容哈希，空矩阵亦有版本；改概述/正文/updatedAt 不改变版本）。PUT 同时带 `responseMatrix` + `responseMatrixVersion` 时先取 **DB 写锁**（SQLite：projects 行无副作用 UPDATE；PostgreSQL：`SELECT … FOR UPDATE`）再比对，版本不匹配返回 **409**，`detail` 含 `message`、`responseMatrix`、`currentResponseMatrixVersion`，**整包不写**；同 expected version 并发 PUT 恰一成一败。不带版本的旧客户端仍可写矩阵。前端 hook **串行**版本化矩阵保存（飞行中不发下一带矩阵 PUT，完成后用新版本+最新 state），409 时保留本地矩阵、停止旧版本重试，面板「重新载入远端矩阵」显式恢复；无静默强制覆盖。暂不做字段级三方合并与端到端 UI 自动化；剩余风险为候选截断、分析刷新后批量失效需人工确认。
 
 正文图片 v1：`project_files.role=source|image`；`/files` 与 parse 只处理 source，`/images` 只处理 PNG/JPEG/GIF（5 MiB、像素和数量限制）。SQLite 个人版在当前项目行写锁内完成图片计数和保存，避免并发绕过上限；未来迁移 PostgreSQL/多进程时必须另行实现等价的行锁或原子计数。正文只接受独占行 `![替代文字](biaoshu-image://file_<16位十六进制> "题注")`，导出按当前 workspace、项目和 `role=image` 二次校验；无效引用显示 warning，不读取外链、任意路径或项目外文件。
 
@@ -246,7 +246,7 @@ frontend/src/features/
 |--------|----|------|
 | 导出 | `structure` / `min_heading_left_enabled` | 用户已确认标题段落描边＋分级底色；整章布局/最小标题左栏仍需独立效果图与规则 |
 | 业务 | 外部标讯数据源 | 资源中心已有受控签名清单同步；标讯仍只支持本机 CSV/JSON 导入，未接网站/API/RSS |
-| 技术标 | 响应矩阵增强 | v1 已做手工映射、持久化、Word 导出联动、待确认智能建议与 `responseMatrixVersion` 乐观锁；字段级合并与端到端 UI 用例未做 |
+| 技术标 | 响应矩阵增强 | v1 已做手工映射、持久化、Word 导出联动、待确认智能建议、`responseMatrixVersion` DB 写锁乐观锁与前端串行保存；字段级合并与端到端 UI 用例未做 |
 | RAG | 真语义大模型 embedding 调优 | 有本地+可选 API，可继续增强 |
 | 库 | Alembic | 仅 create_all + ALTER |
 | 生产 | 登录/多用户/HTTPS/Key 加密/PG/Docker | 未做 |
@@ -257,7 +257,7 @@ frontend/src/features/
 
 ## 6. 建议下一会话方向
 
-1. 响应矩阵后续：端到端用例、多端冲突处理与大项目候选分批策略
+1. 响应矩阵端到端 UI 用例（双浏览器上下文 409 / 显式载入远端）与大项目 `response_match` 候选分批
 2. 标题整章布局/最小标题左栏（需用户提供效果图和版式规则）
 
 资源同步后续只可由管理员配置新的签名发布方，绝不可放开浏览器 URL 或外网抓取。图片管线已冻结项目内资源引用协议，后续扩展不得放开外链或客户端路径。SSE 的多工作空间鉴权、事件游标和项目级总线不在当前范围。

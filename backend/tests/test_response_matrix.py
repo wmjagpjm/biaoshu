@@ -608,3 +608,78 @@ def test_response_matrix_legacy_put_without_version(client):
     assert put.status_code == 200
     assert put.json()["responseMatrix"][0]["sourceText"] == "旧客户端写入"
     assert put.json()["responseMatrixVersion"].startswith("rmv_")
+
+
+def test_response_matrix_concurrent_versioned_puts_one_wins(client):
+    """
+    用途：独立 Session 并发带同一 expected version 的矩阵 PUT，恰好一方成功一方 409。
+    对接：editor_state_service 写锁；不得用顺序两次调用代替。
+    """
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.core.database import SessionLocal
+    from app.services import editor_state_service
+    from app.services.editor_state_service import ResponseMatrixVersionConflict
+
+    pid = _create_project(client)
+    base = client.get(f"/api/projects/{pid}/editor-state").json()
+    v0 = base["responseMatrixVersion"]
+    workspace_id = "ws_local"
+
+    def _matrix(label: str) -> list[dict]:
+        return [
+            {
+                "id": f"mx_{label}",
+                "kind": "requirement",
+                "sourceKey": f"requirement:{label}",
+                "sourceIndex": 0,
+                "sourceText": label,
+                "chapterIds": [],
+                "outlineNodeIds": [],
+                "status": "uncovered",
+                "notes": label,
+            }
+        ]
+
+    barrier = threading.Barrier(2)
+    outcomes: list[tuple[str, str | None]] = []
+
+    def worker(label: str) -> tuple[str, str | None]:
+        db = SessionLocal()
+        try:
+            barrier.wait(timeout=5)
+            try:
+                data = editor_state_service.upsert_editor_state(
+                    db,
+                    workspace_id,
+                    pid,
+                    response_matrix=_matrix(label),
+                    response_matrix_version=v0,
+                )
+                return ("ok", data["responseMatrix"][0]["sourceText"])
+            except ResponseMatrixVersionConflict as exc:
+                # 冲突方必须看到获胜者矩阵
+                winner = (
+                    exc.current_matrix[0]["sourceText"]
+                    if exc.current_matrix
+                    else None
+                )
+                return ("conflict", winner)
+        finally:
+            db.close()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(worker, "并发甲"), pool.submit(worker, "并发乙")]
+        outcomes = [f.result(timeout=15) for f in futures]
+
+    statuses = sorted(o[0] for o in outcomes)
+    assert statuses == ["conflict", "ok"], outcomes
+    ok_label = next(o[1] for o in outcomes if o[0] == "ok")
+    conflict_seen = next(o[1] for o in outcomes if o[0] == "conflict")
+    assert ok_label in ("并发甲", "并发乙")
+    assert conflict_seen == ok_label
+
+    final = client.get(f"/api/projects/{pid}/editor-state").json()
+    assert final["responseMatrix"][0]["sourceText"] == ok_label
+    assert final["responseMatrixVersion"] != v0

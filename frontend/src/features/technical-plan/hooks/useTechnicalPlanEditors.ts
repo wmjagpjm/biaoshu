@@ -274,6 +274,14 @@ export function useTechnicalPlanEditors(projectId: string) {
   /** 409 后停止携带旧版本写矩阵，直至用户显式载入远端 */
   const matrixPutBlockedRef = useRef(false);
   const matrixVersionRef = useRef<string | null>(null);
+  /** 最新编辑态：防抖/串行保存避免闭包过期 */
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  /**
+   * 版本化矩阵 PUT 串行链：飞行中不发下一个带矩阵的请求；
+   * 完成后用最新 state + 新 version 再保存，避免同页误 409。
+   */
+  const matrixSaveChainRef = useRef(Promise.resolve());
 
   const applyMatrixVersion = useCallback((version: string | null | undefined) => {
     const next = version && String(version).trim() ? String(version).trim() : null;
@@ -335,32 +343,33 @@ export function useTechnicalPlanEditors(projectId: string) {
     };
   }, [projectId, applyMatrixVersion]);
 
-  // 保存：debounce PUT + localStorage；矩阵带版本，409 不静默覆盖
+  // 保存：debounce PUT + localStorage；矩阵带版本且串行；409 不静默覆盖
   useEffect(() => {
     if (!hydrated || skipNextSave.current) return;
     saveLocal(projectId, state);
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => {
-      const body: Record<string, unknown> = {
-        outline: state.outline,
-        chapters: state.chapters,
-        facts: state.facts,
-        mode: state.mode,
-        analysisOverview: state.analysis.overview || state.analysisOverview,
-        analysis: state.analysis,
-      };
-      const includeMatrix =
-        !matrixPutBlockedRef.current &&
-        (persistSource === "api" || state.responseMatrix.length > 0);
-      if (includeMatrix) {
-        body.responseMatrix = state.responseMatrix;
-        const version = matrixVersionRef.current;
-        if (version) {
-          body.responseMatrixVersion = version;
+      const runSave = async () => {
+        const latest = stateRef.current;
+        const body: Record<string, unknown> = {
+          outline: latest.outline,
+          chapters: latest.chapters,
+          facts: latest.facts,
+          mode: latest.mode,
+          analysisOverview: latest.analysis.overview || latest.analysisOverview,
+          analysis: latest.analysis,
+        };
+        const includeMatrix =
+          !matrixPutBlockedRef.current &&
+          (persistSource === "api" || latest.responseMatrix.length > 0);
+        if (includeMatrix) {
+          body.responseMatrix = latest.responseMatrix;
+          const version = matrixVersionRef.current;
+          if (version) {
+            body.responseMatrixVersion = version;
+          }
         }
-      }
-      const path = `${getApiBase()}/projects/${encodeURIComponent(projectId)}/editor-state`;
-      void (async () => {
+        const path = `${getApiBase()}/projects/${encodeURIComponent(projectId)}/editor-state`;
         try {
           const res = await fetch(path, {
             method: "PUT",
@@ -368,6 +377,7 @@ export function useTechnicalPlanEditors(projectId: string) {
             body: JSON.stringify(body),
           });
           if (res.status === 409) {
+            // 仅真实版本冲突：串行后仍 409 才提示（同页旧版本重试已被队列消除）
             const raw = (await res.json().catch(() => null)) as {
               detail?: {
                 message?: string;
@@ -390,7 +400,6 @@ export function useTechnicalPlanEditors(projectId: string) {
               remoteMatrix,
               remoteVersion,
             });
-            // 保留页面本地矩阵，不写 setState 覆盖
             return;
           }
           if (!res.ok) {
@@ -405,7 +414,12 @@ export function useTechnicalPlanEditors(projectId: string) {
         } catch {
           setPersistSource("local");
         }
-      })();
+      };
+
+      // 串行：上一矩阵/整包 PUT 完成并更新 version 后，再用最新 state 发出
+      matrixSaveChainRef.current = matrixSaveChainRef.current
+        .catch(() => undefined)
+        .then(runSave);
     }, 800);
   }, [projectId, state, hydrated, persistSource, applyMatrixVersion]);
 

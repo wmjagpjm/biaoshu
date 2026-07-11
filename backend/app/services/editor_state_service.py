@@ -4,6 +4,7 @@
 对接：GET|PUT /api/projects/{id}/editor-state
 二次开发：商务字段整包存 business_json，API 拆成 businessQualify 等 camelCase。
   responseMatrixVersion 由收敛后的矩阵内容哈希得出，勿绑 updated_at；冲突时整包不写。
+  版本化矩阵写入前必须取得 DB 写锁后再比对，禁止纯 Python 竞态窗口。
 """
 
 from __future__ import annotations
@@ -13,10 +14,11 @@ from hashlib import sha1
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.models.entities import ProjectEditorStateRow
-from app.services.project_service import get_project
+from app.models.entities import Project, ProjectEditorStateRow
+from app.services.project_service import ProjectNotFoundError, get_project
 
 # business_json 内键名（snake）
 _BIZ_KEYS = ("qualify", "toc", "quote", "commit")
@@ -288,6 +290,50 @@ def _current_response_matrix(row: ProjectEditorStateRow | None) -> list[dict]:
     )
 
 
+def _lock_for_versioned_matrix_write(
+    db: Session, workspace_id: str, project_id: str
+) -> ProjectEditorStateRow | None:
+    """
+    用途：版本化矩阵写入前取得项目级写锁，使「读版本→比对→写」在事务内串行。
+    对接：upsert_editor_state 带 responseMatrixVersion 的路径。
+    二次开发：
+      - SQLite：对 projects 行做无副作用 UPDATE（与图片上传锁同策略），依赖文件库写锁串行。
+      - PostgreSQL 等：SELECT projects / project_editor_states FOR UPDATE。
+      - 禁止仅依赖进程内锁或 GIL。
+    """
+    dialect = db.get_bind().dialect.name
+    if dialect == "sqlite":
+        result = db.execute(
+            update(Project)
+            .where(
+                Project.id == project_id,
+                Project.workspace_id == workspace_id,
+            )
+            .values(updated_at=Project.updated_at)
+        )
+        if result.rowcount == 0:
+            raise ProjectNotFoundError(project_id)
+        # 锁后再读，避免读到过期快照
+        db.expire_all()
+        return db.get(ProjectEditorStateRow, project_id)
+
+    project = db.execute(
+        select(Project)
+        .where(
+            Project.id == project_id,
+            Project.workspace_id == workspace_id,
+        )
+        .with_for_update()
+    ).scalar_one_or_none()
+    if project is None:
+        raise ProjectNotFoundError(project_id)
+    return db.execute(
+        select(ProjectEditorStateRow)
+        .where(ProjectEditorStateRow.project_id == project_id)
+        .with_for_update()
+    ).scalar_one_or_none()
+
+
 def get_editor_state(db: Session, workspace_id: str, project_id: str) -> dict:
     """
     用途：返回编辑器状态字典（camelCase），含 responseMatrixVersion。
@@ -372,18 +418,19 @@ def upsert_editor_state(
 ) -> dict:
     """
     用途：部分更新；analysis 与 analysis_overview 双写；商务字段合并进 business_json。
-    二次开发：同时带 responseMatrix + responseMatrixVersion 时做乐观锁；冲突则整包不写。
+    二次开发：同时带 responseMatrix + responseMatrixVersion 时先 DB 写锁再比对；冲突则整包不写。
     """
-    get_project(db, workspace_id, project_id)
-    row = db.get(ProjectEditorStateRow, project_id)
-
     writing_matrix = response_matrix is not ... and response_matrix is not None
     client_version = (
         None
         if response_matrix_version is ... or response_matrix_version is None
         else str(response_matrix_version).strip() or None
     )
-    if writing_matrix and client_version is not None:
+    versioned_matrix_write = writing_matrix and client_version is not None
+
+    if versioned_matrix_write:
+        # 锁 → 再读 → 比对 → 写入，均在同一 Session 事务内至 commit
+        row = _lock_for_versioned_matrix_write(db, workspace_id, project_id)
         current_matrix = _current_response_matrix(row)
         current_version = compute_response_matrix_version(current_matrix)
         if client_version != current_version:
@@ -392,6 +439,9 @@ def upsert_editor_state(
                 current_matrix=current_matrix,
                 current_version=current_version,
             )
+    else:
+        get_project(db, workspace_id, project_id)
+        row = db.get(ProjectEditorStateRow, project_id)
 
     if row is None:
         row = ProjectEditorStateRow(project_id=project_id, mode="ALIGNED")
