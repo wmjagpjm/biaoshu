@@ -3,15 +3,17 @@
 用途：将 editor-state 导出为 .docx，应用 workspace 默认 ExportFormat：
   - 纸张/边距/页眉页脚/页码
   - 正文与标题字体色间距
+  - 标题段落边框与分级底色（heading_border）
   - 标题编号（numbering_format / numbering_template）
   - 列表符号（list_style / ordered_list_style）
   - 评分点与 Markdown 表格（table.* 边框/表头/首列）
   - 章节 body 粗解析 Markdown（列表/表格/小标题）
+  - 技术标响应矩阵（仅输出当前有效的章节/大纲关联）
 对接：export 任务；settings.export_format_json；前端 ExportFormatConfig
 二次开发：
-  - 图片样式需正文结构化图片管线后再做
+  - 正文图片仅支持项目内 biaoshu-image://file_<16位十六进制> 独占行引用
   - 字段兼容 snake_case 与 camelCase（_g）
-  - 标题边框 heading_border 尚未映射
+  - structure / min_heading_left_enabled 尚未映射，不得误称整章页框
 """
 
 from __future__ import annotations
@@ -20,13 +22,15 @@ import io
 import json
 import re
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.models.entities import ProjectEditorStateRow
 from app.services.project_service import get_project
-from app.services import settings_service
+from app.services import file_service, settings_service
 
 
 def _loads(raw: str | None) -> Any:
@@ -305,6 +309,39 @@ def _table_cfg(template: dict | None) -> dict:
     return t if isinstance(t, dict) else {}
 
 
+def _image_cfg(template: dict | None) -> dict:
+    """用途：读取正文图片样式，并将不可信宽度限制在可用版心比例内。"""
+    raw = _g(template, "image", default={}) if isinstance(template, dict) else {}
+    if not isinstance(raw, dict):
+        raw = {}
+    try:
+        max_width = float(
+            _g(raw, "max_width_percent", "maxWidthPercent", default=90) or 90
+        )
+    except (TypeError, ValueError):
+        max_width = 90
+    return {
+        "max_width_percent": max(20, min(100, max_width)),
+        "alignment": str(_g(raw, "alignment", default="居中对齐") or "居中对齐"),
+        "caption_font": str(
+            _g(raw, "caption_font", "captionFont", default="宋体") or "宋体"
+        ),
+        "caption_size": str(
+            _g(raw, "caption_size", "captionSize", default="小五") or "小五"
+        ),
+        "caption_alignment": str(
+            _g(raw, "caption_alignment", "captionAlignment", default="居中对齐")
+            or "居中对齐"
+        ),
+        "caption_bold": _strict_bool(
+            _g(raw, "caption_bold", "captionBold", default=False)
+        ),
+        "caption_italic": _strict_bool(
+            _g(raw, "caption_italic", "captionItalic", default=False)
+        ),
+    }
+
+
 def _add_list_item(
     doc,
     text: str,
@@ -357,6 +394,162 @@ def _hex_color(color: str | None, default: str = "000000") -> str:
     if len(s) == 6 and re.fullmatch(r"[0-9a-fA-F]{6}", s):
         return s.upper()
     return default
+
+
+def _strict_bool(value: Any, default: bool = False) -> bool:
+    """用途：把常见布尔值安全归一化，避免字符串 false 被当成真。"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off", ""}:
+            return False
+    return default
+
+
+def _heading_border_cfg(template: dict | None) -> dict:
+    """用途：读取并清洗标题段落边框配置，兼容 snake_case 与 camelCase。"""
+    if not isinstance(template, dict):
+        return {
+            "enabled": False,
+            "border_color": "000000",
+            "level_cell_colors": [],
+        }
+    raw = _g(template, "heading_border", "headingBorder", default={}) or {}
+    if not isinstance(raw, dict):
+        raw = {}
+    raw_colors = _g(
+        raw,
+        "level_cell_colors",
+        "levelCellColors",
+        default=[],
+    ) or []
+    colors: list[str] = []
+    if isinstance(raw_colors, list):
+        colors = [
+            _hex_color(str(color), "FFFFFF")
+            for color in raw_colors[:6]
+        ]
+    return {
+        "enabled": _strict_bool(_g(raw, "enabled", default=False)),
+        "border_color": _hex_color(
+            str(_g(raw, "border_color", "borderColor", default="#000000")),
+            "000000",
+        ),
+        "level_cell_colors": colors,
+    }
+
+
+_PPR_CHILD_ORDER = (
+    "pStyle",
+    "keepNext",
+    "keepLines",
+    "pageBreakBefore",
+    "framePr",
+    "widowControl",
+    "numPr",
+    "suppressLineNumbers",
+    "pBdr",
+    "shd",
+    "tabs",
+    "suppressAutoHyphens",
+    "kinsoku",
+    "wordWrap",
+    "overflowPunct",
+    "topLinePunct",
+    "autoSpaceDE",
+    "autoSpaceDN",
+    "bidi",
+    "adjustRightInd",
+    "snapToGrid",
+    "spacing",
+    "ind",
+    "contextualSpacing",
+    "mirrorIndents",
+    "suppressOverlap",
+    "jc",
+    "textDirection",
+    "textAlignment",
+    "textboxTightWrap",
+    "outlineLvl",
+    "divId",
+    "cnfStyle",
+    "rPr",
+    "sectPr",
+    "pPrChange",
+)
+_PPR_CHILD_RANK = {name: index for index, name in enumerate(_PPR_CHILD_ORDER)}
+
+
+def _insert_ppr_child_in_order(paragraph_props, child, local_name: str) -> None:
+    """用途：按 OOXML CT_PPr 顺序插入段落属性，兼容严格校验器。"""
+    target_rank = _PPR_CHILD_RANK[local_name]
+    for index, existing in enumerate(paragraph_props):
+        existing_name = existing.tag.rsplit("}", 1)[-1]
+        existing_rank = _PPR_CHILD_RANK.get(existing_name, len(_PPR_CHILD_ORDER))
+        if existing_rank > target_rank:
+            paragraph_props.insert(index, child)
+            return
+    paragraph_props.append(child)
+
+
+def _apply_heading_border(paragraph, cfg: dict | None, *, level_index: int) -> None:
+    """用途：为单个标题段落写入四边描边和对应级别底色。"""
+    if not isinstance(cfg, dict) or not cfg.get("enabled"):
+        return
+
+    from docx.oxml import OxmlElement  # type: ignore
+    from docx.oxml.ns import qn  # type: ignore
+
+    border_color = _hex_color(str(cfg.get("border_color") or ""), "000000")
+    colors = cfg.get("level_cell_colors")
+    fill_color = "FFFFFF"
+    if isinstance(colors, list) and colors:
+        safe_index = max(0, min(int(level_index), len(colors) - 1))
+        fill_color = _hex_color(str(colors[safe_index]), "FFFFFF")
+
+    paragraph_props = paragraph._p.get_or_add_pPr()
+    for child in list(paragraph_props):
+        if child.tag in {qn("w:pBdr"), qn("w:shd")}:
+            paragraph_props.remove(child)
+
+    borders = OxmlElement("w:pBdr")
+    for edge_name in ("top", "left", "bottom", "right"):
+        edge = OxmlElement(f"w:{edge_name}")
+        edge.set(qn("w:val"), "single")
+        edge.set(qn("w:sz"), "8")
+        edge.set(qn("w:space"), "4")
+        edge.set(qn("w:color"), border_color)
+        borders.append(edge)
+    _insert_ppr_child_in_order(paragraph_props, borders, "pBdr")
+
+    shading = OxmlElement("w:shd")
+    shading.set(qn("w:val"), "clear")
+    shading.set(qn("w:color"), "auto")
+    shading.set(qn("w:fill"), fill_color)
+    _insert_ppr_child_in_order(paragraph_props, shading, "shd")
+
+
+def _add_heading(
+    doc,
+    text: str,
+    *,
+    level: int,
+    heading_border_cfg: dict | None = None,
+):
+    """用途：创建 Word 标题，并按实际 Heading 级别应用标题边框。"""
+    paragraph = doc.add_heading(text, level=level)
+    if level >= 1:
+        _apply_heading_border(
+            paragraph,
+            heading_border_cfg,
+            level_index=min(level - 1, 5),
+        )
+    return paragraph
 
 
 def _shade_cell(cell, color: str | None) -> None:
@@ -501,6 +694,104 @@ def add_styled_table(
             pass
 
 
+_RESPONSE_MATRIX_KIND_LABELS = {
+    "requirement": "技术要求",
+    "scoring": "评分点",
+}
+_RESPONSE_MATRIX_STATUS_LABELS = {
+    "uncovered": "未覆盖",
+    "partial": "部分覆盖",
+    "covered": "已覆盖",
+    "waived": "不响应",
+}
+
+
+def _index_node_titles(nodes: Any) -> dict[str, str]:
+    """用途：递归建立大纲或章节 id 到标题的安全索引。"""
+    titles: dict[str, str] = {}
+    if not isinstance(nodes, list):
+        return titles
+    stack = list(nodes)
+    while stack:
+        node = stack.pop()
+        if not isinstance(node, dict):
+            continue
+        node_id = str(node.get("id") or "").strip()
+        title = str(node.get("title") or "").strip()
+        if node_id and title:
+            titles[node_id] = title
+        children = node.get("children")
+        if isinstance(children, list):
+            stack.extend(children)
+    return titles
+
+
+def _response_matrix_link_labels(
+    item: dict[str, Any],
+    chapter_titles: dict[str, str],
+    outline_titles: dict[str, str],
+) -> str:
+    """用途：将已收敛的关联 id 显示为可读位置，不泄露内部标识。"""
+    labels: list[str] = []
+    for chapter_id in item.get("chapterIds") or []:
+        title = chapter_titles.get(str(chapter_id))
+        if title:
+            labels.append(f"正文：{title}")
+    for outline_id in item.get("outlineNodeIds") or []:
+        title = outline_titles.get(str(outline_id))
+        if title:
+            labels.append(f"大纲：{title}")
+    return "；".join(labels)
+
+
+def _add_response_matrix_table(
+    doc,
+    response_matrix: Any,
+    outline: Any,
+    chapters: Any,
+    table_cfg: dict | None = None,
+    *,
+    heading_border_cfg: dict | None = None,
+) -> bool:
+    """
+    用途：将技术标响应矩阵写入 Word，并在导出时再次过滤失效关联。
+    对接：editor_state_service.reconcile_response_matrix；build_docx_bytes 技术标分支。
+    """
+    from app.services.editor_state_service import reconcile_response_matrix
+
+    rows = reconcile_response_matrix(response_matrix, outline, chapters)
+    if not rows:
+        return False
+
+    chapter_titles = _index_node_titles(chapters)
+    outline_titles = _index_node_titles(outline)
+    table_rows: list[list[str]] = [
+        ["类型", "要求/评分点", "权重", "响应状态", "关联位置", "备注"]
+    ]
+    for item in rows:
+        kind = str(item.get("kind") or "")
+        status = str(item.get("status") or "uncovered")
+        table_rows.append(
+            [
+                _RESPONSE_MATRIX_KIND_LABELS.get(kind, "待确认"),
+                str(item.get("sourceText") or ""),
+                str(item.get("weight") or ""),
+                _RESPONSE_MATRIX_STATUS_LABELS.get(status, "未覆盖"),
+                _response_matrix_link_labels(item, chapter_titles, outline_titles),
+                str(item.get("notes") or ""),
+            ]
+        )
+
+    _add_heading(
+        doc,
+        "六、响应矩阵",
+        level=1,
+        heading_border_cfg=heading_border_cfg,
+    )
+    add_styled_table(doc, table_rows, table_cfg, has_header=True)
+    return True
+
+
 def _parse_md_table_lines(lines: list[str]) -> list[list[str]] | None:
     """用途：解析连续 | 表格行；失败返回 None。"""
     if not lines:
@@ -518,18 +809,66 @@ def _parse_md_table_lines(lines: list[str]) -> list[list[str]] | None:
     return rows if rows else None
 
 
+_PROJECT_IMAGE_LINE_RE = re.compile(
+    r'^\s*!\[(?P<alt>[^\]]*)\]\(\s*biaoshu-image://'
+    r'(?P<file_id>[^\s)]+)(?:\s+"(?P<caption>[^"]*)")?\s*\)\s*$'
+)
+_PROJECT_IMAGE_ID_RE = re.compile(r"^file_[0-9a-f]{16}$")
+
+
+def _add_image_warning(doc, image_warnings: list[str], reason: str) -> None:
+    """用途：以可见段落和任务结果同步报告图片降级原因。"""
+    message = f"图片引用无效：{reason}"
+    doc.add_paragraph(f"【{message}】")
+    image_warnings.append(message)
+
+
+def _add_project_image(doc, image_path: Path, caption: str | None, image_cfg: dict) -> None:
+    """用途：按模板版心和图注样式向 Word 插入已受控验证的本地图片。"""
+    from docx.shared import Pt  # type: ignore
+
+    section = doc.sections[0]
+    available_width = (
+        int(section.page_width)
+        - int(section.left_margin)
+        - int(section.right_margin)
+    )
+    if available_width <= 0:
+        raise ValueError("页面可用宽度无效")
+    width = int(available_width * float(image_cfg["max_width_percent"]) / 100)
+    paragraph = doc.add_paragraph()
+    paragraph.alignment = _align(image_cfg["alignment"])
+    paragraph.add_run().add_picture(str(image_path), width=width)
+
+    if caption:
+        caption_paragraph = doc.add_paragraph()
+        caption_paragraph.alignment = _align(image_cfg["caption_alignment"])
+        run = caption_paragraph.add_run(caption)
+        run.font.name = image_cfg["caption_font"]
+        run.font.size = Pt(_pt(image_cfg["caption_size"], 9))
+        run.bold = bool(image_cfg["caption_bold"])
+        run.italic = bool(image_cfg["caption_italic"])
+
+
 def write_markdown_body(
     doc,
     text: str,
     *,
     list_cfg: dict | None = None,
     table_cfg: dict | None = None,
+    heading_border_cfg: dict | None = None,
+    image_cfg: dict | None = None,
+    image_resolver=None,
+    image_warnings: list[str] | None = None,
 ) -> None:
     """
     用途：把章节 Markdown 粗解析为段落/列表/表格写入 docx。
-    支持：普通段、-/* 无序、1. 有序、| 表格。
+    对接：商务标整包 Markdown、技术标 chapters[].body、heading_border。
+    支持：普通段、-/* 无序、1. 有序、| 表格、项目内图片独占行。
     """
     lines = (text or "").replace("\r\n", "\n").split("\n")
+    resolved_image_cfg = image_cfg or _image_cfg(None)
+    resolved_image_warnings = image_warnings if image_warnings is not None else []
     i = 0
     ol_index = 0
     while i < len(lines):
@@ -537,6 +876,39 @@ def write_markdown_body(
         stripped = line.strip()
         if not stripped:
             i += 1
+            continue
+
+        # 图片只接受项目内受控协议，禁止从 Markdown 请求外链或任意磁盘路径。
+        if "biaoshu-image://" in stripped:
+            image_match = _PROJECT_IMAGE_LINE_RE.fullmatch(stripped)
+            if image_match is None:
+                _add_image_warning(doc, resolved_image_warnings, "图片语法不符合约定")
+                i += 1
+                ol_index = 0
+                continue
+            file_id = image_match.group("file_id")
+            if not _PROJECT_IMAGE_ID_RE.fullmatch(file_id):
+                _add_image_warning(doc, resolved_image_warnings, "图片标识不合法")
+                i += 1
+                ol_index = 0
+                continue
+            if image_resolver is None:
+                _add_image_warning(doc, resolved_image_warnings, "导出服务未配置图片解析器")
+                i += 1
+                ol_index = 0
+                continue
+            try:
+                image_path = image_resolver(file_id)
+                _add_project_image(
+                    doc,
+                    image_path,
+                    image_match.group("caption"),
+                    resolved_image_cfg,
+                )
+            except (KeyError, FileNotFoundError, OSError, ValueError):
+                _add_image_warning(doc, resolved_image_warnings, "图片不存在、越权或已损坏")
+            i += 1
+            ol_index = 0
             continue
 
         # 表格块
@@ -579,7 +951,12 @@ def write_markdown_body(
         m_h = re.match(r"^(#{1,4})\s+(.+)$", stripped)
         if m_h:
             level = min(len(m_h.group(1)) + 1, 4)
-            doc.add_heading(m_h.group(2).strip(), level=level)
+            _add_heading(
+                doc,
+                m_h.group(2).strip(),
+                level=level,
+                heading_border_cfg=heading_border_cfg,
+            )
             i += 1
             ol_index = 0
             continue
@@ -805,9 +1182,11 @@ def build_docx_bytes(
     project_id: str,
     *,
     mode: str | None = None,
+    image_warnings: list[str] | None = None,
 ) -> tuple[bytes, str]:
     """
-    用途：生成 Word 文档（封面 + 正文，应用默认导出模板）。
+    用途：生成 Word 文档（封面 + 正文及技术标响应矩阵，应用默认导出模板）。
+    对接：export 同步/异步任务；settings.export_format_json。
     mode：technical（默认）| business（商务标册，读 business_json）。
     """
     try:
@@ -832,6 +1211,21 @@ def build_docx_bytes(
     headings_cfg: list = []
     list_cfg = _body_list_cfg(template)
     table_cfg = _table_cfg(template)
+    heading_border_cfg = _heading_border_cfg(template)
+    image_cfg = _image_cfg(template)
+    resolved_image_warnings = image_warnings if image_warnings is not None else []
+    settings = get_settings()
+
+    def resolve_project_image(file_id: str) -> Path:
+        _, image_path = file_service.resolve_project_image(
+            db,
+            workspace_id,
+            project_id,
+            settings,
+            file_id,
+        )
+        return image_path
+
     if template:
         try:
             _apply_template_styles(doc, template)
@@ -892,7 +1286,16 @@ def build_docx_bytes(
 
         ed = editor_state_service.get_editor_state(db, workspace_id, project_id)
         md = business_task_service.build_business_markdown(ed, title)
-        write_markdown_body(doc, md, list_cfg=list_cfg, table_cfg=table_cfg)
+        write_markdown_body(
+            doc,
+            md,
+            list_cfg=list_cfg,
+            table_cfg=table_cfg,
+            heading_border_cfg=heading_border_cfg,
+            image_cfg=image_cfg,
+            image_resolver=resolve_project_image,
+            image_warnings=resolved_image_warnings,
+        )
         buf = io.BytesIO()
         doc.save(buf)
         filename = f"{title}.docx".replace("/", "_").replace("\\", "_")
@@ -904,7 +1307,12 @@ def build_docx_bytes(
         overview = analysis["overview"]
 
     if overview.strip():
-        doc.add_heading("一、项目概述 / 招标分析", level=1)
+        _add_heading(
+            doc,
+            "一、项目概述 / 招标分析",
+            level=1,
+            heading_border_cfg=heading_border_cfg,
+        )
         for para in overview.strip().split("\n"):
             if para.strip():
                 doc.add_paragraph(para.strip())
@@ -912,12 +1320,22 @@ def build_docx_bytes(
     if isinstance(analysis, dict):
         tr = analysis.get("techRequirements") or []
         if tr:
-            doc.add_heading("技术要求", level=2)
+            _add_heading(
+                doc,
+                "技术要求",
+                level=2,
+                heading_border_cfg=heading_border_cfg,
+            )
             for item in tr:
                 _add_list_item(doc, str(item), ordered=False, list_cfg=list_cfg)
         sp = analysis.get("scoringPoints") or []
         if sp:
-            doc.add_heading("评分点", level=2)
+            _add_heading(
+                doc,
+                "评分点",
+                level=2,
+                heading_border_cfg=heading_border_cfg,
+            )
             # 有权重时用表格；否则有序列表
             table_rows: list[list[str]] = [["评分项", "权重"]]
             use_table = False
@@ -943,13 +1361,23 @@ def build_docx_bytes(
                     )
         rr = analysis.get("rejectionRisks") or []
         if rr:
-            doc.add_heading("废标风险", level=2)
+            _add_heading(
+                doc,
+                "废标风险",
+                level=2,
+                heading_border_cfg=heading_border_cfg,
+            )
             for item in rr:
                 _add_list_item(doc, str(item), ordered=False, list_cfg=list_cfg)
 
     parsed = (state.parsed_markdown if state else None) or ""
     if parsed.strip():
-        doc.add_heading("二、招标文件解析摘录", level=1)
+        _add_heading(
+            doc,
+            "二、招标文件解析摘录",
+            level=1,
+            heading_border_cfg=heading_border_cfg,
+        )
         clip = parsed.strip()
         if len(clip) > 20000:
             clip = clip[:20000] + "\n\n…（导出已截断）"
@@ -960,7 +1388,12 @@ def build_docx_bytes(
 
     outline = _loads(state.outline_json) if state else None
     if isinstance(outline, list) and outline:
-        doc.add_heading("三、目录大纲", level=1)
+        _add_heading(
+            doc,
+            "三、目录大纲",
+            level=1,
+            heading_border_cfg=heading_border_cfg,
+        )
         outline_num = HeadingNumberer(headings_cfg)
 
         def walk(nodes: list, depth: int = 1) -> None:
@@ -974,7 +1407,12 @@ def build_docx_bytes(
                 t = compose_heading_text(raw_title, prefix)
                 # Word 样式：大纲挂在「三、」下，用 Heading 2+ 更合适
                 style_level = min(depth + 1, 4)
-                doc.add_heading(t, level=style_level)
+                _add_heading(
+                    doc,
+                    t,
+                    level=style_level,
+                    heading_border_cfg=heading_border_cfg,
+                )
                 desc = n.get("description")
                 if desc:
                     doc.add_paragraph(str(desc))
@@ -986,7 +1424,12 @@ def build_docx_bytes(
 
     chapters = _loads(state.chapters_json) if state else None
     if isinstance(chapters, list) and chapters:
-        doc.add_heading("四、正文", level=1)
+        _add_heading(
+            doc,
+            "四、正文",
+            level=1,
+            heading_border_cfg=heading_border_cfg,
+        )
         chapter_num = HeadingNumberer(headings_cfg)
         first_ch = True
         for ch in chapters:
@@ -999,18 +1442,35 @@ def build_docx_bytes(
             # 正文一级章 → headings[0]
             prefix = chapter_num.next_prefix(0)
             ch_title = compose_heading_text(raw_title, prefix)
-            doc.add_heading(ch_title, level=2)
+            _add_heading(
+                doc,
+                ch_title,
+                level=2,
+                heading_border_cfg=heading_border_cfg,
+            )
             body = str(ch.get("body") or "").strip()
             if not body:
                 doc.add_paragraph("（本章暂无正文）")
                 continue
             write_markdown_body(
-                doc, body, list_cfg=list_cfg, table_cfg=table_cfg
+                doc,
+                body,
+                list_cfg=list_cfg,
+                table_cfg=table_cfg,
+                heading_border_cfg=heading_border_cfg,
+                image_cfg=image_cfg,
+                image_resolver=resolve_project_image,
+                image_warnings=resolved_image_warnings,
             )
 
     facts = _loads(state.facts_json) if state else None
     if isinstance(facts, list) and facts:
-        doc.add_heading("五、全局事实", level=1)
+        _add_heading(
+            doc,
+            "五、全局事实",
+            level=1,
+            heading_border_cfg=heading_border_cfg,
+        )
         for f in facts:
             if not isinstance(f, dict):
                 continue
@@ -1019,6 +1479,15 @@ def build_docx_bytes(
             _add_list_item(
                 doc, f"[{cat}] {content}", ordered=False, list_cfg=list_cfg
             )
+
+    _add_response_matrix_table(
+        doc,
+        _loads(getattr(state, "response_matrix_json", None)) if state else None,
+        outline,
+        chapters,
+        table_cfg,
+        heading_border_cfg=heading_border_cfg,
+    )
 
     buf = io.BytesIO()
     doc.save(buf)

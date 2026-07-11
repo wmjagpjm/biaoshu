@@ -34,7 +34,7 @@ export type ListProjectsResult = {
   offlineHint?: string;
 };
 
-function useApiProjects(): boolean {
+function shouldUseApiProjects(): boolean {
   const flag = import.meta.env.VITE_USE_API_PROJECTS;
   if (flag === "false" || flag === "0") return false;
   return true;
@@ -101,7 +101,7 @@ export async function listProjectsAsync(options?: {
   kind?: "technical" | "business";
 }): Promise<ListProjectsResult> {
   const kind = options?.kind;
-  if (useApiProjects()) {
+  if (shouldUseApiProjects()) {
     try {
       const q = kind ? `?kind=${encodeURIComponent(kind)}` : "";
       const remote = await apiFetch<Project[]>(`/projects${q}`);
@@ -141,7 +141,7 @@ export function getProject(id: string): Project | undefined {
 export async function getProjectAsync(
   id: string,
 ): Promise<Project | undefined> {
-  if (useApiProjects()) {
+  if (shouldUseApiProjects()) {
     try {
       return await apiFetch<Project>(`/projects/${encodeURIComponent(id)}`);
     } catch {
@@ -184,7 +184,7 @@ export async function createProjectAsync(
   const kind = input.kind ?? "technical";
   const defaultName =
     kind === "business" ? "未命名商务标项目" : "未命名技术标项目";
-  if (useApiProjects()) {
+  if (shouldUseApiProjects()) {
     try {
       const project = await apiFetch<Project>("/projects", {
         method: "POST",
@@ -215,7 +215,7 @@ export async function updateProjectAsync(
     >
   >,
 ): Promise<Project | null> {
-  if (!useApiProjects()) return null;
+  if (!shouldUseApiProjects()) return null;
   try {
     return await apiFetch<Project>(`/projects/${encodeURIComponent(id)}`, {
       method: "PATCH",

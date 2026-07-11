@@ -1,17 +1,19 @@
 """
 模块：pytest 夹具
-用途：在导入 app 前注入内存库环境变量；每测重建表并 seed 默认 workspace。
-对接：tests/test_*.py 中的 client fixture
-注意：必须在 import app 之前设置 DATABASE_URL，否则 engine 仍指向文件库。
+用途：在导入 app 前注入独立文件型 SQLite；每测重建表并 seed 默认 workspace，支持后台任务并发。
+对接：tests/test_*.py 中的 client fixture；app.core.database 的测试 DATABASE_URL。
+二次开发：必须在 import app 前设置 DATABASE_URL；若改用并行 pytest，需为每个 worker 分配独立测试库。
 """
 
 import os
 
-# 必须在导入 app 之前设置
-os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+# 必须在导入 app 之前设置。文件型 SQLite 允许 TestClient 与后台任务使用独立连接；
+# :memory: + StaticPool 会让跨线程请求竞争同一条 sqlite3 连接，造成偶发底层异常。
+os.environ["DATABASE_URL"] = "sqlite:///./data/biaoshu-pytest.db"
 os.environ["DEFAULT_WORKSPACE_ID"] = "ws_local"
 os.environ["DEFAULT_WORKSPACE_NAME"] = "测试工作空间"
 os.environ["DEFAULT_OWNER_USER_ID"] = "user_test"
+os.environ["SEED_SAMPLE_OPPORTUNITIES"] = "false"
 
 import pytest
 from fastapi.testclient import TestClient

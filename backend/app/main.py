@@ -25,8 +25,10 @@ from app.api import (
     health,
     knowledge as knowledge_api,
     llm,
+    opportunities,
     parse_callback,
     projects,
+    resources,
     revise,
     settings as settings_api,
     tasks,
@@ -42,10 +44,17 @@ from app.models import (  # noqa: F401
     ProjectEditorStateRow,
     ProjectFileRow,
     ProjectTaskRow,
+    BidOpportunityRow,
+    ResourceRow,
+    ResourceSyncItemRow,
+    ResourceSyncRunRow,
+    ResourceSyncSourceRow,
     Workspace,
     WorkspaceSettingsRow,
 )
 from app.services.project_service import ensure_default_workspace
+from app.services.opportunity_service import ensure_sample_opportunities
+from app.services.resource_service import ensure_system_resources
 from app.services.task_service import fail_interrupted_tasks
 
 
@@ -61,6 +70,9 @@ async def lifespan(_app: FastAPI):
     db = SessionLocal()
     try:
         ensure_default_workspace(db, settings)
+        if settings.seed_sample_opportunities:
+            ensure_sample_opportunities(db, settings.default_workspace_id)
+        ensure_system_resources(db)
         fail_interrupted_tasks(db)
     finally:
         db.close()
@@ -99,6 +111,8 @@ def create_app() -> FastAPI:
     app.include_router(parse_callback.router, prefix="/api")
     app.include_router(knowledge_api.router, prefix="/api")
     app.include_router(compliance_api.router, prefix="/api")
+    app.include_router(opportunities.router, prefix="/api")
+    app.include_router(resources.router, prefix="/api")
     return app
 
 

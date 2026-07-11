@@ -1,6 +1,9 @@
-/**
- * 标讯列表样式
- */
+/*
+模块：标讯页样式
+用途：提供本地标讯列表、状态筛选和紧凑录入弹层的稳定布局。
+对接：BidOpportunityPage.tsx；全局 btn、field、card 和颜色变量。
+二次开发：新增外部来源或批量导入时保持筛选区、列表和弹层三层结构，避免把表单嵌入标讯卡片。
+*/
 
 .opp-filters {
   display: grid;
@@ -8,6 +11,12 @@
   gap: 12px;
   align-items: flex-end;
   margin-bottom: 14px;
+}
+
+.opp-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .opp-chips {
@@ -20,7 +29,7 @@
 .opp-chip {
   height: 32px;
   padding: 0 12px;
-  border-radius: 999px;
+  border-radius: 6px;
   border: 1px solid var(--border);
   background: #fff;
   font-size: 13px;
@@ -106,12 +115,38 @@
   color: var(--text-tertiary);
 }
 
+.opp-count {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  padding-bottom: 8px;
+}
+
+.opp-icon-button {
+  width: 32px;
+  padding: 0;
+  justify-content: center;
+}
+
+.opp-error {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid rgba(220, 38, 38, 0.3);
+  border-radius: 6px;
+  color: #b91c1c;
+  background: rgba(254, 242, 242, 0.82);
+  font-size: 13px;
+}
+
 .opp-status {
   display: inline-flex;
   height: 24px;
   align-items: center;
   padding: 0 8px;
-  border-radius: 999px;
+  border-radius: 6px;
   font-size: 12px;
   font-weight: 400;
   white-space: nowrap;
@@ -132,6 +167,111 @@
   color: var(--text-tertiary);
 }
 
+.opp-modal-mask {
+  position: fixed;
+  z-index: 50;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(16, 24, 40, 0.38);
+}
+
+.opp-modal {
+  width: min(720px, 100%);
+  max-height: min(760px, calc(100vh - 48px));
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 18px 48px rgba(16, 24, 40, 0.22);
+}
+
+.opp-modal__head,
+.opp-modal__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.opp-import {
+  width: min(520px, 100%);
+}
+
+.opp-import__file small {
+  display: block;
+  margin-top: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.opp-import__result {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid rgba(22, 163, 74, 0.28);
+  border-radius: 6px;
+  color: #15803d;
+  background: #f0fdf4;
+  font-size: 13px;
+}
+
+.opp-import__error {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid rgba(220, 38, 38, 0.3);
+  border-radius: 6px;
+  color: #b91c1c;
+  background: #fef2f2;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.opp-modal__head {
+  margin-bottom: 16px;
+}
+
+.opp-modal__head h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.opp-modal__head p {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.opp-modal__fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.opp-modal__full {
+  grid-column: 1 / -1;
+}
+
+.opp-modal textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+
+.opp-modal__actions {
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+
+.opp-spin {
+  animation: opp-spin 0.9s linear infinite;
+}
+
+@keyframes opp-spin {
+  to { transform: rotate(360deg); }
+}
+
 @media (max-width: 800px) {
   .opp-filters {
     grid-template-columns: 1fr;
@@ -139,5 +279,17 @@
 
   .opp-card__source {
     margin-left: 0;
+  }
+
+  .opp-modal-mask {
+    padding: 12px;
+  }
+
+  .opp-modal__fields {
+    grid-template-columns: 1fr;
+  }
+
+  .opp-modal__full {
+    grid-column: auto;
   }
 }

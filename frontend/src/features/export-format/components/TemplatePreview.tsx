@@ -1,3 +1,10 @@
+/**
+ * 模块：导出模板实时预览
+ * 用途：用 CSS 变量近似呈现纸张、标题段落边框、正文、表格及页眉页脚样式。
+ * 对接：ExportFormatConfig、buildExportFormatCssVars、TemplatePreview.css。
+ * 二次开发：预览只修饰标题行；Word 最终效果以后端 python-docx 输出为准。
+ */
+
 import { useMemo, type CSSProperties } from "react";
 import type { ExportFormatConfig } from "../model/exportFormat";
 import { HEADING_LEVEL_LABELS } from "../model/exportFormat";
@@ -9,8 +16,8 @@ type Props = {
 };
 
 /**
- * 模板实时预览
- * 用途：对齐 C 端 TemplatePreview，用 CSS 变量渲染纸张/标题/正文效果。
+ * 用途：渲染模板示例页，并实时响应标题边框和各类样式配置。
+ * 对接：模板编辑页传入的 ExportFormatConfig。
  */
 export function TemplatePreview({ config }: Props) {
   const style = useMemo(
@@ -27,19 +34,23 @@ export function TemplatePreview({ config }: Props) {
           <div className="ef-paper__header">{config.page.header_text || "页眉示例"}</div>
         )}
         <div className="ef-paper__body">
-          <div className="ef-h1">
+          <div className={headingClassName(config, "ef-h1", 1)}>
             {sampleTitle(h[0], "第一章 项目理解与建设目标")}
           </div>
-          <div className="ef-h2">
+          <div className={headingClassName(config, "ef-h2", 2)}>
             {sampleTitle(h[1], "第一节 招标需求解读")}
           </div>
-          <div className="ef-h3">{sampleTitle(h[2], "1 业务痛点与建设范围")}</div>
+          <div className={headingClassName(config, "ef-h3", 3)}>
+            {sampleTitle(h[2], "1 业务痛点与建设范围")}
+          </div>
           <p className="ef-body">
             这是正文预览段落。字体、字号、行距与首行缩进将按模板配置渲染。
             系统支持六级标题（
             {HEADING_LEVEL_LABELS.slice(0, 3).join("、")}…）与表格、图片样式。
           </p>
-          <div className="ef-h3">{sampleTitle(h[2], "2 建设目标与成功标准")}</div>
+          <div className={headingClassName(config, "ef-h3", 3)}>
+            {sampleTitle(h[2], "2 建设目标与成功标准")}
+          </div>
           <p className="ef-body">
             建设周期、接入规模与等保要求等关键事实应与全局事实保持一致，避免前后矛盾。
           </p>
@@ -74,6 +85,15 @@ export function TemplatePreview({ config }: Props) {
       </div>
     </div>
   );
+}
+
+function headingClassName(
+  config: ExportFormatConfig,
+  baseClassName: string,
+  level: number,
+) {
+  if (!config.heading_border.enabled) return baseClassName;
+  return `${baseClassName} ef-heading-frame ef-heading-frame--level-${level}`;
 }
 
 function sampleTitle(

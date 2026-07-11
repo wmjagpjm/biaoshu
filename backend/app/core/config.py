@@ -39,12 +39,38 @@ class Settings(BaseSettings):
     upload_dir: str = "./uploads"
     # 单文件上限（字节），默认 50MB
     max_upload_bytes: int = 50 * 1024 * 1024
+    # 正文图片独立上限：避免大图占满导出内存或污染招标源文件上传契约
+    max_image_upload_bytes: int = 5 * 1024 * 1024
+    max_image_pixels: int = 8192 * 8192
+    max_project_images: int = 50
+    # 标讯离线导入仅在请求内存解析；限制文件与行数，避免本地误选大文件拖垮服务
+    max_opportunity_import_bytes: int = 2 * 1024 * 1024
+    max_opportunity_import_rows: int = 2000
+    # 受控资源同步：来源仅由服务端 JSON 配置；默认空数组，浏览器不接收 URL 或同步密钥
+    resource_sync_sources: str = "[]"
+    resource_sync_allowed_hosts: str = ""
+    resource_sync_max_bytes: int = 1024 * 1024
+    resource_sync_timeout_seconds: int = 10
+    # 仅本地演示时写入示例标讯；默认关闭，避免污染真实空工作空间
+    seed_sample_opportunities: bool = False
     # 本地 MinerU 回传 Token；空字符串表示不校验（保密机默认）
     local_parser_token: str = ""
 
     def cors_origin_list(self) -> list[str]:
         """用途：将 cors_origins 字符串拆成列表，供 CORSMiddleware 使用。"""
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    def resource_sync_allowed_host_set(self) -> set[str]:
+        """
+        用途：归一化受控同步的精确主机白名单，空集合表示所有同步源均不可连接。
+        对接：resource_sync_service.parse_configured_sources；RESOURCE_SYNC_ALLOWED_HOSTS。
+        二次开发：仅接受纯主机名；不得支持通配符、CIDR、端口或由客户端传入的主机。
+        """
+        return {
+            host.strip().lower().rstrip(".")
+            for host in self.resource_sync_allowed_hosts.split(",")
+            if host.strip()
+        }
 
 
 @lru_cache

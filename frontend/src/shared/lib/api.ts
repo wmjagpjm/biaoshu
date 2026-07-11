@@ -60,7 +60,24 @@ export function parseApiErrorMessage(raw: string, fallback: string): string {
         .join("；");
     }
     if (detail && typeof detail === "object") {
-      return JSON.stringify(detail);
+      const message =
+        "message" in detail && typeof detail.message === "string"
+          ? detail.message
+          : fallback;
+      const errors =
+        "errors" in detail && Array.isArray(detail.errors)
+          ? detail.errors
+              .map((item) => {
+                if (!item || typeof item !== "object") return JSON.stringify(item);
+                const row = typeof item.row === "number" ? `第 ${item.row} 行` : "";
+                const field = typeof item.field === "string" ? item.field : "";
+                const itemMessage =
+                  typeof item.message === "string" ? item.message : JSON.stringify(item);
+                return [row, field, itemMessage].filter(Boolean).join("：");
+              })
+              .filter(Boolean)
+          : [];
+      return errors.length ? `${message}：${errors.join("；")}` : message;
     }
   } catch {
     /* 非 JSON，原文返回 */

@@ -7,6 +7,8 @@ import type { BusinessBidStepId, BusinessBidStepMeta } from "../types";
  * 对接：纯前端路由；后端任务状态可在 is-done 上叠加。
  */
 
+// 步骤元数据供工作区/列表页复用；与组件同文件导出会触发 only-export-components
+// oxlint-disable-next-line react/only-export-components
 export const BUSINESS_STEPS: BusinessBidStepMeta[] = [
   { id: "parse", index: 1, title: "条款解析", description: "商务与资格条款" },
   { id: "qualify", index: 2, title: "资格响应", description: "逐条响应与证明" },

@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import type { TechnicalPlanStepId, TechnicalPlanStepMeta } from "../types";
 
-export const STEPS: TechnicalPlanStepMeta[] = [
+const STEPS: TechnicalPlanStepMeta[] = [
   { id: "document", index: 1, title: "文档解析", description: "导入招标文件" },
   { id: "analysis", index: 2, title: "招标分析", description: "概述与评分点" },
   { id: "outline", index: 3, title: "大纲编辑", description: "三级目录" },

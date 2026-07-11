@@ -1,22 +1,11 @@
 @echo off
-setlocal
+setlocal EnableExtensions
 cd /d "%~dp0"
-title Biaoshu-API
-echo Starting biaoshu backend on http://127.0.0.1:8000
-echo Working dir: %cd%
-echo.
 
-if exist ".venv\Scripts\python.exe" (
-  ".venv\Scripts\python.exe" -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-) else (
-  echo [ERROR] .venv not found. Install once:
-  echo   python -m venv .venv
-  echo   .venv\Scripts\pip install -r requirements.txt
-  echo.
-  pause
-  exit /b 1
-)
+if not exist ".venv\Scripts\python.exe" exit /b 1
 
-echo.
-echo Server exited.
-pause
+netstat -ano 2>nul | findstr /i /c:":8000 " | findstr /i "LISTENING" >nul
+if not errorlevel 1 exit /b 0
+
+powershell -NoProfile -WindowStyle Hidden -Command "$python = Join-Path (Get-Location) '.venv\Scripts\python.exe'; Start-Process -FilePath $python -ArgumentList @('-m','uvicorn','app.main:app','--reload','--host','127.0.0.1','--port','8000') -WorkingDirectory (Get-Location).Path -WindowStyle Hidden" >nul 2>&1
+exit /b %ERRORLEVEL%

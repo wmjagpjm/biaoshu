@@ -1,11 +1,12 @@
-import { useMemo, useState } from "react";
-import { Eye, EyeOff } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { Eye, EyeOff, ImagePlus } from "lucide-react";
 import type { ChapterContent } from "../types";
 
 /**
  * 模块：正文分章编辑器
  * 用途：左章节列表 + 右 Markdown 正文编辑；字数实时统计。
- * 对接：body 写入 useTechnicalPlanEditors；AI 反馈在父级按选中章 targetId 提交。
+ * 对接：body 写入 useTechnicalPlanEditors；项目图片上传后写入 biaoshu-image 受控引用；AI 反馈在父级按选中章 targetId 提交。
+ * 二次开发：新增图片来源或富文本编辑器时，必须继续只写入项目 file_id，禁止写入外链和本地文件路径。
  */
 
 export type ChapterEditorProps = {
@@ -14,6 +15,8 @@ export type ChapterEditorProps = {
   onSelect: (id: string) => void;
   onChangeBody: (id: string, body: string) => void;
   onChangeTitle: (id: string, title: string) => void;
+  onUploadImage: (file: File) => Promise<{ id: string; filename: string }>;
+  imageBusy?: boolean;
 };
 
 function statusBadge(status: ChapterContent["status"]) {
@@ -32,8 +35,14 @@ export function ChapterEditor({
   onSelect,
   onChangeBody,
   onChangeTitle,
+  onUploadImage,
+  imageBusy = false,
 }: ChapterEditorProps) {
   const [showPreview, setShowPreview] = useState(false);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const bodyInputRef = useRef<HTMLTextAreaElement>(null);
+  const chaptersRef = useRef(chapters);
+  chaptersRef.current = chapters;
 
   const selected =
     chapters.find((c) => c.id === selectedId) ??
@@ -44,6 +53,26 @@ export function ChapterEditor({
     () => chapters.filter((c) => c.status === "done").length,
     [chapters],
   );
+
+  const insertProjectImage = async (file: File) => {
+    const targetId = selected.id;
+    const initialBody = selected.body;
+    const initialCursor = bodyInputRef.current?.selectionStart ?? initialBody.length;
+    const uploaded = await onUploadImage(file);
+    const targetChapter = chaptersRef.current.find(
+      (chapter) => chapter.id === targetId,
+    );
+    if (!targetChapter) return;
+    const currentBody = targetChapter.body;
+    const cursor = Math.min(initialCursor, currentBody.length);
+    const before = currentBody.slice(0, cursor);
+    const after = currentBody.slice(cursor);
+    const alt = uploaded.filename.replace(/[[\]\r\n]/g, "_") || "项目图片";
+    const reference = `![${alt}](biaoshu-image://${uploaded.id})`;
+    const prefix = before && !before.endsWith("\n") ? "\n\n" : "";
+    const suffix = after && !after.startsWith("\n") ? "\n\n" : "";
+    onChangeBody(targetId, `${before}${prefix}${reference}${suffix}${after}`);
+  };
 
   if (!selected) {
     return (
@@ -96,6 +125,30 @@ export function ChapterEditor({
             aria-label="章节标题"
           />
           <div className="tp-toolbar__spacer" />
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/gif"
+            hidden
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.target.value = "";
+              if (!file) return;
+              void insertProjectImage(file).catch(() => {
+                /* 上传错误由任务流水线统一展示。 */
+              });
+            }}
+          />
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            aria-label="插入项目图片"
+            title="插入项目图片"
+            disabled={imageBusy}
+            onClick={() => imageInputRef.current?.click()}
+          >
+            <ImagePlus size={15} />
+          </button>
           <span className="mono" style={{ fontSize: 12, color: "var(--text-tertiary)" }}>
             {selected.wordCount} 字
           </span>
@@ -122,6 +175,7 @@ export function ChapterEditor({
           <textarea
             className="tp-content-body"
             value={selected.body}
+            ref={bodyInputRef}
             onChange={(e) => onChangeBody(selected.id, e.target.value)}
             placeholder="在此编辑本章 Markdown 正文。可用下方「按反馈调整」让 AI 定向修订……"
             aria-label={`正文：${selected.title}`}

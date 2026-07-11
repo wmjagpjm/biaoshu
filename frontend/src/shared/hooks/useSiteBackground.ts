@@ -21,7 +21,7 @@ export function useSiteBackground() {
 
   useEffect(() => {
     applySiteBackground(config);
-  }, []);
+  }, [config]);
 
   useEffect(() => {
     function onChange(e: Event) {

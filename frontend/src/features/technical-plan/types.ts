@@ -2,6 +2,7 @@
  * 模块：技术方案域类型
  * 用途：对齐 C 端 technical-plan 工作流的数据结构。
  * 对接：大纲/正文字段将进入 revise 与生成任务 body；后端可原样复用。
+ * 二次开发：响应矩阵持久化字段与任务建议字段分离，建议不得直接当作已保存状态。
  */
 
 export type TechnicalPlanStepId =
@@ -55,6 +56,45 @@ export type ChapterContent = {
 export type ScoringPoint = {
   name: string;
   weight: string;
+};
+
+export type ResponseMatrixKind = "requirement" | "scoring";
+
+export type ResponseMatrixStatus =
+  | "uncovered"
+  | "partial"
+  | "covered"
+  | "waived";
+
+export type ResponseMatrixItem = {
+  id: string;
+  kind: ResponseMatrixKind;
+  sourceKey: string;
+  sourceIndex: number;
+  sourceText: string;
+  weight: string;
+  chapterIds: string[];
+  outlineNodeIds: string[];
+  status: ResponseMatrixStatus;
+  notes: string;
+};
+
+export type ResponseMatrixSuggestionStatus =
+  | "uncovered"
+  | "partial"
+  | "covered";
+
+export type ResponseMatrixSuggestion = {
+  sourceKey: string;
+  chapterIds: string[];
+  outlineNodeIds: string[];
+  status: ResponseMatrixSuggestionStatus;
+  confidence: number;
+  reason: string;
+  base: Pick<
+    ResponseMatrixItem,
+    "chapterIds" | "outlineNodeIds" | "status"
+  >;
 };
 
 export type BidAnalysis = {

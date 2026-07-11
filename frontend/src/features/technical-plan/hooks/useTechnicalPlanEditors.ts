@@ -1,12 +1,12 @@
 /**
  * 模块：技术方案大纲 / 正文 / 全局事实 / 分析概述
  * 用途：可编辑状态；优先 GET|PUT /api/projects/{id}/editor-state，失败回退 localStorage。
- * 对接：editor-state API；页面 TechnicalPlanWorkspace
- * 二次开发：冲突合并、版本号可在 PUT 增加 if-match。
+ * 对接：editor-state API；页面 TechnicalPlanWorkspace；responseMatrixVersion 乐观锁。
+ * 二次开发：矩阵 409 时禁止静默覆盖本地；须用户显式「重新载入远端矩阵」后才恢复保存。
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { apiFetch } from "../../../shared/lib/api";
+import { apiFetch, getApiBase } from "../../../shared/lib/api";
 import {
   addChild,
   addSibling,
@@ -17,6 +17,11 @@ import {
   removeNode,
   updateNode,
 } from "../lib/outlineTree";
+import {
+  mergeResponseMatrix,
+  normalizeResponseMatrix,
+  reconcileResponseMatrixLinks,
+} from "../lib/responseMatrix";
 import { mockChapters, mockFacts, mockOutline } from "../mock";
 import type {
   BidAnalysis,
@@ -24,6 +29,8 @@ import type {
   GlobalFact,
   OutlineExpansionMode,
   OutlineNode,
+  ResponseMatrixItem,
+  ResponseMatrixSuggestion,
 } from "../types";
 import { emptyBidAnalysis } from "../types";
 
@@ -34,6 +41,7 @@ type StoredEditors = {
   mode: OutlineExpansionMode;
   analysisOverview: string;
   analysis: BidAnalysis;
+  responseMatrix: ResponseMatrixItem[];
   parsedMarkdown: string;
 };
 
@@ -45,10 +53,29 @@ type EditorStateApi = {
   mode?: string;
   analysisOverview?: string | null;
   analysis?: BidAnalysis | null;
+  responseMatrix?: ResponseMatrixItem[] | null;
+  responseMatrixVersion?: string | null;
   parsedMarkdown?: string | null;
   guidance?: Record<string, unknown> | null;
   updatedAt?: string | null;
 };
+
+/** 用途：响应矩阵多端冲突时保留本地、展示远端快照。 */
+export type ResponseMatrixConflict = {
+  message: string;
+  remoteMatrix: ResponseMatrixItem[];
+  remoteVersion: string;
+};
+
+function uniqueIds(values: string[]): string[] {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function sameIds(left: string[], right: string[]): boolean {
+  const a = uniqueIds(left).sort();
+  const b = uniqueIds(right).sort();
+  return a.length === b.length && a.every((value, index) => value === b[index]);
+}
 
 function normalizeAnalysis(
   raw: Partial<BidAnalysis> | null | undefined,
@@ -85,7 +112,7 @@ const storageKey = (projectId: string) =>
 function derivePreview(body: string): string {
   const plain = body
     .replace(/^#+\s*/gm, "")
-    .replace(/[|>*`_\-]/g, " ")
+    .replace(/[|>*`_-]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
   return plain.slice(0, 96) || "（空正文）";
@@ -103,6 +130,7 @@ function defaultState(): StoredEditors {
     mode: "ALIGNED",
     analysisOverview: "",
     analysis: emptyBidAnalysis(),
+    responseMatrix: [],
     parsedMarkdown: "",
   };
 }
@@ -136,6 +164,7 @@ function loadLocal(projectId: string): StoredEditors {
           ? parsed.analysisOverview
           : "",
       ),
+      responseMatrix: normalizeResponseMatrix(parsed.responseMatrix),
       parsedMarkdown:
         typeof parsed.parsedMarkdown === "string"
           ? parsed.parsedMarkdown
@@ -155,19 +184,32 @@ function fromApi(data: EditorStateApi, fallback: StoredEditors): StoredEditors {
     data.analysis,
     data.analysisOverview || fallback.analysisOverview || "",
   );
+  const outline = Array.isArray(data.outline) && data.outline.length
+    ? (data.outline as OutlineNode[])
+    : fallback.outline;
+  const chapters = Array.isArray(data.chapters) && data.chapters.length
+    ? (data.chapters as ChapterContent[])
+    : fallback.chapters;
+  const responseMatrix = reconcileResponseMatrixLinks(
+    mergeResponseMatrix(
+      analysis,
+      Array.isArray(data.responseMatrix)
+        ? data.responseMatrix
+        : fallback.responseMatrix,
+    ),
+    chapters,
+    outline,
+  );
   return {
-    outline: Array.isArray(data.outline) && data.outline.length
-      ? (data.outline as OutlineNode[])
-      : fallback.outline,
-    chapters: Array.isArray(data.chapters) && data.chapters.length
-      ? (data.chapters as ChapterContent[])
-      : fallback.chapters,
+    outline,
+    chapters,
     facts: Array.isArray(data.facts) && data.facts.length
       ? (data.facts as GlobalFact[])
       : fallback.facts,
     mode: data.mode === "FREE" ? "FREE" : "ALIGNED",
     analysisOverview: analysis.overview || data.analysisOverview || "",
     analysis,
+    responseMatrix,
     parsedMarkdown:
       typeof data.parsedMarkdown === "string" && data.parsedMarkdown
         ? data.parsedMarkdown
@@ -218,6 +260,9 @@ export function useTechnicalPlanEditors(projectId: string) {
   const [state, setState] = useState<StoredEditors>(() => loadLocal(projectId));
   const [hydrated, setHydrated] = useState(false);
   const [persistSource, setPersistSource] = useState<"api" | "local">("local");
+  const [matrixVersion, setMatrixVersion] = useState<string | null>(null);
+  const [matrixConflict, setMatrixConflict] =
+    useState<ResponseMatrixConflict | null>(null);
   const [selectedChapterId, setSelectedChapterId] = useState<string | null>(
     null,
   );
@@ -226,11 +271,22 @@ export function useTechnicalPlanEditors(projectId: string) {
   );
   const skipNextSave = useRef(true);
   const saveTimer = useRef<number | null>(null);
+  /** 409 后停止携带旧版本写矩阵，直至用户显式载入远端 */
+  const matrixPutBlockedRef = useRef(false);
+  const matrixVersionRef = useRef<string | null>(null);
+
+  const applyMatrixVersion = useCallback((version: string | null | undefined) => {
+    const next = version && String(version).trim() ? String(version).trim() : null;
+    matrixVersionRef.current = next;
+    setMatrixVersion(next);
+  }, []);
 
   // 加载：API 优先
   useEffect(() => {
     let cancelled = false;
     skipNextSave.current = true;
+    matrixPutBlockedRef.current = false;
+    setMatrixConflict(null);
     setHydrated(false);
     const local = loadLocal(projectId);
 
@@ -245,9 +301,13 @@ export function useTechnicalPlanEditors(projectId: string) {
           (Array.isArray(remote.chapters) && remote.chapters.length > 0) ||
           !!remote.analysisOverview ||
           !!remote.analysis?.overview ||
-          !!remote.parsedMarkdown;
+          (Array.isArray(remote.responseMatrix) &&
+            remote.responseMatrix.length > 0) ||
+          !!remote.parsedMarkdown ||
+          !!remote.responseMatrixVersion;
         const next = hasRemote ? fromApi(remote, local) : local;
         setState(next);
+        applyMatrixVersion(remote.responseMatrixVersion);
         setPersistSource(hasRemote || remote.updatedAt ? "api" : "local");
         setSelectedOutlineId(next.outline[0]?.id ?? null);
         setSelectedChapterId(null);
@@ -255,6 +315,7 @@ export function useTechnicalPlanEditors(projectId: string) {
       } catch {
         if (cancelled) return;
         setState(local);
+        applyMatrixVersion(null);
         setPersistSource("local");
         setSelectedOutlineId(local.outline[0]?.id ?? null);
         setSelectedChapterId(null);
@@ -272,29 +333,81 @@ export function useTechnicalPlanEditors(projectId: string) {
       cancelled = true;
       if (saveTimer.current) window.clearTimeout(saveTimer.current);
     };
-  }, [projectId]);
+  }, [projectId, applyMatrixVersion]);
 
-  // 保存：debounce PUT + localStorage
+  // 保存：debounce PUT + localStorage；矩阵带版本，409 不静默覆盖
   useEffect(() => {
     if (!hydrated || skipNextSave.current) return;
     saveLocal(projectId, state);
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => {
-      void apiFetch(`/projects/${encodeURIComponent(projectId)}/editor-state`, {
-        method: "PUT",
-        body: JSON.stringify({
-          outline: state.outline,
-          chapters: state.chapters,
-          facts: state.facts,
-          mode: state.mode,
-          analysisOverview: state.analysis.overview || state.analysisOverview,
-          analysis: state.analysis,
-        }),
-      })
-        .then(() => setPersistSource("api"))
-        .catch(() => setPersistSource("local"));
+      const body: Record<string, unknown> = {
+        outline: state.outline,
+        chapters: state.chapters,
+        facts: state.facts,
+        mode: state.mode,
+        analysisOverview: state.analysis.overview || state.analysisOverview,
+        analysis: state.analysis,
+      };
+      const includeMatrix =
+        !matrixPutBlockedRef.current &&
+        (persistSource === "api" || state.responseMatrix.length > 0);
+      if (includeMatrix) {
+        body.responseMatrix = state.responseMatrix;
+        const version = matrixVersionRef.current;
+        if (version) {
+          body.responseMatrixVersion = version;
+        }
+      }
+      const path = `${getApiBase()}/projects/${encodeURIComponent(projectId)}/editor-state`;
+      void (async () => {
+        try {
+          const res = await fetch(path, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          if (res.status === 409) {
+            const raw = (await res.json().catch(() => null)) as {
+              detail?: {
+                message?: string;
+                responseMatrix?: ResponseMatrixItem[];
+                currentResponseMatrixVersion?: string;
+              };
+            } | null;
+            const detail = raw?.detail;
+            const remoteMatrix = Array.isArray(detail?.responseMatrix)
+              ? normalizeResponseMatrix(detail.responseMatrix)
+              : [];
+            const remoteVersion = String(
+              detail?.currentResponseMatrixVersion || "",
+            ).trim();
+            matrixPutBlockedRef.current = true;
+            setMatrixConflict({
+              message:
+                (detail?.message && String(detail.message)) ||
+                "响应矩阵已被其他终端更新，请重新载入后再保存",
+              remoteMatrix,
+              remoteVersion,
+            });
+            // 保留页面本地矩阵，不写 setState 覆盖
+            return;
+          }
+          if (!res.ok) {
+            setPersistSource("local");
+            return;
+          }
+          const saved = (await res.json()) as EditorStateApi;
+          setPersistSource("api");
+          if (saved.responseMatrixVersion) {
+            applyMatrixVersion(saved.responseMatrixVersion);
+          }
+        } catch {
+          setPersistSource("local");
+        }
+      })();
     }, 800);
-  }, [projectId, state, hydrated]);
+  }, [projectId, state, hydrated, persistSource, applyMatrixVersion]);
 
   const targetWordsTotal = useMemo(
     () => countTargetWords(state.outline),
@@ -331,6 +444,11 @@ export function useTechnicalPlanEditors(projectId: string) {
       ...prev,
       analysis,
       analysisOverview: analysis.overview,
+      responseMatrix: reconcileResponseMatrixLinks(
+        mergeResponseMatrix(analysis, prev.responseMatrix),
+        prev.chapters,
+        prev.outline,
+      ),
     }));
   }, []);
 
@@ -341,6 +459,11 @@ export function useTechnicalPlanEditors(projectId: string) {
         ...prev,
         analysis: next,
         analysisOverview: next.overview,
+        responseMatrix: reconcileResponseMatrixLinks(
+          mergeResponseMatrix(next, prev.responseMatrix),
+          prev.chapters,
+          prev.outline,
+        ),
       };
     });
   }, []);
@@ -376,6 +499,81 @@ export function useTechnicalPlanEditors(projectId: string) {
     setState((prev) => ({ ...prev, parsedMarkdown }));
   }, []);
 
+  const refreshResponseMatrix = useCallback(() => {
+    setState((prev) => ({
+      ...prev,
+      responseMatrix: reconcileResponseMatrixLinks(
+        mergeResponseMatrix(prev.analysis, prev.responseMatrix),
+        prev.chapters,
+        prev.outline,
+      ),
+    }));
+  }, []);
+
+  const updateResponseMatrixItem = useCallback(
+    (id: string, patch: Partial<ResponseMatrixItem>) => {
+      setState((prev) => ({
+        ...prev,
+        responseMatrix: reconcileResponseMatrixLinks(
+          normalizeResponseMatrix(
+            prev.responseMatrix.map((item) =>
+              item.id === id ? { ...item, ...patch } : item,
+            ),
+          ),
+          prev.chapters,
+          prev.outline,
+        ),
+      }));
+    },
+    [],
+  );
+
+  const applyResponseMatrixSuggestions = useCallback(
+    (suggestions: ResponseMatrixSuggestion[]) => {
+      if (suggestions.length === 0) return;
+      const bySourceKey = new Map(
+        suggestions.map((suggestion) => [suggestion.sourceKey, suggestion]),
+      );
+      setState((prev) => {
+        const nextItems = prev.responseMatrix.map((item) => {
+          const suggestion = bySourceKey.get(item.sourceKey);
+          if (!suggestion || item.status === "waived") return item;
+          const baseMatches =
+            item.status === suggestion.base.status &&
+            sameIds(item.chapterIds, suggestion.base.chapterIds) &&
+            sameIds(item.outlineNodeIds, suggestion.base.outlineNodeIds);
+          if (!baseMatches) return item;
+          const chapterIds = uniqueIds([...item.chapterIds, ...suggestion.chapterIds]);
+          const outlineNodeIds = uniqueIds([
+            ...item.outlineNodeIds,
+            ...suggestion.outlineNodeIds,
+          ]);
+          const hasSuggestedLink =
+            suggestion.chapterIds.length + suggestion.outlineNodeIds.length > 0;
+          return {
+            ...item,
+            chapterIds,
+            outlineNodeIds,
+            status:
+              item.status === "uncovered" && hasSuggestedLink
+                ? suggestion.status
+                : item.status,
+          };
+        });
+        return {
+          ...prev,
+          // 建议生成后章节或大纲可能已被删除，收敛会移除死链接并把空关联降为未覆盖。
+          responseMatrix: reconcileResponseMatrixLinks(
+            normalizeResponseMatrix(nextItems),
+            prev.chapters,
+            prev.outline,
+          ),
+        };
+      });
+    },
+    [],
+  );
+
   /** 用途：任务成功后从服务端重新拉取 editor-state */
   const reloadFromApi = useCallback(async () => {
     try {
@@ -383,11 +581,35 @@ export function useTechnicalPlanEditors(projectId: string) {
         `/projects/${encodeURIComponent(projectId)}/editor-state`,
       );
       setState((prev) => fromApi(remote, prev));
+      applyMatrixVersion(remote.responseMatrixVersion);
+      matrixPutBlockedRef.current = false;
+      setMatrixConflict(null);
       setPersistSource("api");
     } catch {
       /* 保持本地 */
     }
-  }, [projectId]);
+  }, [projectId, applyMatrixVersion]);
+
+  /**
+   * 用途：冲突后显式采用远端矩阵并恢复保存；不提供静默强制覆盖。
+   * 对接：ResponseMatrixPanel「重新载入远端矩阵」
+   */
+  const reloadRemoteResponseMatrix = useCallback(() => {
+    setMatrixConflict((conflict) => {
+      if (!conflict) return null;
+      setState((prev) => ({
+        ...prev,
+        responseMatrix: reconcileResponseMatrixLinks(
+          normalizeResponseMatrix(conflict.remoteMatrix),
+          prev.chapters,
+          prev.outline,
+        ),
+      }));
+      applyMatrixVersion(conflict.remoteVersion || null);
+      matrixPutBlockedRef.current = false;
+      return null;
+    });
+  }, [applyMatrixVersion]);
 
   const replaceChapterBody = useCallback((id: string, body: string) => {
     setState((prev) => ({
@@ -423,10 +645,18 @@ export function useTechnicalPlanEditors(projectId: string) {
   );
 
   const deleteOutlineNode = useCallback((id: string) => {
-    setState((prev) => ({
-      ...prev,
-      outline: removeNode(prev.outline, id),
-    }));
+    setState((prev) => {
+      const outline = removeNode(prev.outline, id);
+      return {
+        ...prev,
+        outline,
+        responseMatrix: reconcileResponseMatrixLinks(
+          prev.responseMatrix,
+          prev.chapters,
+          outline,
+        ),
+      };
+    });
     setSelectedOutlineId((cur) => (cur === id ? null : cur));
   }, []);
 
@@ -479,7 +709,16 @@ export function useTechnicalPlanEditors(projectId: string) {
           });
         }
       }
-      return { ...prev, outline, chapters: nextChapters };
+      return {
+        ...prev,
+        outline,
+        chapters: nextChapters,
+        responseMatrix: reconcileResponseMatrixLinks(
+          prev.responseMatrix,
+          nextChapters,
+          outline,
+        ),
+      };
     });
     setSelectedOutlineId(outline[0]?.id ?? null);
   }, []);
@@ -602,6 +841,13 @@ export function useTechnicalPlanEditors(projectId: string) {
     mode: state.mode,
     analysisOverview: state.analysis.overview || state.analysisOverview,
     analysis: state.analysis,
+    responseMatrix: state.responseMatrix,
+    responseMatrixVersion: matrixVersion,
+    responseMatrixConflict: matrixConflict,
+    reloadRemoteResponseMatrix,
+    refreshResponseMatrix,
+    updateResponseMatrixItem,
+    applyResponseMatrixSuggestions,
     setAnalysisOverview,
     setAnalysis,
     patchAnalysis,

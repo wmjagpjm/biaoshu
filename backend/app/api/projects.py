@@ -172,6 +172,9 @@ def put_editor_state(
     用途：部分写入编辑状态（仅 body 中出现的字段更新）。
     说明：Pydantic 未传字段为 None 时：outline/chapters/facts/guidance/analysis
     若客户端显式传 null 会清空；前端应只发需要更新的键（见 exclude_unset）。
+    responseMatrix 例外：null 视为未更新，只有 [] 清空，避免整包回写误删映射。
+    二次开发：同时带 responseMatrix 与 responseMatrixVersion 时乐观锁；
+    版本不匹配返回 409 且整包不写。
     """
     # exclude_unset：未出现在 JSON 的字段不覆盖
     payload = body.model_dump(by_alias=False, exclude_unset=True)
@@ -188,6 +191,10 @@ def put_editor_state(
         kwargs["analysis"] = payload["analysis"]
     if "analysis_overview" in payload:
         kwargs["analysis_overview"] = payload["analysis_overview"]
+    if "response_matrix" in payload and payload["response_matrix"] is not None:
+        kwargs["response_matrix"] = payload["response_matrix"]
+    if "response_matrix_version" in payload and payload["response_matrix_version"] is not None:
+        kwargs["response_matrix_version"] = payload["response_matrix_version"]
     if "guidance" in payload:
         kwargs["guidance"] = payload["guidance"]
     if "parsed_markdown" in payload:
@@ -207,12 +214,21 @@ def put_editor_state(
         )
     except ProjectNotFoundError:
         raise HTTPException(status_code=404, detail="项目不存在") from None
+    except editor_state_service.ResponseMatrixVersionConflict as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": exc.message,
+                "responseMatrix": exc.current_matrix,
+                "currentResponseMatrixVersion": exc.current_version,
+            },
+        ) from None
 
     return _editor_out(data)
 
 
 def _editor_out(data: dict) -> EditorStateOut:
-    """用途：service dict → EditorStateOut（含 analysis / 商务字段）。"""
+    """用途：service dict → EditorStateOut（含 analysis / 商务字段 / 矩阵版本）。"""
     return EditorStateOut.model_validate(
         {
             "project_id": data["projectId"],
@@ -222,6 +238,8 @@ def _editor_out(data: dict) -> EditorStateOut:
             "mode": data["mode"],
             "analysis_overview": data["analysisOverview"],
             "analysis": data.get("analysis"),
+            "response_matrix": data.get("responseMatrix"),
+            "response_matrix_version": data.get("responseMatrixVersion") or "",
             "guidance": data["guidance"],
             "parsed_markdown": data.get("parsedMarkdown"),
             "business_qualify": data.get("businessQualify"),

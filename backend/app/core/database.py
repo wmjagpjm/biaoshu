@@ -88,10 +88,11 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
-def ensure_schema_columns() -> None:
+def ensure_schema_columns(target_engine=None) -> None:
     """
     用途：SQLite 个人版轻量加列（create_all 不会改已有表）。
     对接：main.lifespan 启动时调用；列已存在则忽略。
+    二次开发：测试旧库迁移时可传独立 target_engine，避免共享测试库 DDL 锁。
     """
     statements = [
         "ALTER TABLE project_editor_states ADD COLUMN analysis_json TEXT",
@@ -103,6 +104,7 @@ def ensure_schema_columns() -> None:
     # payload_json 在 tasks 表；editor_states 无 payload — 去掉错误那行
     statements = [
         "ALTER TABLE project_editor_states ADD COLUMN analysis_json TEXT",
+        "ALTER TABLE project_editor_states ADD COLUMN response_matrix_json TEXT",
         "ALTER TABLE project_editor_states ADD COLUMN parsed_markdown TEXT",
         "ALTER TABLE project_editor_states ADD COLUMN business_json TEXT",
         "ALTER TABLE project_tasks ADD COLUMN payload_json TEXT",
@@ -111,8 +113,38 @@ def ensure_schema_columns() -> None:
         "ALTER TABLE projects ADD COLUMN linked_project_id VARCHAR(64)",
         "ALTER TABLE kb_chunks ADD COLUMN embedding_json TEXT",
         "ALTER TABLE workspace_settings ADD COLUMN embedding_model VARCHAR(200) DEFAULT ''",
+        "ALTER TABLE project_files ADD COLUMN role VARCHAR(16) NOT NULL DEFAULT 'source'",
+        "ALTER TABLE projects ADD COLUMN source_opportunity_id VARCHAR(64)",
+        "ALTER TABLE bid_opportunities ADD COLUMN source_key VARCHAR(200)",
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_bid_opportunities_workspace_source_key
+        ON bid_opportunities(workspace_id, source_key)
+        """,
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_resources_validate_insert
+        BEFORE INSERT ON resources
+        FOR EACH ROW
+        WHEN NEW.source NOT IN ('system', 'user')
+          OR (NEW.source = 'system' AND NEW.workspace_id IS NOT NULL)
+          OR (NEW.source = 'user' AND NEW.workspace_id IS NULL)
+        BEGIN
+            SELECT RAISE(ABORT, '资源来源与工作空间不一致');
+        END
+        """,
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_resources_validate_update
+        BEFORE UPDATE OF source, workspace_id ON resources
+        FOR EACH ROW
+        WHEN NEW.source NOT IN ('system', 'user')
+          OR (NEW.source = 'system' AND NEW.workspace_id IS NOT NULL)
+          OR (NEW.source = 'user' AND NEW.workspace_id IS NULL)
+        BEGIN
+            SELECT RAISE(ABORT, '资源来源与工作空间不一致');
+        END
+        """,
     ]
-    with engine.begin() as conn:
+    active_engine = target_engine or engine
+    with active_engine.begin() as conn:
         for sql in statements:
             try:
                 conn.exec_driver_sql(sql)

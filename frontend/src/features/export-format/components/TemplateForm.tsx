@@ -1,3 +1,10 @@
+/**
+ * 模块：导出模板配置表单
+ * 用途：编辑版面、标题、正文、表格和图片样式，并应用内置版面与主题预设。
+ * 对接：ExportFormatConfig、useExportTemplates、TemplatePreview。
+ * 二次开发：标题边框仅修饰标题段落；structure 与最小标题左栏未实现时不得暴露为可用能力。
+ */
+
 import { useState } from "react";
 import type { ExportFormatConfig, HeadingStyleConfig } from "../model/exportFormat";
 import {
@@ -27,8 +34,8 @@ type Props = {
 };
 
 /**
- * C 端对齐的模板配置表单
- * 分栏：快捷预设 / 页面 / 六级标题 / 正文 / 表格图片
+ * 用途：按标签页渲染完整模板配置控件，并把变更回传给模板编辑页。
+ * 对接：ExportFormatConfig、版面预设、主题预设。
  */
 export function TemplateForm({
   config,
@@ -53,6 +60,21 @@ export function TemplateForm({
       i === index ? { ...h, ...patch } : h,
     );
     onChange({ ...config, headings });
+  }
+
+  function patchHeadingBorder(
+    patch: Partial<ExportFormatConfig["heading_border"]>,
+  ) {
+    onChange({
+      ...config,
+      heading_border: { ...config.heading_border, ...patch },
+    });
+  }
+
+  function patchHeadingBorderLevelColor(index: number, color: string) {
+    const levelCellColors = [...config.heading_border.level_cell_colors];
+    levelCellColors[index] = color;
+    patchHeadingBorder({ level_cell_colors: levelCellColors });
   }
 
   function patchTable(patch: Partial<ExportFormatConfig["table"]>) {
@@ -482,17 +504,42 @@ export function TemplateForm({
               disabled={disabled}
               checked={config.heading_border.enabled}
               onChange={(e) =>
-                onChange({
-                  ...config,
-                  heading_border: {
-                    ...config.heading_border,
-                    enabled: e.target.checked,
-                  },
-                })
+                patchHeadingBorder({ enabled: e.target.checked })
               }
             />
-            启用章节页框（标题边框装饰）
+            启用标题段落边框与分级底色
           </label>
+          {config.heading_border.enabled && (
+            <div className="ef-form-grid ef-form-grid--3">
+              <div className="field">
+                <label>边框颜色</label>
+                <input
+                  type="color"
+                  disabled={disabled}
+                  value={config.heading_border.border_color || "#cfd8ee"}
+                  onChange={(e) =>
+                    patchHeadingBorder({ border_color: e.target.value })
+                  }
+                />
+              </div>
+              {HEADING_LEVEL_LABELS.map((label, index) => (
+                <div className="field" key={label}>
+                  <label>{label}底色</label>
+                  <input
+                    type="color"
+                    disabled={disabled}
+                    value={
+                      config.heading_border.level_cell_colors[index] ||
+                      "#ffffff"
+                    }
+                    onChange={(e) =>
+                      patchHeadingBorderLevelColor(index, e.target.value)
+                    }
+                  />
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

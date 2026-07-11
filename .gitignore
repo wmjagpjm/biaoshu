@@ -35,3 +35,6 @@ tmp_cend/
 tmp/
 *.sqlite
 *.db
+
+# 本地多代理协作消息箱（运行时数据，不进入仓库）
+.agent-collaboration/

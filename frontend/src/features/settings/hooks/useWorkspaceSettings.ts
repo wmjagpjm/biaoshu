@@ -14,7 +14,7 @@ import { DEFAULT_SETTINGS, type WorkspaceSettings } from "../types";
 const STORAGE_KEY = "biaoshu.settings.v1";
 
 /** 用途：是否走后端设置 API（默认开；VITE_USE_API_SETTINGS=false 时强制本地）。 */
-function useApiSettings(): boolean {
+function shouldUseApiSettings(): boolean {
   const flag = import.meta.env.VITE_USE_API_SETTINGS;
   if (flag === "false" || flag === "0") return false;
   return true;
@@ -48,7 +48,7 @@ export function useWorkspaceSettings() {
   const reload = useCallback(async () => {
     setLoading(true);
     setSaveError(null);
-    if (useApiSettings()) {
+    if (shouldUseApiSettings()) {
       try {
         const remote = await apiFetch<WorkspaceSettings>("/settings");
         const next = { ...DEFAULT_SETTINGS, ...remote };
@@ -86,7 +86,7 @@ export function useWorkspaceSettings() {
       updatedAt: new Date().toISOString(),
     };
 
-    if (useApiSettings()) {
+    if (shouldUseApiSettings()) {
       try {
         const remote = await apiFetch<WorkspaceSettings>("/settings", {
           method: "PUT",

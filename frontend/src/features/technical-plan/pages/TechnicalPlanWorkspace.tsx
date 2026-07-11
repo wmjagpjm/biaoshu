@@ -17,6 +17,7 @@ import { ChapterEditor } from "../components/ChapterEditor";
 import { FactsEditor } from "../components/FactsEditor";
 import { OutlineStepWorkspace } from "../components/OutlineStepWorkspace";
 import { ProjectGuidanceCard } from "../components/ProjectGuidanceCard";
+import { ResponseMatrixPanel } from "../components/ResponseMatrixPanel";
 import { StepStepper } from "../components/StepStepper";
 import { useProjectGuidance } from "../hooks/useProjectGuidance";
 import { useProjectPipeline } from "../hooks/useProjectPipeline";
@@ -26,11 +27,12 @@ import {
   useTechnicalPlanEditors,
 } from "../hooks/useTechnicalPlanEditors";
 import { markdownToOutline } from "../lib/outlineTree";
+import { normalizeResponseMatrixSuggestions } from "../lib/responseMatrix";
 import {
   getPendingFileNames,
   getProjectAsync,
 } from "../lib/projectStore";
-import type { TechnicalPlanStepId } from "../types";
+import type { ResponseMatrixSuggestion, TechnicalPlanStepId } from "../types";
 import { serializeBidAnalysis } from "../types";
 import "./TechnicalPlan.css";
 
@@ -119,6 +121,9 @@ export function TechnicalPlanWorkspace() {
     null,
   );
   const [taskTip, setTaskTip] = useState("");
+  const [matrixSuggestions, setMatrixSuggestions] = useState<
+    ResponseMatrixSuggestion[]
+  >([]);
 
   useEffect(() => {
     if (projectId) {
@@ -201,6 +206,36 @@ export function TechnicalPlanWorkspace() {
       setRevisePreview(res.resultSummary);
       setRevisePreviewStep(stepId);
     }
+  }
+
+  async function requestResponseMatrixSuggestions() {
+    try {
+      const task = await pipeline.runTask("response_match");
+      if (task.status !== "success") return;
+      const suggestions = normalizeResponseMatrixSuggestions(
+        task.result?.suggestions,
+      );
+      setMatrixSuggestions(suggestions);
+      setTaskTip(
+        suggestions.length > 0
+          ? `已生成 ${suggestions.length} 条待确认映射建议`
+          : "未生成可用映射建议，请人工维护响应矩阵",
+      );
+    } catch {
+      /* 错误已在 pipeline */
+    }
+  }
+
+  function applyResponseMatrixSuggestions(sourceKeys: string[]) {
+    const selected = matrixSuggestions.filter((item) =>
+      sourceKeys.includes(item.sourceKey),
+    );
+    if (selected.length === 0) return;
+    editors.applyResponseMatrixSuggestions(selected);
+    setMatrixSuggestions((current) =>
+      current.filter((item) => !sourceKeys.includes(item.sourceKey)),
+    );
+    setTaskTip("已应用所选建议；人工修改过或不响应的条目会保持原样");
   }
 
   return (
@@ -744,6 +779,21 @@ export function TechnicalPlanWorkspace() {
             </div>
           </section>
 
+          <ResponseMatrixPanel
+            items={editors.responseMatrix}
+            chapters={editors.chapters}
+            outline={editors.outline}
+            onRefresh={editors.refreshResponseMatrix}
+            onPatch={editors.updateResponseMatrixItem}
+            suggestions={matrixSuggestions}
+            suggestionBusy={pipeline.busy && pipeline.lastTask?.type === "response_match"}
+            onRequestSuggestions={() => void requestResponseMatrixSuggestions()}
+            onApplySuggestions={applyResponseMatrixSuggestions}
+            onClearSuggestions={() => setMatrixSuggestions([])}
+            conflictMessage={editors.responseMatrixConflict?.message ?? null}
+            onReloadRemote={editors.reloadRemoteResponseMatrix}
+          />
+
           <ProjectGuidanceCard guidance={guidance} onChange={updateGuidance} mode="edit" />
 
           <div className="card card-pad" style={{ paddingTop: 4, paddingBottom: 4 }}>
@@ -997,6 +1047,8 @@ export function TechnicalPlanWorkspace() {
             onSelect={editors.setSelectedChapterId}
             onChangeBody={editors.updateChapterBody}
             onChangeTitle={editors.updateChapterTitle}
+            onUploadImage={pipeline.uploadImage}
+            imageBusy={pipeline.busy}
           />
 
           {selectedChapter && (

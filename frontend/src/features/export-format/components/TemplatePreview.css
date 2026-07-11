@@ -1,3 +1,10 @@
+/*
+ * 模块：导出模板预览样式
+ * 用途：稳定呈现纸张、标题段落边框、正文、表格和题注的预览布局。
+ * 对接：TemplatePreview.tsx；exportFormatCss.ts 注入的 --ef-* 变量。
+ * 二次开发：新增 Word 样式时先定义稳定尺寸，再同步前端近似预览。
+ */
+
 .ef-preview-wrap {
   width: 100%;
   overflow: auto;
@@ -74,6 +81,26 @@
   text-align: var(--ef-h3-align);
   line-height: var(--ef-h3-line-height);
   margin: var(--ef-h3-spacing-before) 0 var(--ef-h3-spacing-after);
+}
+
+.ef-heading-frame {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 4px 7px;
+  border: var(--ef-chapter-frame-border);
+  overflow-wrap: anywhere;
+}
+
+.ef-heading-frame--level-1 {
+  background: var(--ef-chapter-row-1-background);
+}
+
+.ef-heading-frame--level-2 {
+  background: var(--ef-chapter-row-2-background);
+}
+
+.ef-heading-frame--level-3 {
+  background: var(--ef-chapter-row-3-background);
 }
 
 .ef-body {

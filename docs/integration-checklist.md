@@ -1,6 +1,6 @@
 # 前后端联调清单
 
-> 目标：验证 health / 项目 / 设置 / revise / editor-state 已闭环。  
+> 目标：验证 health / 项目 / 设置 / revise / editor-state / 响应矩阵 / 本地标讯库 / 资源中心及受控同步已闭环。
 > Key **明文**存储与回显（保密机决策）。
 
 ## 1. 一键启动
@@ -9,7 +9,11 @@
 仓库根目录双击：Start-Biaoshu-Dev.bat
 ```
 
-若双击「无反应」或窗口一闪就关：
+启动脚本会在后台静默拉起未运行的服务，不等待、不自动打开浏览器；已监听端口会直接返回。启动后直接访问前端地址验证。
+
+Grok-Codex 本地协作：让 Grok 执行 `tools/agent-collaboration/Connect-Grok.ps1` 接入；协议与后续状态消息见 `docs/agent-collaboration.md`。消息目录仅用于本机运行时，不提交 Git。
+
+若访问地址失败：
 
 1. 确认点的是 **`Start-Biaoshu-Dev.bat`**（不是 `.url` 快捷方式）
 2. 右键 bat → **以管理员身份运行**（一般不需要）
@@ -19,9 +23,9 @@
 4. 仍失败时在资源管理器地址栏输入 `cmd` 回车，再执行：  
    `cd /d C:\Users\Administrator\biaoshu`  
    `Start-Biaoshu-Dev.bat`  
-   看窗口报错文字
+   再用 `netstat -ano | findstr :8000` 与 `netstat -ano | findstr :5173` 检查监听端口
 
-成功时会**额外弹出两个黑窗口**（Biaoshu-API / Biaoshu-Vite），启动器窗口也会 `pause` 停住。
+成功时不会弹出服务窗口或启动器等待窗口；直接访问前端与健康检查地址确认服务状态。
 
 或分别启动：
 
@@ -71,9 +75,15 @@ cd C:\Users\Administrator\biaoshu\backend
 1. **创建** → 创建技术标项目 → 进入工作区  
 2. **刷新**「我的项目」→ 新项目仍在  
 3. **分析步**改概述 → 刷新页面 → 概述仍在（editor-state）  
-4. **设置**填真实 Key → 测试连通  
-5. **分析步**反馈面板提交意见 → history 有摘要 → 「修订结果预览」→ 可替换概述  
-6. **停掉后端** → 状态变红；列表提示本地兜底，不白屏  
+4. **分析步响应矩阵**编辑技术要求/评分点后出现矩阵项 → 勾选章节/大纲并保存备注 → 刷新后仍保持；点击「智能建议」后逐条勾选应用，人工修改过或“不响应”条目不应被覆盖；删除或重生成大纲后，无效引用不计入覆盖率；导出技术标 Word 后应有「六、响应矩阵」表且不展示失效关联或内部 ID
+5. **设置**填真实 Key → 测试连通
+6. **分析步**反馈面板提交意见 → history 有摘要 → 「修订结果预览」→ 可替换概述
+7. **导出模板**启用「标题段落边框与分级底色」→ 预览标题出现边框 → 设为默认后导出 Word，技术标/商务标标题均有对应样式
+8. **技术标**上传 Markdown 后点「轻量解析」→ 最近任务由 `pending/running` 更新到 `success`，预览写入解析结果
+9. **商务标**上传文件后运行 `parse`，或配置用户自备 Key 后运行一个 `biz_*` 任务 → 状态可更新并成功回填
+10. **正文生成**页点击图片图标上传 PNG/JPEG/GIF → 当前光标位置写入 `biaoshu-image://file_...`；导出 Word 后有图片与可选题注；手工删掉该图片后再次导出，应出现“图片引用无效”而非请求外网
+11. 临时阻断单任务 `/events` 请求后重新发起任务 → 页面先查询一次任务，再以约 2 秒间隔查询至终态；不得无限重连 SSE
+12. **停掉后端** → 状态变红；列表提示本地兜底，不白屏
 
 ## 5. 自动化测试
 
@@ -85,6 +95,8 @@ cd ..\frontend
 npm run build
 ```
 
+当前基线：后端 **123 passed**；前端构建通过（仅有既有单包体积警告）。
+
 ## 6. 已接 API 一览
 
 | 方法 | 路径 |
@@ -92,10 +104,22 @@ npm run build
 | GET | `/api/health` |
 | GET/POST | `/api/projects` |
 | GET/PATCH/DELETE | `/api/projects/{id}` |
-| GET/PUT | `/api/projects/{id}/editor-state` |
+| GET | `/api/projects/{id}/tasks/{taskId}/events`（SSE） |
+| GET/PUT | `/api/projects/{id}/editor-state`（含 responseMatrix） |
+| GET/POST | `/api/projects/{id}/files`（仅招标源文件） |
+| GET/POST | `/api/projects/{id}/images`（仅项目正文图片） |
+| GET | `/api/projects/{id}/images/{fileId}`（受控预览） |
 | GET/PUT | `/api/settings` |
 | POST | `/api/llm/test` |
 | POST | `/api/projects/{id}/artifacts/{artifactId}/revise` |
+| GET/POST | `/api/opportunities` |
+| GET/PATCH/DELETE | `/api/opportunities/{id}` |
+| POST | `/api/opportunities/{id}/projects` |
+| POST | `/api/opportunities/import`（本机 CSV/JSON 整批导入） |
+| GET/POST | `/api/resources` |
+| GET/PATCH/DELETE | `/api/resources/{id}` |
+| POST | `/api/resources/{id}/view` |
+| GET | `/api/resources/sync-sources`（仅同步状态，不含地址/公钥/错误原文） |
 
 ## 7. 本机日用主链路（目标 A 加强版）
 
@@ -104,13 +128,15 @@ npm run build
 | 上传 | document 步选择 PDF/DOCX/TXT |
 | 解析 | 「轻量解析」（**异步任务**，顶部进度条） |
 | 本地 MinerU | `/local-parser` 粘贴 Markdown 回传，或 `POST .../parse-callback` |
-| 分析 | 「AI 招标分析」→ 结构化概述/技术要求/废标风险/评分点（可编辑） |
-| 导出样式 | 模板设置「设为默认」同步到后端，导出 Word 应用字体/标题 |
+| 分析 | 「AI 招标分析」→ 结构化概述/技术要求/废标风险/评分点（可编辑），并生成可手工维护的响应矩阵 |
+| 响应矩阵 | 在分析步把技术要求/评分点映射到大纲节点和章节；可调用用户已配置模型生成待确认建议，逐条应用后才保存；删除大纲/章节后无效引用不计入覆盖；技术标 Word 导出包含收敛后的矩阵表 |
+| 导出样式 | 模板设置「设为默认」同步到后端，导出 Word 应用字体、标题编号、标题段落边框与分级底色 |
 | 大纲 | 「AI 生成大纲」 |
 | 正文 | 「AI 生成本章」或 **「生成全部空章节」** |
-| 导出 | 「生成并下载 Word」（含封面信息） |
+| 正文图片 | 正文工具栏图标上传 PNG/JPEG/GIF，写入项目内 `biaoshu-image://file_...` 引用 |
+| 导出 | 「生成并下载 Word」（含封面、项目内正文图片及无效引用 warning） |
 
-任务默认异步：`POST /tasks` 立即返回，前端轮询 `GET /tasks/{id}`。  
+任务默认异步：`POST /tasks` 立即返回，前端优先订阅 `GET /tasks/{id}/events` 的 `snapshot` / `task` / `heartbeat`；流不可用时立即 GET 一次，再以 2 秒间隔轮询。SSE v1 仅承诺默认工作空间。
 测试可用：`POST /tasks?sync=true`。
 
 ## 8. 商务标六步（MVP）
@@ -140,11 +166,31 @@ npm run build
 2. `GET /api/knowledge/search?q=` 结果可含 `vectorScore`  
 3. 设置页可选 `embeddingModel`（OpenAI 兼容 /embeddings）  
 
-## 11. 仍未接（后续）
+## 11. 本地标讯库
 
-SSE 推送、Celery、真 MinerU 安装包、标讯/资源 API、多用户鉴权、导出标题边框。
+1. 打开 `/bid-opportunity`；空工作空间显示空态，使用“新增标讯”录入标题、截止日期等字段。
+2. 新增一个截止日超过 7 天的标讯，按关键字、地区和状态筛选后仍可找到；修改后刷新页面，字段应保持。
+3. 从未截止标讯创建技术方案项目，应跳转项目正文页；删除原标讯后，项目仍存在但 `sourceOpportunityId` 为空。
+4. 将标讯截止日改为昨天后，“创建技术方案项目”不可用。
+5. 仅演示环境需要初始数据时，在 `backend/.env` 设置 `SEED_SAMPLE_OPPORTUNITIES=true` 后重启；默认不得自动写入示例记录。
+6. 点击“导入标讯”选择 UTF-8 CSV 或 JSON；合法记录导入后出现在列表。重复 `sourceKey` 应统计为跳过；任一行日期/标题非法时弹层显示行号且列表不新增记录。
+7. 导入仅接受本机 CSV/JSON（默认上限 2 MiB、2,000 行）；不得填写外部 URL、Token 或附件路径。
 
-## 7. 知识库 RAG 简版
+## 12. 资源中心
+
+1. 打开 `/resources`，默认显示六条“系统精选”资源；其 `workspaceId` 为 `null`，页面没有编辑或删除按钮。
+2. 新增一条资源并填写标题、正文 Markdown、标签和色调；保存后刷新页面，资源应保持并显示“我的资源”。
+3. 点击用户资源打开详情，浏览量应增加一次；刷新后数量仍保持，且资源排序不因浏览而变化。
+4. 编辑、删除自己的资源应成功；系统资源的 `PATCH` 和 `DELETE` 应返回 403。
+5. 资源正文只按文本展示；不配置也不应存在 `VITE_RESOURCES_URL`、浏览器远程 fetch 或 mock 回退。
+6. 默认不设 `RESOURCE_SYNC_SOURCES` 时，在 `backend` 执行 `.\.venv\Scripts\python.exe scripts\sync_resources.py`，应提示未配置来源且不发生网络请求。
+7. 使用 [资源同步清单协议](resource-sync-manifest.md) 配置测试发布方后运行命令；新资源应以只读“系统精选”出现，重复同版本清单不重复创建。`GET /api/resources/sync-sources` 只返回名称、状态和计数，不返回 URL、公钥或远端错误。
+
+## 13. 仍未接（后续）
+
+Celery、真 MinerU 安装包、外部标讯数据源、多用户鉴权、SSE 事件游标/多工作空间鉴权、标题整章布局语义、响应矩阵多端冲突处理与端到端 UI 自动化。
+
+## 14. 知识库 RAG 简版
 
 1. 打开「知识库」→ 上传 md/txt/docx/pdf → 状态「已就绪」、分块数 > 0  
 2. 浏览器或 curl：`GET http://127.0.0.1:8000/api/knowledge/search?q=关键词` 有 items  

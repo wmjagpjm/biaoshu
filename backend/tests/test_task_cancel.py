@@ -4,9 +4,22 @@
   - pending/running 可取消；已结束任务 400
   - exportFormat 含页眉页脚等扩展字段时仍可导出
 对接：POST .../tasks/{id}/cancel；export 任务
+二次开发：新增异步任务类型时，取消测试必须等待对应后台线程退出后再结束夹具，避免拆表竞态。
 """
 
+import threading
 import time
+
+
+def _wait_for_task_thread(task_id: str, timeout_seconds: float = 2.0) -> None:
+    """用途：等待指定后台任务线程退出，避免 pytest 夹具拆表时仍有写库操作。"""
+    deadline = time.monotonic() + timeout_seconds
+    thread_name = f"task-{task_id}"
+    while time.monotonic() < deadline:
+        if not any(thread.name == thread_name and thread.is_alive() for thread in threading.enumerate()):
+            return
+        time.sleep(0.02)
+    raise AssertionError(f"后台任务线程未按时退出：{task_id}")
 
 
 def test_cancel_running_parse_task(client):
@@ -46,6 +59,8 @@ def test_cancel_running_parse_task(client):
             time.sleep(0.05)
         assert final is not None
         assert final["status"] in ("success", "failed", "cancelled")
+
+    _wait_for_task_thread(tid)
 
 
 def test_cancel_finished_task_rejected(client):

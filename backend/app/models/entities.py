@@ -10,9 +10,18 @@
   - 大纲/事实/章节等产物建议新表（artifact），勿把大 JSON 无限塞进 Project
 """
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -82,8 +91,194 @@ class Project(Base):
     # technical | business
     kind: Mapped[str] = mapped_column(String(32), nullable=False, default="technical")
     linked_project_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # 标讯删除时清空关联；项目本身及其文件、任务不受影响。
+    source_opportunity_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("bid_opportunities.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     workspace: Mapped["Workspace"] = relationship(back_populates="projects")
+
+
+class BidOpportunityRow(Base):
+    """
+    用途：工作空间内本地标讯线索；截止状态由服务端按 deadline 实时计算，不持久化。
+    对接：/api/opportunities；标讯页；从标讯创建技术标项目。
+    二次开发：外部抓取、RSS 或导入必须保留 workspace 归属；source_key 仅是本地不透明去重键，不得写入外部 URL、密钥或抓取状态。
+    """
+
+    __tablename__ = "bid_opportunities"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "source_key",
+            name="uq_bid_opportunities_workspace_source_key",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    buyer: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    region: Mapped[str] = mapped_column(String(100), nullable=False, default="其他")
+    budget_label: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    deadline: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    tags_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    source_label: Mapped[str] = mapped_column(
+        String(200), nullable=False, default="本地录入"
+    )
+    # 离线导入的可选不透明来源键；SQLite 对 NULL 唯一约束允许多行，手工录入不受影响
+    source_key: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
+class ResourceRow(Base):
+    """
+    模块：资源中心持久化实体
+    用途：存储系统精选 Markdown 资源与 workspace 自建资源；浏览量由服务端维护。
+    对接：resource_service；/api/resources；frontend/src/features/resources。
+    二次开发：外部同步应另建来源与审计模型，勿把 URL、密钥或抓取状态写入本表。
+    """
+
+    __tablename__ = "resources"
+    __table_args__ = (
+        CheckConstraint(
+            "(source = 'system' AND workspace_id IS NULL) "
+            "OR (source = 'user' AND workspace_id IS NOT NULL)",
+            name="ck_resources_source_workspace",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # system 资源全局可见且不归属 workspace；user 资源必须归属一个 workspace
+    workspace_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    # system | user；写权限由 resource_service 校验，不能信任客户端字段
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="user")
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    category: Mapped[str] = mapped_column(String(100), nullable=False, default="资源")
+    tags_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    body_markdown: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    tone: Mapped[str] = mapped_column(String(16), nullable=False, default="blue")
+    view_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
+class ResourceSyncSourceRow(Base):
+    """
+    模块：受控资源同步来源实体
+    用途：记录服务端配置的签名清单来源、公共密钥指纹和最近同步摘要，不向 ResourceRow 混入连接信息。
+    对接：resource_sync_service；backend/scripts/sync_resources.py；GET /api/resources/sync-sources。
+    二次开发：来源 URL 只能由服务端配置驱动；不得从浏览器请求、资源正文或工作空间记录写入。
+    """
+
+    __tablename__ = "resource_sync_sources"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    label: Mapped[str] = mapped_column(String(200), nullable=False)
+    manifest_url: Mapped[str] = mapped_column(String(1000), nullable=False)
+    public_key_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    last_manifest_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_manifest_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    last_status: Mapped[str] = mapped_column(String(32), nullable=False, default="never")
+    last_attempted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_success_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class ResourceSyncRunRow(Base):
+    """
+    模块：受控资源同步运行审计实体
+    用途：保存每次同步的有限状态、数量与脱敏错误摘要，便于本机管理员追踪但不泄露远端正文或密钥。
+    对接：resource_sync_service；GET /api/resources/sync-sources；管理员同步命令。
+    二次开发：错误消息只能使用服务端错误码对应的安全文案；不得写入响应体、完整 URL、请求头或 Token。
+    """
+
+    __tablename__ = "resource_sync_runs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    source_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("resource_sync_sources.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="running")
+    created_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    skipped_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_code: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    error_message: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class ResourceSyncItemRow(Base):
+    """
+    模块：受控资源同步条目映射实体
+    用途：将发布方稳定条目键映射到本地只读资源，并保存正文摘要与最近出现时间以支持幂等更新。
+    对接：resource_sync_service；ResourceSyncSourceRow；ResourceRow。
+    二次开发：外部键只能是协议内不透明标识；不得存 URL、附件路径、HTML 或任何发布方密钥。
+    """
+
+    __tablename__ = "resource_sync_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_id",
+            "external_key",
+            name="uq_resource_sync_items_source_external_key",
+        ),
+        UniqueConstraint("resource_id", name="uq_resource_sync_items_resource_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    source_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("resource_sync_sources.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    external_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    resource_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("resources.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
 
 
 class WorkspaceSettingsRow(Base):
@@ -145,6 +340,8 @@ class ProjectEditorStateRow(Base):
     analysis_overview: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 结构化招标分析：overview + techRequirements + rejectionRisks + scoringPoints
     analysis_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 响应矩阵：评分点/技术要求到大纲与章节的手工映射
+    response_matrix_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     guidance_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 轻量解析后的招标文件 Markdown（document 步）
     parsed_markdown: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -160,7 +357,8 @@ class ProjectEditorStateRow(Base):
 class ProjectFileRow(Base):
     """
     用途：项目上传文件元数据；实体文件在 uploads/{project_id}/ 目录。
-    对接：POST /api/projects/{id}/files
+    对接：POST /api/projects/{id}/files、POST /api/projects/{id}/images。
+    二次开发：role=source|image；不得以文件名、路径或客户端 MIME 代替该角色和项目归属校验。
     """
 
     __tablename__ = "project_files"
@@ -176,6 +374,10 @@ class ProjectFileRow(Base):
     stored_name: Mapped[str] = mapped_column(String(500), nullable=False)
     content_type: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # source=招标/解析源文件；image=正文受控图片，旧数据默认 source
+    role: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="source", server_default="source", index=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

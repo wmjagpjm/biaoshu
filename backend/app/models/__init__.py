@@ -6,6 +6,7 @@
 """
 
 from app.models.entities import (
+    BidOpportunityRow,
     KbChunkRow,
     KbDocumentRow,
     KbFolderRow,
@@ -13,6 +14,10 @@ from app.models.entities import (
     ProjectEditorStateRow,
     ProjectFileRow,
     ProjectTaskRow,
+    ResourceRow,
+    ResourceSyncItemRow,
+    ResourceSyncRunRow,
+    ResourceSyncSourceRow,
     Workspace,
     WorkspaceSettingsRow,
 )
@@ -27,4 +32,9 @@ __all__ = [
     "KbFolderRow",
     "KbDocumentRow",
     "KbChunkRow",
+    "BidOpportunityRow",
+    "ResourceRow",
+    "ResourceSyncSourceRow",
+    "ResourceSyncRunRow",
+    "ResourceSyncItemRow",
 ]

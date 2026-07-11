@@ -13,14 +13,19 @@
 
 from __future__ import annotations
 
+import logging
 import secrets
+import shutil
 from datetime import datetime, timezone
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.config import Settings
+from app.core.config import Settings, get_settings
 from app.models.entities import Project, Workspace
+
+logger = logging.getLogger(__name__)
 
 # 与前端 ProjectStatus 保持一致
 ALLOWED_STATUS = frozenset(
@@ -105,12 +110,16 @@ def create_project(
     word_count: int = 0,
     kind: str = "technical",
     linked_project_id: str | None = None,
+    source_opportunity_id: str | None = None,
+    commit: bool = True,
 ) -> Project:
     """
     用途：创建项目并落库。
     规则：空名称→未命名；非法 status→draft；步骤钳制 1–6；word_count≥0；
       kind 非法则 technical。
-    对接：POST /api/projects
+    对接：POST /api/projects；opportunity_service.create_project_from_opportunity
+    source_opportunity_id：仅受控立项路径写入；普通项目创建保持 None。
+    commit=False：由调用方与标讯校验合并为单次事务，调用方必须负责 commit/rollback。
     """
     cleaned_kind = kind if kind in ALLOWED_KINDS else "technical"
     default_name = (
@@ -132,10 +141,14 @@ def create_project(
         word_count=max(0, word_count),
         kind=cleaned_kind,
         linked_project_id=linked_project_id,
+        source_opportunity_id=source_opportunity_id,
     )
     db.add(project)
-    db.commit()
-    db.refresh(project)
+    if commit:
+        db.commit()
+        db.refresh(project)
+    else:
+        db.flush()
     return project
 
 
@@ -185,9 +198,20 @@ def update_project(
 
 def delete_project(db: Session, workspace_id: str, project_id: str) -> None:
     """
-    用途：物理删除项目（当前无级联产物表；后续有 artifact 需改级联或软删）。
+    用途：物理删除项目、级联数据库产物并清理 uploads/{project_id} 磁盘目录。
     对接：DELETE /api/projects/{id}
+    二次开发：对象存储或软删除上线后改为延迟清理；不得在 commit 前删除目录。
     """
     project = get_project(db, workspace_id, project_id)
     db.delete(project)
     db.commit()
+    upload_root = Path(get_settings().upload_dir).resolve()
+    project_dir = (upload_root / project_id).resolve()
+    if project_dir.is_relative_to(upload_root):
+        try:
+            shutil.rmtree(project_dir)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            # 数据已删除时不回滚；保留异常栈，便于运维清理遗留文件。
+            logger.warning("删除项目后清理上传目录失败：%s", project_id, exc_info=True)
