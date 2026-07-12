@@ -1,8 +1,8 @@
 /**
  * 模块：响应矩阵面板
  * 用途：编辑技术要求/评分点到章节和大纲节点的可追溯映射；展示多端冲突并支持显式载入远端。
- * 对接：useTechnicalPlanEditors.responseMatrix / responseMatrixConflict；response_match 任务。
- * 二次开发：保持为受控组件；冲突时禁止静默覆盖，只能走 onReloadRemote。
+ * 对接：useTechnicalPlanEditors.responseMatrix / responseMatrixConflict；串行 response_match。
+ * 二次开发：保持为受控组件；冲突时禁止静默覆盖；批次进度仅展示，不写 editor-state。
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -60,6 +60,8 @@ export function ResponseMatrixPanel(props: {
   onPatch: (id: string, patch: Partial<ResponseMatrixItem>) => void;
   suggestions: ResponseMatrixSuggestion[];
   suggestionBusy: boolean;
+  /** 串行候选分批进度文案，如「候选批次 2/5 · 已累计 12 条待确认」 */
+  suggestionProgressLabel?: string | null;
   onRequestSuggestions: () => void;
   onApplySuggestions: (sourceKeys: string[]) => void;
   onClearSuggestions: () => void;
@@ -129,6 +131,9 @@ export function ResponseMatrixPanel(props: {
           <div className="response-matrix__summary">
             {coveredCount}/{props.items.length} 已建立覆盖
             {invalidCount > 0 ? ` · ${invalidCount} 个失效引用` : ""}
+            {props.suggestionProgressLabel
+              ? ` · ${props.suggestionProgressLabel}`
+              : ""}
           </div>
         </div>
         <div className="tp-toolbar__spacer" />
@@ -137,6 +142,7 @@ export function ResponseMatrixPanel(props: {
           className="btn btn-ghost btn-sm"
           disabled={props.suggestionBusy || props.items.length === 0}
           onClick={props.onRequestSuggestions}
+          title={props.suggestionProgressLabel || "按候选章节/大纲分批串行生成建议"}
         >
           <Sparkles size={14} /> {props.suggestionBusy ? "匹配中…" : "智能建议"}
         </button>
@@ -183,9 +189,14 @@ export function ResponseMatrixPanel(props: {
         </div>
       ) : null}
 
-      {props.suggestions.length > 0 ? (
+      {props.suggestions.length > 0 || props.suggestionBusy ? (
         <div className="response-matrix__suggestion-actions">
-          <span>已生成 {props.suggestions.length} 条待确认建议</span>
+          <span>
+            {props.suggestionProgressLabel ||
+              (props.suggestions.length > 0
+                ? `已生成 ${props.suggestions.length} 条待确认建议`
+                : "正在生成映射建议…")}
+          </span>
           <div className="tp-toolbar__spacer" />
           <button
             type="button"

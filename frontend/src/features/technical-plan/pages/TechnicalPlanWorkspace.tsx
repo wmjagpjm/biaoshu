@@ -27,7 +27,10 @@ import {
   useTechnicalPlanEditors,
 } from "../hooks/useTechnicalPlanEditors";
 import { markdownToOutline } from "../lib/outlineTree";
-import { normalizeResponseMatrixSuggestions } from "../lib/responseMatrix";
+import {
+  mergeResponseMatrixSuggestions,
+  normalizeResponseMatrixSuggestions,
+} from "../lib/responseMatrix";
 import {
   getPendingFileNames,
   getProjectAsync,
@@ -102,11 +105,32 @@ const STEP_IDS: TechnicalPlanStepId[] = [
  * 模块：技术方案工作区
  * 用途：六步流水线 + 异步任务 + 反馈修订 + 知识库引用展示。
  *   - 取消任务、大纲 revise「应用到大纲树」、生成后展示 kbCitations
+ *   - 响应矩阵智能建议：串行候选分批、本地累计、禁止自动写 editor-state
  * 对接：
  *   - useProjectPipeline / useTechnicalPlanEditors / useProjectGuidance
- *   - editor-state、POST .../tasks、POST .../revise
- * 二次开发：勿在此堆业务；任务与持久化进 hooks。
+ *   - editor-state、POST .../tasks（response_match payload.candidateBatchIndex）、POST .../revise
+ * 二次开发：勿在此堆业务；任务与持久化进 hooks；分批合并用 mergeResponseMatrixSuggestions。
  */
+
+type MatrixMatchProgress = {
+  current: number;
+  total: number;
+  accumulated: number;
+  status: "idle" | "running" | "success" | "failed" | "cancelled";
+};
+
+function readBatchMeta(result: Record<string, unknown> | null | undefined) {
+  /** 用途：从 response_match 任务结果读取批次元数据；旧后端缺字段时视为单批。 */
+  const indexRaw = Number(result?.candidateBatchIndex);
+  const countRaw = Number(result?.candidateBatchCount);
+  const index = Number.isFinite(indexRaw) && indexRaw >= 0 ? Math.floor(indexRaw) : 0;
+  const total =
+    Number.isFinite(countRaw) && countRaw >= 1 ? Math.floor(countRaw) : 1;
+  const isLast =
+    result?.isLastCandidateBatch === true || index + 1 >= total;
+  return { index, total, isLast };
+}
+
 export function TechnicalPlanWorkspace() {
   const { projectId = "", step } = useParams<{ projectId: string; step?: string }>();
   const [project, setProject] = useState<Project | null | undefined>(undefined);
@@ -124,6 +148,11 @@ export function TechnicalPlanWorkspace() {
   const [matrixSuggestions, setMatrixSuggestions] = useState<
     ResponseMatrixSuggestion[]
   >([]);
+  const [matchProgress, setMatchProgress] = useState<MatrixMatchProgress | null>(
+    null,
+  );
+  /** 代次：项目切换、重入智能建议或取消后，丢弃迟到的串行批结果 */
+  const matchSessionRef = useRef(0);
 
   useEffect(() => {
     if (projectId) {
@@ -150,6 +179,12 @@ export function TechnicalPlanWorkspace() {
     return () => {
       cancelled = true;
     };
+  }, [projectId]);
+
+  useEffect(() => {
+    matchSessionRef.current += 1;
+    setMatrixSuggestions([]);
+    setMatchProgress(null);
   }, [projectId]);
 
   if (project === undefined) {
@@ -209,20 +244,102 @@ export function TechnicalPlanWorkspace() {
   }
 
   async function requestResponseMatrixSuggestions() {
+    const session = ++matchSessionRef.current;
+    let accumulated: ResponseMatrixSuggestion[] = [];
+    setMatrixSuggestions([]);
+    setMatchProgress({
+      current: 1,
+      total: 1,
+      accumulated: 0,
+      status: "running",
+    });
+    setTaskTip("正在串行拉取候选批次建议…");
+
     try {
-      const task = await pipeline.runTask("response_match");
-      if (task.status !== "success") return;
-      const suggestions = normalizeResponseMatrixSuggestions(
-        task.result?.suggestions,
-      );
-      setMatrixSuggestions(suggestions);
-      setTaskTip(
-        suggestions.length > 0
-          ? `已生成 ${suggestions.length} 条待确认映射建议`
-          : "未生成可用映射建议，请人工维护响应矩阵",
-      );
+      for (let batchIndex = 0; ; batchIndex += 1) {
+        if (matchSessionRef.current !== session) return;
+
+        const task = await pipeline.runTask("response_match", {
+          candidateBatchIndex: batchIndex,
+        });
+
+        if (matchSessionRef.current !== session) return;
+
+        if (task.status === "cancelled") {
+          setMatchProgress({
+            current: batchIndex + 1,
+            total: Math.max(batchIndex + 1, 1),
+            accumulated: accumulated.length,
+            status: "cancelled",
+          });
+          setTaskTip(
+            accumulated.length > 0
+              ? `已取消；保留已成功批次的 ${accumulated.length} 条待确认建议`
+              : "智能建议已取消",
+          );
+          return;
+        }
+
+        if (task.status !== "success") {
+          setMatchProgress({
+            current: batchIndex + 1,
+            total: Math.max(batchIndex + 1, 1),
+            accumulated: accumulated.length,
+            status: "failed",
+          });
+          setTaskTip(
+            accumulated.length > 0
+              ? `候选批次 ${batchIndex + 1} 失败，已停止后续批次；保留已累计 ${accumulated.length} 条建议`
+              : task.error || task.message || "智能建议失败",
+          );
+          return;
+        }
+
+        const batchSuggestions = normalizeResponseMatrixSuggestions(
+          task.result?.suggestions,
+        );
+        accumulated = mergeResponseMatrixSuggestions(
+          accumulated,
+          batchSuggestions,
+        );
+        setMatrixSuggestions(accumulated);
+
+        const meta = readBatchMeta(task.result);
+        setMatchProgress({
+          current: meta.index + 1,
+          total: meta.total,
+          accumulated: accumulated.length,
+          status: meta.isLast ? "success" : "running",
+        });
+        setTaskTip(
+          `候选批次 ${meta.index + 1}/${meta.total} · 已累计 ${accumulated.length} 条待确认`,
+        );
+
+        if (meta.isLast) {
+          if (accumulated.length === 0) {
+            setTaskTip("未生成可用映射建议，请人工维护响应矩阵");
+          }
+          return;
+        }
+      }
     } catch {
-      /* 错误已在 pipeline */
+      if (matchSessionRef.current !== session) return;
+      setMatchProgress((prev) =>
+        prev
+          ? { ...prev, status: "failed", accumulated: accumulated.length }
+          : {
+              current: 0,
+              total: 1,
+              accumulated: accumulated.length,
+              status: "failed",
+            },
+      );
+      if (accumulated.length > 0) {
+        setTaskTip(
+          `智能建议中断；保留已累计 ${accumulated.length} 条待确认建议`,
+        );
+      }
+      /* 错误文案已在 pipeline */
     }
   }
 
@@ -235,8 +352,24 @@ export function TechnicalPlanWorkspace() {
     setMatrixSuggestions((current) =>
       current.filter((item) => !sourceKeys.includes(item.sourceKey)),
     );
+    setMatchProgress((prev) =>
+      prev
+        ? {
+            ...prev,
+            accumulated: Math.max(0, prev.accumulated - selected.length),
+          }
+        : prev,
+    );
     setTaskTip("已应用所选建议；人工修改过或不响应的条目会保持原样");
   }
+
+  const suggestionBusy =
+    matchProgress?.status === "running" ||
+    (pipeline.busy && pipeline.lastTask?.type === "response_match");
+  const matchProgressLabel =
+    matchProgress && matchProgress.status !== "idle"
+      ? `候选批次 ${Math.max(matchProgress.current, 1)}/${Math.max(matchProgress.total, 1)} · 已累计 ${matrixSuggestions.length} 条待确认`
+      : null;
 
   return (
     <div className="page tp-layout">
@@ -269,8 +402,26 @@ export function TechnicalPlanWorkspace() {
             onClick={() => {
               void (async () => {
                 try {
+                  // 先作废串行批会话，避免取消后迟到结果污染；保留已累计建议
+                  if (matchProgress?.status === "running") {
+                    matchSessionRef.current += 1;
+                    setMatchProgress((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            status: "cancelled",
+                            accumulated: matrixSuggestions.length,
+                          }
+                        : prev,
+                    );
+                    setTaskTip(
+                      matrixSuggestions.length > 0
+                        ? `已取消；保留已成功批次的 ${matrixSuggestions.length} 条待确认建议`
+                        : "智能建议已取消",
+                    );
+                  }
                   const t = await pipeline.cancelTask();
-                  if (t?.status === "cancelled") {
+                  if (t?.status === "cancelled" && matchProgress?.status !== "running") {
                     setTaskTip("任务已取消");
                   }
                 } catch {
@@ -786,10 +937,15 @@ export function TechnicalPlanWorkspace() {
             onRefresh={editors.refreshResponseMatrix}
             onPatch={editors.updateResponseMatrixItem}
             suggestions={matrixSuggestions}
-            suggestionBusy={pipeline.busy && pipeline.lastTask?.type === "response_match"}
+            suggestionBusy={suggestionBusy}
+            suggestionProgressLabel={matchProgressLabel}
             onRequestSuggestions={() => void requestResponseMatrixSuggestions()}
             onApplySuggestions={applyResponseMatrixSuggestions}
-            onClearSuggestions={() => setMatrixSuggestions([])}
+            onClearSuggestions={() => {
+              matchSessionRef.current += 1;
+              setMatrixSuggestions([]);
+              setMatchProgress(null);
+            }}
             conflictMessage={editors.responseMatrixConflict?.message ?? null}
             onReloadRemote={editors.reloadRemoteResponseMatrix}
           />

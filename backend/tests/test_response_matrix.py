@@ -1,8 +1,8 @@
 """
-模块：响应矩阵 editor-state 测试
-用途：验收评分点/技术要求到章节映射的读写、容错和旧库补列。
-对接：GET|PUT /api/projects/{id}/editor-state；project_editor_states.response_matrix_json。
-二次开发：新增矩阵字段或智能建议时必须补部分更新隔离与只读建议测试，避免防抖 PUT 清空已有映射。
+模块：响应矩阵 editor-state 与智能建议测试
+用途：验收评分点/技术要求映射读写、容错、旧库补列，以及 response_match 候选分批与只读建议。
+对接：GET|PUT /api/projects/{id}/editor-state；POST .../tasks type=response_match。
+二次开发：新增矩阵字段或分批语义时必须补兼容/越界/不写库用例，避免防抖 PUT 清空已有映射。
 """
 
 import json
@@ -461,8 +461,260 @@ def test_response_match_returns_sanitized_suggestions_without_writing_state(
     assert invalid_links["outlineNodeIds"] == []
     assert invalid_links["status"] == "uncovered"
     assert task["result"]["skippedInvalidCount"] == 5
+    # 默认 batch0 兼容：旧客户端不传 payload 时语义不变，并返回批次元数据
+    assert task["result"]["candidateBatchIndex"] == 0
+    assert task["result"]["candidateBatchCount"] == 1
+    assert task["result"]["isLastCandidateBatch"] is True
+    assert task["result"]["chapterCandidateTotal"] == 2
+    assert task["result"]["outlineCandidateTotal"] == 2
+    assert task["result"]["chapterCandidateInBatch"] == 2
+    assert task["result"]["outlineCandidateInBatch"] == 2
+    assert task["result"]["sourceCount"] == 2
+    assert task["result"]["totalSourceCount"] == 2
     after = client.get(f"/api/projects/{pid}/editor-state").json()["responseMatrix"]
     assert after == before
+
+
+def _extract_prompt_option_ids(user_content: str, section: str) -> list[str]:
+    """用途：从模型 user 提示中解析章节/大纲候选 id，用于验收分批窗口。"""
+    marker = f"【{section}】\n"
+    start = user_content.find(marker)
+    if start < 0:
+        return []
+    rest = user_content[start + len(marker) :]
+    end = rest.find("\n\n【")
+    block = rest if end < 0 else rest[:end]
+    if block.strip() == "无":
+        return []
+    ids: list[str] = []
+    for line in block.splitlines():
+        line = line.strip()
+        if not line.startswith("- id="):
+            continue
+        part = line[len("- id=") :]
+        option_id = part.split("；", 1)[0].strip()
+        if option_id:
+            ids.append(option_id)
+    return ids
+
+
+def test_response_match_candidate_batches_cover_without_overlap(client, monkeypatch):
+    """用途：>120 章 / >160 大纲时批窗口无重叠并覆盖全量；任意批不写 responseMatrix。"""
+    pid = _create_project(client)
+    chapters = [
+        {"id": f"chapter_{i:03d}", "title": f"章节{i:03d}"} for i in range(250)
+    ]
+    outline = [{"id": f"node_{i:03d}", "title": f"大纲{i:03d}"} for i in range(200)]
+    # 构造超过来源 80 上限，验证 sourceCount 仍截断
+    matrix = [
+        {
+            "kind": "requirement",
+            "sourceKey": f"requirement:来源{i:03d}",
+            "sourceText": f"来源{i:03d}",
+            "status": "uncovered",
+        }
+        for i in range(90)
+    ]
+    saved = client.put(
+        f"/api/projects/{pid}/editor-state",
+        json={
+            "outline": outline,
+            "chapters": chapters,
+            "responseMatrix": matrix,
+        },
+    )
+    assert saved.status_code == 200
+    before = client.get(f"/api/projects/{pid}/editor-state").json()["responseMatrix"]
+
+    captured: list[str] = []
+
+    def fake_chat(db, workspace_id, *, messages, temperature=0.4, timeout_sec=120.0):
+        user_content = messages[-1]["content"]
+        captured.append(user_content)
+        chapter_ids = _extract_prompt_option_ids(user_content, "章节候选")
+        outline_ids = _extract_prompt_option_ids(user_content, "大纲候选")
+        # 故意混入跨批非法 id，确认仅本批 ID 可通过规范化
+        foreign_chapter = "chapter_200" if "chapter_000" in chapter_ids else "chapter_000"
+        return ChatResult(
+            content=json.dumps(
+                [
+                    {
+                        "sourceKey": "requirement:来源000",
+                        "chapterIds": ([chapter_ids[0]] if chapter_ids else [])
+                        + [foreign_chapter],
+                        "outlineNodeIds": ([outline_ids[0]] if outline_ids else []),
+                        "status": "covered",
+                        "confidence": 80 + len(captured),
+                        "reason": f"批次探测{len(captured)}",
+                    }
+                ],
+                ensure_ascii=False,
+            ),
+            model="demo",
+        )
+
+    monkeypatch.setattr("app.services.llm_service.chat_completion", fake_chat)
+
+    batch0 = client.post(
+        f"/api/projects/{pid}/tasks?sync=true",
+        json={"type": "response_match", "payload": {"candidateBatchIndex": 0}},
+    ).json()
+    batch1 = client.post(
+        f"/api/projects/{pid}/tasks?sync=true",
+        json={"type": "response_match", "payload": {"candidateBatchIndex": 1}},
+    ).json()
+    batch2 = client.post(
+        f"/api/projects/{pid}/tasks?sync=true",
+        json={"type": "response_match", "payload": {"candidateBatchIndex": 2}},
+    ).json()
+
+    assert batch0["status"] == "success"
+    assert batch1["status"] == "success"
+    assert batch2["status"] == "success"
+
+    r0, r1, r2 = batch0["result"], batch1["result"], batch2["result"]
+    assert r0["candidateBatchCount"] == 3
+    assert r1["candidateBatchCount"] == 3
+    assert r2["candidateBatchCount"] == 3
+    assert r0["candidateBatchIndex"] == 0
+    assert r1["candidateBatchIndex"] == 1
+    assert r2["candidateBatchIndex"] == 2
+    assert r0["isLastCandidateBatch"] is False
+    assert r1["isLastCandidateBatch"] is False
+    assert r2["isLastCandidateBatch"] is True
+    assert r0["chapterCandidateTotal"] == 250
+    assert r0["outlineCandidateTotal"] == 200
+    assert r0["chapterCandidateInBatch"] == 120
+    assert r0["outlineCandidateInBatch"] == 160
+    assert r1["chapterCandidateInBatch"] == 120
+    assert r1["outlineCandidateInBatch"] == 40
+    assert r2["chapterCandidateInBatch"] == 10
+    assert r2["outlineCandidateInBatch"] == 0
+    # 来源产品上限 80 不变
+    assert r0["sourceCount"] == 80
+    assert r0["totalSourceCount"] == 90
+    assert r1["sourceCount"] == 80
+    assert r2["sourceCount"] == 80
+
+    c0 = _extract_prompt_option_ids(captured[0], "章节候选")
+    c1 = _extract_prompt_option_ids(captured[1], "章节候选")
+    c2 = _extract_prompt_option_ids(captured[2], "章节候选")
+    o0 = _extract_prompt_option_ids(captured[0], "大纲候选")
+    o1 = _extract_prompt_option_ids(captured[1], "大纲候选")
+    o2 = _extract_prompt_option_ids(captured[2], "大纲候选")
+    assert len(c0) == 120 and len(c1) == 120 and len(c2) == 10
+    assert set(c0).isdisjoint(c1) and set(c0).isdisjoint(c2) and set(c1).isdisjoint(c2)
+    assert set(c0) | set(c1) | set(c2) == {f"chapter_{i:03d}" for i in range(250)}
+    assert len(o0) == 160 and len(o1) == 40 and len(o2) == 0
+    assert set(o0).isdisjoint(o1)
+    assert set(o0) | set(o1) == {f"node_{i:03d}" for i in range(200)}
+
+    # 本批 ID 保留，跨批 foreign 被剔除
+    assert r0["suggestions"][0]["chapterIds"] == ["chapter_000"]
+    assert r1["suggestions"][0]["chapterIds"] == ["chapter_120"]
+    assert r2["suggestions"][0]["chapterIds"] == ["chapter_240"]
+
+    after = client.get(f"/api/projects/{pid}/editor-state").json()["responseMatrix"]
+    assert after == before
+
+
+def test_response_match_batch_out_of_range_fails(client, monkeypatch):
+    """用途：候选批次越界时任务失败，且不改 editor-state。"""
+    pid = _create_project(client)
+    client.put(
+        f"/api/projects/{pid}/editor-state",
+        json={
+            "outline": [{"id": "node_1", "title": "大纲1"}],
+            "chapters": [{"id": "chapter_1", "title": "章节1"}],
+            "responseMatrix": [
+                {
+                    "kind": "requirement",
+                    "sourceKey": "requirement:一条",
+                    "sourceText": "一条",
+                    "status": "uncovered",
+                }
+            ],
+        },
+    )
+    before = client.get(f"/api/projects/{pid}/editor-state").json()["responseMatrix"]
+    called = {"n": 0}
+
+    def fake_chat(db, workspace_id, *, messages, temperature=0.4, timeout_sec=120.0):
+        called["n"] += 1
+        return ChatResult(content="[]", model="demo")
+
+    monkeypatch.setattr("app.services.llm_service.chat_completion", fake_chat)
+    response = client.post(
+        f"/api/projects/{pid}/tasks?sync=true",
+        json={"type": "response_match", "payload": {"candidateBatchIndex": 9}},
+    )
+    assert response.status_code == 201
+    task = response.json()
+    assert task["status"] == "failed"
+    detail = (task.get("error") or task.get("message") or "")
+    assert "候选批次越界" in detail
+    assert called["n"] == 0
+    after = client.get(f"/api/projects/{pid}/editor-state").json()["responseMatrix"]
+    assert after == before
+
+
+def test_response_match_invalid_batch_index_defaults_to_zero(client, monkeypatch):
+    """用途：缺失/非法类型/负值 candidateBatchIndex 均视为 batch0（不接受 bool/float/字符串隐式转换）。"""
+    pid = _create_project(client)
+    client.put(
+        f"/api/projects/{pid}/editor-state",
+        json={
+            "outline": [{"id": "node_1", "title": "大纲1"}],
+            "chapters": [{"id": "chapter_1", "title": "章节1"}],
+            "responseMatrix": [
+                {
+                    "kind": "requirement",
+                    "sourceKey": "requirement:一条",
+                    "sourceText": "一条",
+                    "status": "uncovered",
+                }
+            ],
+        },
+    )
+
+    def fake_chat(db, workspace_id, *, messages, temperature=0.4, timeout_sec=120.0):
+        return ChatResult(
+            content=json.dumps(
+                [
+                    {
+                        "sourceKey": "requirement:一条",
+                        "chapterIds": ["chapter_1"],
+                        "outlineNodeIds": ["node_1"],
+                        "status": "covered",
+                        "confidence": 70,
+                        "reason": "默认批",
+                    }
+                ],
+                ensure_ascii=False,
+            ),
+            model="demo",
+        )
+
+    monkeypatch.setattr("app.services.llm_service.chat_completion", fake_chat)
+    for payload in (
+        None,
+        {},
+        {"candidateBatchIndex": "bad"},
+        {"candidateBatchIndex": -3},
+        {"candidateBatchIndex": True},
+        {"candidateBatchIndex": 1.5},
+        {"candidateBatchIndex": "1"},
+    ):
+        body: dict = {"type": "response_match"}
+        if payload is not None:
+            body["payload"] = payload
+        task = client.post(
+            f"/api/projects/{pid}/tasks?sync=true",
+            json=body,
+        ).json()
+        assert task["status"] == "success"
+        assert task["result"]["candidateBatchIndex"] == 0
+        assert task["result"]["isLastCandidateBatch"] is True
 
 
 def test_response_matrix_version_stable_and_empty(client):

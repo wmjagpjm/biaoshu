@@ -1,8 +1,8 @@
 /**
  * 模块：响应矩阵合并工具
- * 用途：从结构化招标分析派生矩阵行，并按 sourceKey 保留用户章节映射与备注。
- * 对接：useTechnicalPlanEditors、ResponseMatrixPanel、editor-state responseMatrix 字段。
- * 二次开发：勿用 sourceIndex 作为主键；新增来源类型时同步后端 normalize_response_matrix。
+ * 用途：从结构化招标分析派生矩阵行，按 sourceKey 保留用户映射；合并多批智能建议。
+ * 对接：useTechnicalPlanEditors、ResponseMatrixPanel、TechnicalPlanWorkspace 串行 response_match。
+ * 二次开发：勿用 sourceIndex 作为主键；建议合并禁止字段级自动并集，整条按置信度择优。
  */
 
 import type {
@@ -148,6 +148,51 @@ export function normalizeResponseMatrixSuggestions(
       },
     ];
   });
+}
+
+function suggestionLinkCount(item: ResponseMatrixSuggestion): number {
+  return item.chapterIds.length + item.outlineNodeIds.length;
+}
+
+function isBetterSuggestion(
+  candidate: ResponseMatrixSuggestion,
+  current: ResponseMatrixSuggestion,
+): boolean {
+  /** 用途：对齐后端去重：confidence 高者优先，平手时关联 ID 更多者优先。 */
+  if (candidate.confidence !== current.confidence) {
+    return candidate.confidence > current.confidence;
+  }
+  return suggestionLinkCount(candidate) > suggestionLinkCount(current);
+}
+
+export function mergeResponseMatrixSuggestions(
+  existing: ResponseMatrixSuggestion[],
+  incoming: ResponseMatrixSuggestion[],
+): ResponseMatrixSuggestion[] {
+  /**
+   * 用途：跨批累计待确认建议；同 sourceKey 整条择优，禁止字段级合并。
+   * 对接：TechnicalPlanWorkspace 串行 response_match；不写 editor-state。
+   */
+  const normalizedExisting = normalizeResponseMatrixSuggestions(existing);
+  const normalizedIncoming = normalizeResponseMatrixSuggestions(incoming);
+  const byKey = new Map(
+    normalizedExisting.map((item) => [item.sourceKey, item] as const),
+  );
+  const order = normalizedExisting.map((item) => item.sourceKey);
+  for (const item of normalizedIncoming) {
+    const previous = byKey.get(item.sourceKey);
+    if (!previous) {
+      byKey.set(item.sourceKey, item);
+      order.push(item.sourceKey);
+      continue;
+    }
+    if (isBetterSuggestion(item, previous)) {
+      byKey.set(item.sourceKey, item);
+    }
+  }
+  return order
+    .map((key) => byKey.get(key))
+    .filter((item): item is ResponseMatrixSuggestion => Boolean(item));
 }
 
 function collectSources(analysis: BidAnalysis): MatrixSource[] {

@@ -281,7 +281,7 @@ def _execute_task(db: Session, workspace_id: str, task: ProjectTaskRow) -> None:
         elif task.type == "export":
             _run_export(db, workspace_id, project_id, task, payload)
         elif task.type == "response_match":
-            _run_response_match(db, workspace_id, project_id, task)
+            _run_response_match(db, workspace_id, project_id, task, payload)
         elif task.type in ("biz_qualify", "biz_toc", "biz_quote", "biz_commit"):
             _run_business(db, workspace_id, project_id, task)
         else:
@@ -609,13 +609,51 @@ def _normalize_response_match_suggestions(
     )
 
 
+# 响应矩阵智能建议：来源产品上限与候选分批窗口（禁止扩大单次 LLM 输入）
+_RESPONSE_MATCH_SOURCE_LIMIT = 80
+_RESPONSE_MATCH_CHAPTER_BATCH_SIZE = 120
+_RESPONSE_MATCH_OUTLINE_BATCH_SIZE = 160
+
+
+def _response_match_batch_count(total: int, batch_size: int) -> int:
+    """用途：按稳定前序候选总数计算批次数；总数为 0 时返回 0。"""
+    if total <= 0 or batch_size <= 0:
+        return 0
+    return (total + batch_size - 1) // batch_size
+
+
+def _parse_candidate_batch_index(payload: dict | None) -> int:
+    """
+    用途：解析 payload.candidateBatchIndex；仅接受非负 int（排除 bool）。
+    对接：_run_response_match；旧客户端不传 payload 时等价 batch0。
+    二次开发：缺失/bool/float/字符串/其它类型/负值一律视为 0，禁止 int() 隐式转换。
+    """
+    if not isinstance(payload, dict):
+        return 0
+    raw = payload.get("candidateBatchIndex")
+    # bool 是 int 的子类，必须先排除，避免 JSON true 被当成 1
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return 0
+    if raw < 0:
+        return 0
+    return raw
+
+
 def _run_response_match(
-    db: Session, workspace_id: str, project_id: str, task: ProjectTaskRow
+    db: Session,
+    workspace_id: str,
+    project_id: str,
+    task: ProjectTaskRow,
+    payload: dict | None = None,
 ) -> None:
     """
-    用途：调用模型生成响应矩阵待确认建议，绝不直接修改 editor-state。
-    对接：POST /api/projects/{id}/tasks type=response_match；ResponseMatrixPanel。
-    二次开发：建议字段必须继续以 sourceKey 绑定，应用时仍需校验生成快照与当前有效引用。
+    用途：按候选批次调用模型生成响应矩阵待确认建议，绝不直接修改 editor-state。
+    对接：POST /api/projects/{id}/tasks type=response_match，payload.candidateBatchIndex；
+      前端 TechnicalPlanWorkspace 串行拉批。
+    二次开发：
+      - 来源仍截断为前 80 条非 waived，分批只覆盖章节/大纲候选窗口，禁止扩大单次输入上限；
+      - 建议以 sourceKey 绑定，应用时仍需校验生成快照与当前有效引用；
+      - ID 仅允许落在本批候选集合。
     """
     state = editor_state_service.get_editor_state(db, workspace_id, project_id)
     matrix = state.get("responseMatrix")
@@ -632,11 +670,41 @@ def _run_response_match(
     if not (chapter_options or outline_options):
         raise ValueError("请先生成或维护大纲、章节，再获取智能建议")
 
+    batch_index = _parse_candidate_batch_index(payload)
+    chapter_total = len(chapter_options)
+    outline_total = len(outline_options)
+    chapter_batches = _response_match_batch_count(
+        chapter_total, _RESPONSE_MATCH_CHAPTER_BATCH_SIZE
+    )
+    outline_batches = _response_match_batch_count(
+        outline_total, _RESPONSE_MATCH_OUTLINE_BATCH_SIZE
+    )
+    candidate_batch_count = max(chapter_batches, outline_batches, 1)
+    if batch_index >= candidate_batch_count:
+        raise ValueError(
+            f"候选批次越界：candidateBatchIndex={batch_index}，共 {candidate_batch_count} 批"
+        )
+
+    chapter_start = batch_index * _RESPONSE_MATCH_CHAPTER_BATCH_SIZE
+    outline_start = batch_index * _RESPONSE_MATCH_OUTLINE_BATCH_SIZE
+    prompt_sources = sources[:_RESPONSE_MATCH_SOURCE_LIMIT]
+    prompt_chapters = chapter_options[
+        chapter_start : chapter_start + _RESPONSE_MATCH_CHAPTER_BATCH_SIZE
+    ]
+    prompt_outline = outline_options[
+        outline_start : outline_start + _RESPONSE_MATCH_OUTLINE_BATCH_SIZE
+    ]
+    is_last_batch = batch_index + 1 >= candidate_batch_count
+
     _assert_not_cancelled(db, task)
-    _set_task(db, task, progress=25, message="整理响应矩阵与候选位置…")
-    prompt_sources = sources[:80]
-    prompt_chapters = chapter_options[:120]
-    prompt_outline = outline_options[:160]
+    _set_task(
+        db,
+        task,
+        progress=25,
+        message=(
+            f"整理响应矩阵与候选位置（批次 {batch_index + 1}/{candidate_batch_count}）…"
+        ),
+    )
     source_lines = [
         f"- sourceKey={item.get('sourceKey')}；类型={item.get('kind')}；内容={item.get('sourceText')}；权重={item.get('weight') or '无'}"
         for item in prompt_sources
@@ -648,7 +716,14 @@ def _run_response_match(
         f"- id={item['id']}；标题={item['title']}" for item in prompt_outline
     ]
     _assert_not_cancelled(db, task)
-    _set_task(db, task, progress=50, message="调用模型生成待确认映射…")
+    _set_task(
+        db,
+        task,
+        progress=50,
+        message=(
+            f"调用模型生成待确认映射（批次 {batch_index + 1}/{candidate_batch_count}）…"
+        ),
+    )
     result = llm_service.chat_completion(
         db,
         workspace_id,
@@ -684,6 +759,7 @@ def _run_response_match(
         raw_suggestions = _parse_json_array(result.content)
     except ValueError as exc:
         raise ValueError("模型未返回合法响应矩阵建议，请重试") from exc
+    # 仅用本批候选做 ID 校验，避免跨批 ID 被误接受
     suggestions, skipped_invalid_count = _normalize_response_match_suggestions(
         raw_suggestions,
         prompt_sources,
@@ -695,7 +771,10 @@ def _run_response_match(
         task,
         status="success",
         progress=100,
-        message=f"已生成 {len(suggestions)} 条待确认建议",
+        message=(
+            f"已生成 {len(suggestions)} 条待确认建议"
+            f"（批次 {batch_index + 1}/{candidate_batch_count}）"
+        ),
         result={
             "suggestions": suggestions,
             "model": result.model,
@@ -703,6 +782,13 @@ def _run_response_match(
             "totalSourceCount": len(sources),
             "skippedInvalidCount": skipped_invalid_count,
             "baseUpdatedAt": state.get("updatedAt"),
+            "candidateBatchIndex": batch_index,
+            "candidateBatchCount": candidate_batch_count,
+            "isLastCandidateBatch": is_last_batch,
+            "chapterCandidateTotal": chapter_total,
+            "outlineCandidateTotal": outline_total,
+            "chapterCandidateInBatch": len(prompt_chapters),
+            "outlineCandidateInBatch": len(prompt_outline),
         },
     )
 
