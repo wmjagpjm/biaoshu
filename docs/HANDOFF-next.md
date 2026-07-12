@@ -4,9 +4,9 @@
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
-> **协作分支已推送基线**：`4946a0d` — 含双浏览器 409/刷新来源 E2E 与候选分批智能建议
+> **协作分支已推送基线**：`de43f2d` — 含中标内容模板资产化、双浏览器 409/刷新来源 E2E 与候选分批智能建议
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **本地状态**：阶段 1 技术标中标内容模板 MVP 已实现（未提交）；含 `bid_templates` 表、`/api/templates*`、模板库 UI、沉淀入口与 E2E
+> **本地状态**：阶段 0 审计、阶段 1 技术标中标内容模板 MVP 均已提交并推送；阶段 2 卡片化知识与素材库待设计审计
 > **验收基线**：`pytest`（含 `test_bid_templates`）；`frontend npm run lint` / `build`；`npm run test:e2e:templates`；`git diff --check`
 
 ---
@@ -274,9 +274,9 @@ frontend/src/features/
 
 ## 6. 建议下一会话方向
 
-1. Codex 审查并 ack 阶段 1 中标内容模板 MVP 后提交推送；再排阶段 2 卡片化或阶段 3 融合
-2. E2E 扩展（智能建议多批串行与人工确认，可选）；来源超过 80 的分页须另开 task
-3. 标题整章布局/最小标题左栏（需用户提供效果图和版式规则）
+1. 阶段 2 卡片化知识与素材库：先做统一卡片模型、图片后端化、来源追溯和写作引用（见路线图功能包 1–2）
+2. 阶段 3 多模板/卡片融合：上下文配额、差异预览、逐项确认写入（见路线图功能包 3–4）
+3. 阶段 4 质量与交付：响应矩阵 E2E/分页/合并、可插拔解析和交付增强均独立立项（见路线图功能包 5–9）
 
 资源同步后续只可由管理员配置新的签名发布方，绝不可放开浏览器 URL 或外网抓取。图片管线已冻结项目内资源引用协议，后续扩展不得放开外链或客户端路径。SSE 的多工作空间鉴权、事件游标和项目级总线不在当前范围。
 
@@ -331,9 +331,9 @@ frontend/src/features/
 
 ## 11. 当前会话状态（2026-07-12）
 
-- 当前分支仍为 `collab/grok-code-codex-review`；已推送基线为 `4946a0d`，禁止直接合入 `main`。
+- 当前分支仍为 `collab/grok-code-codex-review`；已推送基线为 `de43f2d`，禁止直接合入 `main`。
 - `npm run test:e2e:matrix` 现跑 conflict + refresh 两 spec（409 主路径与刷新来源保留人工映射）；智能建议人工确认 E2E 仍未做。
-- 标书制作者路线图已建 `docs/plans/2026-07-12-bid-writer-roadmap.md`：阶段 0 审计完成，阶段 1 中标内容模板资产化待实现。每阶段目标、当前进度、验收和未做项必须更新文档并与代码一起推送 GitHub。
+- 标书制作者路线图已建 `docs/plans/2026-07-12-bid-writer-roadmap.md`：阶段 0 审计和阶段 1 中标内容模板资产化已完成；剩余 9 个标书制作者功能包已按阶段 2–4 排序。每阶段目标、当前进度、验收和未做项必须更新文档并与代码一起推送 GitHub。
 - 现有 Grok 会话已由用户确认通过 AgentBridge 连通。不要重复启动 Grok、不要终止用户已打开的 AgentBridge 会话；当前 Codex 侧没有绑定该 AgentBridge pair 时，仍以 `tools/agent-collaboration/` 消息箱作为可审计的回退通道。
 - 新任务分工不变：Codex 负责范围、取舍、审查和验收；Grok 负责限定范围内的实现与测试。每一项先发 `task`，完成后发 `review_request`，未经 Codex `ack` 不得提交或推送。
 
