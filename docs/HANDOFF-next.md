@@ -1,13 +1,13 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-12（阶段 2 SHA=`53e012f`；阶段 3 **M3-A 已完成** SHA=`5d37dba`；**M3-B 实现中**，待 Codex 审查；未 commit/push）
+> **交接日期**：2026-07-12（阶段 2 SHA=`53e012f`；阶段 3 **已完成并推送**：M3-A=`5d37dba`，M3-B=`e2e5d04`；阶段 4 功能包 5 本批实现完成，待 Codex 审查，未 commit/push）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
-> **协作分支已推送基线**：`5d37dba` — 实现模板卡片只读融合建议（M3-A）
+> **协作分支已推送基线**：`e2e5d04` — 实现融合建议人工确认写入（M3-B）；其上含 M3-A=`5d37dba`
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **本地状态**：阶段 0/1/2/M3-A 已推送；阶段 3 **M3-B**（差异预览 + 勾选确认写入）本地实现中；写入仅经用户确认 → `replaceChapterBody` → debounce PUT；无专用 undo
-> **验收基线**：`pytest`（含 `test_content_fuse` / `test_knowledge_cards` / `test_bid_templates`）；`frontend npm run lint` / `build`；`npm run test:e2e:fuse` / `fuse-apply` / `cards` / `templates` / `matrix`；`git diff --check`
+> **本地状态**：阶段 0/1/2/3 已推送；阶段 4 **包 5**（响应矩阵智能建议人工确认 E2E）仅改 E2E spec + package.json script + 文档，**无业务代码改动**
+> **验收基线**：`pytest`（含 `test_content_fuse` / `test_knowledge_cards` / `test_bid_templates`）；`frontend npm run lint` / `build`；`npm run test:e2e:fuse` / `fuse-apply` / `cards` / `templates` / `matrix`（含 suggest-apply）；`git diff --check`
 
 ---
 
@@ -201,7 +201,7 @@ npm run test:e2e:matrix
 
 智能建议（已实现候选分批）：`response_match` 使用用户已配置模型生成**待确认**建议，结果仅在任务中返回，**绝不**直接写 `editor-state`/`responseMatrix`。`payload.candidateBatchIndex`（缺省/非法/负值→0；越界→任务 failed）沿 `_response_match_options` 稳定前序切窗口：来源仍 `sources[:80]`（非 waived）、章节每批 120、大纲每批 160，共享 0-based 批轴，`candidateBatchCount = max(章批数, 大纲批数, 1)`。result 含 `candidateBatchIndex/Count`、`isLastCandidateBatch`、章/大纲 total 与 inBatch 计数。前端 **await 串行**逐批请求，按 `sourceKey` 累计（confidence 高优先，平手关联数多优先，整条择优、禁止字段级合并）；展示「当前批/总批、累计建议数」；失败或取消即停并保留已成功批；会话/代次保护避免项目切换、取消、重入后的迟到污染。人工应用仍：勾选、`base` 快照跳过已改行、`waived`/notes 保护、关联并集、仅 `uncovered` 可被建议改状态。旧客户端不传批号等价 batch0。
 
-多端冲突（已实现）：GET/PUT 均返回稳定的 `responseMatrixVersion`（仅对收敛后矩阵内容哈希，空矩阵亦有版本；改概述/正文/updatedAt 不改变版本）。PUT 同时带 `responseMatrix` + `responseMatrixVersion` 时先取 **DB 写锁**（SQLite：projects 行无副作用 UPDATE；PostgreSQL：`SELECT … FOR UPDATE`）再比对，版本不匹配返回 **409**，`detail` 含 `message`、`responseMatrix`、`currentResponseMatrixVersion`，**整包不写**；同 expected version 并发 PUT 恰一成一败。不带版本的旧客户端仍可写矩阵。前端 hook **串行**版本化矩阵保存（飞行中不发下一带矩阵 PUT，完成后用新版本+最新 state），409 时保留本地矩阵、停止旧版本重试，面板「重新载入远端矩阵」显式恢复；无静默强制覆盖。**浏览器 E2E（`npm run test:e2e:matrix`）已覆盖**：双 context 409 主路径；「刷新来源」按 `sourceKey` 保留人工 chapter/outline/status/notes，并随 analysis 增删行后 GET 持久化收敛。**仍未做**智能建议须人工确认的浏览器 E2E。字段级三方合并未做；来源超过 80 不做第二轮分页（须另 task）。
+多端冲突（已实现）：GET/PUT 均返回稳定的 `responseMatrixVersion`（仅对收敛后矩阵内容哈希，空矩阵亦有版本；改概述/正文/updatedAt 不改变版本）。PUT 同时带 `responseMatrix` + `responseMatrixVersion` 时先取 **DB 写锁**（SQLite：projects 行无副作用 UPDATE；PostgreSQL：`SELECT … FOR UPDATE`）再比对，版本不匹配返回 **409**，`detail` 含 `message`、`responseMatrix`、`currentResponseMatrixVersion`，**整包不写**；同 expected version 并发 PUT 恰一成一败。不带版本的旧客户端仍可写矩阵。前端 hook **串行**版本化矩阵保存（飞行中不发下一带矩阵 PUT，完成后用新版本+最新 state），409 时保留本地矩阵、停止旧版本重试，面板「重新载入远端矩阵」显式恢复；无静默强制覆盖。**浏览器 E2E（`npm run test:e2e:matrix`）已覆盖**：双 context 409 主路径；「刷新来源」按 `sourceKey` 保留人工 chapter/outline/status/notes，并随 analysis 增删行后 GET 持久化收敛；**智能建议人工确认**（本机 mock LLM，待确认卡 → 部分勾选应用 → notes 保护 → base 漂移跳过；应用前 `response_match` 不写 editor-state）。字段级三方合并未做；来源超过 80 不做第二轮分页（须另 task）。
 
 正文图片 v1：`project_files.role=source|image`；`/files` 与 parse 只处理 source，`/images` 只处理 PNG/JPEG/GIF（5 MiB、像素和数量限制）。SQLite 个人版在当前项目行写锁内完成图片计数和保存，避免并发绕过上限；未来迁移 PostgreSQL/多进程时必须另行实现等价的行锁或原子计数。正文只接受独占行 `![替代文字](biaoshu-image://file_<16位十六进制> "题注")`，导出按当前 workspace、项目和 `role=image` 二次校验；无效引用显示 warning，不读取外链、任意路径或项目外文件。
 
@@ -265,8 +265,8 @@ frontend/src/features/
 |--------|----|------|
 | 导出 | `structure` / `min_heading_left_enabled` | 用户已确认标题段落描边＋分级底色；整章布局/最小标题左栏仍需独立效果图与规则 |
 | 业务 | 外部标讯数据源 | 资源中心已有受控签名清单同步；标讯仍只支持本机 CSV/JSON 导入，未接网站/API/RSS |
-| 技术标 | 响应矩阵增强 | v1 已做手工映射、持久化、Word 导出联动、待确认智能建议（**候选章/大纲分批 + 前端串行累计**）、`responseMatrixVersion` DB 写锁乐观锁、前端串行保存、双浏览器 409 与刷新来源保留映射 E2E；字段级合并、来源 80 分页、智能建议人工确认浏览器 E2E 仍未做 |
-| 资产 | 卡片化知识/多模板融合 | 阶段 1 模板 + 阶段 2 卡片库（`53e012f`）；M3-A 只读融合建议已完成（`5d37dba`）；M3-B 差异/确认写入实现中 |
+| 技术标 | 响应矩阵增强 | v1 已做手工映射、持久化、Word 导出联动、待确认智能建议（**候选章/大纲分批 + 前端串行累计**）、`responseMatrixVersion` DB 写锁乐观锁、前端串行保存、双浏览器 409、刷新来源与**智能建议人工确认** E2E；字段级合并、来源 80 分页仍未做 |
+| 资产 | 卡片化知识/多模板融合 | 阶段 1 模板 + 阶段 2 卡片库（`53e012f`）；阶段 3 已完成并推送：M3-A=`5d37dba`，M3-B=`e2e5d04` |
 | RAG | 真语义大模型 embedding 调优 | 有本地+可选 API，可继续增强 |
 | 库 | Alembic | 仅 create_all + ALTER |
 | 生产 | 登录/多用户/HTTPS/Key 加密/PG/Docker | 未做 |
@@ -277,9 +277,9 @@ frontend/src/features/
 
 ## 6. 建议下一会话方向
 
-1. Codex 审查并授权提交阶段 3 **M3-B**（差异预览 + 勾选确认写入）；确认未改后端/矩阵/大纲、无专用 undo
-2. M3-B 后遗留：写入历史/回滚、矩阵智能建议人工确认 E2E
-3. 阶段 4 质量与交付：响应矩阵分页/合并、可插拔解析和交付增强均独立立项（见路线图功能包 5–9）
+1. Codex 审查并授权提交阶段 4 **功能包 5**（`response-matrix-suggest-apply.spec.ts` + `test:e2e:matrix` + 文档）；确认零业务代码 diff
+2. 阶段 4 其余包独立立项：包 6 来源 80 分页、包 7 字段级合并、包 8 可插拔解析、包 9 交付增强（见路线图）
+3. M3-B 后遗留：写入历史/回滚（可选）；多角色仍不开始
 
 资源同步后续只可由管理员配置新的签名发布方，绝不可放开浏览器 URL 或外网抓取。图片管线已冻结项目内资源引用协议，后续扩展不得放开外链或客户端路径。SSE 的多工作空间鉴权、事件游标和项目级总线不在当前范围。
 
@@ -334,11 +334,10 @@ frontend/src/features/
 
 ## 11. 当前会话状态（2026-07-12）
 
-- 当前分支仍为 `collab/grok-code-codex-review`；已推送基线含 M3-A `5d37dba`，禁止直接合入 `main`。
-- 阶段 3 **M3-A**（`5d37dba`）：`content_fuse` 只读建议；仅写 `result_json`。
-- 阶段 3 **M3-B**（本批次）：ContentFuseDialog 双栏预览 + checkbox +「确认写入所选」；纯同步 SHA-1 base 校验；`replaceChapterBody` 写入；无专用 undo（手工恢复）；E2E `test:e2e:fuse-apply`。
-- 审批写入边界：仅勾选且 base 匹配项可写；空建议/正文漂移/标题漂移/章节删除跳过；关闭未确认不写；不改 responseMatrix/outline。
-- 标书制作者路线图：阶段 0–2/M3-A 已完成；M3-B 实现中待审查。
+- 当前分支仍为 `collab/grok-code-codex-review`；已推送基线含阶段 3：M3-A=`5d37dba`、M3-B=`e2e5d04`，禁止直接合入 `main`。
+- 阶段 3 **已完成并推送**：M3-A 只读融合建议；M3-B 差异预览 + 勾选确认写入（`test:e2e:fuse-apply`）。
+- 阶段 4 **功能包 5**（本批次）：`frontend/e2e/response-matrix-suggest-apply.spec.ts` + `test:e2e:matrix` 纳入；本机 mock LLM；部分勾选应用、notes 保护、base 漂移跳过；应用前 `response_match` 不写 editor-state；**无 `frontend/src` / backend 业务改动**。
+- 未做：包 6 来源 80 分页、包 7 字段级合并、包 8 可插拔解析、包 9 交付增强。
 - 新任务分工不变：Codex 负责范围、取舍、审查和验收；Grok 负责限定范围内的实现与测试。每一项先发 `task`，完成后发 `review_request`，未经 Codex `ack` 不得提交或推送。
 
 **换会话可直接：pull → 读本文 §0～§2 → 按 §6 开干。**

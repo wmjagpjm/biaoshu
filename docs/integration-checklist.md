@@ -95,7 +95,8 @@ cd ..\frontend
 npm run lint
 npm run build
 
-# 响应矩阵双浏览器 E2E（独立 8010/5174 与 biaoshu-e2e.db；勿占用日用端口）
+# 响应矩阵 E2E（独立 8010/5174 与 biaoshu-e2e.db；勿占用日用端口）
+# 含：双 context 409、刷新来源保留映射、智能建议人工确认应用（本机 mock LLM）
 # 首次需：npx playwright install chromium
 npm run test:e2e:matrix
 
@@ -112,7 +113,7 @@ npm run test:e2e:fuse
 npm run test:e2e:fuse-apply
 ```
 
-当前基线：后端 **pytest 全量**（含 `test_content_fuse`、`test_knowledge_cards`、`test_bid_templates` 与候选分批）；前端 lint/build；`test:e2e:fuse` 覆盖只读建议且关闭不写；`test:e2e:fuse-apply` 覆盖中文/emoji 基线匹配、部分勾选写入、正文/标题漂移跳过、删除目标章跳过、确认后刷新保持、关闭未确认不写；`test:e2e:matrix` / `templates` / `cards` 为回归。矩阵智能建议人工确认 E2E 仍未做。
+当前基线：后端 **pytest 全量**（含 `test_content_fuse`、`test_knowledge_cards`、`test_bid_templates` 与候选分批）；前端 lint/build；`test:e2e:fuse` 覆盖只读建议且关闭不写；`test:e2e:fuse-apply` 覆盖中文/emoji 基线匹配、部分勾选写入、正文/标题漂移跳过、删除目标章跳过、确认后刷新保持、关闭未确认不写；`test:e2e:matrix` 覆盖 409、刷新来源与**智能建议人工确认**（应用前不写库、部分勾选、notes 保护、base 漂移跳过；无业务代码改动）；`templates` / `cards` 为回归。阶段 3 已推送（M3-A=`5d37dba`，M3-B=`e2e5d04`）。阶段 4 未做：包 6 来源 80 分页、包 7 字段级合并、包 8 可插拔解析、包 9 交付增强。
 
 ## 6. 已接 API 一览
 
@@ -227,7 +228,7 @@ npm run test:e2e:fuse-apply
 
 Celery、真 MinerU 安装包、外部标讯数据源、多用户鉴权、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
 
-**响应矩阵相关（已接 vs 未扩）：** 多端冲突的版本写保护、409 与双浏览器上下文 E2E 主路径已接；「刷新来源」保留人工映射 E2E 已接（见第 5 节 `test:e2e:matrix`）。仍未接或仅后端覆盖、未扩 E2E 的项：字段级合并、智能建议须人工确认的浏览器 E2E、Word 失效引用在浏览器层的扩展（导出逻辑以后端单测为准）。
+**响应矩阵相关（已接 vs 未扩）：** 多端冲突的版本写保护、409 与双浏览器上下文 E2E 主路径已接；「刷新来源」保留人工映射 E2E 已接；**智能建议人工确认后应用** E2E 已接（本机 mock LLM，见第 5 节 `test:e2e:matrix` / `response-matrix-suggest-apply.spec.ts`）。仍未接或仅后端覆盖、未扩 E2E 的项：字段级合并、来源超过 80 分页、Word 失效引用在浏览器层的扩展（导出逻辑以后端单测为准）。
 
 ## 15. 知识库 RAG 简版
 

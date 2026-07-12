@@ -7,7 +7,7 @@
 
 # 标书制作者能力补全与角色化演进路线图
 
-> **状态**：阶段 0/1/2 已完成；阶段 3：M3-A 已完成（SHA=`5d37dba`）；M3-B 本地实现完成（待 Codex 审查，未授权提交/推送）。
+> **状态**：阶段 0/1/2 已完成；阶段 3 **已完成并推送**（M3-A=`5d37dba`，M3-B=`e2e5d04`）；阶段 4 功能包 5（响应矩阵智能建议人工确认 E2E）本批实现完成，待 Codex 审查（未授权提交/推送）。
 > **当前分支**：`collab/grok-code-codex-review`
 > **协作方式**：Grok 负责限定范围的实现与测试；Codex 负责范围、审查、验收和提交授权。
 
@@ -131,9 +131,9 @@
 
 **验收命令（M3-B）**：`npm run lint` / `build`；`npm run test:e2e:fuse`；`npm run test:e2e:fuse-apply`；回归 `test:e2e:cards` / `templates` / `matrix`；后端 `pytest -q`（无后端 diff 仅回归）；`git diff --check`。
 
-**验收结果（占位，审查后由 Codex 填实）**：待 Codex 审查。
+**验收结果**：已推送 SHA=`e2e5d04`（差异预览 + 勾选确认写入 E2E）。
 
-**M3-B 后遗留**：写入后专用回滚/历史、智能建议人工确认浏览器 E2E（矩阵）、多角色协作。
+**M3-B 后遗留**：写入后专用回滚/历史、多角色协作。（矩阵智能建议人工确认 E2E 见阶段 4 包 5）
 
 ### 阶段 4：生产链质量与交付闭环
 
@@ -142,6 +142,26 @@
 **范围**：智能建议人工确认浏览器 E2E、来源超过 80 条的分页策略、响应矩阵字段级合并评估、Word 整章版式/最小标题左栏、外部标讯数据源方案。
 
 **验收**：每项独立立项；有后端测试、前端构建检查和按风险需要的 E2E；版式项必须先确认效果图和规则。
+
+#### 功能包 5：响应矩阵智能建议“人工确认后应用”浏览器 E2E
+
+**状态**：本批实现完成，待 Codex 审查（未授权提交/推送）。**无业务代码改动。**
+
+**允许文件**：
+- `frontend/e2e/response-matrix-suggest-apply.spec.ts`（新）
+- `frontend/package.json`（仅 `test:e2e:matrix` 纳入新 spec）
+- `docs/plans/2026-07-11-response-matrix-e2e-plan.md`
+- `docs/plans/2026-07-12-bid-writer-roadmap.md`
+- `docs/HANDOFF-next.md`
+- `docs/integration-checklist.md`
+
+**范围**：本机 OpenAI-compatible mock LLM + API 种子；真实驱动分析步响应矩阵 UI；`response_match` 应用前不写 editor-state；部分勾选应用；notes 保护；base 漂移跳过。
+
+**明确不做**：多批来源分页、取消中断、409 与建议交叉、真实 Key/外网、任何 `frontend/src` 或 `backend` 业务改动。
+
+**验收命令**：`npm run test:e2e:matrix`；`npm run lint` / `build`；回归 `test:e2e:fuse` / `fuse-apply` / `cards` / `templates`；backend `pytest -q`（无后端 diff）；`git diff --check`。
+
+**未做（包 6/7/8/9）**：来源超过 80 分页、字段级三方合并、可插拔解析、交付增强（Word 精细版式/外部标讯/embedding）——均须独立 task。
 
 ### 阶段 5：团队账号、角色与协作
 
@@ -186,4 +206,4 @@
 
 ## 5. 当前下一步
 
-阶段 1/2 已完成并推送（阶段 2 SHA=`53e012f`）。阶段 3 **M3-A** 已完成（SHA=`5d37dba`）。**M3-B** 本地实现完成，待 Codex 审查并授权提交；通过后进入阶段 4。多角色仍不开始。
+阶段 0/1/2/3 已完成并推送（M3-A=`5d37dba`，M3-B=`e2e5d04`）。阶段 4 **功能包 5** 本批 E2E 与文档已落地，待 Codex 审查授权后提交；通过后按收益拆分独立立项 **包 6/7/8/9**（分页、字段级合并、可插拔解析、交付增强）。多角色（阶段 5）仍不开始。
