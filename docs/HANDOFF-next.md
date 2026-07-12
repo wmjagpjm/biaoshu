@@ -4,9 +4,9 @@
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
-> **协作分支已推送基线**：`aff1079` — 含双浏览器 409 E2E 与候选分批智能建议
+> **协作分支已推送基线**：`4946a0d` — 含双浏览器 409/刷新来源 E2E 与候选分批智能建议
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **本地状态**：刷新来源保留人工映射 E2E（task msg_28b5b564）**待 Codex 对 review_request 明确 ack 后**再 commit/push；禁止擅自提交
+> **本地状态**：刷新来源保留人工映射 E2E 已提交并推送；标书制作者路线图阶段 0 已完成审计，阶段 1「中标内容模板资产化」待立项实现
 > **验收基线**：`pytest`（含分批用例）；`frontend npm run lint` 0 errors/0 warnings；`frontend npm run build` 通过；`npm run test:e2e:matrix` 通过（409 主路径 + 刷新来源保留映射）
 
 ---
@@ -265,8 +265,9 @@ frontend/src/features/
 
 ## 6. 建议下一会话方向
 
-1. E2E 扩展（智能建议多批串行与人工确认，可选）；来源超过 80 的分页须另开 task
-2. 标题整章布局/最小标题左栏（需用户提供效果图和版式规则）
+1. 标书制作者路线图阶段 1：中标内容模板资产化（见 `docs/plans/2026-07-12-bid-writer-roadmap.md`）；阶段目标、进度和验收须随代码提交
+2. E2E 扩展（智能建议多批串行与人工确认，可选）；来源超过 80 的分页须另开 task
+3. 标题整章布局/最小标题左栏（需用户提供效果图和版式规则）
 
 资源同步后续只可由管理员配置新的签名发布方，绝不可放开浏览器 URL 或外网抓取。图片管线已冻结项目内资源引用协议，后续扩展不得放开外链或客户端路径。SSE 的多工作空间鉴权、事件游标和项目级总线不在当前范围。
 
@@ -321,8 +322,9 @@ frontend/src/features/
 
 ## 11. 当前会话状态（2026-07-12）
 
-- 当前分支仍为 `collab/grok-code-codex-review`；已推送基线为 `aff1079`，禁止直接合入 `main`。
-- `npm run test:e2e:matrix` 现跑 conflict + refresh 两 spec（409 主路径与刷新来源保留人工映射）；智能建议人工确认 E2E 仍未做。刷新来源 E2E 改动待 Codex `ack` 后再 commit/push。
+- 当前分支仍为 `collab/grok-code-codex-review`；已推送基线为 `4946a0d`，禁止直接合入 `main`。
+- `npm run test:e2e:matrix` 现跑 conflict + refresh 两 spec（409 主路径与刷新来源保留人工映射）；智能建议人工确认 E2E 仍未做。
+- 标书制作者路线图已建 `docs/plans/2026-07-12-bid-writer-roadmap.md`：阶段 0 审计完成，阶段 1 中标内容模板资产化待实现。每阶段目标、当前进度、验收和未做项必须更新文档并与代码一起推送 GitHub。
 - 现有 Grok 会话已由用户确认通过 AgentBridge 连通。不要重复启动 Grok、不要终止用户已打开的 AgentBridge 会话；当前 Codex 侧没有绑定该 AgentBridge pair 时，仍以 `tools/agent-collaboration/` 消息箱作为可审计的回退通道。
 - 新任务分工不变：Codex 负责范围、取舍、审查和验收；Grok 负责限定范围内的实现与测试。每一项先发 `task`，完成后发 `review_request`，未经 Codex `ack` 不得提交或推送。
 
