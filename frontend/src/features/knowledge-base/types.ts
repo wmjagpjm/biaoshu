@@ -1,10 +1,62 @@
 /**
  * 模块：知识库类型
- * 用途：文档知识库（文件夹 + 解析状态）+ 图片知识库。
- * 对接：GET|POST /api/knowledge/*；useKnowledgeBase 优先 API。
+ * 用途：文档知识库（文件夹 + 解析状态）+ 卡片化素材库 + 图片卡。
+ * 对接：GET|POST /api/knowledge/*；/api/cards；useKnowledgeBase / useKnowledgeCards。
  */
 
-export type KbTab = "documents" | "images";
+export type KbTab = "documents" | "cards" | "images";
+
+/** 知识卡片类型（与后端 knowledge_cards.type 对齐） */
+export type KnowledgeCardType =
+  | "document"
+  | "image"
+  | "qualification"
+  | "performance";
+
+export type KnowledgeCardStatus = "active" | "archived";
+
+/** 列表摘要：无正文全文、无 base64 */
+export type KnowledgeCardSummary = {
+  id: string;
+  workspaceId: string;
+  type: KnowledgeCardType;
+  title: string;
+  tags: string[];
+  status: KnowledgeCardStatus;
+  summary: string;
+  sourceType: string;
+  sourceId: string | null;
+  sourceLabel: string;
+  hasBody: boolean;
+  hasImage: boolean;
+  contentType?: string | null;
+  sizeBytes: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** 详情：含正文快照与图片元数据 */
+export type KnowledgeCard = KnowledgeCardSummary & {
+  bodyMarkdown: string;
+  payload?: Record<string, unknown> | null;
+  storedName?: string | null;
+};
+
+export type InsertCardResult = {
+  markdown: string;
+  projectImageId: string | null;
+  cardId: string;
+  cardType: KnowledgeCardType;
+  title: string;
+  sourceLabel: string;
+};
+
+export const CARD_TYPE_LABEL: Record<KnowledgeCardType, string> = {
+  document: "文档片段",
+  image: "图片",
+  qualification: "资质",
+  performance: "业绩",
+};
 
 /** 文档处理状态机 */
 export type DocParseStatus =

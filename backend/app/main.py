@@ -19,6 +19,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import (
+    cards as cards_api,
     compliance as compliance_api,
     export as export_api,
     files,
@@ -42,6 +43,7 @@ from app.models import (  # noqa: F401
     KbChunkRow,
     KbDocumentRow,
     KbFolderRow,
+    KnowledgeCardRow,
     Project,
     ProjectEditorStateRow,
     ProjectFileRow,
@@ -112,6 +114,7 @@ def create_app() -> FastAPI:
     app.include_router(export_api.router, prefix="/api")
     app.include_router(parse_callback.router, prefix="/api")
     app.include_router(knowledge_api.router, prefix="/api")
+    app.include_router(cards_api.router, prefix="/api")
     app.include_router(compliance_api.router, prefix="/api")
     app.include_router(opportunities.router, prefix="/api")
     app.include_router(resources.router, prefix="/api")

@@ -1,38 +1,36 @@
-import { useMemo, useRef, useState, type DragEvent } from "react";
+/**
+ * 模块：知识库页
+ * 用途：文档（文件夹树 + 状态筛选 + 上传索引）+ 素材卡片库 + 后端化图片卡。
+ * 对接：/api/knowledge；/api/cards；useKnowledgeBase / useKnowledgeCards。
+ * 二次开发：图片禁止回退 localStorage/data URL；AI 注入与融合属阶段 3。
+ */
+
+import { useMemo, useRef, useState, type DragEvent, type FormEvent } from "react";
 import {
   BookOpen,
   FolderInput,
   ImageIcon,
   Images,
+  Layers,
   RefreshCw,
   Search,
   Trash2,
   Upload,
-  X,
 } from "lucide-react";
 import { EmptyState } from "../../../shared/components/EmptyState/EmptyState";
+import { cardContentUrl, getCard } from "../api/cardsApi";
 import { FolderTree } from "../components/FolderTree";
 import { useKnowledgeBase } from "../hooks/useKnowledgeBase";
-import { imageCategories, mockImages } from "../mock";
-import type { DocParseStatus, KnowledgeImage } from "../types";
-import { DOC_STATUS_LABEL } from "../types";
+import { useKnowledgeCards } from "../hooks/useKnowledgeCards";
+import type {
+  DocParseStatus,
+  KnowledgeCard,
+  KnowledgeCardSummary,
+  KnowledgeCardType,
+  KbTab,
+} from "../types";
+import { CARD_TYPE_LABEL, DOC_STATUS_LABEL } from "../types";
 import "./KnowledgeBase.css";
-
-const STORAGE_KEY = "biaoshu.knowledgeImages.v1";
-
-function loadUserImages(): KnowledgeImage[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    return JSON.parse(raw) as KnowledgeImage[];
-  } catch {
-    return [];
-  }
-}
-
-function saveUserImages(list: KnowledgeImage[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
-}
 
 function statusClass(status: DocParseStatus): string {
   if (status === "ready") return "is-ready";
@@ -41,108 +39,36 @@ function statusClass(status: DocParseStatus): string {
   return "is-busy";
 }
 
-/**
- * 模块：知识库页
- * 用途：文档（文件夹树 + 状态筛选 + 批量操作 + 上传索引）+ 图片素材库。
- * 对接：文档走 /api/knowledge；图片库仍 localStorage。
- */
+function parseTags(raw: string): string[] {
+  return raw
+    .split(/[，,\n]/)
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .slice(0, 20);
+}
+
 export function KnowledgeBasePage() {
-  const [tab, setTab] = useState<"documents" | "images">("documents");
+  const [tab, setTab] = useState<KbTab>("documents");
   const kb = useKnowledgeBase();
+  const cards = useKnowledgeCards();
+  const images = useKnowledgeCards({ fixedType: "image" });
   const docFileRef = useRef<HTMLInputElement>(null);
 
-  const [imgQuery, setImgQuery] = useState("");
-  const [imgCategory, setImgCategory] = useState("全部");
-  const [userImages, setUserImages] = useState<KnowledgeImage[]>(() =>
-    loadUserImages(),
-  );
   const [dragOver, setDragOver] = useState(false);
-  const [preview, setPreview] = useState<KnowledgeImage | null>(null);
   const [moveTarget, setMoveTarget] = useState("");
-
-  const allImages = useMemo(
-    () => [...userImages, ...mockImages],
-    [userImages],
-  );
-
-  const filteredImages = useMemo(() => {
-    const q = imgQuery.trim().toLowerCase();
-    return allImages.filter((img) => {
-      if (imgCategory !== "全部" && img.category !== imgCategory) return false;
-      if (!q) return true;
-      return (
-        img.name.toLowerCase().includes(q) ||
-        img.caption.toLowerCase().includes(q) ||
-        img.tags.some((t) => t.toLowerCase().includes(q)) ||
-        img.category.includes(q)
-      );
-    });
-  }, [allImages, imgCategory, imgQuery]);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createType, setCreateType] =
+    useState<Exclude<KnowledgeCardType, "image">>("document");
+  const [createTitle, setCreateTitle] = useState("");
+  const [createBody, setCreateBody] = useState("");
+  const [createTags, setCreateTags] = useState("");
+  const [createSource, setCreateSource] = useState("手工录入");
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [detail, setDetail] = useState<KnowledgeCard | null>(null);
 
   const allFilteredSelected =
     kb.filteredDocs.length > 0 &&
     kb.filteredDocs.every((d) => kb.selectedIds.includes(d.id));
-
-  function addImagesFromFiles(files: FileList | File[]) {
-    const list = Array.from(files).filter((f) => f.type.startsWith("image/"));
-    if (list.length === 0) {
-      window.alert("请选择图片文件（png / jpg / webp / gif 等）");
-      return;
-    }
-
-    const readers = list.map(
-      (file) =>
-        new Promise<KnowledgeImage>((resolve) => {
-          const reader = new FileReader();
-          reader.onload = () => {
-            const url = String(reader.result || "");
-            resolve({
-              id: `user_img_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-              name: file.name,
-              thumbUrl: url,
-              url,
-              tags: ["本地上传"],
-              category: "未分类",
-              sizeLabel: formatSize(file.size),
-              caption: file.name.replace(/\.[^.]+$/, ""),
-              updatedAt: new Date().toISOString(),
-            });
-          };
-          reader.readAsDataURL(file);
-        }),
-    );
-
-    void Promise.all(readers).then((items) => {
-      setUserImages((prev) => {
-        const next = [...items, ...prev];
-        saveUserImages(next);
-        return next;
-      });
-      setTab("images");
-    });
-  }
-
-  function removeUserImage(id: string) {
-    if (!id.startsWith("user_img_")) {
-      window.alert("演示内置图片不可删除，可删除你上传的图片。");
-      return;
-    }
-    if (!window.confirm("确定从图片知识库移除该图片？")) return;
-    setUserImages((prev) => {
-      const next = prev.filter((i) => i.id !== id);
-      saveUserImages(next);
-      return next;
-    });
-    if (preview?.id === id) setPreview(null);
-  }
-
-  function onDrop(e: DragEvent) {
-    e.preventDefault();
-    setDragOver(false);
-    if (e.dataTransfer.files?.length) {
-      addImagesFromFiles(e.dataTransfer.files);
-    }
-  }
 
   function handleBatchMove() {
     if (!moveTarget || !kb.selectedIds.length) return;
@@ -150,15 +76,61 @@ export function KnowledgeBasePage() {
     setMoveTarget("");
   }
 
+  async function openDetail(card: KnowledgeCardSummary) {
+    try {
+      const full = await getCard(card.id);
+      setDetail(full);
+    } catch {
+      setDetail({
+        ...card,
+        bodyMarkdown: card.summary || "",
+        payload: null,
+        storedName: null,
+      });
+    }
+  }
+
+  async function handleCreateCard(e: FormEvent) {
+    e.preventDefault();
+    setCreateError(null);
+    try {
+      await cards.createText({
+        type: createType,
+        title: createTitle,
+        bodyMarkdown: createBody,
+        tags: parseTags(createTags),
+        sourceLabel: createSource,
+      });
+      setCreateOpen(false);
+      setCreateTitle("");
+      setCreateBody("");
+      setCreateTags("");
+      setTab("cards");
+    } catch (reason) {
+      setCreateError(
+        (reason as { message?: string }).message || "创建失败",
+      );
+    }
+  }
+
+  function onDropImages(e: DragEvent) {
+    e.preventDefault();
+    setDragOver(false);
+    if (e.dataTransfer.files?.length) {
+      void images.uploadImages(e.dataTransfer.files).then(() => setTab("images"));
+    }
+  }
+
+  const cardList = useMemo(() => cards.items, [cards.items]);
+
   return (
     <div className="page">
       <header className="page-header">
         <div>
           <h1>知识库</h1>
           <p>
-            文档按文件夹管理并展示解析/索引状态；图片库管理架构图等配图素材。
-            大纲/正文生成时自动关键词检索知识库参考
-            {kb.source === "api" ? "（已接后端）" : "（当前离线本地演示）"}。
+            文档按文件夹管理；素材卡片统一沉淀文档片段、资质、业绩与图片，供章节安全引用。
+            {kb.source === "api" ? "（已接后端）" : "（文档当前离线本地演示）"}
           </p>
         </div>
         <div className="page-actions">
@@ -196,21 +168,44 @@ export function KnowledgeBasePage() {
                 <Upload size={16} /> {kb.busy ? "处理中…" : "上传文档"}
               </button>
             </>
-          ) : (
+          ) : null}
+          {tab === "cards" ? (
+            <>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                disabled={cards.loading}
+                onClick={() => void cards.refresh()}
+              >
+                <RefreshCw size={16} /> 刷新
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => setCreateOpen(true)}
+                aria-label="新建文本卡片"
+              >
+                <Layers size={16} /> 新建卡片
+              </button>
+            </>
+          ) : null}
+          {tab === "images" ? (
             <label className="btn btn-primary" style={{ cursor: "pointer" }}>
-              <Upload size={16} /> 上传图片
+              <Upload size={16} /> 上传图片卡
               <input
                 type="file"
-                accept="image/*"
+                accept="image/png,image/jpeg,image/gif"
                 multiple
                 hidden
                 onChange={(e) => {
-                  if (e.target.files?.length) addImagesFromFiles(e.target.files);
+                  if (e.target.files?.length) {
+                    void images.uploadImages(e.target.files);
+                  }
                   e.target.value = "";
                 }}
               />
             </label>
-          )}
+          ) : null}
         </div>
       </header>
 
@@ -225,11 +220,19 @@ export function KnowledgeBasePage() {
         </button>
         <button
           type="button"
+          className={`kb-tab${tab === "cards" ? " is-active" : ""}`}
+          onClick={() => setTab("cards")}
+        >
+          <Layers size={16} /> 素材卡片
+          <span className="badge badge-muted">{cardList.length}</span>
+        </button>
+        <button
+          type="button"
           className={`kb-tab${tab === "images" ? " is-active" : ""}`}
           onClick={() => setTab("images")}
         >
-          <Images size={16} /> 图片知识库
-          <span className="badge badge-muted">{allImages.length}</span>
+          <Images size={16} /> 图片卡片
+          <span className="badge badge-muted">{images.items.length}</span>
         </button>
       </nav>
 
@@ -497,8 +500,160 @@ export function KnowledgeBasePage() {
         </div>
       )}
 
+      {tab === "cards" && (
+        <div className="kb-cards-panel">
+          {cards.error && (
+            <div className="hint-banner" role="status" style={{ marginBottom: 12 }}>
+              {cards.error}
+            </div>
+          )}
+          <div className="kb-docs-toolbar card card-pad">
+            <div className="field" style={{ margin: 0, flex: 1, minWidth: 180 }}>
+              <label htmlFor="kb-card-search">检索卡片</label>
+              <div style={{ position: "relative" }}>
+                <Search
+                  size={16}
+                  style={{
+                    position: "absolute",
+                    left: 12,
+                    top: 14,
+                    color: "var(--text-tertiary)",
+                  }}
+                />
+                <input
+                  id="kb-card-search"
+                  value={cards.query}
+                  onChange={(e) => cards.setQuery(e.target.value)}
+                  placeholder="标题、标签、摘要、来源…"
+                  style={{ paddingLeft: 36 }}
+                  aria-label="检索卡片"
+                />
+              </div>
+            </div>
+            <div className="field" style={{ margin: 0, minWidth: 140 }}>
+              <label htmlFor="kb-card-type">类型</label>
+              <select
+                id="kb-card-type"
+                value={cards.typeFilter}
+                onChange={(e) =>
+                  cards.setTypeFilter(
+                    (e.target.value || "") as KnowledgeCardType | "",
+                  )
+                }
+                aria-label="卡片类型"
+              >
+                <option value="">全部类型</option>
+                <option value="document">文档片段</option>
+                <option value="qualification">资质</option>
+                <option value="performance">业绩</option>
+                <option value="image">图片</option>
+              </select>
+            </div>
+            <div className="field" style={{ margin: 0, minWidth: 120 }}>
+              <label htmlFor="kb-card-status">状态</label>
+              <select
+                id="kb-card-status"
+                value={cards.statusFilter}
+                onChange={(e) =>
+                  cards.setStatusFilter(
+                    e.target.value as "active" | "archived" | "all",
+                  )
+                }
+              >
+                <option value="active">有效</option>
+                <option value="archived">已归档</option>
+                <option value="all">全部</option>
+              </select>
+            </div>
+          </div>
+
+          {cards.loading ? (
+            <p>加载卡片中…</p>
+          ) : cardList.length === 0 ? (
+            <EmptyState
+              title="暂无素材卡片"
+              description="点击「新建卡片」录入文档/资质/业绩，或在图片 Tab 上传 PNG/JPEG/GIF。"
+            />
+          ) : (
+            <ul className="kb-card-grid" aria-label="素材卡片列表">
+              {cardList.map((card) => (
+                <li
+                  key={card.id}
+                  className="card card-pad kb-card-item"
+                  aria-label={`卡片 ${card.title}`}
+                >
+                  <div className="kb-card-item__head">
+                    <strong>{card.title}</strong>
+                    <span className="badge badge-muted">
+                      {CARD_TYPE_LABEL[card.type]}
+                    </span>
+                  </div>
+                  <p className="kb-card-item__summary">
+                    {card.summary || "无摘要"}
+                  </p>
+                  <div className="kb-card-item__meta mono">
+                    {card.sourceLabel || "无来源"} · {card.status}
+                  </div>
+                  <div className="kb-card-item__tags">
+                    {card.tags.map((t) => (
+                      <span key={t} className="badge badge-muted">
+                        {t}
+                      </span>
+                    ))}
+                  </div>
+                  {card.type === "image" && card.hasImage ? (
+                    <img
+                      src={cardContentUrl(card.id)}
+                      alt={card.title}
+                      className="kb-card-item__thumb"
+                    />
+                  ) : null}
+                  <div className="kb-card-item__actions">
+                    <button
+                      type="button"
+                      className="btn btn-soft btn-sm"
+                      onClick={() => void openDetail(card)}
+                    >
+                      预览
+                    </button>
+                    {card.status === "active" ? (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        disabled={cards.busy}
+                        onClick={() => void cards.archive(card.id)}
+                      >
+                        归档
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      disabled={cards.busy}
+                      aria-label={`删除卡片 ${card.title}`}
+                      onClick={() => {
+                        if (window.confirm(`确定删除卡片「${card.title}」？`)) {
+                          void cards.remove(card.id);
+                        }
+                      }}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
       {tab === "images" && (
         <>
+          {images.error && (
+            <div className="hint-banner" role="status" style={{ marginBottom: 12 }}>
+              {images.error}
+            </div>
+          )}
           <div
             className={`kb-upload-zone${dragOver ? " is-drag" : ""}`}
             onDragOver={(e) => {
@@ -506,7 +661,7 @@ export function KnowledgeBasePage() {
               setDragOver(true);
             }}
             onDragLeave={() => setDragOver(false)}
-            onDrop={onDrop}
+            onDrop={onDropImages}
             onClick={() => document.getElementById("kb-image-input")?.click()}
             role="button"
             tabIndex={0}
@@ -518,16 +673,18 @@ export function KnowledgeBasePage() {
             <ImageIcon size={28} color="var(--primary)" />
             <strong>拖拽图片到此处，或点击上传</strong>
             <p>
-              支持 PNG / JPG / WEBP / GIF；建议单张 ≤ 10MB。上传后可供技术标配图引用。
+              仅 PNG / JPEG / GIF；保存为后端图片卡，刷新后仍可预览，不依赖 localStorage。
             </p>
             <input
               id="kb-image-input"
               type="file"
-              accept="image/*"
+              accept="image/png,image/jpeg,image/gif"
               multiple
               hidden
               onChange={(e) => {
-                if (e.target.files?.length) addImagesFromFiles(e.target.files);
+                if (e.target.files?.length) {
+                  void images.uploadImages(e.target.files);
+                }
                 e.target.value = "";
               }}
             />
@@ -535,7 +692,7 @@ export function KnowledgeBasePage() {
 
           <div className="kb-toolbar">
             <div className="field">
-              <label htmlFor="kb-img-search">检索图片</label>
+              <label htmlFor="kb-img-search">检索图片卡</label>
               <div style={{ position: "relative" }}>
                 <Search
                   size={16}
@@ -548,106 +705,67 @@ export function KnowledgeBasePage() {
                 />
                 <input
                   id="kb-img-search"
-                  value={imgQuery}
-                  onChange={(e) => setImgQuery(e.target.value)}
-                  placeholder="按文件名、说明、标签检索…"
+                  value={images.query}
+                  onChange={(e) => images.setQuery(e.target.value)}
+                  placeholder="名称、标签…"
                   style={{ paddingLeft: 36 }}
                 />
               </div>
             </div>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              disabled={images.loading}
+              onClick={() => void images.refresh()}
+            >
+              <RefreshCw size={16} /> 刷新
+            </button>
           </div>
 
-          <div className="kb-cats">
-            {imageCategories.map((c) => (
-              <button
-                key={c}
-                type="button"
-                className={`kb-cat${imgCategory === c ? " is-active" : ""}`}
-                onClick={() => setImgCategory(c)}
-              >
-                {c}
-                {c !== "全部" ? "" : ` (${allImages.length})`}
-              </button>
-            ))}
-          </div>
-
-          {filteredImages.length === 0 ? (
-            <div className="card empty-state">
-              <strong>暂无匹配图片</strong>
-              试试更换分类，或上传架构图 / 部署图 / 效果图素材。
-            </div>
+          {images.items.length === 0 ? (
+            <EmptyState
+              title="暂无图片卡片"
+              description="上传 PNG/JPEG/GIF 后会出现在此，并可在章节中「插入卡片」。"
+            />
           ) : (
-            <div className="kb-image-grid">
-              {filteredImages.map((img) => (
-                <article key={img.id} className="kb-image-card">
-                  <div
-                    className="kb-image-card__thumb"
-                    onClick={() => setPreview(img)}
-                    role="button"
-                    tabIndex={0}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") setPreview(img);
-                    }}
-                  >
-                    <div className="kb-image-card__pattern" />
-                    {img.url || img.thumbUrl ? (
-                      <img src={img.url || img.thumbUrl} alt={img.name} />
-                    ) : (
-                      <ImageIcon
-                        size={36}
-                        style={{ position: "relative", zIndex: 1 }}
-                      />
-                    )}
-                    <span className="kb-image-card__badge badge badge-primary">
-                      {img.category}
-                    </span>
-                  </div>
+            <div className="kb-image-grid" aria-label="图片卡片网格">
+              {images.items.map((img) => (
+                <article
+                  key={img.id}
+                  className="kb-image-card"
+                  aria-label={`图片卡片 ${img.title}`}
+                >
+                  <img
+                    src={cardContentUrl(img.id)}
+                    alt={img.title}
+                    loading="lazy"
+                  />
                   <div className="kb-image-card__body">
-                    <div className="kb-image-card__name">{img.name}</div>
-                    <div className="kb-image-card__caption">{img.caption}</div>
-                    <div className="kb-image-card__meta">
-                      <span>{img.sizeLabel}</span>
-                      {img.width && img.height ? (
-                        <span>
-                          {img.width}×{img.height}
-                        </span>
-                      ) : null}
-                      {img.tags.slice(0, 2).map((t) => (
-                        <span key={t} className="badge badge-muted">
-                          {t}
-                        </span>
-                      ))}
+                    <strong>{img.title}</strong>
+                    <div className="mono" style={{ fontSize: 11 }}>
+                      {img.sourceLabel || img.summary}
                     </div>
-                  </div>
-                  <div className="kb-image-card__actions">
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      onClick={() => setPreview(img)}
-                    >
-                      查看
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-soft btn-sm"
-                      title="后端接入后可插入正文"
-                      onClick={() =>
-                        window.alert(
-                          "演示：标记为「可引用配图」。后端将支持写入章节插图位。",
-                        )
-                      }
-                    >
-                      用于配图
-                    </button>
-                    {img.id.startsWith("user_img_") && (
+                    <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                      <button
+                        type="button"
+                        className="btn btn-soft btn-sm"
+                        onClick={() => void openDetail(img)}
+                      >
+                        预览
+                      </button>
                       <button
                         type="button"
                         className="btn btn-ghost btn-sm"
-                        onClick={() => removeUserImage(img.id)}
+                        aria-label={`删除图片卡片 ${img.title}`}
+                        onClick={() => {
+                          if (window.confirm(`删除图片卡「${img.title}」？`)) {
+                            void images.remove(img.id);
+                          }
+                        }}
                       >
                         <Trash2 size={14} />
                       </button>
-                    )}
+                    </div>
                   </div>
                 </article>
               ))}
@@ -656,124 +774,173 @@ export function KnowledgeBasePage() {
         </>
       )}
 
-      {preview && (
+      {createOpen && (
         <div
-          className="kb-modal-mask"
-          onClick={() => setPreview(null)}
+          className="modal-backdrop"
           role="presentation"
+          onClick={() => setCreateOpen(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15, 23, 42, 0.45)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 70,
+            padding: 16,
+          }}
+        >
+          <form
+            className="card card-pad"
+            role="dialog"
+            aria-modal="true"
+            aria-label="新建文本卡片"
+            onClick={(e) => e.stopPropagation()}
+            onSubmit={(e) => void handleCreateCard(e)}
+            style={{ width: "min(560px, 100%)" }}
+          >
+            <h2 style={{ marginTop: 0, fontSize: 18 }}>新建文本卡片</h2>
+            <div className="field">
+              <label htmlFor="card-type">类型</label>
+              <select
+                id="card-type"
+                value={createType}
+                onChange={(e) =>
+                  setCreateType(
+                    e.target.value as Exclude<KnowledgeCardType, "image">,
+                  )
+                }
+              >
+                <option value="document">文档片段</option>
+                <option value="qualification">资质</option>
+                <option value="performance">业绩</option>
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="card-title">标题</label>
+              <input
+                id="card-title"
+                required
+                value={createTitle}
+                onChange={(e) => setCreateTitle(e.target.value)}
+                aria-label="卡片标题"
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="card-body">正文</label>
+              <textarea
+                id="card-body"
+                required
+                rows={6}
+                value={createBody}
+                onChange={(e) => setCreateBody(e.target.value)}
+                aria-label="卡片正文"
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="card-tags">标签（逗号分隔）</label>
+              <input
+                id="card-tags"
+                value={createTags}
+                onChange={(e) => setCreateTags(e.target.value)}
+                aria-label="卡片标签"
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="card-source">来源说明</label>
+              <input
+                id="card-source"
+                value={createSource}
+                onChange={(e) => setCreateSource(e.target.value)}
+                aria-label="卡片来源"
+              />
+            </div>
+            {createError && (
+              <div className="hint-banner" role="alert">
+                {createError}
+              </div>
+            )}
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => setCreateOpen(false)}
+              >
+                取消
+              </button>
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={cards.busy}
+              >
+                {cards.busy ? "保存中…" : "创建卡片"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {detail && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onClick={() => setDetail(null)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15, 23, 42, 0.45)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 75,
+            padding: 16,
+          }}
         >
           <div
-            className="kb-modal"
-            onClick={(e) => e.stopPropagation()}
+            className="card card-pad"
             role="dialog"
-            aria-modal
-            aria-label={preview.name}
+            aria-modal="true"
+            aria-label={`预览卡片 ${detail.title}`}
+            onClick={(e) => e.stopPropagation()}
+            style={{ width: "min(640px, 100%)", maxHeight: "85vh", overflow: "auto" }}
           >
-            <div className="kb-modal__visual">
-              {preview.url || preview.thumbUrl ? (
-                <img src={preview.url || preview.thumbUrl} alt={preview.name} />
-              ) : (
-                <div
-                  style={{ color: "#94a3b8", textAlign: "center", padding: 24 }}
-                >
-                  <ImageIcon size={48} />
-                  <p>演示占位图（上传本地图片可预览真实内容）</p>
-                </div>
-              )}
+            <h2 style={{ marginTop: 0 }}>{detail.title}</h2>
+            <div className="mono" style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+              {CARD_TYPE_LABEL[detail.type]} · 来源：{detail.sourceLabel || "—"}
             </div>
-            <div className="kb-modal__side">
-              <div
+            {detail.type === "image" ? (
+              <img
+                src={cardContentUrl(detail.id)}
+                alt={detail.title}
+                style={{ marginTop: 12, maxWidth: "100%", maxHeight: 360 }}
+              />
+            ) : (
+              <pre
+                className="mono"
                 style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  gap: 8,
+                  marginTop: 12,
+                  whiteSpace: "pre-wrap",
+                  fontSize: 13,
+                  background: "var(--hover-bg)",
+                  padding: 12,
+                  borderRadius: 8,
                 }}
               >
-                <h3>{preview.name}</h3>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm"
-                  onClick={() => setPreview(null)}
-                  aria-label="关闭"
-                >
-                  <X size={16} />
-                </button>
-              </div>
-              <div className="field">
-                <label>分类</label>
-                <div>{preview.category}</div>
-              </div>
-              <div className="field">
-                <label>说明（检索/配图用）</label>
-                <div
-                  style={{
-                    fontSize: "var(--fs-sm)",
-                    color: "var(--text-body)",
-                  }}
-                >
-                  {preview.caption}
-                </div>
-              </div>
-              <div className="field">
-                <label>标签</label>
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  {preview.tags.map((t) => (
-                    <span key={t} className="badge badge-muted">
-                      {t}
-                    </span>
-                  ))}
-                </div>
-              </div>
-              <div className="kb-image-card__meta">
-                <span>{preview.sizeLabel}</span>
-                {preview.width && preview.height ? (
-                  <span>
-                    {preview.width}×{preview.height}
-                  </span>
-                ) : null}
-                <span>
-                  更新 {new Date(preview.updatedAt).toLocaleString("zh-CN")}
-                </span>
-              </div>
-              <div className="kb-modal__actions">
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  onClick={() =>
-                    window.alert(
-                      "演示：已加入当前项目配图候选（后端待接）。",
-                    )
-                  }
-                >
-                  用于配图
-                </button>
-                {preview.id.startsWith("user_img_") && (
-                  <button
-                    type="button"
-                    className="btn btn-ghost"
-                    onClick={() => removeUserImage(preview.id)}
-                  >
-                    <Trash2 size={16} /> 删除
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  onClick={() => setPreview(null)}
-                >
-                  关闭
-                </button>
-              </div>
+                {detail.bodyMarkdown || "（无正文）"}
+              </pre>
+            )}
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => setDetail(null)}
+              >
+                关闭
+              </button>
             </div>
           </div>
         </div>
       )}
     </div>
   );
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }

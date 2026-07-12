@@ -2,7 +2,7 @@
  * 模块：知识库文档状态
  * 用途：文件夹树 + 文档列表/筛选/批量移动/上传索引/重试；优先 API，失败回退 localStorage。
  * 对接：GET|POST /api/knowledge/*；页面 KnowledgeBasePage
- * 二次开发：图片库仍独立 localStorage，勿混进本 hook。
+ * 二次开发：图片/素材卡片走 useKnowledgeCards（后端 /api/cards），勿再混入 localStorage。
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";

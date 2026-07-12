@@ -1,13 +1,13 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-12（阶段 1 中标内容模板资产化 MVP 实现中，待 Codex 审查）
+> **交接日期**：2026-07-12（阶段 2 卡片化知识与素材库 MVP 已实现，待 Codex 审查；未 commit/push）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
-> **协作分支已推送基线**：`de43f2d` — 含中标内容模板资产化、双浏览器 409/刷新来源 E2E 与候选分批智能建议
+> **协作分支已推送基线**：`335beb5` — 含中标内容模板资产化、标书制作者剩余主线规划、双浏览器 409/刷新来源 E2E 与候选分批智能建议
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **本地状态**：阶段 0 审计、阶段 1 技术标中标内容模板 MVP 均已提交并推送；阶段 2 卡片化知识与素材库待设计审计
-> **验收基线**：`pytest`（含 `test_bid_templates`）；`frontend npm run lint` / `build`；`npm run test:e2e:templates`；`git diff --check`
+> **本地状态**：阶段 0/1 已推送；阶段 2 MVP 本地已实现（`knowledge_cards` + `/api/cards` + 章节插入 + E2E），待审查后合入
+> **验收基线**：`pytest`（含 `test_knowledge_cards` / `test_bid_templates`）；`frontend npm run lint` / `build`；`npm run test:e2e:cards` / `templates` / `matrix`；`git diff --check`
 
 ---
 
@@ -108,7 +108,8 @@
 | 商务任务 | `services/business_task_service.py` | **齐** | qualify/toc/quote/commit |
 | 编辑态 | `services/editor_state_service.py` | **齐** | business_json、response_matrix_json 规范化与死引用收敛 |
 | 响应矩阵 | `services/editor_state_service.py`、`services/task_service.py`、`api/projects.py`、`api/tasks.py`、`services/export_service.py`、`models/entities.py`；前端 `useTechnicalPlanEditors` / `ResponseMatrixPanel` | **齐/部分** | service/API/导出与乐观锁注释齐；`response_match` 支持 `candidateBatchIndex` 候选分批且只产出待确认建议；前端冲突 UX 与串行分批进度注释齐；`entities.py` 仍按历史文件部分 |
-| 知识库 | `services/knowledge_service.py`、`api/knowledge.py` | **齐** | 混合检索 |
+| 知识库 | `services/knowledge_service.py`、`api/knowledge.py` | **齐** | 混合检索；`get_chunk` 供卡片沉淀 |
+| 知识卡片 | `services/card_service.py`、`api/cards.py`、`models/entities.py`（KnowledgeCardRow） | **齐** | 独立 knowledge_cards；列表摘要/详情；from-chunk/from-project-image；insert-card → biaoshu-image |
 | 向量 | `services/embedding_service.py` | **齐** | 本地哈希 + 可选 API |
 | 导出 | `services/export_service.py` | **齐** | 标题段落边框/分级底色、项目内正文图片嵌入与无效引用降级已做 |
 | 修订 | `services/revise_service.py` | **齐** | 商务结构化写回 |
@@ -117,12 +118,12 @@
 | 相似度 | `services/text_similarity.py` | **齐** | |
 | LLM | `services/llm_service.py` | **齐** | |
 | 设置 | `services/settings_service.py`、`api/settings.py` | **部分** | 文件顶有；embedding_model 已在模型/schema 体现 |
-| 解析/文件 | `parse_service` / `file_service` / `api/files.py` | **齐** | `source`/`image` 角色隔离、Pillow 校验和项目内安全读取 |
+| 解析/文件 | `parse_service` / `file_service` / `api/files.py` | **齐** | `source`/`image` 角色隔离、Pillow 校验（公开 `verify_image_content`）和项目内安全读取 |
 | 本地标讯库 | `services/opportunity_service.py`、`api/opportunities.py` | **齐** | CRUD、服务端状态、跨 workspace 404、原子立项、离线 CSV/JSON 整批导入和弱关联清理 |
 | 资源中心 | `services/resource_service.py`、`resource_sync_service.py`、`api/resources.py` | **齐** | 全局系统只读资源、workspace 用户资源、服务端原子浏览量、签名清单受控同步与来源审计 |
 | 中标内容模板 | `services/template_service.py`、`api/templates.py`、`models/entities.py`（BidTemplateRow） | **齐** | workspace 快照沉淀/列表摘要/详情快照/删除/从模板新建；源项目 SET NULL；空大纲与超大快照 400 |
-| 实体 | `models/entities.py` | **部分** | 类 docstring 齐；文件顶视历史版本；response_matrix_json / BidTemplateRow 已补语义 |
-| 测试 | `backend/tests/*.py` | **齐/部分** | 含 `test_bid_templates` 及标题边框/SSE/标讯/资源/响应矩阵等；多数历史测试含用途 |
+| 实体 | `models/entities.py` | **部分** | 类 docstring 齐；文件顶视历史版本；KnowledgeCardRow / BidTemplateRow 已补语义 |
+| 测试 | `backend/tests/*.py` | **齐/部分** | 含 `test_knowledge_cards`、`test_bid_templates` 及标题边框/SSE/标讯/资源/响应矩阵等 |
 
 #### 前端 `frontend/src/features`
 
@@ -134,7 +135,7 @@
 | projectStore | `technical-plan/lib/projectStore.ts` | **齐** | kind 过滤 |
 | outlineTree | `technical-plan/lib/outlineTree.ts` | **齐** | markdownToOutline |
 | 商务标 | `business-bid/pages/*`、`hooks/useBusinessBidWorkspace.ts` | **齐** | 空态/API |
-| 知识库 | `knowledge-base/hooks/useKnowledgeBase.ts`、pages | **齐** | |
+| 知识库/卡片 | `knowledge-base/**`（useKnowledgeCards、cardsApi、KnowledgeBasePage）、`ChapterEditor`/`InsertCardDialog`；E2E `e2e/knowledge-cards.spec.ts` | **齐** | 图片 Tab 后端化；章节插入卡片；`npm run test:e2e:cards` |
 | 查重 | `duplicate-check/pages`、`types.ts` | **齐** | 已接 API |
 | 废标 | `rejection-check/pages`、`types.ts` | **齐** | 已接 API |
 | 设置 | `settings/hooks`、`pages`、`types` | **齐** | embeddingModel 字段 |
@@ -149,9 +150,9 @@
 
 #### 仍偏 mock、注释已标明「二期」的模块
 
-- 图片库部分仍 localStorage（知识库文档已 API）
+- 知识库文档在 API 失败时仍可回退 localStorage mock；图片/素材卡片已改为后端 `/api/cards`，不再依赖 localStorage 存图。
 
-**结论**：主链路（技术标/商务标/任务/知识库/查重/废标/导出/设置）**文件顶注释整体达标**；新会话**不得降低标准**。历史 mock 页允许「对接：二期」，但不可无文件顶。
+**结论**：主链路（技术标/商务标/任务/知识库/卡片/查重/废标/导出/设置）**文件顶注释整体达标**；新会话**不得降低标准**。历史 mock 页允许「对接：二期」，但不可无文件顶。
 
 ---
 
@@ -235,7 +236,7 @@ npm run test:e2e:matrix
 
 独立表 `bid_templates`（**非**导出版式模板 / `export_format`）。API：`POST /api/templates/from-project`（仅 technical、深拷贝 outline/chapters，可选 facts/guidance/mode；响应含完整 snapshot）、`GET /api/templates`（**列表摘要**：元数据 + `chapterCount`/`outlineTitles`，**不含**完整 snapshot）、`GET|DELETE /api/templates/{id}`（详情含完整 snapshot）、`POST /api/templates/{id}/projects`（仅创建新项目草稿 + 独立 editor-state，绝不覆盖已有项目）。`source_project_id` 可空，源项目删除 `ON DELETE SET NULL`，快照与 `source_project_name` 保留。空大纲与超过约 1.5MB 的 snapshot → 400；跨 workspace → 404。前端：`/bid-templates` 模板库仅用列表摘要展示章节数/大纲标题；技术标工作区「沉淀为模板」；E2E `npm run test:e2e:templates`。
 
-**未做**：商务模板、多模板融合/差异、卡片库、从 docx 反解析。
+**未做**：商务模板、多模板融合/差异、从 docx 反解析（卡片库 MVP 见阶段 2）。
 
 ### 4.8 路径索引
 
@@ -263,7 +264,7 @@ frontend/src/features/
 | 导出 | `structure` / `min_heading_left_enabled` | 用户已确认标题段落描边＋分级底色；整章布局/最小标题左栏仍需独立效果图与规则 |
 | 业务 | 外部标讯数据源 | 资源中心已有受控签名清单同步；标讯仍只支持本机 CSV/JSON 导入，未接网站/API/RSS |
 | 技术标 | 响应矩阵增强 | v1 已做手工映射、持久化、Word 导出联动、待确认智能建议（**候选章/大纲分批 + 前端串行累计**）、`responseMatrixVersion` DB 写锁乐观锁、前端串行保存、双浏览器 409 与刷新来源保留映射 E2E；字段级合并、来源 80 分页、智能建议人工确认浏览器 E2E 仍未做 |
-| 资产 | 卡片化知识/多模板融合 | 阶段 1 内容模板 MVP 已实现；卡片库与多模板融合/差异预览未做（路线图阶段 2/3） |
+| 资产 | 卡片化知识/多模板融合 | 阶段 1 内容模板 + 阶段 2 卡片库 MVP 已实现（待审查合入）；多模板融合/差异预览属阶段 3 |
 | RAG | 真语义大模型 embedding 调优 | 有本地+可选 API，可继续增强 |
 | 库 | Alembic | 仅 create_all + ALTER |
 | 生产 | 登录/多用户/HTTPS/Key 加密/PG/Docker | 未做 |
@@ -274,7 +275,7 @@ frontend/src/features/
 
 ## 6. 建议下一会话方向
 
-1. 阶段 2 卡片化知识与素材库：先做统一卡片模型、图片后端化、来源追溯和写作引用（见路线图功能包 1–2）
+1. Codex 审查并合入阶段 2 卡片库 MVP；通过后进入阶段 3
 2. 阶段 3 多模板/卡片融合：上下文配额、差异预览、逐项确认写入（见路线图功能包 3–4）
 3. 阶段 4 质量与交付：响应矩阵 E2E/分页/合并、可插拔解析和交付增强均独立立项（见路线图功能包 5–9）
 

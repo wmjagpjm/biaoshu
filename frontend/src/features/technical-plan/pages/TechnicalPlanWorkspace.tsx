@@ -1243,6 +1243,7 @@ export function TechnicalPlanWorkspace() {
             onChangeTitle={editors.updateChapterTitle}
             onUploadImage={pipeline.uploadImage}
             imageBusy={pipeline.busy}
+            projectId={projectId}
           />
 
           {selectedChapter && (

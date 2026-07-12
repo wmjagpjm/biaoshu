@@ -101,9 +101,13 @@ npm run test:e2e:matrix
 
 # 中标内容模板沉淀与复用 E2E
 npm run test:e2e:templates
+
+# 知识卡片创建 → 章节插入 → 刷新保持 E2E
+npm run test:e2e:cards
 ```
 
-当前基线：后端 **pytest 全量**（含 `test_bid_templates` 与候选分批）；前端 lint 0/0、构建通过；`test:e2e:matrix` 覆盖双 context 409/显式载入 **与** 刷新来源保留人工映射；`test:e2e:templates` 覆盖沉淀 → 从模板新建。智能建议须人工确认的浏览器 E2E 仍未做。
+当前基线：后端 **pytest 全量**（含 `test_knowledge_cards`、`test_bid_templates` 与候选分批）；前端 lint/build；`test:e2e:matrix` 覆盖双 context 409/显式载入 **与** 刷新来源保留人工映射；`test:e2e:templates` 覆盖沉淀 → 从模板新建；`test:e2e:cards` 覆盖新建文本卡 → 章节插入 → 刷新保持。智能建议须人工确认的浏览器 E2E 仍未做。
+
 ## 6. 已接 API 一览
 
 | 方法 | 路径 |
@@ -131,6 +135,13 @@ npm run test:e2e:templates
 | GET | `/api/templates`（可选 q/status；列表摘要无完整 snapshot） |
 | GET/DELETE | `/api/templates/{id}`（详情含完整 snapshot） |
 | POST | `/api/templates/{id}/projects`（从模板新建技术标草稿） |
+| GET | `/api/cards`（可选 q/type/status；列表摘要无正文/base64） |
+| POST | `/api/cards`（手工创建文本卡） |
+| POST | `/api/cards/upload-image`（PNG/JPEG/GIF 图片卡） |
+| POST | `/api/cards/from-chunk` / `/api/cards/from-project-image` |
+| GET/PATCH/DELETE | `/api/cards/{id}` |
+| GET | `/api/cards/{id}/content`（图片卡二进制） |
+| POST | `/api/projects/{id}/insert-card`（返回 Markdown；图片复制为项目 role=image） |
 
 ## 7. 本机日用主链路（目标 A 加强版）
 

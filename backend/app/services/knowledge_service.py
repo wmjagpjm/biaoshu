@@ -210,6 +210,17 @@ def get_doc(db: Session, workspace_id: str, doc_id: str) -> KbDocumentRow:
     return row
 
 
+def get_chunk(db: Session, workspace_id: str, chunk_id: str) -> KbChunkRow:
+    """
+    用途：按 workspace 读取单个知识分块（跨空间/不存在 → KnowledgeNotFoundError）。
+    对接：card_service.create_from_chunk；禁止把 chunk 表当卡片库复用。
+    """
+    row = db.get(KbChunkRow, chunk_id)
+    if row is None or row.workspace_id != workspace_id:
+        raise KnowledgeNotFoundError(chunk_id)
+    return row
+
+
 def _tokenize_query(query: str) -> list[str]:
     raw = (query or "").strip().lower()
     if not raw:

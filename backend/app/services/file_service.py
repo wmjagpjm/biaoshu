@@ -170,8 +170,12 @@ def save_upload(
     )
 
 
-def _verified_image_info(content: bytes, settings: Settings) -> tuple[str, str]:
-    """用途：以真实解码结果验证图片格式和像素，客户端 MIME 与扩展名不参与信任判断。"""
+def verify_image_content(content: bytes, settings: Settings) -> tuple[str, str]:
+    """
+    用途：以真实解码结果验证图片格式和像素；返回 (content_type, suffix)。
+    对接：save_image_upload；card_service 卡片图片上传/沉淀。
+    二次开发：客户端 MIME 与扩展名不得参与信任判断；仅 PNG/JPEG/GIF。
+    """
     if not content:
         raise ValueError("图片不能为空")
     if len(content) > settings.max_image_upload_bytes:
@@ -199,6 +203,11 @@ def _verified_image_info(content: bytes, settings: Settings) -> tuple[str, str]:
     if width < 1 or height < 1 or width * height > settings.max_image_pixels:
         raise ValueError("图片像素超出限制")
     return _ALLOWED_IMAGE_FORMATS[image_format]
+
+
+def _verified_image_info(content: bytes, settings: Settings) -> tuple[str, str]:
+    """用途：内部别名，兼容既有调用点。"""
+    return verify_image_content(content, settings)
 
 
 def _acquire_image_upload_lock(

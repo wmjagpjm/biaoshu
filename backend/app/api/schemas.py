@@ -511,3 +511,160 @@ class BidTemplateProjectCreate(BaseModel):
 
     name: str | None = None
     industry: str | None = None
+
+
+KnowledgeCardType = Literal["document", "image", "qualification", "performance"]
+KnowledgeCardStatus = Literal["active", "archived"]
+# 列表筛选：缺省等价 active；all 返回含归档的全量
+KnowledgeCardListStatus = Literal["active", "archived", "all"]
+
+
+class KnowledgeCardSummaryOut(BaseModel):
+    """
+    模块：知识卡片列表摘要
+    用途：GET /api/cards 列表读模型；不含正文全文与图片 base64。
+    对接：/api/cards；frontend knowledge-base 卡片 Tab。
+    二次开发：完整正文与图片元数据仅走详情；勿回填 base64。
+    """
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id: str
+    workspace_id: str = Field(serialization_alias="workspaceId")
+    type: KnowledgeCardType
+    title: str
+    tags: list[str] = Field(default_factory=list)
+    status: KnowledgeCardStatus = "active"
+    summary: str = ""
+    source_type: str = Field(default="manual", serialization_alias="sourceType")
+    source_id: str | None = Field(default=None, serialization_alias="sourceId")
+    source_label: str = Field(default="", serialization_alias="sourceLabel")
+    has_body: bool = Field(default=False, serialization_alias="hasBody")
+    has_image: bool = Field(default=False, serialization_alias="hasImage")
+    content_type: str | None = Field(default=None, serialization_alias="contentType")
+    size_bytes: int = Field(default=0, serialization_alias="sizeBytes")
+    created_at: datetime = Field(serialization_alias="createdAt")
+    updated_at: datetime = Field(serialization_alias="updatedAt")
+
+
+class KnowledgeCardOut(BaseModel):
+    """
+    模块：知识卡片详情
+    用途：详情/创建/更新响应；含正文快照与图片元数据，不含 base64。
+    对接：GET /api/cards/{id}；POST /api/cards*。
+    """
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id: str
+    workspace_id: str = Field(serialization_alias="workspaceId")
+    type: KnowledgeCardType
+    title: str
+    tags: list[str] = Field(default_factory=list)
+    status: KnowledgeCardStatus = "active"
+    summary: str = ""
+    source_type: str = Field(default="manual", serialization_alias="sourceType")
+    source_id: str | None = Field(default=None, serialization_alias="sourceId")
+    source_label: str = Field(default="", serialization_alias="sourceLabel")
+    has_body: bool = Field(default=False, serialization_alias="hasBody")
+    has_image: bool = Field(default=False, serialization_alias="hasImage")
+    content_type: str | None = Field(default=None, serialization_alias="contentType")
+    size_bytes: int = Field(default=0, serialization_alias="sizeBytes")
+    body_markdown: str = Field(default="", serialization_alias="bodyMarkdown")
+    payload: dict | None = None
+    stored_name: str | None = Field(default=None, serialization_alias="storedName")
+    created_at: datetime = Field(serialization_alias="createdAt")
+    updated_at: datetime = Field(serialization_alias="updatedAt")
+
+
+class KnowledgeCardCreate(BaseModel):
+    """
+    用途：手工创建文本类卡片请求体。
+    对接：POST /api/cards。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    type: KnowledgeCardType = "document"
+    title: str
+    body_markdown: str = Field(alias="bodyMarkdown")
+    tags: list[str] | None = None
+    summary: str | None = None
+    source_label: str | None = Field(default=None, alias="sourceLabel")
+    payload: dict | None = None
+
+
+class KnowledgeCardFromChunkCreate(BaseModel):
+    """
+    用途：从知识分块沉淀卡片。
+    对接：POST /api/cards/from-chunk。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    chunk_id: str = Field(alias="chunkId")
+    title: str | None = None
+    tags: list[str] | None = None
+    summary: str | None = None
+    type: KnowledgeCardType = "document"
+
+
+class KnowledgeCardFromProjectImageCreate(BaseModel):
+    """
+    用途：从项目图片沉淀卡片。
+    对接：POST /api/cards/from-project-image。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    project_id: str = Field(alias="projectId")
+    file_id: str = Field(alias="fileId")
+    title: str | None = None
+    tags: list[str] | None = None
+    summary: str | None = None
+
+
+class KnowledgeCardUpdate(BaseModel):
+    """
+    用途：更新卡片元数据/正文。
+    对接：PATCH /api/cards/{id}。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    title: str | None = None
+    tags: list[str] | None = None
+    status: KnowledgeCardStatus | None = None
+    summary: str | None = None
+    body_markdown: str | None = Field(default=None, alias="bodyMarkdown")
+    source_label: str | None = Field(default=None, alias="sourceLabel")
+    payload: dict | None = None
+
+
+class InsertCardBody(BaseModel):
+    """
+    用途：将卡片转为可插入章节的 Markdown 片段请求体。
+    对接：POST /api/projects/{projectId}/insert-card。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    card_id: str = Field(alias="cardId")
+
+
+class InsertCardOut(BaseModel):
+    """
+    用途：插入卡片结果；markdown 由前端用户操作追加，服务端不自动覆盖正文。
+    对接：POST /api/projects/{projectId}/insert-card。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    markdown: str
+    project_image_id: str | None = Field(
+        default=None, serialization_alias="projectImageId"
+    )
+    card_id: str = Field(serialization_alias="cardId")
+    card_type: KnowledgeCardType = Field(serialization_alias="cardType")
+    title: str
+    source_label: str = Field(default="", serialization_alias="sourceLabel")

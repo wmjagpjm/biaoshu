@@ -1,13 +1,15 @@
-import { useMemo, useRef, useState } from "react";
-import { Eye, EyeOff, ImagePlus } from "lucide-react";
-import type { ChapterContent } from "../types";
-
 /**
  * 模块：正文分章编辑器
- * 用途：左章节列表 + 右 Markdown 正文编辑；字数实时统计。
- * 对接：body 写入 useTechnicalPlanEditors；项目图片上传后写入 biaoshu-image 受控引用；AI 反馈在父级按选中章 targetId 提交。
- * 二次开发：新增图片来源或富文本编辑器时，必须继续只写入项目 file_id，禁止写入外链和本地文件路径。
+ * 用途：左章节列表 + 右 Markdown 正文编辑；字数实时统计；支持项目图片与知识卡片插入。
+ * 对接：body 写入 useTechnicalPlanEditors；项目图片 → biaoshu-image；卡片经 insert-card 追加。
+ * 二次开发：新增图片来源时必须继续只写入项目 file_id；禁止外链、data URL 和卡片路径。
  */
+
+import { useMemo, useRef, useState } from "react";
+import { Eye, EyeOff, ImagePlus, Library } from "lucide-react";
+import type { InsertCardResult } from "../../knowledge-base/types";
+import type { ChapterContent } from "../types";
+import { InsertCardDialog } from "./InsertCardDialog";
 
 export type ChapterEditorProps = {
   chapters: ChapterContent[];
@@ -17,6 +19,8 @@ export type ChapterEditorProps = {
   onChangeTitle: (id: string, title: string) => void;
   onUploadImage: (file: File) => Promise<{ id: string; filename: string }>;
   imageBusy?: boolean;
+  /** 当前项目 id，用于 insert-card；缺省时隐藏「插入卡片」 */
+  projectId?: string;
 };
 
 function statusBadge(status: ChapterContent["status"]) {
@@ -37,8 +41,10 @@ export function ChapterEditor({
   onChangeTitle,
   onUploadImage,
   imageBusy = false,
+  projectId,
 }: ChapterEditorProps) {
   const [showPreview, setShowPreview] = useState(false);
+  const [cardDialogOpen, setCardDialogOpen] = useState(false);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const bodyInputRef = useRef<HTMLTextAreaElement>(null);
   const chaptersRef = useRef(chapters);
@@ -54,24 +60,35 @@ export function ChapterEditor({
     [chapters],
   );
 
-  const insertProjectImage = async (file: File) => {
-    const targetId = selected.id;
-    const initialBody = selected.body;
-    const initialCursor = bodyInputRef.current?.selectionStart ?? initialBody.length;
-    const uploaded = await onUploadImage(file);
+  const appendMarkdown = (targetId: string, fragment: string) => {
     const targetChapter = chaptersRef.current.find(
       (chapter) => chapter.id === targetId,
     );
     if (!targetChapter) return;
     const currentBody = targetChapter.body;
-    const cursor = Math.min(initialCursor, currentBody.length);
-    const before = currentBody.slice(0, cursor);
-    const after = currentBody.slice(cursor);
-    const alt = uploaded.filename.replace(/[[\]\r\n]/g, "_") || "项目图片";
-    const reference = `![${alt}](biaoshu-image://${uploaded.id})`;
+    const cursor =
+      bodyInputRef.current && document.activeElement === bodyInputRef.current
+        ? bodyInputRef.current.selectionStart
+        : currentBody.length;
+    const safeCursor = Math.min(Math.max(cursor, 0), currentBody.length);
+    const before = currentBody.slice(0, safeCursor);
+    const after = currentBody.slice(safeCursor);
     const prefix = before && !before.endsWith("\n") ? "\n\n" : "";
     const suffix = after && !after.startsWith("\n") ? "\n\n" : "";
-    onChangeBody(targetId, `${before}${prefix}${reference}${suffix}${after}`);
+    onChangeBody(targetId, `${before}${prefix}${fragment.trim()}${suffix}${after}`);
+  };
+
+  const insertProjectImage = async (file: File) => {
+    const targetId = selected.id;
+    const uploaded = await onUploadImage(file);
+    const alt = uploaded.filename.replace(/[[\]\r\n]/g, "_") || "项目图片";
+    const reference = `![${alt}](biaoshu-image://${uploaded.id})`;
+    appendMarkdown(targetId, reference);
+  };
+
+  const handleCardInsert = (result: InsertCardResult) => {
+    if (!selected) return;
+    appendMarkdown(selected.id, result.markdown);
   };
 
   if (!selected) {
@@ -149,6 +166,18 @@ export function ChapterEditor({
           >
             <ImagePlus size={15} />
           </button>
+          {projectId ? (
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              aria-label="插入知识卡片"
+              title="插入知识卡片"
+              disabled={imageBusy}
+              onClick={() => setCardDialogOpen(true)}
+            >
+              <Library size={15} /> 插入卡片
+            </button>
+          ) : null}
           <span className="mono" style={{ fontSize: 12, color: "var(--text-tertiary)" }}>
             {selected.wordCount} 字
           </span>
@@ -182,6 +211,15 @@ export function ChapterEditor({
           />
         )}
       </div>
+
+      {projectId ? (
+        <InsertCardDialog
+          open={cardDialogOpen}
+          projectId={projectId}
+          onClose={() => setCardDialogOpen(false)}
+          onInsert={handleCardInsert}
+        />
+      ) : null}
     </div>
   );
 }

@@ -529,6 +529,54 @@ class KbChunkRow(Base):
     )
 
 
+class KnowledgeCardRow(Base):
+    """
+    模块：卡片化知识与素材库实体
+    用途：在 workspace 内独立沉淀文档片段、图片、资质与业绩快照，供编辑安全引用与复用。
+    对接：card_service；/api/cards；/api/projects/{id}/insert-card；frontend knowledge-base。
+    二次开发：
+      - 禁止污染 kb_documents/kb_chunks、resources、project_files、bid_templates 语义；
+      - source_id 仅为弱追溯，源删除不得级联删卡片；
+      - 图片字节存卡片目录；插入项目时必须复制为项目 role=image。
+    """
+
+    __tablename__ = "knowledge_cards"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # document | image | qualification | performance
+    type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    tags_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # active | archived
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # manual | chunk | project_image | upload 等来源类型快照
+    source_type: Mapped[str] = mapped_column(String(64), nullable=False, default="manual")
+    # 弱引用：源删除后可置空，卡片正文/图片快照仍保留
+    source_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    source_label: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    # 文本类卡片正文快照；图片卡可为空
+    body_markdown: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # 类型扩展 JSON（资质字段、业绩字段等）
+    payload_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 图片卡服务端存储元数据（相对卡片目录）
+    stored_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    content_type: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
 class ProjectTaskRow(Base):
     """
     用途：本机日用任务（解析/分析/大纲/正文/导出）状态。

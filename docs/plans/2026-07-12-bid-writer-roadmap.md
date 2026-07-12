@@ -64,11 +64,35 @@
 
 ### 阶段 2：卡片化知识与素材库
 
-**目标**：统一沉淀文档片段、图片、资质与中标经验为可检索卡片，服务写标书时的引用与复用。
+**目标**：统一沉淀文档片段、图片、资质与业绩为 workspace 内可检索卡片，服务标书编辑时的安全引用与复用。
 
-**范围**：卡片类型、标签、预览、来源、图片安全存储、项目内插入和知识检索接入。
+**设计状态（2026-07-12）**：只读审计已完成，MVP 契约已冻结。**实现状态：实现完成（待 Codex 审查）**（Grok 按 msg_4c2238d… 实施，未 commit/push）。
 
-**验收**：能创建/检索/筛选文档与图片卡片；图片仅允许安全项目内引用；生成与编辑流程可引用卡片且保留来源。
+**数据边界**：新建独立 `knowledge_cards` 表，禁止复用或污染 `kb_documents/kb_chunks`、`resources`、`project_files`、`bid_templates` 的既有语义。文本卡保存正文快照和可空弱来源引用；图片卡复制图片字节到 workspace 卡片存储（`data/knowledge_cards/{workspaceId}/`）。源项目、源文档或源分块删除后，卡片仍可预览和复用。
+
+**MVP 范围（已实现）**：
+
+- 类型：`document`、`image`、`qualification`、`performance`；统一保存标题、标签、摘要、状态、来源快照、正文或类型扩展数据。
+- 能力：手工创建文本卡、从知识分块沉淀、上传/从项目图片沉淀、列表筛选检索、详情预览、归档/删除。
+- 图片：只允许 PNG/JPEG/GIF；卡片入项目时先复制登记为当前项目 `role=image`，Markdown 只写 `biaoshu-image://file_*`，禁止外链、卡片路径或 data URL。
+- 编辑：章节编辑器通过「插入卡片」取得文本引用块或项目化图片引用；只追加用户选择的内容，不自动覆盖正文。
+
+**实际 API**：
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/cards` | 列表摘要（q/type/status）；status 缺省=active，archived\|all 显式；无正文/base64；bodyMarkdown 上限 20,000 |
+| POST | `/api/cards` | 手工创建文本卡 |
+| POST | `/api/cards/upload-image` | 上传图片卡 |
+| POST | `/api/cards/from-chunk` | 从知识分块沉淀 |
+| POST | `/api/cards/from-project-image` | 从项目图片沉淀 |
+| GET/PATCH/DELETE | `/api/cards/{id}` | 详情/更新/删除 |
+| GET | `/api/cards/{id}/content` | 图片卡二进制 |
+| POST | `/api/projects/{projectId}/insert-card` | 返回可插入 Markdown + 可选 projectImageId |
+
+**明确不做（本阶段仍排除）**：不把卡片自动注入 AI 生成；不做多卡片融合、差异预览、向量排序、历史项目批量扫描、跨 workspace 共享、商务标专用卡、版本历史、登录/RBAC、Alembic 或依赖升级。卡片作为 AI 上下文的配额、选择与确认写入留给阶段 3。
+
+**验收命令**：`backend pytest -q`（含 `test_knowledge_cards`）；`frontend npm run lint` / `build`；`npm run test:e2e:cards`；`npm run test:e2e:templates`；`npm run test:e2e:matrix`；`git diff --check`。
 
 ### 阶段 3：可控 AI 编写与模板融合
 
@@ -129,4 +153,4 @@
 
 ## 5. 当前下一步
 
-阶段 1 已完成并推送。下一步是阶段 2 的只读设计审计：先确定统一卡片模型与图片后端化边界，再立项实现；未完成阶段 2 验收前，不开始多模板融合或多角色代码开发。
+阶段 1 已完成并推送。阶段 2 卡片化知识与素材库 MVP 已实现（待 Codex 审查与合入）。未完成阶段 2 验收前，不开始阶段 3 多模板/卡片融合或多角色代码开发。
