@@ -34,7 +34,10 @@ class TaskCreate(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     type: str = Field(
-        description="parse|analyze|outline|chapter|chapters|export|response_match"
+        description=(
+            "parse|analyze|outline|chapter|chapters|export|"
+            "response_match|content_fuse"
+        )
     )
     payload: dict[str, Any] | None = None
 

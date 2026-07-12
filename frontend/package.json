@@ -11,7 +11,8 @@
     "test:e2e": "playwright test",
     "test:e2e:matrix": "playwright test e2e/response-matrix-conflict.spec.ts e2e/response-matrix-refresh-sources.spec.ts",
     "test:e2e:templates": "playwright test e2e/bid-template-reuse.spec.ts",
-    "test:e2e:cards": "playwright test e2e/knowledge-cards.spec.ts"
+    "test:e2e:cards": "playwright test e2e/knowledge-cards.spec.ts",
+    "test:e2e:fuse": "playwright test e2e/content-fuse-suggest.spec.ts"
   },
   "dependencies": {
     "lucide-react": "^1.23.0",

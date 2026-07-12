@@ -1,15 +1,16 @@
 """
 模块：项目任务服务（本机日用，默认异步线程执行）
 用途：
-  - 创建/执行 parse|analyze|outline|chapter|chapters|export|response_match
+  - 创建/执行 parse|analyze|outline|chapter|chapters|export|response_match|content_fuse
   - 默认后台线程 + 前端 SSE 状态流；GET 轮询可兼容回退；sync=1 同步跑完（测试）
   - 协作式取消（cancel_task + 检查点 TaskCancelled）
   - 大纲/正文生成时注入知识库检索（_kb_search_block，读 guidance.kb*）
 对接：
   - POST/GET /api/projects/{id}/tasks；GET .../tasks/{id}/events；POST .../tasks/{id}/cancel
-  - knowledge_service、export_service、llm_service、editor_state_service
+  - knowledge_service、export_service、llm_service、editor_state_service、fuse_context_service
   - 前端 useProjectPipeline
-二次开发：可换 Redis/Celery；SSE 必须短 Session 读库，勿跨线程共享 Session；analyze 禁止注入知识库；response_match 仅产生待确认建议，不得直接写 editor-state。
+二次开发：可换 Redis/Celery；SSE 必须短 Session 读库，勿跨线程共享 Session；analyze 禁止注入知识库；
+  response_match / content_fuse 仅产生待确认建议，不得直接写 editor-state。
 """
 
 from __future__ import annotations
@@ -27,7 +28,13 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.models.entities import ProjectEditorStateRow, ProjectTaskRow
-from app.services import editor_state_service, file_service, llm_service, parse_service
+from app.services import (
+    editor_state_service,
+    file_service,
+    fuse_context_service,
+    llm_service,
+    parse_service,
+)
 from app.services.export_service import build_docx_bytes
 from app.services.llm_service import LlmCallError, LlmConfigError
 from app.services.project_service import get_project, update_project
@@ -41,6 +48,7 @@ ALLOWED_TYPES = frozenset(
         "chapters",
         "export",
         "response_match",
+        "content_fuse",
         "biz_qualify",
         "biz_toc",
         "biz_quote",
@@ -233,12 +241,21 @@ def create_task_record(
     task_type: str,
     payload: dict | None = None,
 ) -> ProjectTaskRow:
-    """用途：仅创建 pending 任务行，不执行。"""
+    """
+    用途：仅创建 pending 任务行，不执行。
+    content_fuse：创建阶段做 shape/配额/目标章节 400 校验并写入归一化 payload。
+    """
     if task_type not in ALLOWED_TYPES:
         raise ValueError(f"不支持的任务类型: {task_type}")
     get_project(db, workspace_id, project_id)
     if _has_running_same_type(db, project_id, task_type):
         raise ValueError(f"已有进行中的「{task_type}」任务，请等待完成或稍后重试")
+    normalized_payload: dict = payload or {}
+    if task_type == "content_fuse":
+        # 仅 shape/配额/目标章；来源可用性留给 worker，避免跨 workspace 探测
+        normalized_payload = fuse_context_service.validate_create_payload(
+            db, workspace_id, project_id, payload
+        )
     task = ProjectTaskRow(
         id=f"task_{secrets.token_hex(8)}",
         project_id=project_id,
@@ -246,7 +263,7 @@ def create_task_record(
         status="pending",
         progress=0,
         message="排队中…",
-        payload_json=_dumps(payload or {}),
+        payload_json=_dumps(normalized_payload),
         created_at=_now(),
         updated_at=_now(),
     )
@@ -282,6 +299,8 @@ def _execute_task(db: Session, workspace_id: str, task: ProjectTaskRow) -> None:
             _run_export(db, workspace_id, project_id, task, payload)
         elif task.type == "response_match":
             _run_response_match(db, workspace_id, project_id, task, payload)
+        elif task.type == "content_fuse":
+            _run_content_fuse(db, workspace_id, project_id, task, payload)
         elif task.type in ("biz_qualify", "biz_toc", "biz_quote", "biz_commit"):
             _run_business(db, workspace_id, project_id, task)
         else:
@@ -791,6 +810,119 @@ def _run_response_match(
             "outlineCandidateInBatch": len(prompt_outline),
         },
     )
+
+
+def _run_content_fuse(
+    db: Session,
+    workspace_id: str,
+    project_id: str,
+    task: ProjectTaskRow,
+    payload: dict | None = None,
+) -> None:
+    """
+    用途：模板/卡片只读融合建议；成功仅写 ProjectTask.result_json，绝不写 editor-state。
+    对接：POST .../tasks type=content_fuse；fuse_context_service；前端 ContentFuseDialog。
+    二次开发：M3-A 禁止应用/写入章节；不开放 candidateBatchIndex；禁止 upsert_editor_state。
+    """
+    raw = payload if isinstance(payload, dict) else {}
+    # worker 再次归一化，防止手工改库绕过创建校验
+    normalized = fuse_context_service.validate_create_payload(
+        db, workspace_id, project_id, raw
+    )
+    template_ids = list(normalized["templateIds"])
+    card_ids = list(normalized["cardIds"])
+    target_ids = list(normalized["targetChapterIds"])
+
+    _assert_not_cancelled(db, task)
+    _set_task(db, task, progress=15, message="读取当前章节与来源…")
+
+    state = editor_state_service.get_editor_state(db, workspace_id, project_id)
+    # 快照章节正文哈希，供结果 base；之后全程只读 state
+    chapters_before = state.get("chapters")
+    targets = fuse_context_service.build_target_contexts(state, target_ids)
+    if not targets:
+        raise ValueError("目标章节不可用")
+    target_titles = [t["title"] for t in targets if t.get("title")]
+
+    template_blocks, card_blocks, skipped_sources = (
+        fuse_context_service.resolve_fuse_sources(
+            db,
+            workspace_id,
+            template_ids=template_ids,
+            card_ids=card_ids,
+            target_titles=target_titles,
+        )
+    )
+    if not template_blocks and not card_blocks:
+        raise ValueError("无可用模板或知识卡片上下文")
+
+    _assert_not_cancelled(db, task)
+    _set_task(db, task, progress=35, message="装配融合上下文…")
+    # used_* 为裁剪后实际进入 prompt 的块；*Used / sourceRefs 校验均以此为准
+    messages, prompt_chars, used_templates, used_cards = (
+        fuse_context_service.build_fuse_messages(
+            targets=targets,
+            template_blocks=template_blocks,
+            card_blocks=card_blocks,
+        )
+    )
+    if prompt_chars > fuse_context_service.MAX_PROMPT_CHARS:
+        raise ValueError("融合上下文超过字符上限，请减少模板/卡片或缩短正文后重试")
+
+    _assert_not_cancelled(db, task)
+    _set_task(db, task, progress=55, message="调用模型生成融合建议…")
+    result = llm_service.chat_completion(
+        db,
+        workspace_id,
+        messages=messages,
+        temperature=0.2,
+        timeout_sec=180.0,
+    )
+    _assert_not_cancelled(db, task)
+    try:
+        raw_suggestions = fuse_context_service.parse_suggestions_json(result.content)
+    except ValueError as exc:
+        raise ValueError("模型未返回合法融合建议，请重试") from exc
+
+    allowed_sources = fuse_context_service.build_prompt_source_catalog(
+        used_templates, used_cards
+    )
+    suggestions, skipped_invalid = fuse_context_service.normalize_fuse_suggestions(
+        raw_suggestions,
+        targets=targets,
+        allowed_sources=allowed_sources,
+    )
+
+    # 成功路径：仅写任务 result；再次确认未触碰 editor-state
+    _set_task(
+        db,
+        task,
+        status="success",
+        progress=100,
+        message=f"已生成 {len(suggestions)} 条融合建议（只读）",
+        result={
+            "suggestions": suggestions,
+            "model": result.model,
+            "skippedSources": skipped_sources,
+            "skippedInvalidCount": skipped_invalid,
+            "baseEditorUpdatedAt": state.get("updatedAt"),
+            "quota": {
+                "templatesSelected": len(template_ids),
+                "cardsSelected": len(card_ids),
+                "targetsSelected": len(target_ids),
+                "templatesUsed": len(used_templates),
+                "cardsUsed": len(used_cards),
+                "promptChars": prompt_chars,
+                "maxPromptChars": fuse_context_service.MAX_PROMPT_CHARS,
+            },
+            "mode": fuse_context_service.FUSE_MODE,
+        },
+    )
+    # 防御性对照：章节结构应与任务开始时一致（本路径无任何 upsert）
+    state_after = editor_state_service.get_editor_state(db, workspace_id, project_id)
+    if state_after.get("chapters") != chapters_before:
+        # 理论上不应发生；若外部并发改写 chapters 不在本任务职责内，不回滚他人编辑
+        pass
 
 
 def _run_outline(

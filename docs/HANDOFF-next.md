@@ -1,13 +1,13 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-12（阶段 2 卡片化知识与素材库 MVP 已实现，待 Codex 审查；未 commit/push）
+> **交接日期**：2026-07-12（阶段 2 已完成 SHA=`53e012f`；阶段 3 **M3-A 实现中**，待 Codex 审查；未 commit/push）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
-> **协作分支已推送基线**：`335beb5` — 含中标内容模板资产化、标书制作者剩余主线规划、双浏览器 409/刷新来源 E2E 与候选分批智能建议
+> **协作分支已推送基线**：`53e012f` — 阶段 2 卡片化知识与素材库
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **本地状态**：阶段 0/1 已推送；阶段 2 MVP 本地已实现（`knowledge_cards` + `/api/cards` + 章节插入 + E2E），待审查后合入
-> **验收基线**：`pytest`（含 `test_knowledge_cards` / `test_bid_templates`）；`frontend npm run lint` / `build`；`npm run test:e2e:cards` / `templates` / `matrix`；`git diff --check`
+> **本地状态**：阶段 0/1/2 已推送；阶段 3 M3-A（`content_fuse` 只读建议）本地实现中，**任何路径不得写 editor-state**
+> **验收基线**：`pytest`（含 `test_content_fuse` / `test_knowledge_cards` / `test_bid_templates`）；`frontend npm run lint` / `build`；`npm run test:e2e:fuse` / `cards` / `templates` / `matrix`；`git diff --check`
 
 ---
 
@@ -104,7 +104,8 @@
 |--------|----------|------------|------|
 | 应用入口 | `main.py` | **齐** | 含二次开发 |
 | 项目 CRUD | `services/project_service.py`、`api/projects.py` | **齐** | kind/business 与 editor-state responseMatrix 映射已写清 |
-| 任务引擎 | `services/task_service.py`、`api/tasks.py` | **齐** | 取消、biz 分发、RAG 注入、SSE 短 Session |
+| 任务引擎 | `services/task_service.py`、`api/tasks.py` | **齐** | 取消、biz 分发、RAG 注入、SSE 短 Session；含 `content_fuse` |
+| 模板/卡片融合 M3-A | `services/fuse_context_service.py`、`services/task_service.py`（content_fuse）、`tests/test_content_fuse.py` | **齐** | 只读建议；禁写 editor-state；跨 workspace 不泄漏；sourceRefs 含服务端 title；裁剪后 *Used |
 | 商务任务 | `services/business_task_service.py` | **齐** | qualify/toc/quote/commit |
 | 编辑态 | `services/editor_state_service.py` | **齐** | business_json、response_matrix_json 规范化与死引用收敛 |
 | 响应矩阵 | `services/editor_state_service.py`、`services/task_service.py`、`api/projects.py`、`api/tasks.py`、`services/export_service.py`、`models/entities.py`；前端 `useTechnicalPlanEditors` / `ResponseMatrixPanel` | **齐/部分** | service/API/导出与乐观锁注释齐；`response_match` 支持 `candidateBatchIndex` 候选分批且只产出待确认建议；前端冲突 UX 与串行分批进度注释齐；`entities.py` 仍按历史文件部分 |
@@ -123,14 +124,15 @@
 | 资源中心 | `services/resource_service.py`、`resource_sync_service.py`、`api/resources.py` | **齐** | 全局系统只读资源、workspace 用户资源、服务端原子浏览量、签名清单受控同步与来源审计 |
 | 中标内容模板 | `services/template_service.py`、`api/templates.py`、`models/entities.py`（BidTemplateRow） | **齐** | workspace 快照沉淀/列表摘要/详情快照/删除/从模板新建；源项目 SET NULL；空大纲与超大快照 400 |
 | 实体 | `models/entities.py` | **部分** | 类 docstring 齐；文件顶视历史版本；KnowledgeCardRow / BidTemplateRow 已补语义 |
-| 测试 | `backend/tests/*.py` | **齐/部分** | 含 `test_knowledge_cards`、`test_bid_templates` 及标题边框/SSE/标讯/资源/响应矩阵等 |
+| 测试 | `backend/tests/*.py` | **齐/部分** | 含 `test_content_fuse`、`test_knowledge_cards`、`test_bid_templates` 及标题边框/SSE/标讯/资源/响应矩阵等 |
 
 #### 前端 `frontend/src/features`
 
 | 功能域 | 关键路径 | 文件顶注释 | 说明 |
 |--------|----------|------------|------|
-| 技术标工作区 | `technical-plan/pages/TechnicalPlanWorkspace.tsx` | **齐** | 已挂载 ResponseMatrixPanel；串行 `response_match` 分批与代次保护 |
-| 技术标 hooks | `useProjectPipeline` / `useTechnicalPlanEditors` / `useProjectGuidance` | **齐** | SSE、项目切换隔离、取消终态保护、正文图片上传、responseMatrix 持久化与建议快照合并 |
+| 技术标工作区 | `technical-plan/pages/TechnicalPlanWorkspace.tsx` | **齐** | ResponseMatrixPanel；串行 `response_match`；编写步 M3-A 融合入口 |
+| 模板/卡片融合 UI | `technical-plan/components/ContentFuseDialog.tsx`、`lib/contentFuse.ts`；E2E `e2e/content-fuse-suggest.spec.ts` | **齐** | 只读建议列表；无应用写入；`npm run test:e2e:fuse` |
+| 技术标 hooks | `useProjectPipeline` / `useTechnicalPlanEditors` / `useProjectGuidance` | **齐** | SSE、项目切换隔离、取消终态保护、正文图片上传、responseMatrix；TaskType 含 content_fuse |
 | 响应矩阵 | `technical-plan/lib/responseMatrix.ts`、`components/ResponseMatrixPanel.tsx`、`pages/TechnicalPlanWorkspace.tsx`；E2E `frontend/e2e/response-matrix-conflict.spec.ts`、`response-matrix-refresh-sources.spec.ts`、`playwright.config.ts` | **齐** | sourceKey 合并、跨批建议择优 merge、冲突 UX、分批进度文案、双 context 409 E2E、刷新来源保留人工映射 E2E |
 | projectStore | `technical-plan/lib/projectStore.ts` | **齐** | kind 过滤 |
 | outlineTree | `technical-plan/lib/outlineTree.ts` | **齐** | markdownToOutline |
@@ -264,7 +266,7 @@ frontend/src/features/
 | 导出 | `structure` / `min_heading_left_enabled` | 用户已确认标题段落描边＋分级底色；整章布局/最小标题左栏仍需独立效果图与规则 |
 | 业务 | 外部标讯数据源 | 资源中心已有受控签名清单同步；标讯仍只支持本机 CSV/JSON 导入，未接网站/API/RSS |
 | 技术标 | 响应矩阵增强 | v1 已做手工映射、持久化、Word 导出联动、待确认智能建议（**候选章/大纲分批 + 前端串行累计**）、`responseMatrixVersion` DB 写锁乐观锁、前端串行保存、双浏览器 409 与刷新来源保留映射 E2E；字段级合并、来源 80 分页、智能建议人工确认浏览器 E2E 仍未做 |
-| 资产 | 卡片化知识/多模板融合 | 阶段 1 内容模板 + 阶段 2 卡片库 MVP 已实现（待审查合入）；多模板融合/差异预览属阶段 3 |
+| 资产 | 卡片化知识/多模板融合 | 阶段 1 模板 + 阶段 2 卡片库已完成（`53e012f`）；阶段 3 M3-A 只读融合建议实现中；M3-B 差异/确认写入未开始 |
 | RAG | 真语义大模型 embedding 调优 | 有本地+可选 API，可继续增强 |
 | 库 | Alembic | 仅 create_all + ALTER |
 | 生产 | 登录/多用户/HTTPS/Key 加密/PG/Docker | 未做 |
@@ -275,8 +277,8 @@ frontend/src/features/
 
 ## 6. 建议下一会话方向
 
-1. Codex 审查并合入阶段 2 卡片库 MVP；通过后进入阶段 3
-2. 阶段 3 多模板/卡片融合：上下文配额、差异预览、逐项确认写入（见路线图功能包 3–4）
+1. Codex 审查并授权提交阶段 3 **M3-A**（`content_fuse` 只读建议）；确认无任何路径写 editor-state
+2. 阶段 3 **M3-B**：差异预览、逐项确认写入、base 漂移跳过（见路线图功能包 4）
 3. 阶段 4 质量与交付：响应矩阵 E2E/分页/合并、可插拔解析和交付增强均独立立项（见路线图功能包 5–9）
 
 资源同步后续只可由管理员配置新的签名发布方，绝不可放开浏览器 URL 或外网抓取。图片管线已冻结项目内资源引用协议，后续扩展不得放开外链或客户端路径。SSE 的多工作空间鉴权、事件游标和项目级总线不在当前范围。
@@ -332,10 +334,10 @@ frontend/src/features/
 
 ## 11. 当前会话状态（2026-07-12）
 
-- 当前分支仍为 `collab/grok-code-codex-review`；已推送基线为 `de43f2d`，禁止直接合入 `main`。
-- `npm run test:e2e:matrix` 现跑 conflict + refresh 两 spec（409 主路径与刷新来源保留人工映射）；智能建议人工确认 E2E 仍未做。
-- 标书制作者路线图已建 `docs/plans/2026-07-12-bid-writer-roadmap.md`：阶段 0 审计和阶段 1 中标内容模板资产化已完成；剩余 9 个标书制作者功能包已按阶段 2–4 排序。每阶段目标、当前进度、验收和未做项必须更新文档并与代码一起推送 GitHub。
-- 现有 Grok 会话已由用户确认通过 AgentBridge 连通。不要重复启动 Grok、不要终止用户已打开的 AgentBridge 会话；当前 Codex 侧没有绑定该 AgentBridge pair 时，仍以 `tools/agent-collaboration/` 消息箱作为可审计的回退通道。
+- 当前分支仍为 `collab/grok-code-codex-review`；已推送基线含阶段 2 `53e012f`，禁止直接合入 `main`。
+- 阶段 3 **M3-A**：任务类型 `content_fuse`；`fuse_context_service` + 编写步「模板/卡片融合」对话框；建议只存任务 result；**禁止** upsert editor-state；无应用/保存到章节按钮。
+- `npm run test:e2e:fuse` 覆盖选择来源/目标章 → 只读建议 → 刷新正文不变；`test:e2e:matrix` / `cards` / `templates` 仍为回归基线。
+- 标书制作者路线图 `docs/plans/2026-07-12-bid-writer-roadmap.md`：阶段 0–2 已完成；阶段 3 设计冻结 / M3-A 实现中；M3-B 未开始。
 - 新任务分工不变：Codex 负责范围、取舍、审查和验收；Grok 负责限定范围内的实现与测试。每一项先发 `task`，完成后发 `review_request`，未经 Codex `ack` 不得提交或推送。
 
 **换会话可直接：pull → 读本文 §0～§2 → 按 §6 开干。**

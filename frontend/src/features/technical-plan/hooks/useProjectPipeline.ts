@@ -42,6 +42,7 @@ export type TaskType =
   | "chapters"
   | "export"
   | "response_match"
+  | "content_fuse"
   | "biz_qualify"
   | "biz_toc"
   | "biz_quote"

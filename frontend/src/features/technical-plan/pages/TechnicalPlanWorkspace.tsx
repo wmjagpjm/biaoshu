@@ -16,6 +16,7 @@ import { LoadingBlock } from "../../../shared/components/LoadingBlock/LoadingBlo
 import type { Project } from "../../../shared/types/workspace";
 import { SaveAsTemplateDialog } from "../../bid-templates/components/SaveAsTemplateDialog";
 import { ChapterEditor } from "../components/ChapterEditor";
+import { ContentFuseDialog } from "../components/ContentFuseDialog";
 import { FactsEditor } from "../components/FactsEditor";
 import { OutlineStepWorkspace } from "../components/OutlineStepWorkspace";
 import { ProjectGuidanceCard } from "../components/ProjectGuidanceCard";
@@ -156,6 +157,8 @@ export function TechnicalPlanWorkspace() {
   /** 中标内容模板：沉淀对话框开关 */
   const [saveTemplateOpen, setSaveTemplateOpen] = useState(false);
   const [saveTemplateTip, setSaveTemplateTip] = useState("");
+  /** 阶段3 M3-A：模板/卡片只读融合建议对话框 */
+  const [contentFuseOpen, setContentFuseOpen] = useState(false);
   /** 代次：项目切换、重入智能建议或取消后，丢弃迟到的串行批结果 */
   const matchSessionRef = useRef(0);
 
@@ -190,6 +193,7 @@ export function TechnicalPlanWorkspace() {
     matchSessionRef.current += 1;
     setMatrixSuggestions([]);
     setMatchProgress(null);
+    setContentFuseOpen(false);
   }, [projectId]);
 
   if (project === undefined) {
@@ -1185,6 +1189,15 @@ export function TechnicalPlanWorkspace() {
               type="button"
               className="btn btn-soft btn-sm"
               disabled={pipeline.busy}
+              aria-label="模板卡片融合建议"
+              onClick={() => setContentFuseOpen(true)}
+            >
+              <FileStack size={14} /> 模板/卡片融合
+            </button>
+            <button
+              type="button"
+              className="btn btn-soft btn-sm"
+              disabled={pipeline.busy}
               onClick={() => {
                 void (async () => {
                   try {
@@ -1234,6 +1247,16 @@ export function TechnicalPlanWorkspace() {
               <Play size={14} /> {pipeline.busy ? "生成中…" : "AI 生成本章"}
             </button>
           </div>
+
+          <ContentFuseDialog
+            open={contentFuseOpen}
+            projectId={resolvedId}
+            chapters={editors.chapters}
+            busy={pipeline.busy && pipeline.lastTask?.type === "content_fuse"}
+            onClose={() => setContentFuseOpen(false)}
+            onRun={(payload) => pipeline.runTask("content_fuse", payload)}
+            onCancelTask={() => pipeline.cancelTask()}
+          />
 
           <ChapterEditor
             chapters={editors.chapters}

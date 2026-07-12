@@ -104,9 +104,12 @@ npm run test:e2e:templates
 
 # 知识卡片创建 → 章节插入 → 刷新保持 E2E
 npm run test:e2e:cards
+
+# 阶段3 M3-A：模板/卡片只读融合建议 E2E（本地 mock LLM，不写章节）
+npm run test:e2e:fuse
 ```
 
-当前基线：后端 **pytest 全量**（含 `test_knowledge_cards`、`test_bid_templates` 与候选分批）；前端 lint/build；`test:e2e:matrix` 覆盖双 context 409/显式载入 **与** 刷新来源保留人工映射；`test:e2e:templates` 覆盖沉淀 → 从模板新建；`test:e2e:cards` 覆盖新建文本卡 → 章节插入 → 刷新保持。智能建议须人工确认的浏览器 E2E 仍未做。
+当前基线：后端 **pytest 全量**（含 `test_content_fuse`、`test_knowledge_cards`、`test_bid_templates` 与候选分批）；前端 lint/build；`test:e2e:fuse` 覆盖选择模板/卡片/目标章 → 只读建议 → 刷新正文不变；`test:e2e:matrix` / `templates` / `cards` 为回归。智能建议人工确认与 M3-B 写入 E2E 仍未做。
 
 ## 6. 已接 API 一览
 
@@ -142,6 +145,7 @@ npm run test:e2e:cards
 | GET/PATCH/DELETE | `/api/cards/{id}` |
 | GET | `/api/cards/{id}/content`（图片卡二进制） |
 | POST | `/api/projects/{id}/insert-card`（返回 Markdown；图片复制为项目 role=image） |
+| POST | `/api/projects/{id}/tasks` type=`content_fuse`（M3-A：模板/卡片只读融合建议；仅 result_json；禁止写 editor-state） |
 
 ## 7. 本机日用主链路（目标 A 加强版）
 

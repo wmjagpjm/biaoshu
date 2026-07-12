@@ -7,7 +7,7 @@
 
 # 标书制作者能力补全与角色化演进路线图
 
-> **状态**：阶段 0 审计与阶段 1 MVP 已完成并推送；阶段 2 待立项。
+> **状态**：阶段 0/1 已完成并推送；阶段 2 已完成（SHA=`53e012f`）；阶段 3 设计冻结 / **M3-A 实现中**（待 Codex 审查，未 commit/push）。
 > **当前分支**：`collab/grok-code-codex-review`
 > **协作方式**：Grok 负责限定范围的实现与测试；Codex 负责范围、审查、验收和提交授权。
 
@@ -66,7 +66,9 @@
 
 **目标**：统一沉淀文档片段、图片、资质与业绩为 workspace 内可检索卡片，服务标书编辑时的安全引用与复用。
 
-**设计状态（2026-07-12）**：只读审计已完成，MVP 契约已冻结。**实现状态：实现完成（待 Codex 审查）**（Grok 按 msg_4c2238d… 实施，未 commit/push）。
+**设计状态（2026-07-12）**：只读审计已完成，MVP 契约已冻结。
+
+**实现状态：已完成**。交付 SHA=`53e012f`（实现卡片化知识与素材库）；含列表默认 active、bodyMarkdown 上限 20,000 等返修项。
 
 **数据边界**：新建独立 `knowledge_cards` 表，禁止复用或污染 `kb_documents/kb_chunks`、`resources`、`project_files`、`bid_templates` 的既有语义。文本卡保存正文快照和可空弱来源引用；图片卡复制图片字节到 workspace 卡片存储（`data/knowledge_cards/{workspaceId}/`）。源项目、源文档或源分块删除后，卡片仍可预览和复用。
 
@@ -98,9 +100,30 @@
 
 **目标**：支持选择多个模板/卡片作为生成上下文，并在写入前展示结构与内容差异，保持人工可控。
 
-**范围**：多模板选择、上下文配额与来源说明、章节级融合建议、差异预览、逐项确认写入与回滚边界。
+**设计状态（2026-07-12）**：只读审计通过；契约冻结为任务类型 `content_fuse`。拆分为：
 
-**验收**：多模板不会直接覆盖正文；用户能看到来源与差异并逐项确认；取消、失败和冲突均不污染 editor-state。
+| 子里程碑 | 范围 | 状态 |
+|---|---|---|
+| **M3-A** | 选择模板/卡片/目标章 → 只读融合建议（result_json） | **实现中（本批次）** |
+| **M3-B** | 差异预览、checkbox、base 漂移跳过、逐项确认写入 | **未开始** |
+
+**M3-A 冻结边界**：
+
+- 成功路径**仅写** `ProjectTask.result_json`；**禁止** `upsert_editor_state`、禁止改 chapters/outline/responseMatrix。
+- payload：`templateIds`(0~3)、`cardIds`(0~8)、合计 1~10、`targetChapterIds`(1~5)、`mode=merge_suggest`。
+- 创建阶段只校验 shape/配额/目标章；来源可用性由 worker 处理；跨 workspace/缺失统一 `skippedSources.unavailable`。
+- 卡片仅 active 的 document|qualification|performance；image/archived → skipped。
+- 前端仅展示建议，**无**「应用/保存/复制到章节」。
+- `result.suggestions[].sourceRefs` 形状为 `{kind,id,title}`：`title` 由服务端按**实际进入 prompt** 的模板/卡片目录补齐，不信任模型；校验后无有效来源的建议整条丢弃并计入 `skippedInvalidCount`；`quota.templatesUsed/cardsUsed` 与裁剪后入 prompt 数量一致，`promptChars≤24000`。
+- 不开放 `candidateBatchIndex`；不改阶段 1/2 templates/cards/insert-card/response_match 语义。
+
+**M3-A 允许文件**：`task_service.py`、`fuse_context_service.py`（新）、`api/tasks.py`（说明）、`test_content_fuse.py`（新）、`useProjectPipeline.ts`、`contentFuse.ts`（新）、`ContentFuseDialog.tsx`（新）、`TechnicalPlanWorkspace.tsx`、`TechnicalPlan.css`、`content-fuse-suggest.spec.ts`（新）、`package.json`（`test:e2e:fuse`）、本路线图 / HANDOFF / integration-checklist。
+
+**验收命令（M3-A）**：`pytest -q`（含 `test_content_fuse`）；`npm run lint` / `build`；`npm run test:e2e:fuse`；回归 `test:e2e:cards` / `templates` / `matrix`；`git diff --check`。
+
+**验收结果（占位，审查后由 Codex 填实）**：待 Codex 审查。
+
+**M3-B 未完成项**：双栏差异、逐项确认写入、base 漂移跳过、写入后回滚边界、相关 E2E。
 
 ### 阶段 4：生产链质量与交付闭环
 
@@ -153,4 +176,4 @@
 
 ## 5. 当前下一步
 
-阶段 1 已完成并推送。阶段 2 卡片化知识与素材库 MVP 已实现（待 Codex 审查与合入）。未完成阶段 2 验收前，不开始阶段 3 多模板/卡片融合或多角色代码开发。
+阶段 1/2 已完成并推送（阶段 2 SHA=`53e012f`）。阶段 3 **M3-A** 只读融合建议实现中（待 Codex 审查，未授权前禁止 commit/push）。M3-B 与多角色仍不开始。
