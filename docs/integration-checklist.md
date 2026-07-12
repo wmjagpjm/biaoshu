@@ -100,7 +100,7 @@ npm run build
 npm run test:e2e:matrix
 ```
 
-当前基线：后端 **127 passed**；前端 lint 0/0、构建通过；`test:e2e:matrix` 覆盖双 context 409/显式载入（失败产物：`frontend/test-results/`、`frontend/playwright-report/`）。
+当前基线：后端 **130 passed**（含候选分批）；前端 lint 0/0、构建通过；`test:e2e:matrix` 覆盖双 context 409/显式载入 **与** 刷新来源保留人工映射（`response-matrix-conflict.spec.ts` + `response-matrix-refresh-sources.spec.ts`；失败产物：`frontend/test-results/`、`frontend/playwright-report/`）。智能建议须人工确认的浏览器 E2E 仍未做。
 ## 6. 已接 API 一览
 
 | 方法 | 路径 |
@@ -194,7 +194,7 @@ npm run test:e2e:matrix
 
 Celery、真 MinerU 安装包、外部标讯数据源、多用户鉴权、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
 
-**响应矩阵相关（已接 vs 未扩）：** 多端冲突的版本写保护、409 与双浏览器上下文 E2E 主路径已接（见第 5 节 `test:e2e:matrix`）。仍未接或仅后端覆盖、未扩 E2E 的项：字段级合并、刷新来源 / 智能建议须人工确认的浏览器 E2E、Word 失效引用在浏览器层的扩展（导出逻辑以后端单测为准）。
+**响应矩阵相关（已接 vs 未扩）：** 多端冲突的版本写保护、409 与双浏览器上下文 E2E 主路径已接；「刷新来源」保留人工映射 E2E 已接（见第 5 节 `test:e2e:matrix`）。仍未接或仅后端覆盖、未扩 E2E 的项：字段级合并、智能建议须人工确认的浏览器 E2E、Word 失效引用在浏览器层的扩展（导出逻辑以后端单测为准）。
 
 ## 14. 知识库 RAG 简版
 

@@ -1,25 +1,26 @@
 <!--
 模块：响应矩阵双浏览器 E2E 方案与实施记录
 用途：说明依赖、启动/隔离、用例步骤、分层与 CI 预算。
-对接：task msg_4aeed563 / msg_33f9d4fc；分支 collab/grok-code-codex-review
-二次开发：状态：主路径已实现且 Codex 代码审查通过；待最终 ack 后 commit。扩展 E2E 另立项。
+对接：task msg_4aeed563 / msg_33f9d4fc / msg_28b5b564；分支 collab/grok-code-codex-review
+二次开发：状态：409 主路径与刷新来源 E2E 已实现；智能建议人工确认 E2E 另立项。
 -->
 
 # 响应矩阵双浏览器上下文 E2E — 最小方案
 
-> **状态（2026-07-11/12）**：主路径已实现（`npm run test:e2e:matrix` 通过）；代码审查基本通过；小修文档一致性后待最终 ack/commit。
+> **状态（2026-07-12）**：409 主路径与「刷新来源保留人工映射」已实现（`npm run test:e2e:matrix` 两 spec）；智能建议人工确认浏览器 E2E 仍未做。
 
 ### 当前实现状态（以代码为准，勿把下文历史方案当现状）
 
 | 项 | 实际配置 |
 |----|----------|
 | 依赖 | `frontend` 已装 `@playwright/test`；仅 chromium |
-| scripts | `test:e2e` / `test:e2e:matrix` |
+| scripts | `test:e2e` / `test:e2e:matrix`（conflict + refresh-sources） |
 | 后端 | `8010`，`DATABASE_URL=sqlite:///./data/biaoshu-e2e.db`，`DEFAULT_WORKSPACE_ID=ws_e2e`；启动前跑 `backend/scripts/e2e_reset_db.py` |
 | 前端 | `5174`；**同源** `/api`，经 `VITE_API_PROXY_TARGET=http://127.0.0.1:8010`（**不是** 浏览器侧固定 `VITE_API_BASE_URL=http://127.0.0.1:8010/api`） |
 | webServer | `reuseExistingServer: false`（前后端均强制新进程，避免复用日用端口/错误库） |
 | workers / sleep | `workers: 1`；禁止固定 `sleep` 作同步 |
-| 主 spec | `frontend/e2e/response-matrix-conflict.spec.ts` |
+| 主 spec | `frontend/e2e/response-matrix-conflict.spec.ts`（双 context 409） |
+| 扩展 spec | `frontend/e2e/response-matrix-refresh-sources.spec.ts`（刷新来源保留人工映射；API 改 analysis 后收敛） |
 
 下文 §0–§7 中标注为「实施前方案 / 历史记录」的段落保留规划痕迹，**仅作决策背景**；运维与二次开发以本表与 `frontend/playwright.config.ts`、`frontend/vite.config.ts` 为准。
 
@@ -149,11 +150,11 @@ Playwright webServer[]:
 |------|--------|------|
 | 空矩阵稳定 version / 概述不改 version / 旧客户端无 version | **已有** `test_response_matrix.py` | API 足够 |
 | 双 Session 并发一成一败 | **已有** concurrent 单测 | 比 E2E 稳 |
-| 刷新来源（merge analysis → matrix） | **E2E 轻量 1 条** 或组件级（若后补 Vitest） | 点「刷新来源」后行数/文案变化即可 |
-| 智能建议须人工确认 | **E2E 1 条（可 mock LLM）** 或任务 API 单测已覆盖 `response_match` 不写 editor-state | 后端已断言建议不入库；E2E 只断言：出现待确认区、未点应用前映射不变 |
+| 刷新来源（merge analysis → matrix） | **已接 E2E** `response-matrix-refresh-sources.spec.ts` | 多源人工映射保留；API 改 analysis 后删/增行并 GET 持久化 |
+| 智能建议须人工确认 | **仍未做浏览器 E2E**；任务 API 单测已覆盖 `response_match` 不写 editor-state | 后端已断言建议不入库；后续 E2E 只断言：出现待确认区、未点应用前映射不变（禁真实 Key） |
 | Word 导出失效引用 | **保持后端** `test_technical_export_includes_reconciled_response_matrix` | 不在浏览器下解析 docx |
 
-**P1 最小合并范围**：先只合 **§3 双 context 冲突主路径**；刷新来源/建议/导出用现有后端 + 最多各 1 条后续 E2E。
+**P1 范围（当前）**：**§3 双 context 冲突主路径**与**刷新来源保留人工映射**已合入 `test:e2e:matrix`；智能建议人工确认 / Word 导出浏览器层仍后续。
 
 ---
 

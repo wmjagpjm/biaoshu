@@ -9,7 +9,7 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "test:e2e": "playwright test",
-    "test:e2e:matrix": "playwright test e2e/response-matrix-conflict.spec.ts"
+    "test:e2e:matrix": "playwright test e2e/response-matrix-conflict.spec.ts e2e/response-matrix-refresh-sources.spec.ts"
   },
   "dependencies": {
     "lucide-react": "^1.23.0",
