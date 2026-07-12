@@ -422,3 +422,92 @@ class EditorStateUpdate(BaseModel):
     business_toc: list | None = Field(default=None, alias="businessToc")
     business_quote: dict | None = Field(default=None, alias="businessQuote")
     business_commit: list | None = Field(default=None, alias="businessCommit")
+
+
+# ---------- 技术标中标内容模板 ----------
+
+
+TemplateStatus = Literal["active", "archived"]
+TemplateKind = Literal["technical"]
+
+
+class BidTemplateSummaryOut(BaseModel):
+    """
+    模块：中标内容模板列表摘要
+    用途：GET /api/templates 列表读模型；仅元数据 + 轻量展示摘要，不含完整 snapshot。
+    对接：/api/templates；frontend bid-templates 列表卡。
+    二次开发：勿回填完整 snapshot；完整快照仅走详情/沉淀响应。
+    """
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id: str
+    workspace_id: str = Field(serialization_alias="workspaceId")
+    title: str
+    tags: list[str] = Field(default_factory=list)
+    status: TemplateStatus = "active"
+    kind: TemplateKind = "technical"
+    source_project_id: str | None = Field(
+        default=None, serialization_alias="sourceProjectId"
+    )
+    source_project_name: str = Field(
+        default="", serialization_alias="sourceProjectName"
+    )
+    chapter_count: int = Field(default=0, serialization_alias="chapterCount")
+    outline_titles: list[str] = Field(
+        default_factory=list, serialization_alias="outlineTitles"
+    )
+    created_at: datetime = Field(serialization_alias="createdAt")
+    updated_at: datetime = Field(serialization_alias="updatedAt")
+
+
+class BidTemplateOut(BaseModel):
+    """
+    模块：中标内容模板详情响应
+    用途：详情/沉淀响应读模型；snapshot 为独立深拷贝，非源项目 live 引用。
+    对接：GET /api/templates/{id}；POST /api/templates/from-project。
+    二次开发：勿与导出版式模板字段混用；列表禁止复用本模型以免拖入完整快照。
+    """
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id: str
+    workspace_id: str = Field(serialization_alias="workspaceId")
+    title: str
+    tags: list[str] = Field(default_factory=list)
+    status: TemplateStatus = "active"
+    kind: TemplateKind = "technical"
+    source_project_id: str | None = Field(
+        default=None, serialization_alias="sourceProjectId"
+    )
+    source_project_name: str = Field(
+        default="", serialization_alias="sourceProjectName"
+    )
+    snapshot: dict
+    created_at: datetime = Field(serialization_alias="createdAt")
+    updated_at: datetime = Field(serialization_alias="updatedAt")
+
+
+class BidTemplateFromProjectCreate(BaseModel):
+    """
+    用途：从技术标项目沉淀模板请求体。
+    对接：POST /api/templates/from-project。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    project_id: str = Field(alias="projectId")
+    title: str | None = None
+    tags: list[str] | None = None
+
+
+class BidTemplateProjectCreate(BaseModel):
+    """
+    用途：从模板创建全新技术标项目草稿请求体。
+    对接：POST /api/templates/{id}/projects。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str | None = None
+    industry: str | None = None

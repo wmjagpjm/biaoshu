@@ -11,6 +11,7 @@ import { RejectionCheckPage } from "../features/rejection-check/pages/RejectionC
 import { BusinessBidPage } from "../features/business-bid/pages/BusinessBidPage";
 import { BusinessBidWorkspace } from "../features/business-bid/pages/BusinessBidWorkspace";
 import { BidOpportunityPage } from "../features/bid-opportunity/pages/BidOpportunityPage";
+import { BidTemplatesPage } from "../features/bid-templates/pages/BidTemplatesPage";
 import { LocalParserPage } from "../features/local-parser/pages/LocalParserPage";
 import { ExportFormatPage } from "../features/export-format/pages/ExportFormatPage";
 import { MyTemplatesPage } from "../features/export-format/pages/MyTemplatesPage";
@@ -19,7 +20,7 @@ import { SettingsPage } from "../features/settings/pages/SettingsPage";
 
 /**
  * 前端路由
- * 用途：对齐 C 端模块地图；商务标含分步工作区子路由。
+ * 用途：对齐 C 端模块地图；商务标含分步工作区；中标内容模板库独立于导出版式模板。
  * 对接：页面均挂 AppShell；后端就绪后无需改路径形状。
  */
 export function AppRouter() {
@@ -39,6 +40,7 @@ export function AppRouter() {
           />
           <Route path="knowledge-base" element={<KnowledgeBasePage />} />
           <Route path="resources" element={<ResourcesPage />} />
+          <Route path="bid-templates" element={<BidTemplatesPage />} />
           <Route path="duplicate-check" element={<DuplicateCheckPage />} />
           <Route path="rejection-check" element={<RejectionCheckPage />} />
 
@@ -53,7 +55,7 @@ export function AppRouter() {
           <Route path="bid-opportunity" element={<BidOpportunityPage />} />
           <Route path="local-parser" element={<LocalParserPage />} />
 
-          {/* 导出模板：设置 / 我的模板 / 新建 / 查看 / 编辑 */}
+          {/* 导出模板：设置 / 我的模板 / 新建 / 查看 / 编辑（Word 版式，非中标内容） */}
           <Route path="export-format" element={<ExportFormatPage />} />
           <Route path="export-format/my-templates" element={<MyTemplatesPage />} />
           <Route path="export-format/new" element={<TemplateEditorPage mode="new" />} />

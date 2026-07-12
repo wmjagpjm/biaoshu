@@ -1,6 +1,6 @@
 # 前后端联调清单
 
-> 目标：验证 health / 项目 / 设置 / revise / editor-state / 响应矩阵 / 本地标讯库 / 资源中心及受控同步已闭环。
+> 目标：验证 health / 项目 / 设置 / revise / editor-state / 响应矩阵 / 本地标讯库 / 资源中心及受控同步 / **中标内容模板** 已闭环。
 > Key **明文**存储与回显（保密机决策）。
 
 ## 1. 一键启动
@@ -98,9 +98,12 @@ npm run build
 # 响应矩阵双浏览器 E2E（独立 8010/5174 与 biaoshu-e2e.db；勿占用日用端口）
 # 首次需：npx playwright install chromium
 npm run test:e2e:matrix
+
+# 中标内容模板沉淀与复用 E2E
+npm run test:e2e:templates
 ```
 
-当前基线：后端 **130 passed**（含候选分批）；前端 lint 0/0、构建通过；`test:e2e:matrix` 覆盖双 context 409/显式载入 **与** 刷新来源保留人工映射（`response-matrix-conflict.spec.ts` + `response-matrix-refresh-sources.spec.ts`；失败产物：`frontend/test-results/`、`frontend/playwright-report/`）。智能建议须人工确认的浏览器 E2E 仍未做。
+当前基线：后端 **pytest 全量**（含 `test_bid_templates` 与候选分批）；前端 lint 0/0、构建通过；`test:e2e:matrix` 覆盖双 context 409/显式载入 **与** 刷新来源保留人工映射；`test:e2e:templates` 覆盖沉淀 → 从模板新建。智能建议须人工确认的浏览器 E2E 仍未做。
 ## 6. 已接 API 一览
 
 | 方法 | 路径 |
@@ -124,6 +127,10 @@ npm run test:e2e:matrix
 | GET/PATCH/DELETE | `/api/resources/{id}` |
 | POST | `/api/resources/{id}/view` |
 | GET | `/api/resources/sync-sources`（仅同步状态，不含地址/公钥/错误原文） |
+| POST | `/api/templates/from-project`（技术标沉淀中标内容模板） |
+| GET | `/api/templates`（可选 q/status；列表摘要无完整 snapshot） |
+| GET/DELETE | `/api/templates/{id}`（详情含完整 snapshot） |
+| POST | `/api/templates/{id}/projects`（从模板新建技术标草稿） |
 
 ## 7. 本机日用主链路（目标 A 加强版）
 
@@ -180,7 +187,15 @@ npm run test:e2e:matrix
 6. 点击“导入标讯”选择 UTF-8 CSV 或 JSON；合法记录导入后出现在列表。重复 `sourceKey` 应统计为跳过；任一行日期/标题非法时弹层显示行号且列表不新增记录。
 7. 导入仅接受本机 CSV/JSON（默认上限 2 MiB、2,000 行）；不得填写外部 URL、Token 或附件路径。
 
-## 12. 资源中心
+## 12. 中标内容模板
+
+1. 打开技术标项目（大纲与章节非空）→ 点击「沉淀为模板」→ 填写名称/可选标签 → 确认。
+2. 打开侧栏「中标模板」`/bid-templates` → 列表可见；搜索标题/标签可用。
+3. 点击「从模板新建」→ 进入新项目大纲步；刷新后大纲/章节仍在；修改新项目不改变模板快照。
+4. 删除源项目后，模板仍可打开且可继续新建；删除模板不影响任何项目。
+5. 与「导出模板」页相互独立，勿混用术语。
+
+## 13. 资源中心
 
 1. 打开 `/resources`，默认显示六条“系统精选”资源；其 `workspaceId` 为 `null`，页面没有编辑或删除按钮。
 2. 新增一条资源并填写标题、正文 Markdown、标签和色调；保存后刷新页面，资源应保持并显示“我的资源”。
@@ -190,13 +205,13 @@ npm run test:e2e:matrix
 6. 默认不设 `RESOURCE_SYNC_SOURCES` 时，在 `backend` 执行 `.\.venv\Scripts\python.exe scripts\sync_resources.py`，应提示未配置来源且不发生网络请求。
 7. 使用 [资源同步清单协议](resource-sync-manifest.md) 配置测试发布方后运行命令；新资源应以只读“系统精选”出现，重复同版本清单不重复创建。`GET /api/resources/sync-sources` 只返回名称、状态和计数，不返回 URL、公钥或远端错误。
 
-## 13. 仍未接（后续）
+## 14. 仍未接（后续）
 
 Celery、真 MinerU 安装包、外部标讯数据源、多用户鉴权、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
 
 **响应矩阵相关（已接 vs 未扩）：** 多端冲突的版本写保护、409 与双浏览器上下文 E2E 主路径已接；「刷新来源」保留人工映射 E2E 已接（见第 5 节 `test:e2e:matrix`）。仍未接或仅后端覆盖、未扩 E2E 的项：字段级合并、智能建议须人工确认的浏览器 E2E、Word 失效引用在浏览器层的扩展（导出逻辑以后端单测为准）。
 
-## 14. 知识库 RAG 简版
+## 15. 知识库 RAG 简版
 
 1. 打开「知识库」→ 上传 md/txt/docx/pdf → 状态「已就绪」、分块数 > 0  
 2. 浏览器或 curl：`GET http://127.0.0.1:8000/api/knowledge/search?q=关键词` 有 items  

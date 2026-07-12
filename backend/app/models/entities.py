@@ -145,6 +145,51 @@ class BidOpportunityRow(Base):
     )
 
 
+class BidTemplateRow(Base):
+    """
+    模块：技术标中标内容模板实体
+    用途：保存 workspace 内独立的大纲/章节快照，供检索与从模板新建项目；非导出版式模板。
+    对接：template_service；/api/templates；frontend/src/features/bid-templates。
+    二次开发：
+      - source_project_id 仅弱追溯，源项目删除须 SET NULL，不得级联删模板；
+      - 禁止与 export_format 混用；多模板融合/商务 kind 另立项。
+    """
+
+    __tablename__ = "bid_templates"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    tags_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # active | archived
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    # 阶段 1 仅 technical；预留 business 字段值
+    kind: Mapped[str] = mapped_column(String(32), nullable=False, default="technical")
+    # 源项目删除后置空，快照与名称仍保留
+    source_project_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("projects.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    source_project_name: Mapped[str] = mapped_column(
+        String(500), nullable=False, default=""
+    )
+    # 深拷贝 JSON：至少 outline + chapters；可含 mode/facts/guidance 写作上下文
+    snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
 class ResourceRow(Base):
     """
     模块：资源中心持久化实体

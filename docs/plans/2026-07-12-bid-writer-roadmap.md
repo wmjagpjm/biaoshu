@@ -7,7 +7,7 @@
 
 # 标书制作者能力补全与角色化演进路线图
 
-> **状态**：阶段 0 审计已完成；阶段 1 尚未开始实现。
+> **状态**：阶段 0 审计已完成；**阶段 1 实现中**（技术标中标内容模板资产化 MVP，待 Codex 审查）。
 > **当前分支**：`collab/grok-code-codex-review`
 > **协作方式**：Grok 负责限定范围的实现与测试；Codex 负责范围、审查、验收和提交授权。
 
@@ -47,6 +47,18 @@
 **数据边界**：模板必须深拷贝大纲与章节；`source_project_id` 只作可空追溯，源项目删除不得删除模板快照；跨 workspace 一律 404；限制 snapshot 体积并拒绝空大纲。阶段 1 不做多模板融合、差异预览、图片卡片、自动扫描中标项目、跨 workspace 共享、RBAC、Alembic 或从 docx 反解析建模板。
 
 **验收**：从项目沉淀模板后，可在同 workspace 检索并创建含独立 editor-state 副本的新项目；删除源项目不破坏模板快照；跨 workspace 不可访问；非法超大/空快照明确 400。
+
+**实现进度（2026-07-12，待 Codex 审查）**：
+
+| 项 | 状态 | 说明 |
+|---|---|---|
+| 实体 `bid_templates` | 已实现 | `BidTemplateRow`；`source_project_id` FK `ON DELETE SET NULL` |
+| API | 已实现 | `POST /api/templates/from-project`（含 snapshot）；`GET /api/templates`（摘要：chapterCount/outlineTitles，无完整 snapshot）；`GET/DELETE /api/templates/{id}`（详情含 snapshot）；`POST /api/templates/{id}/projects` |
+| 服务 | 已实现 | `template_service`：深拷贝 outline/chapters（+ 可选 facts/guidance/mode）；列表 `template_to_summary_data`；空大纲/超大快照 400；仅 technical |
+| UI | 已实现 | 工作区「沉淀为模板」；侧栏「中标模板」库；从模板新建进入大纲步 |
+| 测试 | 已实现 | `backend/tests/test_bid_templates.py`；`frontend/e2e/bid-template-reuse.spec.ts`；`npm run test:e2e:templates` |
+
+**未做（阶段 1 明确排除）**：商务模板、卡片库、多模板融合/差异预览、Docling、外部标讯、登录/RBAC、Alembic、导出版式模板语义变更、从 docx 反解析建模板。
 
 ### 阶段 2：卡片化知识与素材库
 
@@ -97,4 +109,4 @@
 
 ## 5. 当前下一步
 
-阶段 0 已完成。下一步由 Codex 冻结阶段 1 的 API、数据模型、允许文件范围和测试矩阵，再由 Grok 实现；未完成阶段 1 验收前，不开始卡片、多模板融合或多角色代码开发。
+阶段 1 MVP 代码与测试已落地，等待 Codex 对 `review_request` 审查与 ack；未 ack 前不 commit/push。阶段 1 验收通过前，不开始卡片、多模板融合或多角色代码开发。

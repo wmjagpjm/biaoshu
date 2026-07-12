@@ -1,0 +1,152 @@
+/**
+ * 模块：中标内容模板库样式
+ * 用途：列表、检索、详情与从模板新建交互的最小版式。
+ * 对接：BidTemplatesPage。
+ * 二次开发：勿与 export-format 页样式耦合。
+ */
+
+.bid-tpl-page .bid-tpl-banner {
+  margin-bottom: 1rem;
+  padding: 0.65rem 0.9rem;
+  border-radius: var(--radius-md, 10px);
+  background: color-mix(in srgb, var(--accent, #3b82f6) 10%, transparent);
+  color: var(--text-secondary, #475569);
+  font-size: var(--fs-sm, 0.875rem);
+}
+
+.bid-tpl-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.bid-tpl-toolbar form {
+  display: flex;
+  flex: 1;
+  min-width: 220px;
+  gap: 0.5rem;
+}
+
+.bid-tpl-toolbar input[type="search"] {
+  flex: 1;
+  min-width: 0;
+}
+
+.bid-tpl-grid {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.bid-tpl-card {
+  display: grid;
+  gap: 0.5rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: var(--radius-md, 12px);
+  background: var(--surface, #fff);
+}
+
+.bid-tpl-card__title {
+  margin: 0;
+  font-size: var(--fs-lg, 1.05rem);
+  font-weight: 600;
+}
+
+.bid-tpl-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.85rem;
+  color: var(--text-secondary, #64748b);
+  font-size: var(--fs-sm, 0.875rem);
+}
+
+.bid-tpl-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.bid-tpl-tag {
+  display: inline-flex;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  background: var(--bg-muted, #f1f5f9);
+  color: var(--text-secondary, #475569);
+  font-size: 0.75rem;
+}
+
+.bid-tpl-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.bid-tpl-detail {
+  margin-top: 0.35rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 8px;
+  background: var(--bg-muted, #f8fafc);
+  font-size: var(--fs-sm, 0.875rem);
+  color: var(--text-secondary, #475569);
+}
+
+.bid-tpl-detail ul {
+  margin: 0.35rem 0 0;
+  padding-left: 1.1rem;
+}
+
+.bid-tpl-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.bid-tpl-dialog {
+  width: min(440px, 100%);
+  padding: 1.15rem 1.25rem;
+  border-radius: 12px;
+  background: var(--surface, #fff);
+  box-shadow: 0 18px 50px rgba(15, 23, 42, 0.18);
+}
+
+.bid-tpl-dialog h2 {
+  margin: 0 0 0.35rem;
+  font-size: 1.1rem;
+}
+
+.bid-tpl-dialog p {
+  margin: 0 0 0.9rem;
+  color: var(--text-secondary, #64748b);
+  font-size: var(--fs-sm, 0.875rem);
+}
+
+.bid-tpl-dialog label {
+  display: grid;
+  gap: 0.35rem;
+  margin-bottom: 0.75rem;
+  font-size: var(--fs-sm, 0.875rem);
+}
+
+.bid-tpl-dialog input {
+  width: 100%;
+}
+
+.bid-tpl-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.bid-tpl-inline-error {
+  margin: 0 0 0.75rem;
+  color: var(--danger, #dc2626);
+  font-size: var(--fs-sm, 0.875rem);
+}

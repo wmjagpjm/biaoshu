@@ -200,7 +200,9 @@ def delete_project(db: Session, workspace_id: str, project_id: str) -> None:
     """
     用途：物理删除项目、级联数据库产物并清理 uploads/{project_id} 磁盘目录。
     对接：DELETE /api/projects/{id}
-    二次开发：对象存储或软删除上线后改为延迟清理；不得在 commit 前删除目录。
+    二次开发：
+      - 对象存储或软删除上线后改为延迟清理；不得在 commit 前删除目录；
+      - 中标内容模板 bid_templates.source_project_id 为 ON DELETE SET NULL，删项目不得级联删模板快照。
     """
     project = get_project(db, workspace_id, project_id)
     db.delete(project)

@@ -7,6 +7,7 @@
 
 from app.models.entities import (
     BidOpportunityRow,
+    BidTemplateRow,
     KbChunkRow,
     KbDocumentRow,
     KbFolderRow,
@@ -33,6 +34,7 @@ __all__ = [
     "KbDocumentRow",
     "KbChunkRow",
     "BidOpportunityRow",
+    "BidTemplateRow",
     "ResourceRow",
     "ResourceSyncSourceRow",
     "ResourceSyncRunRow",

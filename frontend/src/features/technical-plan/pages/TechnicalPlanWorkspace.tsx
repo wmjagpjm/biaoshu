@@ -3,6 +3,7 @@ import { Link, Navigate, useParams } from "react-router-dom";
 import {
   CheckCircle2,
   Download,
+  FileStack,
   FileText,
   Info,
   Pause,
@@ -13,6 +14,7 @@ import {
 import { AiFeedbackPanel } from "../../../shared/components/AiFeedbackPanel/AiFeedbackPanel";
 import { LoadingBlock } from "../../../shared/components/LoadingBlock/LoadingBlock";
 import type { Project } from "../../../shared/types/workspace";
+import { SaveAsTemplateDialog } from "../../bid-templates/components/SaveAsTemplateDialog";
 import { ChapterEditor } from "../components/ChapterEditor";
 import { FactsEditor } from "../components/FactsEditor";
 import { OutlineStepWorkspace } from "../components/OutlineStepWorkspace";
@@ -151,6 +153,9 @@ export function TechnicalPlanWorkspace() {
   const [matchProgress, setMatchProgress] = useState<MatrixMatchProgress | null>(
     null,
   );
+  /** 中标内容模板：沉淀对话框开关 */
+  const [saveTemplateOpen, setSaveTemplateOpen] = useState(false);
+  const [saveTemplateTip, setSaveTemplateTip] = useState("");
   /** 代次：项目切换、重入智能建议或取消后，丢弃迟到的串行批结果 */
   const matchSessionRef = useRef(0);
 
@@ -390,6 +395,21 @@ export function TechnicalPlanWorkspace() {
           <Link to="/technical-plan" className="btn btn-ghost">
             项目列表
           </Link>
+          <Link to="/bid-templates" className="btn btn-ghost">
+            中标模板库
+          </Link>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            aria-label="沉淀为中标内容模板"
+            title="将当前大纲与章节深拷贝为工作空间内独立模板快照"
+            onClick={() => {
+              setSaveTemplateTip("");
+              setSaveTemplateOpen(true);
+            }}
+          >
+            <FileStack size={16} /> 沉淀为模板
+          </button>
           <button
             type="button"
             className="btn btn-ghost"
@@ -434,6 +454,24 @@ export function TechnicalPlanWorkspace() {
           </button>
         </div>
       </header>
+
+      {saveTemplateTip && (
+        <div className="tp-source-banner is-api" role="status">
+          {saveTemplateTip}
+        </div>
+      )}
+
+      <SaveAsTemplateDialog
+        open={saveTemplateOpen}
+        projectId={project.id}
+        defaultTitle={`${project.name} · 模板`}
+        onClose={() => setSaveTemplateOpen(false)}
+        onSaved={(tpl) => {
+          setSaveTemplateTip(
+            `已沉淀模板「${tpl.title}」，可在中标模板库查看或从模板新建项目。`,
+          );
+        }}
+      />
 
       {(pipeline.error || taskTip) && (
         <div

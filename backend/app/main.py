@@ -32,11 +32,13 @@ from app.api import (
     revise,
     settings as settings_api,
     tasks,
+    templates as templates_api,
 )
 from app.core.config import get_settings
 from app.core.database import Base, SessionLocal, engine, ensure_schema_columns
 # 导入实体以注册 Base.metadata（create_all 依赖）
 from app.models import (  # noqa: F401
+    BidTemplateRow,
     KbChunkRow,
     KbDocumentRow,
     KbFolderRow,
@@ -113,6 +115,7 @@ def create_app() -> FastAPI:
     app.include_router(compliance_api.router, prefix="/api")
     app.include_router(opportunities.router, prefix="/api")
     app.include_router(resources.router, prefix="/api")
+    app.include_router(templates_api.router, prefix="/api")
     return app
 
 

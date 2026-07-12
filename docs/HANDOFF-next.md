@@ -1,13 +1,13 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-12（响应矩阵刷新来源 E2E + 候选分批/多端冲突交接）
+> **交接日期**：2026-07-12（阶段 1 中标内容模板资产化 MVP 实现中，待 Codex 审查）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
 > **协作分支已推送基线**：`4946a0d` — 含双浏览器 409/刷新来源 E2E 与候选分批智能建议
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **本地状态**：刷新来源保留人工映射 E2E 已提交并推送；标书制作者路线图阶段 0 已完成审计，阶段 1「中标内容模板资产化」待立项实现
-> **验收基线**：`pytest`（含分批用例）；`frontend npm run lint` 0 errors/0 warnings；`frontend npm run build` 通过；`npm run test:e2e:matrix` 通过（409 主路径 + 刷新来源保留映射）
+> **本地状态**：阶段 1 技术标中标内容模板 MVP 已实现（未提交）；含 `bid_templates` 表、`/api/templates*`、模板库 UI、沉淀入口与 E2E
+> **验收基线**：`pytest`（含 `test_bid_templates`）；`frontend npm run lint` / `build`；`npm run test:e2e:templates`；`git diff --check`
 
 ---
 
@@ -120,8 +120,9 @@
 | 解析/文件 | `parse_service` / `file_service` / `api/files.py` | **齐** | `source`/`image` 角色隔离、Pillow 校验和项目内安全读取 |
 | 本地标讯库 | `services/opportunity_service.py`、`api/opportunities.py` | **齐** | CRUD、服务端状态、跨 workspace 404、原子立项、离线 CSV/JSON 整批导入和弱关联清理 |
 | 资源中心 | `services/resource_service.py`、`resource_sync_service.py`、`api/resources.py` | **齐** | 全局系统只读资源、workspace 用户资源、服务端原子浏览量、签名清单受控同步与来源审计 |
-| 实体 | `models/entities.py` | **部分** | 类 docstring 齐；文件顶视历史版本；response_matrix_json 已补语义 |
-| 测试 | `backend/tests/*.py` | **齐/部分** | 新增标题边框/SSE/项目图片/标讯库（含离线导入）/资源中心/受控同步/响应矩阵（含 Word 导出与智能建议）测试和 pytest 夹具均含四字段；多数历史测试含用途 |
+| 中标内容模板 | `services/template_service.py`、`api/templates.py`、`models/entities.py`（BidTemplateRow） | **齐** | workspace 快照沉淀/列表摘要/详情快照/删除/从模板新建；源项目 SET NULL；空大纲与超大快照 400 |
+| 实体 | `models/entities.py` | **部分** | 类 docstring 齐；文件顶视历史版本；response_matrix_json / BidTemplateRow 已补语义 |
+| 测试 | `backend/tests/*.py` | **齐/部分** | 含 `test_bid_templates` 及标题边框/SSE/标讯/资源/响应矩阵等；多数历史测试含用途 |
 
 #### 前端 `frontend/src/features`
 
@@ -142,6 +143,7 @@
 | 本地解析 | `local-parser` | **齐** | |
 | 标讯 | `bid-opportunity` | **齐** | 已接本地标讯库 API 与 CSV/JSON 离线导入；页面逻辑在 `hooks/useOpportunities.ts` |
 | 资源中心 | `resources` | **齐** | 已接 API；页面逻辑在 `hooks/useResources.ts`，无浏览器远程 URL |
+| 中标内容模板 | `bid-templates/*`、工作区沉淀入口、E2E `e2e/bid-template-reuse.spec.ts` | **齐** | 与导出版式模板（export-format）分离；`npm run test:e2e:templates` |
 | shared/api | `shared/lib/api.ts` | **齐** | |
 | shared 杂项 | `siteBackground` 等 | **部分** | 缺「对接」字段 |
 
@@ -229,20 +231,26 @@ npm run test:e2e:matrix
 
 前端不再使用 `mock.ts`、`VITE_RESOURCES_URL` 或浏览器远程请求。正文 Markdown 仅以 React 文本节点和 `<pre>` 展示，不渲染 HTML。外部标讯抓取、RSS、附件、版本历史、应用内定时器、同步 Token/Cookie 与浏览器同步触发均不在本轮范围。Grok CLI 通过代理恢复后完成只读复审：首轮指出 `tags` 静默截断/去重及并发旧版本覆盖新版本两个 P1；Codex 已修复并补测试，Grok 二次确认“未发现 P0/P1，上一轮两个 P1 已修复”。剩余 P2：陈旧同步失败会把来源 `last_status` 记为 `failed`，当前语义为“最近一次尝试状态”，不是“最新成功数据不可用”。
 
-### 4.7 路径索引
+### 4.7 中标内容模板（阶段 1 MVP）
+
+独立表 `bid_templates`（**非**导出版式模板 / `export_format`）。API：`POST /api/templates/from-project`（仅 technical、深拷贝 outline/chapters，可选 facts/guidance/mode；响应含完整 snapshot）、`GET /api/templates`（**列表摘要**：元数据 + `chapterCount`/`outlineTitles`，**不含**完整 snapshot）、`GET|DELETE /api/templates/{id}`（详情含完整 snapshot）、`POST /api/templates/{id}/projects`（仅创建新项目草稿 + 独立 editor-state，绝不覆盖已有项目）。`source_project_id` 可空，源项目删除 `ON DELETE SET NULL`，快照与 `source_project_name` 保留。空大纲与超过约 1.5MB 的 snapshot → 400；跨 workspace → 404。前端：`/bid-templates` 模板库仅用列表摘要展示章节数/大纲标题；技术标工作区「沉淀为模板」；E2E `npm run test:e2e:templates`。
+
+**未做**：商务模板、多模板融合/差异、卡片库、从 docx 反解析。
+
+### 4.8 路径索引
 
 ```text
 backend/app/
-  api/compliance.py knowledge.py tasks.py projects.py settings.py opportunities.py resources.py
+  api/compliance.py knowledge.py tasks.py projects.py settings.py opportunities.py resources.py templates.py
   services/
     task_service.py business_task_service.py knowledge_service.py
     embedding_service.py duplicate_service.py rejection_service.py
     export_service.py revise_service.py editor_state_service.py
     file_service.py opportunity_service.py resource_service.py resource_sync_service.py
-    text_similarity.py
+    template_service.py text_similarity.py
 
 frontend/src/features/
-  technical-plan/  business-bid/  knowledge-base/
+  technical-plan/  business-bid/  knowledge-base/  bid-templates/
   duplicate-check/  rejection-check/  settings/  bid-opportunity/  resources/
 ```
 
@@ -255,17 +263,18 @@ frontend/src/features/
 | 导出 | `structure` / `min_heading_left_enabled` | 用户已确认标题段落描边＋分级底色；整章布局/最小标题左栏仍需独立效果图与规则 |
 | 业务 | 外部标讯数据源 | 资源中心已有受控签名清单同步；标讯仍只支持本机 CSV/JSON 导入，未接网站/API/RSS |
 | 技术标 | 响应矩阵增强 | v1 已做手工映射、持久化、Word 导出联动、待确认智能建议（**候选章/大纲分批 + 前端串行累计**）、`responseMatrixVersion` DB 写锁乐观锁、前端串行保存、双浏览器 409 与刷新来源保留映射 E2E；字段级合并、来源 80 分页、智能建议人工确认浏览器 E2E 仍未做 |
+| 资产 | 卡片化知识/多模板融合 | 阶段 1 内容模板 MVP 已实现；卡片库与多模板融合/差异预览未做（路线图阶段 2/3） |
 | RAG | 真语义大模型 embedding 调优 | 有本地+可选 API，可继续增强 |
 | 库 | Alembic | 仅 create_all + ALTER |
 | 生产 | 登录/多用户/HTTPS/Key 加密/PG/Docker | 未做 |
 
-**粗估**：技术标 ~92%；商务 ~80%；合规工具可用；内网多人 ~30%；公网 SaaS ~15%。
+**粗估**：技术标 ~93%；商务 ~80%；合规工具可用；内网多人 ~30%；公网 SaaS ~15%。
 
 ---
 
 ## 6. 建议下一会话方向
 
-1. 标书制作者路线图阶段 1：中标内容模板资产化（见 `docs/plans/2026-07-12-bid-writer-roadmap.md`）；阶段目标、进度和验收须随代码提交
+1. Codex 审查并 ack 阶段 1 中标内容模板 MVP 后提交推送；再排阶段 2 卡片化或阶段 3 融合
 2. E2E 扩展（智能建议多批串行与人工确认，可选）；来源超过 80 的分页须另开 task
 3. 标题整章布局/最小标题左栏（需用户提供效果图和版式规则）
 

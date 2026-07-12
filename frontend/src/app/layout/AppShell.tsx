@@ -4,6 +4,7 @@ import {
   BookOpen,
   Briefcase,
   FileSearch,
+  FileStack,
   FileText,
   FileType,
   FileWarning,
@@ -52,6 +53,12 @@ const mainNav: NavItem[] = [
   },
   { to: "/knowledge-base", label: "知识库", icon: <BookOpen size={18} /> },
   { to: "/resources", label: "资源中心", icon: <Library size={18} /> },
+  {
+    to: "/bid-templates",
+    label: "中标模板",
+    icon: <FileStack size={18} />,
+    matchPrefix: "/bid-templates",
+  },
   { to: "/duplicate-check", label: "标书查重", icon: <FileSearch size={18} /> },
   {
     to: "/rejection-check",
