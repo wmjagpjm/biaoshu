@@ -38,3 +38,9 @@ tmp/
 
 # 本地多代理协作消息箱（运行时数据，不进入仓库）
 .agent-collaboration/
+
+# Playwright E2E 产物与浏览器缓存链接
+frontend/playwright-report/
+frontend/test-results/
+frontend/blob-report/
+frontend/playwright/.cache/

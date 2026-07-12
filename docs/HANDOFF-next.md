@@ -1,12 +1,13 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-11（响应矩阵智能建议、导出联动与静默启动）
-> **仓库本地**：`C:\Users\Administrator\biaoshu`  
-> **GitHub**：https://github.com/wmjagpjm/biaoshu  
-> **分支**：`main`  
-> **远程 HEAD**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章
-> **本地状态**：有未提交的标题边框、SSE、项目正文图片、本地标讯库及离线导入、资源中心 API/受控同步、响应矩阵智能建议与导出联动、静默启动脚本、本地 Grok-Codex 协作消息箱、测试、计划及交接文档（交接时以 `git status` 为准）
-> **验收基线**：`pytest` **126 passed**；`frontend npm run lint` 0 errors/0 warnings；`frontend npm run build` 通过（仅有既有单包体积警告）
+> **交接日期**：2026-07-12（响应矩阵多端冲突、双浏览器 E2E 与协作通道交接）
+> **仓库本地**：`C:\Users\Administrator\biaoshu`
+> **GitHub**：https://github.com/wmjagpjm/biaoshu
+> **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
+> **协作分支已推送基线**：`0e4a42c` — 修正响应矩阵版本写锁与同页串行保存
+> **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
+> **本地状态**：在 `0e4a42c` 之上有**未提交**的 P1 双浏览器 E2E（Playwright、e2e 脚本/配置、相关文档与 `.gitignore`），待 Codex 最终 ack 后 commit/push；其余 WIP 已含于 `18b592d` 起的协作分支历史（以 `git status` 为准）
+> **验收基线**：`pytest` **127 passed**；`frontend npm run lint` 0 errors/0 warnings；`frontend npm run build` 通过；`npm run test:e2e:matrix` 通过（双浏览器 409 主路径）
 
 ---
 
@@ -17,6 +18,7 @@
 先 git status；对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
+新增或修改 PowerShell 脚本后必须转换为 UTF-8 BOM 编码。
 用户自备 API Key，禁止把密钥写进仓库。
 启动：仓库根 Start-Biaoshu-Dev.bat；或 backend/run-dev.bat + frontend/run-dev.bat。四个启动脚本均后台静默执行，不等待、不弹浏览器、不重复拉起已监听端口。
 ```
@@ -90,6 +92,7 @@
 4. **非触达历史文件**：可不顺手全仓扫注释；但若打开大改，顺手补齐。  
 5. **禁止**为「好看」做与需求无关的全仓注释重构。  
 6. **写完能力更新 HANDOFF 时**：必须在 §2.3 表更新该模块注释状态。
+7. **PowerShell 脚本**：新增或修改后必须为 UTF-8 BOM，避免 Windows PowerShell 解析中文注释或字符串异常。
 
 ### 2.3 功能注释齐备表（交接审计 · 2026-07-11）
 
@@ -126,7 +129,7 @@
 |--------|----------|------------|------|
 | 技术标工作区 | `technical-plan/pages/TechnicalPlanWorkspace.tsx` | **齐** | 已挂载 ResponseMatrixPanel |
 | 技术标 hooks | `useProjectPipeline` / `useTechnicalPlanEditors` / `useProjectGuidance` | **齐** | SSE、项目切换隔离、取消终态保护、正文图片上传、responseMatrix 持久化与建议快照合并 |
-| 响应矩阵 | `technical-plan/lib/responseMatrix.ts`、`components/ResponseMatrixPanel.tsx`、`pages/TechnicalPlanWorkspace.tsx` | **齐** | sourceKey 合并、有效引用统计、失效引用提示、智能建议逐条确认 |
+| 响应矩阵 | `technical-plan/lib/responseMatrix.ts`、`components/ResponseMatrixPanel.tsx`、`pages/TechnicalPlanWorkspace.tsx`；E2E `frontend/e2e/response-matrix-conflict.spec.ts`、`playwright.config.ts` | **齐** | sourceKey 合并、冲突 UX、双 context E2E；Playwright 配置与 spec 含四字段顶注释 |
 | projectStore | `technical-plan/lib/projectStore.ts` | **齐** | kind 过滤 |
 | outlineTree | `technical-plan/lib/outlineTree.ts` | **齐** | markdownToOutline |
 | 商务标 | `business-bid/pages/*`、`hooks/useBusinessBidWorkspace.ts` | **齐** | 空态/API |
@@ -166,10 +169,13 @@
 cd C:\Users\Administrator\biaoshu\backend
 .\.venv\Scripts\activate
 .\.venv\Scripts\python -m pytest -q
-# 期望：123 passed
+# 期望：127 passed
 
 cd ..\frontend
+npm run lint
 npm run build
+# 响应矩阵双浏览器 E2E（独立 8010/5174 + biaoshu-e2e.db；首次需 npx playwright install chromium）
+npm run test:e2e:matrix
 ```
 
 **已知 lint 状态**：`npm run lint` **已通过**（**0 errors、0 warnings**）。此前 Hooks 误判（`useApiProjects` / `useApiSettings` → `shouldUseApiProjects` / `shouldUseApiSettings`）与 5 条既有 warnings（`BusinessStepStepper` / `StepStepper` 的 `only-export-components`、`useSiteBackground` 的 `exhaustive-deps`、`ChapterEditor` / `useTechnicalPlanEditors` 的 `no-useless-escape`）已在**独立 lint-only 任务**中清理完毕；`npm run build` 通过 TypeScript 类型检查。
@@ -188,7 +194,7 @@ npm run build
 
 响应矩阵 v1：editor-state 已持久化 `responseMatrix`，覆盖技术要求/评分点到大纲节点和章节正文的手工映射。前端用稳定 `sourceKey` 合并分析结果，避免要求重排后错绑；前后端都会过滤已删除的大纲/章节引用，非 `waived` 且无有效链接时降级为 `uncovered`。`responseMatrix: null` 视为不更新，显式 `[]` 才清空。技术标 Word 导出会再次收敛失效引用，并在“六、响应矩阵”中按模板表格样式输出类型、来源、权重、响应状态、当前关联位置和备注；不输出内部 ID，商务标不含该章节。`response_match` 使用用户已配置模型生成待确认建议，结果仅在任务中返回；前端逐条勾选应用，只合并自建议生成后未被人工改动的关联，`waived`、备注与已保存的非 `uncovered` 状态不被覆盖，应用后仍收敛失效引用。
 
-多端冲突（已实现）：GET/PUT 均返回稳定的 `responseMatrixVersion`（仅对收敛后矩阵内容哈希，空矩阵亦有版本；改概述/正文/updatedAt 不改变版本）。PUT 同时带 `responseMatrix` + `responseMatrixVersion` 时先取 **DB 写锁**（SQLite：projects 行无副作用 UPDATE；PostgreSQL：`SELECT … FOR UPDATE`）再比对，版本不匹配返回 **409**，`detail` 含 `message`、`responseMatrix`、`currentResponseMatrixVersion`，**整包不写**；同 expected version 并发 PUT 恰一成一败。不带版本的旧客户端仍可写矩阵。前端 hook **串行**版本化矩阵保存（飞行中不发下一带矩阵 PUT，完成后用新版本+最新 state），409 时保留本地矩阵、停止旧版本重试，面板「重新载入远端矩阵」显式恢复；无静默强制覆盖。暂不做字段级三方合并与端到端 UI 自动化；剩余风险为候选截断、分析刷新后批量失效需人工确认。
+多端冲突（已实现）：GET/PUT 均返回稳定的 `responseMatrixVersion`（仅对收敛后矩阵内容哈希，空矩阵亦有版本；改概述/正文/updatedAt 不改变版本）。PUT 同时带 `responseMatrix` + `responseMatrixVersion` 时先取 **DB 写锁**（SQLite：projects 行无副作用 UPDATE；PostgreSQL：`SELECT … FOR UPDATE`）再比对，版本不匹配返回 **409**，`detail` 含 `message`、`responseMatrix`、`currentResponseMatrixVersion`，**整包不写**；同 expected version 并发 PUT 恰一成一败。不带版本的旧客户端仍可写矩阵。前端 hook **串行**版本化矩阵保存（飞行中不发下一带矩阵 PUT，完成后用新版本+最新 state），409 时保留本地矩阵、停止旧版本重试，面板「重新载入远端矩阵」显式恢复；无静默强制覆盖。**已覆盖双浏览器 409 主路径**（`npm run test:e2e:matrix`：A 保存 → B 冲突条与本地保留 → 显式载入远端 → B 再保存）；刷新来源 / 智能建议人工确认等 E2E 扩展仍未做。字段级三方合并未做；剩余风险为候选截断、分析刷新后批量失效需人工确认。
 
 正文图片 v1：`project_files.role=source|image`；`/files` 与 parse 只处理 source，`/images` 只处理 PNG/JPEG/GIF（5 MiB、像素和数量限制）。SQLite 个人版在当前项目行写锁内完成图片计数和保存，避免并发绕过上限；未来迁移 PostgreSQL/多进程时必须另行实现等价的行锁或原子计数。正文只接受独占行 `![替代文字](biaoshu-image://file_<16位十六进制> "题注")`，导出按当前 workspace、项目和 `role=image` 二次校验；无效引用显示 warning，不读取外链、任意路径或项目外文件。
 
@@ -246,7 +252,7 @@ frontend/src/features/
 |--------|----|------|
 | 导出 | `structure` / `min_heading_left_enabled` | 用户已确认标题段落描边＋分级底色；整章布局/最小标题左栏仍需独立效果图与规则 |
 | 业务 | 外部标讯数据源 | 资源中心已有受控签名清单同步；标讯仍只支持本机 CSV/JSON 导入，未接网站/API/RSS |
-| 技术标 | 响应矩阵增强 | v1 已做手工映射、持久化、Word 导出联动、待确认智能建议、`responseMatrixVersion` DB 写锁乐观锁与前端串行保存；字段级合并与端到端 UI 用例未做 |
+| 技术标 | 响应矩阵增强 | v1 已做手工映射、持久化、Word 导出联动、待确认智能建议、`responseMatrixVersion` DB 写锁乐观锁、前端串行保存与双浏览器 409 主路径 E2E；字段级合并与刷新来源/智能建议等 E2E 扩展未做 |
 | RAG | 真语义大模型 embedding 调优 | 有本地+可选 API，可继续增强 |
 | 库 | Alembic | 仅 create_all + ALTER |
 | 生产 | 登录/多用户/HTTPS/Key 加密/PG/Docker | 未做 |
@@ -257,7 +263,7 @@ frontend/src/features/
 
 ## 6. 建议下一会话方向
 
-1. 响应矩阵端到端 UI 用例（双浏览器上下文 409 / 显式载入远端）与大项目 `response_match` 候选分批
+1. 大项目 `response_match` 候选分批；E2E 扩展（刷新来源 / 智能建议人工确认，可选）
 2. 标题整章布局/最小标题左栏（需用户提供效果图和版式规则）
 
 资源同步后续只可由管理员配置新的签名发布方，绝不可放开浏览器 URL 或外网抓取。图片管线已冻结项目内资源引用协议，后续扩展不得放开外链或客户端路径。SSE 的多工作空间鉴权、事件游标和项目级总线不在当前范围。
@@ -308,5 +314,14 @@ frontend/src/features/
 3. **注释与 HANDOFF 路径表保持一致。**  
 4. 远程以 GitHub `main` 为准；有本地脏文件先 `git status`。  
 5. Grok-Codex 协作时：Grok 先通过接入器发送 `ready`，Codex 写任务与审查结论；不得绕过消息箱把密钥写入工作区。
+
+---
+
+## 11. 当前会话状态（2026-07-12）
+
+- 当前分支仍为 `collab/grok-code-codex-review`；已推送基线为 `0e4a42c`，禁止直接合入 `main`。
+- P1 双浏览器 E2E 已实现并通过：`npm run test:e2e:matrix` 为 1 passed；本地尚有 Playwright、代理配置、忽略规则和交接文档等未提交改动，必须先复核 `git diff --check`、全量测试和审查结论，再单独提交并推送。
+- 现有 Grok 会话已由用户确认通过 AgentBridge 连通。不要重复启动 Grok、不要终止用户已打开的 AgentBridge 会话；当前 Codex 侧没有绑定该 AgentBridge pair 时，仍以 `tools/agent-collaboration/` 消息箱作为可审计的回退通道。
+- 新任务分工不变：Codex 负责范围、取舍、审查和验收；Grok 负责限定范围内的实现与测试。每一项先发 `task`，完成后发 `review_request`，未经 Codex `ack` 不得提交或推送。
 
 **换会话可直接：pull → 读本文 §0～§2 → 按 §6 开干。**
