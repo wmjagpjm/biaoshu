@@ -1256,6 +1256,7 @@ export function TechnicalPlanWorkspace() {
             onClose={() => setContentFuseOpen(false)}
             onRun={(payload) => pipeline.runTask("content_fuse", payload)}
             onCancelTask={() => pipeline.cancelTask()}
+            onReplaceChapterBody={editors.replaceChapterBody}
           />
 
           <ChapterEditor

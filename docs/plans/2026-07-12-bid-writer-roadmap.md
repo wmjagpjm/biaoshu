@@ -7,7 +7,7 @@
 
 # 标书制作者能力补全与角色化演进路线图
 
-> **状态**：阶段 0/1 已完成并推送；阶段 2 已完成（SHA=`53e012f`）；阶段 3 设计冻结 / **M3-A 实现中**（待 Codex 审查，未 commit/push）。
+> **状态**：阶段 0/1/2 已完成；阶段 3：M3-A 已完成（SHA=`5d37dba`）；M3-B 本地实现完成（待 Codex 审查，未授权提交/推送）。
 > **当前分支**：`collab/grok-code-codex-review`
 > **协作方式**：Grok 负责限定范围的实现与测试；Codex 负责范围、审查、验收和提交授权。
 
@@ -104,26 +104,36 @@
 
 | 子里程碑 | 范围 | 状态 |
 |---|---|---|
-| **M3-A** | 选择模板/卡片/目标章 → 只读融合建议（result_json） | **实现中（本批次）** |
-| **M3-B** | 差异预览、checkbox、base 漂移跳过、逐项确认写入 | **未开始** |
+| **M3-A** | 选择模板/卡片/目标章 → 只读融合建议（result_json） | **已完成**（合并 SHA=`5d37dba`） |
+| **M3-B** | 差异预览、checkbox、base 漂移跳过、逐项确认写入 | **本地实现完成**（待 Codex 审查） |
 
-**M3-A 冻结边界**：
+**M3-A 冻结边界**（已落地）：
 
 - 成功路径**仅写** `ProjectTask.result_json`；**禁止** `upsert_editor_state`、禁止改 chapters/outline/responseMatrix。
 - payload：`templateIds`(0~3)、`cardIds`(0~8)、合计 1~10、`targetChapterIds`(1~5)、`mode=merge_suggest`。
 - 创建阶段只校验 shape/配额/目标章；来源可用性由 worker 处理；跨 workspace/缺失统一 `skippedSources.unavailable`。
 - 卡片仅 active 的 document|qualification|performance；image/archived → skipped。
-- 前端仅展示建议，**无**「应用/保存/复制到章节」。
-- `result.suggestions[].sourceRefs` 形状为 `{kind,id,title}`：`title` 由服务端按**实际进入 prompt** 的模板/卡片目录补齐，不信任模型；校验后无有效来源的建议整条丢弃并计入 `skippedInvalidCount`；`quota.templatesUsed/cardsUsed` 与裁剪后入 prompt 数量一致，`promptChars≤24000`。
+- `result.suggestions[].sourceRefs` 形状为 `{kind,id,title}`：`title` 由服务端按**实际进入 prompt** 的模板/卡片目录补齐；无有效来源建议整条丢弃并计入 `skippedInvalidCount`；`quota.templatesUsed/cardsUsed` 与入 prompt 一致，`promptChars≤24000`。
 - 不开放 `candidateBatchIndex`；不改阶段 1/2 templates/cards/insert-card/response_match 语义。
-
-**M3-A 允许文件**：`task_service.py`、`fuse_context_service.py`（新）、`api/tasks.py`（说明）、`test_content_fuse.py`（新）、`useProjectPipeline.ts`、`contentFuse.ts`（新）、`ContentFuseDialog.tsx`（新）、`TechnicalPlanWorkspace.tsx`、`TechnicalPlan.css`、`content-fuse-suggest.spec.ts`（新）、`package.json`（`test:e2e:fuse`）、本路线图 / HANDOFF / integration-checklist。
 
 **验收命令（M3-A）**：`pytest -q`（含 `test_content_fuse`）；`npm run lint` / `build`；`npm run test:e2e:fuse`；回归 `test:e2e:cards` / `templates` / `matrix`；`git diff --check`。
 
+**M3-B 冻结边界**：
+
+- **纯前端**：不新增后端 API/任务/表/依赖；`content_fuse` worker 仍只写 `result_json`。
+- 确认写入**仅**修改用户勾选且实时 base 匹配的 `chapters` body，经既有 `replaceChapterBody` → debounce PUT `editor-state`；**不**改 responseMatrix/outline/analysis。
+- base 全匹配：章节存在 + `bodyHash`/`bodyLength`/`title(trim)` 一致；哈希为纯同步 SHA-1（UTF-8、hex 前 20、`bh_` 前缀）；`bodyLength=Array.from(body).length`；哈希失败不得放行。
+- 空 `proposedMarkdown` 永不应用；`action=expand` 追加（非空旧正文双换行）；其余规范 action 替换。默认不预勾；确认瞬间再校验。
+- 未确认关闭、取消、项目切换/迟到结果均不写；部分成功允许；**无专用 undo/history**，由用户手工编辑恢复。
+- 保存失败/409 行为复用既有 editor-state/UI，不静默覆盖矩阵或回滚已编辑章节。
+
+**M3-B 允许文件**：`contentFuse.ts`、`ContentFuseDialog.tsx`、`TechnicalPlanWorkspace.tsx`、`TechnicalPlan.css`、`content-fuse-apply.spec.ts`（新）、`package.json`（`test:e2e:fuse-apply`）、本路线图 / HANDOFF / integration-checklist。若必须改 `useTechnicalPlanEditors.ts` 须先 question。
+
+**验收命令（M3-B）**：`npm run lint` / `build`；`npm run test:e2e:fuse`；`npm run test:e2e:fuse-apply`；回归 `test:e2e:cards` / `templates` / `matrix`；后端 `pytest -q`（无后端 diff 仅回归）；`git diff --check`。
+
 **验收结果（占位，审查后由 Codex 填实）**：待 Codex 审查。
 
-**M3-B 未完成项**：双栏差异、逐项确认写入、base 漂移跳过、写入后回滚边界、相关 E2E。
+**M3-B 后遗留**：写入后专用回滚/历史、智能建议人工确认浏览器 E2E（矩阵）、多角色协作。
 
 ### 阶段 4：生产链质量与交付闭环
 
@@ -176,4 +186,4 @@
 
 ## 5. 当前下一步
 
-阶段 1/2 已完成并推送（阶段 2 SHA=`53e012f`）。阶段 3 **M3-A** 只读融合建议实现中（待 Codex 审查，未授权前禁止 commit/push）。M3-B 与多角色仍不开始。
+阶段 1/2 已完成并推送（阶段 2 SHA=`53e012f`）。阶段 3 **M3-A** 已完成（SHA=`5d37dba`）。**M3-B** 本地实现完成，待 Codex 审查并授权提交；通过后进入阶段 4。多角色仍不开始。

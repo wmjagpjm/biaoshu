@@ -107,9 +107,12 @@ npm run test:e2e:cards
 
 # 阶段3 M3-A：模板/卡片只读融合建议 E2E（本地 mock LLM，不写章节）
 npm run test:e2e:fuse
+
+# 阶段3 M3-B：差异预览 + 勾选确认写入 / base 漂移跳过 E2E
+npm run test:e2e:fuse-apply
 ```
 
-当前基线：后端 **pytest 全量**（含 `test_content_fuse`、`test_knowledge_cards`、`test_bid_templates` 与候选分批）；前端 lint/build；`test:e2e:fuse` 覆盖选择模板/卡片/目标章 → 只读建议 → 刷新正文不变；`test:e2e:matrix` / `templates` / `cards` 为回归。智能建议人工确认与 M3-B 写入 E2E 仍未做。
+当前基线：后端 **pytest 全量**（含 `test_content_fuse`、`test_knowledge_cards`、`test_bid_templates` 与候选分批）；前端 lint/build；`test:e2e:fuse` 覆盖只读建议且关闭不写；`test:e2e:fuse-apply` 覆盖中文/emoji 基线匹配、部分勾选写入、正文/标题漂移跳过、删除目标章跳过、确认后刷新保持、关闭未确认不写；`test:e2e:matrix` / `templates` / `cards` 为回归。矩阵智能建议人工确认 E2E 仍未做。
 
 ## 6. 已接 API 一览
 
