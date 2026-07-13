@@ -7,7 +7,7 @@
 
 # 可插拔解析调度（阶段 4 功能包 8 MVP）
 
-> **状态（2026-07-13）**：本批实现**待 Codex 审查**（未 commit/push）。
+> **状态（2026-07-13）**：**已验收并推送**（SHA=`6db1586`，提交标题「实现可插拔解析引擎调度」）。
 > **基线父提交**：`834969e`（包 7 文档状态同步后协作分支干净点）。
 > **包 7 已推送**：`2c7b3e0`（实现响应矩阵字段级三方合并）。
 > **分支**：`collab/grok-code-codex-review`。
@@ -20,7 +20,7 @@
 | 轻量解析 `parse_service.parse_file_to_markdown` | 已有；txt/md/docx/pdf 本机提取 |
 | 异步 parse 任务 | 已有；成功写 `editor-state.parsedMarkdown` |
 | 外置 MinerU 回传 `POST .../parse-callback` | 已有；可选 `X-Local-Token` |
-| 可插拔引擎注册/调度 | **本包 MVP** |
+| 可插拔引擎注册/调度 | **已完成并推送**（`6db1586`） |
 | 真实 MinerU/Docling 内嵌或 subprocess | **不做**（部署决策，见 §5） |
 | `settings.parseStrategy=local/ask` 驱动内嵌引擎 | **未接线**（设置项仍存在，但不选择引擎） |
 
@@ -78,17 +78,14 @@ task_service._run_parse
 - `LOCAL_PARSER_TOKEN` / `settings.local_parser_token` **默认为空** → callback **不校验** `X-Local-Token`。
 - 保密机本机回环可接受；多用户/局域网暴露时必须配置非空 token（本包仅加测试，不改默认）。
 
-## 7. 允许改动文件（本批）
+## 7. 已合入实现文件（SHA=`6db1586`）
 
 - `backend/app/services/parse_engines.py`（新）
 - `backend/app/services/task_service.py`
 - `backend/tests/test_parse_export.py`
 - `backend/tests/test_async_and_callback.py`
 - `backend/tests/test_parse_engines.py`（新）
-- `docs/plans/2026-07-13-pluggable-parse-plan.md`（本文件）
-- `docs/plans/2026-07-12-bid-writer-roadmap.md`
-- `docs/HANDOFF-next.md`
-- `docs/integration-checklist.md`
+- 文档闭环另批仅改：本文件、`docs/plans/2026-07-12-bid-writer-roadmap.md`、`docs/HANDOFF-next.md`、`docs/integration-checklist.md`
 
 ## 8. 验收命令
 
@@ -112,4 +109,4 @@ git diff --check
 - 修改 `requirements.txt`、`parse_callback.py`、`config.py`、前端、DB/API 路由
 - 强制默认 token 非空、任意新 markdown 体积上限（属部署决策）
 - 包 9 交付增强、多角色
-- 未获 Codex `ack` 前 commit / push
+- 本实现提交已验收并推送；文档闭环未获 Codex `ack` 前仍不得 commit / push

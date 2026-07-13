@@ -1,12 +1,12 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-13（阶段 2 SHA=`53e012f`；阶段 3 **已完成并推送**：M3-A=`5d37dba`，M3-B=`e2e5d04`；阶段 4 **包 5** 已推送 `460097a`；**包 6** 已推送 `1289c92`；**包 7** 已推送 `2c7b3e0`；**包 8** MVP 可插拔解析调度**本批实现待审查**）
+> **交接日期**：2026-07-13（阶段 2 SHA=`53e012f`；阶段 3 **已完成并推送**：M3-A=`5d37dba`，M3-B=`e2e5d04`；阶段 4 **包 5** 已推送 `460097a`；**包 6** 已推送 `1289c92`；**包 7** 已推送 `2c7b3e0`；**包 8** 已验收并推送 `6db1586` 实现可插拔解析引擎调度）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
-> **协作分支已推送基线**：`2c7b3e0` — 实现响应矩阵字段级三方合并（包 7）；其上含包 6=`1289c92`、包 5=`460097a`、M3-B=`e2e5d04`、M3-A=`5d37dba`
+> **协作分支已推送基线**：`6db1586` — 实现可插拔解析引擎调度（包 8）；其上含包 7=`2c7b3e0`、包 6=`1289c92`、包 5=`460097a`、M3-B=`e2e5d04`、M3-A=`5d37dba`
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **本地状态**：阶段 0/1/2/3/包5/包6/包7 已推送；包 8 MVP 待审查（未 commit）；**包 9** 未开始。MinerU 仅外置 callback；Docling 未接；`parseStrategy` 未接线。
+> **本地状态**：阶段 0/1/2/3/包5/包6/包7/包8 已推送；**包 9** 未开始。MinerU 仅外置 callback；Docling 未接；`parseStrategy` 未接线。
 > **验收基线**：`pytest`（含 parse_engines）；`frontend npm run lint` / `build`；`npm run test:e2e:matrix`（含 field-merge）；`git diff --check`
 
 ---
@@ -269,7 +269,7 @@ frontend/src/features/
 |--------|----|------|
 | 导出 | `structure` / `min_heading_left_enabled` | 用户已确认标题段落描边＋分级底色；整章布局/最小标题左栏仍需独立效果图与规则 |
 | 业务 | 外部标讯数据源 | 资源中心已有受控签名清单同步；标讯仍只支持本机 CSV/JSON 导入，未接网站/API/RSS |
-| 技术标 | 响应矩阵增强 | v1 已做手工映射、持久化、Word 导出联动、待确认智能建议（**来源 80 分页 + 候选章/大纲分批 + 前端嵌套串行累计**）、`responseMatrixVersion` DB 写锁乐观锁、前端串行保存、双浏览器 409、刷新来源、智能建议人工确认与**来源分页** E2E；**字段级三方合并 MVP**（包 7 已推送 `2c7b3e0`）。**包 8** 可插拔解析调度 MVP 本批实现待审查（默认 lightweight + 测试 fake；MinerU 仅外置 callback；Docling 未接；`parseStrategy` 未接线）。仍未接：包 9 交付增强相关扩展 |
+| 技术标 | 响应矩阵增强 | v1 已做手工映射、持久化、Word 导出联动、待确认智能建议（**来源 80 分页 + 候选章/大纲分批 + 前端嵌套串行累计**）、`responseMatrixVersion` DB 写锁乐观锁、前端串行保存、双浏览器 409、刷新来源、智能建议人工确认与**来源分页** E2E；**字段级三方合并 MVP**（包 7 已推送 `2c7b3e0`）。**包 8** 可插拔解析调度 MVP 已验收并推送（`6db1586`：默认 lightweight + 测试 fake；MinerU 仅外置 callback；Docling 未接；`parseStrategy` 未接线）。仍未接：包 9 交付增强相关扩展 |
 | 资产 | 卡片化知识/多模板融合 | 阶段 1 模板 + 阶段 2 卡片库（`53e012f`）；阶段 3 已完成并推送：M3-A=`5d37dba`，M3-B=`e2e5d04` |
 | RAG | 真语义大模型 embedding 调优 | 有本地+可选 API，可继续增强 |
 | 库 | Alembic | 仅 create_all + ALTER |
@@ -281,7 +281,7 @@ frontend/src/features/
 
 ## 6. 建议下一会话方向
 
-1. 阶段 4 **功能包 8** MVP 审查通过后提交推送；真实 MinerU/Docling 外置部署与 `parseStrategy` 接线另开 task
+1. 阶段 4 **功能包 8** MVP 已验收并推送（`6db1586`）；真实 MinerU/Docling 外置部署与 `parseStrategy` 接线另开 task
 2. 阶段 4 **功能包 9**（交付增强：Word 精细版式 / 外部标讯源 / embedding 调优）仍未开始，须各自独立 task
 3. M3-B 后遗留：写入历史/回滚（可选）；多角色仍不开始
 
@@ -338,12 +338,12 @@ frontend/src/features/
 
 ## 11. 当前会话状态（2026-07-13）
 
-- 当前分支仍为 `collab/grok-code-codex-review`；已推送基线：包 7=`2c7b3e0`（实现响应矩阵字段级三方合并）、包 6=`1289c92`、包 5=`460097a`、M3-B=`e2e5d04`、M3-A=`5d37dba`，禁止直接合入 `main`。
+- 当前分支仍为 `collab/grok-code-codex-review`；已推送基线：包 8=`6db1586`（实现可插拔解析引擎调度）、包 7=`2c7b3e0`、包 6=`1289c92`、包 5=`460097a`、M3-B=`e2e5d04`、M3-A=`5d37dba`，禁止直接合入 `main`。
 - 阶段 3 **已完成并推送**：M3-A 只读融合建议；M3-B 差异预览 + 勾选确认写入（SHA=`e2e5d04`）。
 - 阶段 4 **包 5** 已推送：`460097a` 智能建议人工确认 E2E。
 - 阶段 4 **包 6** 已推送：`1289c92` 实现响应矩阵源分页调用。
 - 阶段 4 **包 7** 已推送：`2c7b3e0` 实现响应矩阵字段级三方合并（base 快照 + 原子字段三方合并 + 冲突显式选择 + 仅矩阵 PUT + field-merge E2E）。
-- 阶段 4 **包 8** MVP：可插拔解析调度**本批实现待审查**（`parse_engines` + `_run_parse` 调度；默认 lightweight；测试 fake；非法引擎 failed 不静默回退；MinerU 仅外置 callback；Docling 未接；`parseStrategy` 未接线）。
+- 阶段 4 **包 8** MVP：**已验收并推送** `6db1586` 实现可插拔解析引擎调度（父提交 `834969e`；`parse_engines` + `_run_parse` 调度；默认 lightweight；测试 fake；非法引擎 failed 不静默回退；MinerU 仅外置 callback；Docling 未接；`parseStrategy` 未接线）。
 - **包 9** 仍未开始。
 - 新任务分工不变：Codex 负责范围、取舍、审查和验收；Grok 负责限定范围内的实现与测试。每一项先发 `task`，完成后发 `review_request`，未经 Codex `ack` 不得提交或推送。
 
