@@ -17,61 +17,311 @@ import { ExportFormatPage } from "../features/export-format/pages/ExportFormatPa
 import { MyTemplatesPage } from "../features/export-format/pages/MyTemplatesPage";
 import { TemplateEditorPage } from "../features/export-format/pages/TemplateEditorPage";
 import { SettingsPage } from "../features/settings/pages/SettingsPage";
+import { LoginPage } from "../features/auth/pages/LoginPage";
+import {
+  authRoleLabel,
+  useAuthSession,
+} from "../features/auth/hooks/useAuthSession";
+import type { ReactNode } from "react";
+import "../features/auth/pages/LoginPage.css";
 
 /**
  * 前端路由
- * 用途：对齐 C 端模块地图；商务标含分步工作区；中标内容模板库独立于导出版式模板。
- * 对接：页面均挂 AppShell；后端就绪后无需改路径形状。
+ * 用途：对齐 C 端模块地图；按认证模式门禁业务壳；非 bid_writer 重定向受限页。
+ * 对接：AuthProvider；页面均挂 AppShell（登录页除外）。
+ * 二次开发：导航隐藏不替代后端鉴权；disabled 保持全部既有路径。
  */
+
+/** 用途：加载中占位（握手未完成）。 */
+function AuthBootSplash() {
+  return (
+    <div className="auth-restricted" data-testid="auth-loading">
+      <div className="auth-restricted__card">
+        <h1 className="auth-restricted__title">正在检查登录状态</h1>
+        <p className="auth-restricted__body">请稍候…</p>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 用途：bootstrap-status 握手失败门控页。
+ * 保守非业务态：不渲染业务壳，避免误判为 disabled。
+ */
+function AuthHandshakeErrorPage() {
+  const { errorMessage, refresh } = useAuthSession();
+  return (
+    <div className="auth-restricted" data-testid="auth-handshake-error">
+      <div className="auth-restricted__card">
+        <h1 className="auth-restricted__title">无法确认认证模式</h1>
+        <p className="auth-restricted__body">
+          {errorMessage ??
+            "暂时无法连接认证握手接口。为避免在未验证模式下误开业务功能，当前不进入工作台。请确认后端已启动后重试。"}
+        </p>
+        <button
+          type="button"
+          className="btn btn-soft btn-sm auth-shell__retry"
+          data-testid="auth-handshake-retry"
+          onClick={() => void refresh()}
+        >
+          重新检查
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 用途：受限角色说明页（finance/hr/bidder 或非所有者访问设置）。
+ */
+function RestrictedAccessPage({ reason }: { reason?: string }) {
+  const { activeMembership, me } = useAuthSession();
+  const role = activeMembership?.role;
+  return (
+    <div className="auth-restricted" data-testid="auth-restricted">
+      <div className="auth-restricted__card">
+        <h1 className="auth-restricted__title">当前账号无权访问该功能</h1>
+        <p className="auth-restricted__body">
+          {reason ??
+            `账号「${me?.user.username ?? "未知"}」在本工作空间的角色为「${authRoleLabel(
+              role,
+            )}」。P10A 阶段仅标书制作者可使用既有业务功能；财务、人力与投标人业务面将在后续权限包开放。权限以服务端校验为准，本页仅作体验分流。`}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/** 用途：要求 bid_writer 才渲染业务页，否则重定向受限说明。 */
+function RequireBusiness({ children }: { children: ReactNode }) {
+  const { phase, canAccessBusiness } = useAuthSession();
+  if (phase === "disabled") return <>{children}</>;
+  if (!canAccessBusiness) {
+    return <Navigate to="/restricted" replace />;
+  }
+  return <>{children}</>;
+}
+
+/** 用途：要求当前空间所有者才进设置。 */
+function RequireOwner({ children }: { children: ReactNode }) {
+  const { phase, canAccessSettings } = useAuthSession();
+  if (phase === "disabled") return <>{children}</>;
+  if (!canAccessSettings) {
+    return <Navigate to="/restricted" replace />;
+  }
+  return <>{children}</>;
+}
+
+/**
+ * 用途：按认证阶段选择登录页或业务壳路由树。
+ */
+function AuthGate() {
+  const { phase } = useAuthSession();
+
+  if (phase === "loading") {
+    return <AuthBootSplash />;
+  }
+
+  if (phase === "handshake_error") {
+    return <AuthHandshakeErrorPage />;
+  }
+
+  if (phase === "unauthenticated") {
+    return <LoginPage />;
+  }
+
+  // disabled | authenticated —— 仅成功握手后才进入业务壳
+  return (
+    <Routes>
+      <Route element={<AppShell />}>
+        <Route index element={<Navigate to="/create" replace />} />
+        <Route
+          path="create"
+          element={
+            <RequireBusiness>
+              <CreatePage />
+            </RequireBusiness>
+          }
+        />
+        <Route
+          path="projects"
+          element={
+            <RequireBusiness>
+              <TechnicalPlanListPage />
+            </RequireBusiness>
+          }
+        />
+        <Route
+          path="technical-plan"
+          element={
+            <RequireBusiness>
+              <TechnicalPlanListPage />
+            </RequireBusiness>
+          }
+        />
+        <Route
+          path="technical-plan/new"
+          element={
+            <RequireBusiness>
+              <TechnicalPlanNewPage />
+            </RequireBusiness>
+          }
+        />
+        <Route
+          path="technical-plan/:projectId"
+          element={
+            <RequireBusiness>
+              <TechnicalPlanWorkspace />
+            </RequireBusiness>
+          }
+        />
+        <Route
+          path="technical-plan/:projectId/:step"
+          element={
+            <RequireBusiness>
+              <TechnicalPlanWorkspace />
+            </RequireBusiness>
+          }
+        />
+        <Route
+          path="knowledge-base"
+          element={
+            <RequireBusiness>
+              <KnowledgeBasePage />
+            </RequireBusiness>
+          }
+        />
+        <Route
+          path="resources"
+          element={
+            <RequireBusiness>
+              <ResourcesPage />
+            </RequireBusiness>
+          }
+        />
+        <Route
+          path="bid-templates"
+          element={
+            <RequireBusiness>
+              <BidTemplatesPage />
+            </RequireBusiness>
+          }
+        />
+        <Route
+          path="duplicate-check"
+          element={
+            <RequireBusiness>
+              <DuplicateCheckPage />
+            </RequireBusiness>
+          }
+        />
+        <Route
+          path="rejection-check"
+          element={
+            <RequireBusiness>
+              <RejectionCheckPage />
+            </RequireBusiness>
+          }
+        />
+        <Route
+          path="business-bid"
+          element={
+            <RequireBusiness>
+              <BusinessBidPage />
+            </RequireBusiness>
+          }
+        />
+        <Route
+          path="business-bid/:projectId"
+          element={
+            <RequireBusiness>
+              <BusinessBidWorkspace />
+            </RequireBusiness>
+          }
+        />
+        <Route
+          path="business-bid/:projectId/:step"
+          element={
+            <RequireBusiness>
+              <BusinessBidWorkspace />
+            </RequireBusiness>
+          }
+        />
+        <Route
+          path="bid-opportunity"
+          element={
+            <RequireBusiness>
+              <BidOpportunityPage />
+            </RequireBusiness>
+          }
+        />
+        <Route
+          path="local-parser"
+          element={
+            <RequireBusiness>
+              <LocalParserPage />
+            </RequireBusiness>
+          }
+        />
+        <Route
+          path="export-format"
+          element={
+            <RequireBusiness>
+              <ExportFormatPage />
+            </RequireBusiness>
+          }
+        />
+        <Route
+          path="export-format/my-templates"
+          element={
+            <RequireBusiness>
+              <MyTemplatesPage />
+            </RequireBusiness>
+          }
+        />
+        <Route
+          path="export-format/new"
+          element={
+            <RequireBusiness>
+              <TemplateEditorPage mode="new" />
+            </RequireBusiness>
+          }
+        />
+        <Route
+          path="export-format/:templateId/edit"
+          element={
+            <RequireBusiness>
+              <TemplateEditorPage mode="edit" />
+            </RequireBusiness>
+          }
+        />
+        <Route
+          path="export-format/:templateId"
+          element={
+            <RequireBusiness>
+              <TemplateEditorPage mode="view" />
+            </RequireBusiness>
+          }
+        />
+        <Route
+          path="settings"
+          element={
+            <RequireOwner>
+              <SettingsPage />
+            </RequireOwner>
+          }
+        />
+        <Route path="restricted" element={<RestrictedAccessPage />} />
+        <Route path="*" element={<Navigate to="/create" replace />} />
+      </Route>
+    </Routes>
+  );
+}
+
 export function AppRouter() {
   return (
     <BrowserRouter>
-      <Routes>
-        <Route element={<AppShell />}>
-          <Route index element={<Navigate to="/create" replace />} />
-          <Route path="create" element={<CreatePage />} />
-          <Route path="projects" element={<TechnicalPlanListPage />} />
-          <Route path="technical-plan" element={<TechnicalPlanListPage />} />
-          <Route path="technical-plan/new" element={<TechnicalPlanNewPage />} />
-          <Route path="technical-plan/:projectId" element={<TechnicalPlanWorkspace />} />
-          <Route
-            path="technical-plan/:projectId/:step"
-            element={<TechnicalPlanWorkspace />}
-          />
-          <Route path="knowledge-base" element={<KnowledgeBasePage />} />
-          <Route path="resources" element={<ResourcesPage />} />
-          <Route path="bid-templates" element={<BidTemplatesPage />} />
-          <Route path="duplicate-check" element={<DuplicateCheckPage />} />
-          <Route path="rejection-check" element={<RejectionCheckPage />} />
-
-          {/* 商务标：入口列表 + 分步工作区 */}
-          <Route path="business-bid" element={<BusinessBidPage />} />
-          <Route path="business-bid/:projectId" element={<BusinessBidWorkspace />} />
-          <Route
-            path="business-bid/:projectId/:step"
-            element={<BusinessBidWorkspace />}
-          />
-
-          <Route path="bid-opportunity" element={<BidOpportunityPage />} />
-          <Route path="local-parser" element={<LocalParserPage />} />
-
-          {/* 导出模板：设置 / 我的模板 / 新建 / 查看 / 编辑（Word 版式，非中标内容） */}
-          <Route path="export-format" element={<ExportFormatPage />} />
-          <Route path="export-format/my-templates" element={<MyTemplatesPage />} />
-          <Route path="export-format/new" element={<TemplateEditorPage mode="new" />} />
-          <Route
-            path="export-format/:templateId/edit"
-            element={<TemplateEditorPage mode="edit" />}
-          />
-          <Route
-            path="export-format/:templateId"
-            element={<TemplateEditorPage mode="view" />}
-          />
-
-          <Route path="settings" element={<SettingsPage />} />
-          <Route path="*" element={<Navigate to="/create" replace />} />
-        </Route>
-      </Routes>
+      <AuthGate />
     </BrowserRouter>
   );
 }

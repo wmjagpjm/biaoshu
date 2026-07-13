@@ -19,6 +19,7 @@ from app.api.deps import require_owner
 from app.api.schemas import (
     ActiveWorkspaceUpdate,
     AuthBootstrapStatusOut,
+    AuthCsrfOut,
     AuthLoginRequest,
     AuthMeOut,
     AuthMemberCreate,
@@ -127,9 +128,17 @@ def require_principal(request: Request) -> auth_service.AuthPrincipal:
 @router.get("/bootstrap-status", response_model=AuthBootstrapStatusOut)
 def bootstrap_status(
     db: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> AuthBootstrapStatusOut:
-    """用途：公开；仅返回是否已完成管理员引导。"""
-    return AuthBootstrapStatusOut(bootstrapped=auth_service.is_bootstrapped(db))
+    """
+    用途：公开只读握手。
+    返回 bootstrapped 与 authRequired（等于 auth_mode==required）；
+    不含用户名、口令、Cookie、CSRF、会话或业务数据。
+    """
+    return AuthBootstrapStatusOut(
+        bootstrapped=auth_service.is_bootstrapped(db),
+        auth_required=settings.is_auth_required(),
+    )
 
 
 @router.post("/login", response_model=AuthMeOut)
@@ -199,6 +208,31 @@ def me(
     # 避免在后续 GET 中重复下发 CSRF（登录时已下发）
     payload["csrfToken"] = None
     return AuthMeOut.model_validate(payload)
+
+
+@router.get("/csrf", response_model=AuthCsrfOut)
+def issue_csrf(
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[auth_service.AuthPrincipal, Depends(require_principal)],
+) -> AuthCsrfOut:
+    """
+    用途：有效会话下轮换并返回新的 CSRF 原始值（硬刷新后内存恢复）。
+    不在公开白名单；GET 不要求旧 CSRF；旧值轮换后立即失效。
+    二次开发：禁止记录原始值/摘要；响应必须 no-store。
+    """
+    session = db.get(AuthSessionRow, principal.session_id)
+    if session is None or session.revoked_at is not None:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": auth_service.CODE_AUTH_REQUIRED,
+                "message": auth_service.MSG_AUTH_REQUIRED,
+            },
+        )
+    raw_csrf = auth_service.rotate_csrf(db, session)
+    response.headers["Cache-Control"] = "no-store"
+    return AuthCsrfOut(csrf_token=raw_csrf)
 
 
 @router.put("/active-workspace", response_model=AuthMeOut)

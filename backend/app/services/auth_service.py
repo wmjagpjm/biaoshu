@@ -489,6 +489,20 @@ def verify_csrf(session: AuthSessionRow, raw_csrf: str | None) -> None:
         raise AuthError(CODE_CSRF_INVALID, MSG_CSRF_INVALID, status_code=403)
 
 
+def rotate_csrf(db: Session, session: AuthSessionRow) -> str:
+    """
+    用途：为当前有效会话轮换 CSRF 原始值；库内仅更新 SHA-256 摘要。
+    返回：新的 CSRF 原始值（仅此一次返回；禁止写入审计/日志/响应以外的持久化）。
+    对接：GET /api/auth/csrf；硬刷新后前端内存恢复。
+    """
+    raw_csrf = secrets.token_urlsafe(32)
+    session.csrf_digest = digest_token(raw_csrf)
+    session.last_seen_at = utc_now()
+    db.commit()
+    db.refresh(session)
+    return raw_csrf
+
+
 def revoke_session(db: Session, session: AuthSessionRow, *, actor_user_id: str) -> None:
     """用途：撤销会话（登出）。"""
     session.revoked_at = utc_now()

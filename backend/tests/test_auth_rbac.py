@@ -100,7 +100,10 @@ def test_uninitialized_business_api_returns_503(required_client):
     """未初始化时业务 API 固定 503；伪造工作空间头不可绕过。"""
     status = required_client.get("/api/auth/bootstrap-status")
     assert status.status_code == 200
-    assert status.json()["bootstrapped"] is False
+    body = status.json()
+    assert body["bootstrapped"] is False
+    assert body["authRequired"] is True
+    _assert_no_secrets(body)
 
     forged = required_client.get(
         "/api/projects",
@@ -114,6 +117,33 @@ def test_uninitialized_business_api_returns_503(required_client):
 
     health = required_client.get("/api/health")
     assert health.status_code == 200
+
+
+def test_bootstrap_status_auth_required_false_when_disabled():
+    """disabled 模式公开握手返回 authRequired=false，仅暴露握手字段。"""
+    get_settings.cache_clear()
+    with TestClient(app) as client:
+        status = client.get("/api/auth/bootstrap-status")
+    assert status.status_code == 200
+    body = status.json()
+    assert body["authRequired"] is False
+    assert set(body.keys()) == {"bootstrapped", "authRequired"}
+    _assert_no_secrets(body)
+
+
+def test_bootstrap_status_auth_required_true_when_required(required_client):
+    """required 模式公开握手返回 authRequired=true，无论是否已引导。"""
+    before = required_client.get("/api/auth/bootstrap-status")
+    assert before.status_code == 200
+    assert before.json()["authRequired"] is True
+    assert before.json()["bootstrapped"] is False
+
+    _bootstrap()
+    after = required_client.get("/api/auth/bootstrap-status")
+    assert after.status_code == 200
+    assert after.json()["authRequired"] is True
+    assert after.json()["bootstrapped"] is True
+    _assert_no_secrets(after.json())
 
 
 def test_wrong_credentials_same_401_and_no_secret_leak(required_client):
@@ -307,6 +337,61 @@ def test_logout_expired_revoked_and_csrf(required_client):
     assert revoked.status_code == 401
     # 避免未使用变量告警
     assert csrf2
+
+
+def test_csrf_resume_rotates_and_invalidates_old(required_client):
+    """
+    有效会话可 GET /auth/csrf 轮换新 CSRF；无会话 401；
+    响应 no-store、不含摘要/口令；旧 CSRF 失效、新值可通过变更请求。
+    """
+    _bootstrap()
+    login = _login(required_client)
+    old_csrf = _csrf_from_login(login.json())
+    assert old_csrf
+
+    # 无会话：清除 Cookie 后固定 401
+    cookie_name = get_settings().auth_cookie_name
+    saved = required_client.cookies.get(cookie_name)
+    required_client.cookies.clear()
+    anon = required_client.get("/api/auth/csrf")
+    assert anon.status_code == 401
+    _assert_no_secrets(anon.json())
+    for marker in _SECRET_MARKERS:
+        assert marker not in json.dumps(anon.json(), ensure_ascii=False)
+
+    # 恢复会话后续发
+    assert saved
+    required_client.cookies.set(cookie_name, saved, path="/api")
+    resumed = required_client.get("/api/auth/csrf")
+    assert resumed.status_code == 200
+    assert resumed.headers.get("cache-control", "").lower() == "no-store"
+    body = resumed.json()
+    assert set(body.keys()) == {"csrfToken"}
+    new_csrf = body["csrfToken"]
+    assert isinstance(new_csrf, str) and new_csrf
+    assert new_csrf != old_csrf
+    _assert_no_secrets(body)
+    for marker in _SECRET_MARKERS:
+        assert marker not in json.dumps(body, ensure_ascii=False)
+    # 原始新值不得出现在响应头（仅正文一次下发）
+    assert new_csrf not in (resumed.headers.get("set-cookie") or "")
+
+    # 旧 CSRF 轮换后失效
+    stale = required_client.post(
+        "/api/projects",
+        json={"name": "旧CSRF应失败"},
+        headers={"X-CSRF-Token": old_csrf},
+    )
+    assert stale.status_code == 403
+
+    # 新 CSRF 可通过一次变更请求
+    ok = required_client.post(
+        "/api/projects",
+        json={"name": "新CSRF可创建"},
+        headers={"X-CSRF-Token": new_csrf},
+    )
+    assert ok.status_code == 201
+    _assert_no_secrets(ok.json())
 
 
 def test_disabled_mode_keeps_workspace_header_isolation(monkeypatch, client):

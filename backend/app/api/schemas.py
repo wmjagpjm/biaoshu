@@ -933,11 +933,17 @@ AuthRole = Literal["bid_writer", "finance", "hr", "bidder"]
 
 
 class AuthBootstrapStatusOut(BaseModel):
-    """用途：公开引导状态；不含任何用户信息。"""
+    """
+    用途：公开引导与部署模式握手；不含用户、会话或密钥。
+    authRequired 严格等于服务端已校验 auth_mode == required。
+    """
 
     model_config = ConfigDict(populate_by_name=True)
 
     bootstrapped: bool
+    auth_required: bool = Field(
+        alias="authRequired", serialization_alias="authRequired"
+    )
 
 
 class AuthLoginRequest(BaseModel):
@@ -985,6 +991,18 @@ class AuthMeOut(BaseModel):
     csrf_token: str | None = Field(
         default=None, alias="csrfToken", serialization_alias="csrfToken"
     )
+
+
+class AuthCsrfOut(BaseModel):
+    """
+    用途：硬刷新后 CSRF 续发响应；仅含一次下发的原始 csrfToken。
+    对接：GET /api/auth/csrf；响应必须 Cache-Control: no-store。
+    二次开发：禁止附带用户、会话摘要、Cookie 或口令字段。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    csrf_token: str = Field(alias="csrfToken", serialization_alias="csrfToken")
 
 
 class ActiveWorkspaceUpdate(BaseModel):
