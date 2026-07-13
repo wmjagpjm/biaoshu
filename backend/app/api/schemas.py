@@ -993,3 +993,47 @@ class ActiveWorkspaceUpdate(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     workspace_id: str = Field(alias="workspaceId")
+
+
+class AuthMemberOut(BaseModel):
+    """
+    用途：工作空间成员脱敏响应；不含口令/摘要/会话。
+    对接：GET/POST/PATCH /api/auth/members*。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    user_id: str = Field(alias="userId", serialization_alias="userId")
+    username: str
+    role: AuthRole
+    is_owner: bool = Field(alias="isOwner", serialization_alias="isOwner")
+    is_active: bool = Field(alias="isActive", serialization_alias="isActive")
+    created_at: datetime = Field(alias="createdAt", serialization_alias="createdAt")
+    updated_at: datetime = Field(alias="updatedAt", serialization_alias="updatedAt")
+
+
+class AuthMemberCreate(BaseModel):
+    """
+    用途：所有者创建本机用户并加入当前工作空间。
+    对接：POST /api/auth/members；禁止公开注册。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    username: str
+    password: str
+    role: AuthRole
+    is_owner: bool = Field(default=False, alias="isOwner")
+
+
+class AuthMemberUpdate(BaseModel):
+    """
+    用途：所有者最小更新成员；至少一项 role/isOwner/isActive。
+    对接：PATCH /api/auth/members/{user_id}。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    role: AuthRole | None = None
+    is_owner: bool | None = Field(default=None, alias="isOwner")
+    is_active: bool | None = Field(default=None, alias="isActive")

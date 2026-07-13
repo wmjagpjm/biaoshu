@@ -5,7 +5,7 @@
 二次开发：
   - 禁止 JWT/OAuth/邮件/短信；禁止口令命令行落盘；禁止回显 Cookie/摘要/口令
   - 角色仅 bid_writer|finance|hr|bidder；所有者是成员标记
-  - 成员管理细接口在后续任务扩展，本模块提供底座函数
+  - 成员创建/更新/移除仅所有者；最后活跃所有者不可降级/停用/移除
 """
 
 from __future__ import annotations
@@ -591,3 +591,289 @@ def serialize_me(principal: AuthPrincipal) -> dict[str, Any]:
         "activeWorkspaceId": principal.active_workspace_id,
         "csrfToken": principal.csrf_token,
     }
+
+
+def serialize_member(member: WorkspaceMemberRow, user: LocalUserRow) -> dict[str, Any]:
+    """用途：成员管理 API 脱敏输出；禁止口令/摘要/会话字段。"""
+    return {
+        "userId": user.id,
+        "username": user.username,
+        "role": member.role,
+        "isOwner": bool(member.is_owner),
+        "isActive": bool(member.is_active),
+        "createdAt": member.created_at,
+        "updatedAt": member.updated_at,
+    }
+
+
+def assert_principal_is_owner(
+    principal: AuthPrincipal,
+    workspace_id: str,
+) -> MemberInfo:
+    """用途：成员管理路由校验当前主体为该空间活跃所有者。"""
+    member = next(
+        (
+            m
+            for m in principal.members
+            if m.workspace_id == workspace_id and m.is_active and m.is_owner
+        ),
+        None,
+    )
+    if member is None:
+        raise AuthError(CODE_ROLE_FORBIDDEN, MSG_ROLE_FORBIDDEN, status_code=403)
+    return member
+
+
+def count_active_owners(db: Session, workspace_id: str) -> int:
+    """用途：统计工作空间内活跃所有者数量（最后所有者保护）。"""
+    stmt = select(WorkspaceMemberRow).where(
+        WorkspaceMemberRow.workspace_id == workspace_id,
+        WorkspaceMemberRow.is_owner.is_(True),
+        WorkspaceMemberRow.is_active.is_(True),
+    )
+    return len(list(db.scalars(stmt).all()))
+
+
+def _guard_last_active_owner(
+    db: Session,
+    member: WorkspaceMemberRow,
+    *,
+    demote_owner: bool = False,
+    deactivate: bool = False,
+    remove: bool = False,
+) -> None:
+    """用途：最后一个活跃所有者不得被降级、停用或移除。"""
+    if not (member.is_owner and member.is_active):
+        return
+    if not (demote_owner or deactivate or remove):
+        return
+    if count_active_owners(db, member.workspace_id) <= 1:
+        raise AuthError(
+            CODE_BAD_REQUEST,
+            "不能降级、停用或移除最后一个活跃所有者",
+            status_code=400,
+        )
+
+
+def revoke_all_sessions_for_user(
+    db: Session,
+    user_id: str,
+    *,
+    actor_user_id: str,
+    workspace_id: str | None = None,
+    commit: bool = True,
+) -> int:
+    """用途：立即撤销用户全部未撤销会话（成员移除/停用后阻止旧 Cookie）。"""
+    stmt = select(AuthSessionRow).where(
+        AuthSessionRow.user_id == user_id,
+        AuthSessionRow.revoked_at.is_(None),
+    )
+    sessions = list(db.scalars(stmt).all())
+    now = utc_now()
+    for session in sessions:
+        session.revoked_at = now
+    if sessions:
+        record_audit(
+            db,
+            action="session_bulk_revoke",
+            result="ok",
+            actor_user_id=actor_user_id,
+            workspace_id=workspace_id,
+            target=f"user:{user_id[:32]}",
+            commit=False,
+        )
+    if commit:
+        db.commit()
+    return len(sessions)
+
+
+def list_workspace_members(db: Session, workspace_id: str) -> list[dict[str, Any]]:
+    """用途：列出工作空间全部成员（含停用）；脱敏。"""
+    stmt = (
+        select(WorkspaceMemberRow, LocalUserRow)
+        .join(LocalUserRow, LocalUserRow.id == WorkspaceMemberRow.user_id)
+        .where(WorkspaceMemberRow.workspace_id == workspace_id)
+        .order_by(WorkspaceMemberRow.created_at.asc())
+    )
+    out: list[dict[str, Any]] = []
+    for member, user in db.execute(stmt).all():
+        out.append(serialize_member(member, user))
+    return out
+
+
+def create_workspace_member(
+    db: Session,
+    settings: Settings,
+    *,
+    workspace_id: str,
+    actor_user_id: str,
+    username: str,
+    password: str,
+    role: str,
+    is_owner: bool = False,
+) -> dict[str, Any]:
+    """
+    用途：所有者创建本机用户并加入当前工作空间。
+    规则：用户名规范化全局唯一；角色白名单；禁止跨空间复制已有用户。
+    """
+    if role not in ALLOWED_ROLES:
+        raise AuthError(CODE_BAD_REQUEST, "无效角色", status_code=400)
+    normalized = normalize_username(username)
+    if not normalized or len(normalized) > 100:
+        raise AuthError(CODE_BAD_REQUEST, "用户名无效", status_code=400)
+    if not password or len(password) < 8:
+        raise AuthError(CODE_BAD_REQUEST, "口令过短", status_code=400)
+
+    existing = db.scalars(
+        select(LocalUserRow).where(LocalUserRow.username_normalized == normalized)
+    ).first()
+    if existing is not None:
+        raise AuthError(CODE_BAD_REQUEST, "用户名已存在", status_code=400)
+
+    salt_hex, hash_hex = hash_password(password)
+    now = utc_now()
+    user = LocalUserRow(
+        id=_new_id("usr"),
+        username=username.strip(),
+        username_normalized=normalized,
+        password_salt=salt_hex,
+        password_hash=hash_hex,
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(user)
+    db.flush()
+
+    member = WorkspaceMemberRow(
+        id=_new_id("wsm"),
+        workspace_id=workspace_id,
+        user_id=user.id,
+        role=role,
+        is_owner=bool(is_owner),
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(member)
+    record_audit(
+        db,
+        action="member_create",
+        result="ok",
+        actor_user_id=actor_user_id,
+        workspace_id=workspace_id,
+        target=f"user:{user.id[:32]}",
+        commit=False,
+    )
+    db.commit()
+    db.refresh(member)
+    db.refresh(user)
+    # settings 预留扩展（如默认角色策略）；当前仅保证可调用签名稳定
+    _ = settings
+    return serialize_member(member, user)
+
+
+def update_workspace_member(
+    db: Session,
+    *,
+    workspace_id: str,
+    target_user_id: str,
+    actor_user_id: str,
+    role: str | None = None,
+    is_owner: bool | None = None,
+    is_active: bool | None = None,
+) -> dict[str, Any]:
+    """
+    用途：所有者最小更新成员 role/isOwner/isActive；至少一项。
+    最后活跃所有者不得被降级或停用；停用时撤销其会话。
+    """
+    if role is None and is_owner is None and is_active is None:
+        raise AuthError(CODE_BAD_REQUEST, "至少更新一项成员字段", status_code=400)
+    if role is not None and role not in ALLOWED_ROLES:
+        raise AuthError(CODE_BAD_REQUEST, "无效角色", status_code=400)
+
+    member = get_member(db, workspace_id=workspace_id, user_id=target_user_id)
+    if member is None:
+        raise AuthError(CODE_BAD_REQUEST, "成员不存在", status_code=404)
+
+    demote_owner = (
+        is_owner is not None and member.is_owner and is_owner is False
+    )
+    deactivate = (
+        is_active is not None and member.is_active and is_active is False
+    )
+    _guard_last_active_owner(
+        db,
+        member,
+        demote_owner=demote_owner,
+        deactivate=deactivate,
+    )
+
+    if role is not None:
+        member.role = role
+    if is_owner is not None:
+        member.is_owner = bool(is_owner)
+    if is_active is not None:
+        member.is_active = bool(is_active)
+    member.updated_at = utc_now()
+
+    should_revoke = deactivate
+    record_audit(
+        db,
+        action="member_update",
+        result="ok",
+        actor_user_id=actor_user_id,
+        workspace_id=workspace_id,
+        target=f"user:{target_user_id[:32]}",
+        commit=False,
+    )
+    if should_revoke:
+        revoke_all_sessions_for_user(
+            db,
+            target_user_id,
+            actor_user_id=actor_user_id,
+            workspace_id=workspace_id,
+            commit=False,
+        )
+    db.commit()
+    db.refresh(member)
+    user = db.get(LocalUserRow, target_user_id)
+    assert user is not None
+    return serialize_member(member, user)
+
+
+def remove_workspace_member(
+    db: Session,
+    *,
+    workspace_id: str,
+    target_user_id: str,
+    actor_user_id: str,
+) -> None:
+    """
+    用途：仅移除当前工作空间成员关系；最后活跃所有者不可移除。
+    成功后立即撤销被移除用户的全部会话。
+    """
+    member = get_member(db, workspace_id=workspace_id, user_id=target_user_id)
+    if member is None:
+        raise AuthError(CODE_BAD_REQUEST, "成员不存在", status_code=404)
+
+    _guard_last_active_owner(db, member, remove=True)
+
+    db.delete(member)
+    record_audit(
+        db,
+        action="member_remove",
+        result="ok",
+        actor_user_id=actor_user_id,
+        workspace_id=workspace_id,
+        target=f"user:{target_user_id[:32]}",
+        commit=False,
+    )
+    revoke_all_sessions_for_user(
+        db,
+        target_user_id,
+        actor_user_id=actor_user_id,
+        workspace_id=workspace_id,
+        commit=False,
+    )
+    db.commit()
