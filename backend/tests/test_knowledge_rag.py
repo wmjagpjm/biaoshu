@@ -992,3 +992,597 @@ def test_semantic_index_status_active_model_unavailable_no_load(client, monkeypa
         assert row.error_code is None
     finally:
         db.close()
+
+
+# ---------- P9C 任务3：合成评测指标与预检（注入假嵌入，禁触网/禁真模型） ----------
+
+
+def _import_preflight():
+    """
+    用途：以可导入方式加载 scripts/semantic_model_preflight.py。
+    说明：脚本位于 backend/scripts，不在默认包路径，测试内临时加入 sys.path。
+    """
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    script = (
+        Path(__file__).resolve().parents[1] / "scripts" / "semantic_model_preflight.py"
+    )
+    assert script.is_file(), f"预检脚本缺失: {script.name}"
+    # 确保 backend 根在 path，便于脚本内 import app.*
+    backend_root = str(script.parents[1])
+    if backend_root not in sys.path:
+        sys.path.insert(0, backend_root)
+    mod_name = "semantic_model_preflight_under_test"
+    if mod_name in sys.modules:
+        return sys.modules[mod_name]
+    spec = importlib.util.spec_from_file_location(mod_name, script)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[mod_name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _oracle_embed_fn(dataset):
+    """
+    用途：按人工 relevance 构造确定性 512 维向量，使相关文档排序可控。
+    对接：evaluate_dataset / run_preflight 注入路径；不加载 sentence-transformers。
+    """
+    import hashlib
+    import math
+
+    # query_id -> {cand_id: relevance}
+    rel_map: dict[str, dict[str, int]] = {}
+    text_to_key: dict[str, tuple[str, str | None]] = {}
+    for q in dataset.queries:
+        rel_map[q.id] = {c.id: c.relevance for c in q.candidates}
+        text_to_key[q.query] = (q.id, None)
+        for c in q.candidates:
+            text_to_key[c.text] = (q.id, c.id)
+
+    def _unit(seed: bytes, dim: int = 512) -> list[float]:
+        raw = hashlib.sha256(seed).digest()
+        # 扩展到 dim 个伪随机分量
+        vals: list[float] = []
+        block = raw
+        while len(vals) < dim:
+            for b in block:
+                vals.append((b / 255.0) * 2.0 - 1.0)
+                if len(vals) >= dim:
+                    break
+            block = hashlib.sha256(block).digest()
+        n = math.sqrt(sum(x * x for x in vals)) or 1.0
+        return [x / n for x in vals]
+
+    # 查询基向量 + 相关方向：relevance 越高越靠近查询
+    q_base = {q.id: _unit(f"q::{q.id}".encode("utf-8")) for q in dataset.queries}
+
+    def _cand_vec(qid: str, cid: str, rel: int) -> list[float]:
+        base = q_base[qid]
+        noise = _unit(f"c::{qid}::{cid}".encode("utf-8"))
+        # rel=3 几乎贴合 query；rel=0 几乎纯噪声
+        w = {0: 0.05, 1: 0.35, 2: 0.65, 3: 0.92}.get(int(rel), 0.05)
+        mixed = [w * b + (1.0 - w) * n for b, n in zip(base, noise)]
+        n = math.sqrt(sum(x * x for x in mixed)) or 1.0
+        return [x / n for x in mixed]
+
+    def embed_fn(texts):
+        out: list[list[float]] = []
+        for t in texts:
+            key = text_to_key.get(t)
+            if key is None:
+                out.append(_unit(f"unk::{t[:64]}".encode("utf-8")))
+                continue
+            qid, cid = key
+            if cid is None:
+                out.append(list(q_base[qid]))
+            else:
+                out.append(_cand_vec(qid, cid, rel_map[qid][cid]))
+        return out
+
+    return embed_fn
+
+
+def test_semantic_eval_fixture_has_at_least_20_synthetic_pairs():
+    """用途：合成评测集 ≥20 条查询，字段完整且无 URL/密钥/本机路径痕迹。"""
+    import json
+    import re
+    from pathlib import Path
+
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "tests"
+        / "fixtures"
+        / "p9c_semantic_eval.json"
+    )
+    assert path.is_file()
+    data = json.loads(path.read_text(encoding="utf-8"))
+    queries = data["queries"]
+    assert len(queries) >= 20
+    assert data.get("fixedModelId") == "BAAI/bge-small-zh-v1.5"
+    assert int(data.get("dimension")) == 512
+    blob = json.dumps(data, ensure_ascii=False).lower()
+    assert "http://" not in blob
+    assert "https://" not in blob
+    assert "api_key" not in blob
+    assert "apikey" not in blob
+    assert "sk-" not in blob
+    assert not re.search(r"[a-z]:\\\\users\\\\", blob)
+    assert "/users/" not in blob
+    assert "huggingface.co" not in blob
+
+    pf = _import_preflight()
+    ds = pf.load_eval_dataset(path)
+    assert len(ds.queries) >= 20
+    total_cands = sum(len(q.candidates) for q in ds.queries)
+    assert total_cands >= 20
+    non_desc_count = 0
+    for q in ds.queries:
+        assert q.query.strip()
+        assert any(c.relevance >= 1 for c in q.candidates)
+        rels = [c.relevance for c in q.candidates]
+        # 候选顺序不得按 relevance 单调非增，避免“原序即高分”
+        is_desc = all(rels[i] >= rels[i + 1] for i in range(len(rels) - 1))
+        if not is_desc:
+            non_desc_count += 1
+        for c in q.candidates:
+            assert 0 <= c.relevance <= 3
+            assert c.text.strip()
+    # 至少绝大多数查询已打乱；此处要求全部非单调降序
+    assert non_desc_count == len(ds.queries)
+
+
+def test_semantic_eval_metrics_recall_ndcg_and_thresholds():
+    """用途：Recall@5/NDCG@5 计算正确；阈值门禁在达标/不达标时行为正确。"""
+    pf = _import_preflight()
+
+    # 完美排序：高相关在前
+    perfect = [3, 2, 1, 0, 0, 0]
+    assert pf.recall_at_k(perfect, k=5) == 1.0
+    assert pf.ndcg_at_k(perfect, k=5) == 1.0
+
+    # 相关全在 top5 之外
+    miss = [0, 0, 0, 0, 0, 3]
+    assert pf.recall_at_k(miss, k=5) == 0.0
+    assert pf.ndcg_at_k(miss, k=5) < 1.0
+
+    # 部分相关排序
+    partial = [0, 3, 0, 2, 0]
+    assert pf.recall_at_k(partial, k=5) == 1.0
+    assert 0.0 < pf.ndcg_at_k(partial, k=5) < 1.0
+
+    ds = pf.load_eval_dataset()
+    good_fn = _oracle_embed_fn(ds)
+    metrics = pf.evaluate_dataset(ds, good_fn, k=5)
+    assert metrics.query_count >= 20
+    assert metrics.recall_at_5 >= ds.recall_threshold
+    assert metrics.ndcg_at_5 >= ds.ndcg_threshold
+    pf.assert_metrics_pass(
+        metrics,
+        recall_threshold=ds.recall_threshold,
+        ndcg_threshold=ds.ndcg_threshold,
+    )
+
+    # 反序假嵌入：相关文档排到后面 → 指标应不达标
+    def reverse_fn(texts):
+        # 使用 oracle 向量但将查询向量取反，打乱排序质量
+        base = good_fn(texts)
+        if not base:
+            return base
+        # 翻转查询向量方向，使高相关余弦变差
+        qv = [-x for x in base[0]]
+        return [qv] + base[1:]
+
+    bad_metrics = pf.evaluate_dataset(ds, reverse_fn, k=5)
+    raised = None
+    try:
+        pf.assert_metrics_pass(
+            bad_metrics,
+            recall_threshold=0.99,
+            ndcg_threshold=0.99,
+        )
+    except pf.PreflightError as exc:
+        raised = exc
+    assert raised is not None
+    assert raised.code == "metric_below_threshold"
+
+
+def test_semantic_eval_rejects_empty_duplicate_wrong_dim_unavailable(tmp_path):
+    """用途：空候选、重复 id、空列表、无相关、错维、模型不可用均为受控失败。"""
+    import json
+
+    import pytest
+
+    pf = _import_preflight()
+
+    # 1) 空 candidates
+    empty_cands = {
+        "schemaVersion": 1,
+        "fixedModelId": "BAAI/bge-small-zh-v1.5",
+        "dimension": 512,
+        "thresholds": {"recallAt5": 0.8, "ndcgAt5": 0.7},
+        "queries": [
+            {
+                "id": f"eq{i:02d}",
+                "query": f"合成查询{i}",
+                "candidates": (
+                    []
+                    if i == 0
+                    else [
+                        {
+                            "id": f"eq{i:02d}_c1",
+                            "text": f"合成正文{i}",
+                            "relevance": 3,
+                        }
+                    ]
+                    + [
+                        {
+                            "id": f"eq{i:02d}_c{j}",
+                            "text": f"无关正文{i}-{j}",
+                            "relevance": 0,
+                        }
+                        for j in range(2, 6)
+                    ]
+                ),
+            }
+            for i in range(20)
+        ],
+    }
+    p1 = tmp_path / "empty_cands.json"
+    p1.write_text(json.dumps(empty_cands, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(pf.PreflightError) as ei:
+        pf.load_eval_dataset(p1)
+    assert ei.value.code == "eval_empty_candidates"
+
+    # 2) 重复候选 id
+    dup = {
+        "schemaVersion": 1,
+        "fixedModelId": "BAAI/bge-small-zh-v1.5",
+        "dimension": 512,
+        "thresholds": {"recallAt5": 0.8, "ndcgAt5": 0.7},
+        "queries": [
+            {
+                "id": f"dq{i:02d}",
+                "query": f"重复检测查询{i}",
+                "candidates": [
+                    {
+                        "id": "dup_same" if j == 1 and i == 0 else f"dq{i:02d}_c{j}",
+                        "text": f"正文{i}-{j}",
+                        "relevance": 3 if j == 1 else 0,
+                    }
+                    for j in range(1, 7)
+                ],
+            }
+            for i in range(20)
+        ],
+    }
+    # 第一条制造两个相同 id
+    dup["queries"][0]["candidates"][0]["id"] = "dup_same"
+    dup["queries"][0]["candidates"][1]["id"] = "dup_same"
+    p2 = tmp_path / "dup.json"
+    p2.write_text(json.dumps(dup, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(pf.PreflightError) as ei2:
+        pf.load_eval_dataset(p2)
+    assert ei2.value.code == "eval_duplicate_id"
+
+    # 3) 空 queries
+    empty_q = {
+        "schemaVersion": 1,
+        "fixedModelId": "BAAI/bge-small-zh-v1.5",
+        "dimension": 512,
+        "thresholds": {"recallAt5": 0.8, "ndcgAt5": 0.7},
+        "queries": [],
+    }
+    p3 = tmp_path / "empty_q.json"
+    p3.write_text(json.dumps(empty_q, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(pf.PreflightError) as ei3:
+        pf.load_eval_dataset(p3)
+    assert ei3.value.code == "eval_empty"
+
+    # 4) 某查询无 relevance>=1 候选 → eval_no_relevant
+    no_rel = {
+        "schemaVersion": 1,
+        "fixedModelId": "BAAI/bge-small-zh-v1.5",
+        "dimension": 512,
+        "thresholds": {"recallAt5": 0.8, "ndcgAt5": 0.7},
+        "queries": [
+            {
+                "id": f"nr{i:02d}",
+                "query": f"无相关查询{i}",
+                "candidates": [
+                    {
+                        "id": f"nr{i:02d}_c{j}",
+                        "text": f"无关正文{i}-{j}",
+                        "relevance": 0,
+                    }
+                    for j in range(1, 7)
+                ],
+            }
+            for i in range(20)
+        ],
+    }
+    p4 = tmp_path / "no_rel.json"
+    p4.write_text(json.dumps(no_rel, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(pf.PreflightError) as ei_nr:
+        pf.load_eval_dataset(p4)
+    assert ei_nr.value.code == "eval_no_relevant"
+
+    # 5) 错维
+    ds = pf.load_eval_dataset()
+    sample = ds.queries[0]
+
+    def wrong_dim_fn(texts):
+        return [[0.1] * 128 for _ in texts]
+
+    with pytest.raises(pf.PreflightError) as ei4:
+        pf.rank_candidates(sample.query, sample.candidates, wrong_dim_fn)
+    assert ei4.value.code == "embed_dim_mismatch"
+
+    # 6) 模型不可用
+    def boom(_texts):
+        raise RuntimeError("simulated offline failure")
+
+    with pytest.raises(pf.PreflightError) as ei5:
+        pf.rank_candidates(sample.query, sample.candidates, boom)
+    assert ei5.value.code == "model_unavailable"
+
+    def none_fn(_texts):
+        return None
+
+    with pytest.raises(pf.PreflightError) as ei6:
+        pf.rank_candidates(sample.query, sample.candidates, none_fn)
+    assert ei6.value.code == "model_unavailable"
+
+
+def test_semantic_rank_independent_of_candidate_order():
+    """用途：排序只依赖嵌入与标注，与 JSON 候选原始顺序无关。"""
+    pf = _import_preflight()
+    ds = pf.load_eval_dataset()
+    embed_fn = _oracle_embed_fn(ds)
+    sample = ds.queries[0]
+    ranked_a = pf.rank_candidates(sample.query, sample.candidates, embed_fn)
+    # 反转输入顺序后再排
+    reversed_cands = tuple(reversed(sample.candidates))
+    ranked_b = pf.rank_candidates(sample.query, reversed_cands, embed_fn)
+    assert [c.id for c in ranked_a] == [c.id for c in ranked_b]
+    # 高相关应排在前（oracle 保证）
+    assert ranked_a[0].relevance >= ranked_a[-1].relevance
+    assert ranked_a[0].relevance >= 2
+
+
+def test_semantic_preflight_cli_has_no_download_or_bypass_flags():
+    """用途：CLI 不得暴露下载、跳过磁盘、外部评测路径开关；无业务 CLI 参数。"""
+    import inspect
+
+    pf = _import_preflight()
+    parser = pf._build_arg_parser()
+    # 除内置 help 外，不得存在任何业务 CLI 参数
+    business_actions = {a.dest for a in parser._actions if a.dest != "help"}
+    assert business_actions == set()
+    help_text = parser.format_help().lower()
+    assert "allow-download" not in help_text
+    assert "skip-disk" not in help_text
+    assert "eval-json" not in help_text
+    # 函数签名也不得再接受 allow_download / skip_disk_check
+    load_sig = inspect.signature(pf.load_local_sentence_transformer)
+    assert "allow_download" not in load_sig.parameters
+    run_sig = inspect.signature(pf.run_preflight)
+    assert "allow_download" not in run_sig.parameters
+    assert "skip_disk_check" not in run_sig.parameters
+    assert "eval_path" not in run_sig.parameters
+    # main 拒绝未知参数
+    raised = None
+    try:
+        pf.main(["--allow-download"])
+    except SystemExit as exc:
+        raised = exc
+    assert raised is not None
+    assert raised.code != 0
+
+
+def _minimal_valid_eval_payload() -> dict:
+    """
+    用途：构造刚好满足契约下限的最小合法评测集骨架，供负向用例逐字段破坏。
+    说明：20 条查询各含一条相关候选；不触网、不读真实模型。
+    """
+    return {
+        "schemaVersion": 1,
+        "fixedModelId": "BAAI/bge-small-zh-v1.5",
+        "dimension": 512,
+        "thresholds": {"recallAt5": 0.80, "ndcgAt5": 0.70},
+        "queries": [
+            {
+                "id": f"cq{i:02d}",
+                "query": f"契约校验合成查询{i}",
+                "candidates": [
+                    {
+                        "id": f"cq{i:02d}_c1",
+                        "text": f"契约校验合成相关正文{i}",
+                        "relevance": 2,
+                    },
+                    {
+                        "id": f"cq{i:02d}_c2",
+                        "text": f"契约校验合成无关正文{i}",
+                        "relevance": 0,
+                    },
+                ],
+            }
+            for i in range(20)
+        ],
+    }
+
+
+def test_semantic_eval_contract_rejects_missing_or_invalid_schema_fields(tmp_path):
+    """
+    用途：schemaVersion / fixedModelId / dimension / thresholds 缺字段、错值、降阈值
+    一律受控 PreflightError；禁止默认值掩盖；不读真实模型/网络/数据库。
+    """
+    import json
+
+    import pytest
+
+    pf = _import_preflight()
+
+    def _write_and_load(name: str, payload: dict):
+        path = tmp_path / name
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        return pf.load_eval_dataset(path)
+
+    # 合法基线可通过
+    ok = _write_and_load("ok.json", _minimal_valid_eval_payload())
+    assert ok.fixed_model_id == "BAAI/bge-small-zh-v1.5"
+    assert ok.dimension == 512
+    assert ok.recall_threshold >= 0.80
+    assert ok.ndcg_threshold >= 0.70
+
+    # A1) schemaVersion 缺失
+    miss_sv = _minimal_valid_eval_payload()
+    del miss_sv["schemaVersion"]
+    with pytest.raises(pf.PreflightError) as e_miss_sv:
+        _write_and_load("miss_sv.json", miss_sv)
+    assert e_miss_sv.value.code == "eval_schema_invalid"
+
+    # A2) schemaVersion 不等于 1
+    bad_sv = _minimal_valid_eval_payload()
+    bad_sv["schemaVersion"] = 2
+    with pytest.raises(pf.PreflightError) as e_bad_sv:
+        _write_and_load("bad_sv.json", bad_sv)
+    assert e_bad_sv.value.code == "eval_schema_invalid"
+
+    # A3) fixedModelId 缺失
+    miss_mid = _minimal_valid_eval_payload()
+    del miss_mid["fixedModelId"]
+    with pytest.raises(pf.PreflightError) as e_miss_mid:
+        _write_and_load("miss_mid.json", miss_mid)
+    assert e_miss_mid.value.code == "model_id_mismatch"
+
+    # A4) fixedModelId 不等于固定模型
+    bad_mid = _minimal_valid_eval_payload()
+    bad_mid["fixedModelId"] = "other/model"
+    with pytest.raises(pf.PreflightError) as e_bad_mid:
+        _write_and_load("bad_mid.json", bad_mid)
+    assert e_bad_mid.value.code == "model_id_mismatch"
+
+    # A5) dimension 缺失
+    miss_dim = _minimal_valid_eval_payload()
+    del miss_dim["dimension"]
+    with pytest.raises(pf.PreflightError) as e_miss_dim:
+        _write_and_load("miss_dim.json", miss_dim)
+    assert e_miss_dim.value.code == "embed_dim_mismatch"
+
+    # A6) dimension 不等于 512
+    bad_dim = _minimal_valid_eval_payload()
+    bad_dim["dimension"] = 768
+    with pytest.raises(pf.PreflightError) as e_bad_dim:
+        _write_and_load("bad_dim.json", bad_dim)
+    assert e_bad_dim.value.code == "embed_dim_mismatch"
+
+    # A7) thresholds 缺失
+    miss_th = _minimal_valid_eval_payload()
+    del miss_th["thresholds"]
+    with pytest.raises(pf.PreflightError) as e_miss_th:
+        _write_and_load("miss_th.json", miss_th)
+    assert e_miss_th.value.code == "eval_threshold_invalid"
+
+    # A8) recallAt5 缺失
+    miss_r = _minimal_valid_eval_payload()
+    del miss_r["thresholds"]["recallAt5"]
+    with pytest.raises(pf.PreflightError) as e_miss_r:
+        _write_and_load("miss_r.json", miss_r)
+    assert e_miss_r.value.code == "eval_threshold_invalid"
+
+    # A9) ndcgAt5 缺失
+    miss_n = _minimal_valid_eval_payload()
+    del miss_n["thresholds"]["ndcgAt5"]
+    with pytest.raises(pf.PreflightError) as e_miss_n:
+        _write_and_load("miss_n.json", miss_n)
+    assert e_miss_n.value.code == "eval_threshold_invalid"
+
+    # A10) Recall@5 低于 0.80
+    low_r = _minimal_valid_eval_payload()
+    low_r["thresholds"]["recallAt5"] = 0.79
+    with pytest.raises(pf.PreflightError) as e_low_r:
+        _write_and_load("low_r.json", low_r)
+    assert e_low_r.value.code == "eval_threshold_invalid"
+
+    # A11) NDCG@5 低于 0.70
+    low_n = _minimal_valid_eval_payload()
+    low_n["thresholds"]["ndcgAt5"] = 0.69
+    with pytest.raises(pf.PreflightError) as e_low_n:
+        _write_and_load("low_n.json", low_n)
+    assert e_low_n.value.code == "eval_threshold_invalid"
+
+    # 允许等于或高于下限的阈值
+    high = _minimal_valid_eval_payload()
+    high["thresholds"]["recallAt5"] = 0.85
+    high["thresholds"]["ndcgAt5"] = 0.75
+    ok_high = _write_and_load("high.json", high)
+    assert ok_high.recall_threshold == 0.85
+    assert ok_high.ndcg_threshold == 0.75
+
+
+def test_semantic_preflight_injected_path_no_network_no_st_load(
+    tmp_path, monkeypatch
+):
+    """
+    用途：run_preflight 注入假嵌入可通过；不得 import/加载 sentence-transformers；
+    不写知识库；真实预检在无缓存时受控失败；磁盘检查不可跳过。
+    """
+    import builtins
+    import sys
+
+    import pytest
+
+    pf = _import_preflight()
+    ds = pf.load_eval_dataset()
+    embed_fn = _oracle_embed_fn(ds)
+
+    # 拦截 sentence_transformers 导入
+    real_import = builtins.__import__
+
+    def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "sentence_transformers" or name.startswith(
+            "sentence_transformers."
+        ):
+            raise AssertionError("pytest 路径禁止加载 sentence-transformers")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+
+    # 磁盘检查不可跳过；测试用 min_free_bytes=1 保证路径执行且环境无关
+    cache = tmp_path / "semantic-models"
+    cache.mkdir()
+    result = pf.run_preflight(
+        embed_fn=embed_fn,
+        cache_dir=cache,
+        min_free_bytes=1,
+    )
+    assert result["ok"] is True
+    assert result["modelId"] == "BAAI/bge-small-zh-v1.5"
+    assert result["dimension"] == 512
+    assert result["queryCount"] >= 20
+    assert result["recallAt5"] >= 0.80
+    assert result["ndcgAt5"] >= 0.70
+    assert result["usedRealModel"] is False
+    assert result.get("freeDiskBytes") is not None
+    # 不得泄露绝对路径/正文
+    blob = str(result).lower()
+    assert "http://" not in blob
+    assert "c:\\" not in blob
+    assert "合成样本" not in str(result)
+
+    # 磁盘不足（检查路径仍存在，不可被 CLI 旁路）
+    with pytest.raises(pf.PreflightError) as ei_disk:
+        pf.check_disk_space(cache, min_free_bytes=10**18)
+    assert ei_disk.value.code == "model_storage_insufficient"
+
+    # 无本地缓存 → model_unavailable；禁止下载，无 allow_download 参数
+    with pytest.raises(pf.PreflightError) as ei_miss:
+        pf.load_local_sentence_transformer(cache)
+    assert ei_miss.value.code == "model_unavailable"
+    assert "sentence_transformers" not in sys.modules
+    # 错误信息不得暗示可下载
+    assert "allow-download" not in str(ei_miss.value).lower()
+    assert "下载" not in str(ei_miss.value) or "禁止" in str(ei_miss.value)
