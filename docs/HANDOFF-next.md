@@ -1,12 +1,12 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-13（阶段 2 SHA=`53e012f`；阶段 3 **已完成并推送**：M3-A=`5d37dba`，M3-B=`e2e5d04`；阶段 4 **包 5** 已推送 `460097a`；**包 6** 已推送 `1289c92` 实现响应矩阵源分页调用；**包 7** 字段级三方合并本批实现中，待 Codex 审查，未 commit/push）
+> **交接日期**：2026-07-13（阶段 2 SHA=`53e012f`；阶段 3 **已完成并推送**：M3-A=`5d37dba`，M3-B=`e2e5d04`；阶段 4 **包 5** 已推送 `460097a`；**包 6** 已推送 `1289c92` 实现响应矩阵源分页调用；**包 7** 已推送 `2c7b3e0` 实现响应矩阵字段级三方合并）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
-> **协作分支已推送基线**：`1289c92` — 实现响应矩阵源分页调用（包 6）；其上含包 5=`460097a`、M3-B=`e2e5d04`、M3-A=`5d37dba`
+> **协作分支已推送基线**：`2c7b3e0` — 实现响应矩阵字段级三方合并（包 7）；其上含包 6=`1289c92`、包 5=`460097a`、M3-B=`e2e5d04`、M3-A=`5d37dba`
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **本地状态**：阶段 0/1/2/3/包5/包6 已推送；阶段 4 **包 7**（字段级三方合并 MVP + E2E）实现完成，待审查
+> **本地状态**：阶段 0/1/2/3/包5/包6/包7 已推送；阶段 4 **包 8/9** 未开始（仅规划）
 > **验收基线**：`pytest`；`frontend npm run lint` / `build`；`npm run test:e2e:matrix`（含 field-merge）；`git diff --check`
 
 ---
@@ -203,7 +203,7 @@ npm run test:e2e:matrix
 
 多端冲突（已实现）：GET/PUT 均返回稳定的 `responseMatrixVersion`（仅对收敛后矩阵内容哈希，空矩阵亦有版本；改概述/正文/updatedAt 不改变版本）。PUT 同时带 `responseMatrix` + `responseMatrixVersion` 时先取 **DB 写锁**（SQLite：projects 行无副作用 UPDATE；PostgreSQL：`SELECT … FOR UPDATE`）再比对，版本不匹配返回 **409**，`detail` 含 `message`、`responseMatrix`、`currentResponseMatrixVersion`，**整包不写**；同 expected version 并发 PUT 恰一成一败。不带版本的旧客户端仍可写矩阵。前端 hook **串行**版本化矩阵保存（飞行中不发下一带矩阵 PUT，完成后用新版本+最新 state），409 时保留本地矩阵、停止旧版本重试，面板「重新载入远端矩阵」显式恢复；无静默强制覆盖。
 
-字段级三方合并（包 7 MVP，本批实现待审查）：成功 GET / 成功带矩阵 PUT / 显式载入远端时深拷贝 `matrixBase`+`baseVersion`；409 且 baseVersion=请求版本且请求后本地未再改时，对 `notes`/`status`/`chapterIds`/`outlineNodeIds` 做原子三方比较（数组去重排序；notes 不 trim；禁止并集/deep-merge）。无冲突展示「可安全合并」；有冲突逐字段 base/local/remote 对照，须显式「采用本地/远端」后「应用合并」可用。应用 PUT **仅** `responseMatrix`+`responseMatrixVersion`（远端版本）；再次 409/网络失败不自动循环。合并后跑既有 reconcile。智能建议语义不变。
+字段级三方合并（包 7 MVP，**已完成并推送** SHA=`2c7b3e0`，提交标题「实现响应矩阵字段级三方合并」）：成功 GET / 成功带矩阵 PUT / 显式载入远端时深拷贝 `matrixBase`+`baseVersion`；409 且 baseVersion=请求版本且请求后本地未再改时，对 `notes`/`status`/`chapterIds`/`outlineNodeIds` 做原子三方比较（数组去重排序；notes 不 trim；禁止并集/deep-merge）。无冲突展示「可安全合并」；有冲突逐字段 base/local/remote 对照，须显式「采用本地/远端」后「应用合并」可用。应用 PUT **仅** `responseMatrix`+`responseMatrixVersion`（远端版本）；再次 409/网络失败不自动循环；合并成功后跳过一次全量 autosave；项目切换丢弃过期合并。合并后跑既有 reconcile。智能建议语义不变。
 
 **浏览器 E2E（`npm run test:e2e:matrix`）已覆盖**：双 context 409 主路径；「刷新来源」按 `sourceKey` 保留人工映射；**智能建议人工确认**；**来源 80 分页**；**字段级三方合并**（无冲突安全合并、同字段冲突显式选择、二次 409 不循环；`response-matrix-field-merge.spec.ts`）。
 
@@ -269,7 +269,7 @@ frontend/src/features/
 |--------|----|------|
 | 导出 | `structure` / `min_heading_left_enabled` | 用户已确认标题段落描边＋分级底色；整章布局/最小标题左栏仍需独立效果图与规则 |
 | 业务 | 外部标讯数据源 | 资源中心已有受控签名清单同步；标讯仍只支持本机 CSV/JSON 导入，未接网站/API/RSS |
-| 技术标 | 响应矩阵增强 | v1 已做手工映射、持久化、Word 导出联动、待确认智能建议（**来源 80 分页 + 候选章/大纲分批 + 前端嵌套串行累计**）、`responseMatrixVersion` DB 写锁乐观锁、前端串行保存、双浏览器 409、刷新来源、智能建议人工确认与**来源分页** E2E；**字段级三方合并 MVP**（包 7，待审查） |
+| 技术标 | 响应矩阵增强 | v1 已做手工映射、持久化、Word 导出联动、待确认智能建议（**来源 80 分页 + 候选章/大纲分批 + 前端嵌套串行累计**）、`responseMatrixVersion` DB 写锁乐观锁、前端串行保存、双浏览器 409、刷新来源、智能建议人工确认与**来源分页** E2E；**字段级三方合并 MVP**（包 7 已推送 `2c7b3e0`）。仍未接：包 8 可插拔解析、包 9 交付增强相关扩展 |
 | 资产 | 卡片化知识/多模板融合 | 阶段 1 模板 + 阶段 2 卡片库（`53e012f`）；阶段 3 已完成并推送：M3-A=`5d37dba`，M3-B=`e2e5d04` |
 | RAG | 真语义大模型 embedding 调优 | 有本地+可选 API，可继续增强 |
 | 库 | Alembic | 仅 create_all + ALTER |
@@ -281,8 +281,8 @@ frontend/src/features/
 
 ## 6. 建议下一会话方向
 
-1. Codex 审查并授权提交阶段 4 **功能包 7**（字段级三方合并 MVP + field-merge E2E + 文档）；确认仅允许文件列表
-2. 阶段 4 其余包独立立项：包 8 可插拔解析、包 9 交付增强（见路线图）
+1. 阶段 4 **功能包 8**（可插拔解析）独立立项与规划（仅 plan/task，勿与包 9 合并）
+2. 阶段 4 **功能包 9**（交付增强：Word 精细版式 / 外部标讯源 / embedding 调优）仍未开始，须各自独立 task
 3. M3-B 后遗留：写入历史/回滚（可选）；多角色仍不开始
 
 资源同步后续只可由管理员配置新的签名发布方，绝不可放开浏览器 URL 或外网抓取。图片管线已冻结项目内资源引用协议，后续扩展不得放开外链或客户端路径。SSE 的多工作空间鉴权、事件游标和项目级总线不在当前范围。
@@ -338,12 +338,12 @@ frontend/src/features/
 
 ## 11. 当前会话状态（2026-07-13）
 
-- 当前分支仍为 `collab/grok-code-codex-review`；已推送基线：包 6=`1289c92`（实现响应矩阵源分页调用）、包 5=`460097a`、M3-B=`e2e5d04`、M3-A=`5d37dba`，禁止直接合入 `main`。
-- 阶段 3 **已完成并推送**：M3-A 只读融合建议；M3-B 差异预览 + 勾选确认写入。
+- 当前分支仍为 `collab/grok-code-codex-review`；已推送基线：包 7=`2c7b3e0`（实现响应矩阵字段级三方合并）、包 6=`1289c92`、包 5=`460097a`、M3-B=`e2e5d04`、M3-A=`5d37dba`，禁止直接合入 `main`。
+- 阶段 3 **已完成并推送**：M3-A 只读融合建议；M3-B 差异预览 + 勾选确认写入（SHA=`e2e5d04`）。
 - 阶段 4 **包 5** 已推送：`460097a` 智能建议人工确认 E2E。
 - 阶段 4 **包 6** 已推送：`1289c92` 实现响应矩阵源分页调用。
-- 阶段 4 **包 7**（本批次）：字段级三方合并纯函数 + base 快照 + 合并预览/显式选择 + 仅矩阵 PUT；`response-matrix-field-merge.spec.ts`；文档同步；**待 Codex 审查，未 commit/push**。
-- 未做：包 8 可插拔解析、包 9 交付增强。
+- 阶段 4 **包 7** 已推送：`2c7b3e0` 实现响应矩阵字段级三方合并（base 快照 + 原子字段三方合并 + 冲突显式选择 + 仅矩阵 PUT + field-merge E2E）。
+- 当前下一包：阶段 4 **包 8**（可插拔解析，只规划）；**包 9** 仍未开始。
 - 新任务分工不变：Codex 负责范围、取舍、审查和验收；Grok 负责限定范围内的实现与测试。每一项先发 `task`，完成后发 `review_request`，未经 Codex `ack` 不得提交或推送。
 
 **换会话可直接：pull → 读本文 §0～§2 → 按 §6 开干。**
