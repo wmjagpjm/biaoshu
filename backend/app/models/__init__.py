@@ -13,6 +13,7 @@ from app.models.entities import (
     BidSourceSyncRunRow,
     BidTemplateRow,
     BidWatchPlanRow,
+    FinanceCostEntryRow,
     KbChunkRow,
     KbDocumentRow,
     KbFolderRow,
@@ -59,4 +60,5 @@ __all__ = [
     "WorkspaceMemberRow",
     "AuthSessionRow",
     "AuthAuditEventRow",
+    "FinanceCostEntryRow",
 ]

@@ -50,6 +50,7 @@ from app.models import (  # noqa: F401
     BidSourceSyncRunRow,
     BidTemplateRow,
     BidWatchPlanRow,
+    FinanceCostEntryRow,
     KbChunkRow,
     KbDocumentRow,
     KbFolderRow,

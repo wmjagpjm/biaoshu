@@ -13,6 +13,7 @@
 from datetime import date, datetime, timezone
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     Date,
@@ -1023,6 +1024,52 @@ class AuthAuditEventRow(Base):
     target: Mapped[str | None] = mapped_column(String(200), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now, index=True
+    )
+
+
+class FinanceCostEntryRow(Base):
+    """
+    模块：P10C 财务成本草案条目
+    用途：由 strict finance 人工维护的项目成本分项；金额以人民币分整数持久化。
+    对接：finance_cost_service；/api/finance/business-bids/*/cost-*。
+    二次开发：禁止写回 business_json；禁止客户端指定 id/workspace/project/user/时间戳。
+    """
+
+    __tablename__ = "finance_cost_entries"
+    __table_args__ = (
+        CheckConstraint(
+            "category IN ('labor', 'material', 'service', 'other')",
+            name="ck_finance_cost_entries_category",
+        ),
+        CheckConstraint(
+            "amount_fen >= 1 AND amount_fen <= 999999999999",
+            name="ck_finance_cost_entries_amount_fen",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    category: Mapped[str] = mapped_column(String(32), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    amount_fen: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    remark: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    created_by_user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
     )
 
 

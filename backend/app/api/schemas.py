@@ -12,7 +12,7 @@
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 
 # 与前端 ProjectStatus 字面量一致
@@ -1120,3 +1120,87 @@ class FinanceBusinessBidDetailOut(FinanceBusinessBidSummaryOut):
 
     quote_rows: list[FinanceQuoteRowOut] = Field(serialization_alias="quoteRows")
     quote_notes: str = Field(serialization_alias="quoteNotes")
+
+
+# ---------- P10C 财务成本草案 ----------
+
+
+FinanceCostCategory = Literal["labor", "material", "service", "other"]
+
+
+class FinanceCostEntryOut(BaseModel):
+    """
+    模块：财务成本条目响应
+    用途：单条成本草案白名单字段；不含创建人与工作空间。
+    对接：POST/PATCH 成本条目与 GET cost-draft.costEntries。
+    二次开发：禁止附加审批/税务/用户隐私字段。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    category: FinanceCostCategory
+    name: str
+    amount_fen: int = Field(serialization_alias="amountFen")
+    remark: str
+    created_at: datetime = Field(serialization_alias="createdAt")
+    updated_at: datetime = Field(serialization_alias="updatedAt")
+
+
+class FinanceCostDraftOut(BaseModel):
+    """
+    模块：财务成本草案汇总响应
+    用途：报价分、成本分、毛利分、基点与条目列表。
+    对接：GET /api/finance/business-bids/{project_id}/cost-draft。
+    二次开发：字段集合为契约白名单；不得附带报价行或 business_json。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    project_id: str = Field(serialization_alias="projectId")
+    project_name: str = Field(serialization_alias="projectName")
+    quote_total_fen: int = Field(serialization_alias="quoteTotalFen")
+    cost_total_fen: int = Field(serialization_alias="costTotalFen")
+    gross_profit_fen: int = Field(serialization_alias="grossProfitFen")
+    gross_margin_basis_points: int | None = Field(
+        serialization_alias="grossMarginBasisPoints"
+    )
+    cost_entries: list[FinanceCostEntryOut] = Field(
+        serialization_alias="costEntries"
+    )
+
+
+class FinanceCostEntryCreate(BaseModel):
+    """
+    模块：新建财务成本条目请求
+    用途：校验类别、名称、分金额与备注；忽略客户端 id/时间戳。
+    对接：POST /api/finance/business-bids/{project_id}/cost-entries。
+    二次开发：amountFen 仅接受 JSON 整数（StrictInt）；拒绝 bool/浮点/字符串强制转换。
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    category: FinanceCostCategory
+    name: str = Field(min_length=1, max_length=120)
+    # StrictInt：仅 JSON 整数；1.0 / true / "1" 均 422，禁止浮点持久化
+    amount_fen: StrictInt = Field(alias="amountFen", ge=1, le=999_999_999_999)
+    remark: str = Field(default="", max_length=500)
+
+
+class FinanceCostEntryUpdate(BaseModel):
+    """
+    模块：更新财务成本条目请求
+    用途：至少一个可修改字段；服务端再做归属与边界校验。
+    对接：PATCH /api/finance/business-bids/{project_id}/cost-entries/{entry_id}。
+    二次开发：amountFen 与创建一致用 StrictInt；禁止改 id/workspace/project/user。
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    category: FinanceCostCategory | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    # StrictInt：仅 JSON 整数；1.0 / true / "1" 均 422
+    amount_fen: StrictInt | None = Field(
+        default=None, alias="amountFen", ge=1, le=999_999_999_999
+    )
+    remark: str | None = Field(default=None, max_length=500)
