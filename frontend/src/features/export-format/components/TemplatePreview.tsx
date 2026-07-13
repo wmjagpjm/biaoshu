@@ -1,6 +1,6 @@
 /**
  * 模块：导出模板实时预览
- * 用途：用 CSS 变量近似呈现纸张、标题段落边框、正文、表格及页眉页脚样式。
+ * 用途：用 CSS 变量近似呈现纸张、标题段落边框、叶子左栏、正文、表格及页眉页脚样式。
  * 对接：ExportFormatConfig、buildExportFormatCssVars、TemplatePreview.css。
  * 二次开发：预览只修饰标题行；Word 最终效果以后端 python-docx 输出为准。
  */
@@ -34,13 +34,14 @@ export function TemplatePreview({ config }: Props) {
           <div className="ef-paper__header">{config.page.header_text || "页眉示例"}</div>
         )}
         <div className="ef-paper__body">
-          <div className={headingClassName(config, "ef-h1", 1)}>
+          {/* 示例树：一级/二级有下级，仅两处三级为叶子 */}
+          <div className={headingClassName(config, "ef-h1", 1, false)}>
             {sampleTitle(h[0], "第一章 项目理解与建设目标")}
           </div>
-          <div className={headingClassName(config, "ef-h2", 2)}>
+          <div className={headingClassName(config, "ef-h2", 2, false)}>
             {sampleTitle(h[1], "第一节 招标需求解读")}
           </div>
-          <div className={headingClassName(config, "ef-h3", 3)}>
+          <div className={headingClassName(config, "ef-h3", 3, true)}>
             {sampleTitle(h[2], "1 业务痛点与建设范围")}
           </div>
           <p className="ef-body">
@@ -48,7 +49,7 @@ export function TemplatePreview({ config }: Props) {
             系统支持六级标题（
             {HEADING_LEVEL_LABELS.slice(0, 3).join("、")}…）与表格、图片样式。
           </p>
-          <div className={headingClassName(config, "ef-h3", 3)}>
+          <div className={headingClassName(config, "ef-h3", 3, true)}>
             {sampleTitle(h[2], "2 建设目标与成功标准")}
           </div>
           <p className="ef-body">
@@ -91,9 +92,18 @@ function headingClassName(
   config: ExportFormatConfig,
   baseClassName: string,
   level: number,
+  isLeaf: boolean,
 ) {
   if (!config.heading_border.enabled) return baseClassName;
-  return `${baseClassName} ef-heading-frame ef-heading-frame--level-${level}`;
+  const classes = [
+    baseClassName,
+    "ef-heading-frame",
+    `ef-heading-frame--level-${level}`,
+  ];
+  if (config.heading_border.min_heading_left_enabled && isLeaf) {
+    classes.push("ef-heading-frame--min-left");
+  }
+  return classes.join(" ");
 }
 
 function sampleTitle(

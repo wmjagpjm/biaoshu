@@ -2,7 +2,7 @@
  * 模块：导出模板配置表单
  * 用途：编辑版面、标题、正文、表格和图片样式，并应用内置版面与主题预设。
  * 对接：ExportFormatConfig、useExportTemplates、TemplatePreview。
- * 二次开发：标题边框仅修饰标题段落；structure 与最小标题左栏未实现时不得暴露为可用能力。
+ * 二次开发：标题边框仅修饰标题段落；最小标题左栏只修饰叶子标题；structure 仍未实现不得暴露为可用能力。
  */
 
 import { useState } from "react";
@@ -510,35 +510,50 @@ export function TemplateForm({
             启用标题段落边框与分级底色
           </label>
           {config.heading_border.enabled && (
-            <div className="ef-form-grid ef-form-grid--3">
-              <div className="field">
-                <label>边框颜色</label>
+            <>
+              <label className="ef-check">
                 <input
-                  type="color"
+                  type="checkbox"
                   disabled={disabled}
-                  value={config.heading_border.border_color || "#cfd8ee"}
+                  checked={config.heading_border.min_heading_left_enabled}
                   onChange={(e) =>
-                    patchHeadingBorder({ border_color: e.target.value })
+                    patchHeadingBorder({
+                      min_heading_left_enabled: e.target.checked,
+                    })
                   }
                 />
-              </div>
-              {HEADING_LEVEL_LABELS.map((label, index) => (
-                <div className="field" key={label}>
-                  <label>{label}底色</label>
+                最小标题左栏（仅修饰叶子标题的左侧强调线，不改变页框）
+              </label>
+              <div className="ef-form-grid ef-form-grid--3">
+                <div className="field">
+                  <label>边框颜色</label>
                   <input
                     type="color"
                     disabled={disabled}
-                    value={
-                      config.heading_border.level_cell_colors[index] ||
-                      "#ffffff"
-                    }
+                    value={config.heading_border.border_color || "#cfd8ee"}
                     onChange={(e) =>
-                      patchHeadingBorderLevelColor(index, e.target.value)
+                      patchHeadingBorder({ border_color: e.target.value })
                     }
                   />
                 </div>
-              ))}
-            </div>
+                {HEADING_LEVEL_LABELS.map((label, index) => (
+                  <div className="field" key={label}>
+                    <label>{label}底色</label>
+                    <input
+                      type="color"
+                      disabled={disabled}
+                      value={
+                        config.heading_border.level_cell_colors[index] ||
+                        "#ffffff"
+                      }
+                      onChange={(e) =>
+                        patchHeadingBorderLevelColor(index, e.target.value)
+                      }
+                    />
+                  </div>
+                ))}
+              </div>
+            </>
           )}
         </div>
       )}

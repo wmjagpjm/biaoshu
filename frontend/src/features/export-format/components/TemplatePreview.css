@@ -1,8 +1,8 @@
 /*
  * 模块：导出模板预览样式
- * 用途：稳定呈现纸张、标题段落边框、正文、表格和题注的预览布局。
+ * 用途：稳定呈现纸张、标题段落边框、叶子标题左栏、正文、表格和题注的预览布局。
  * 对接：TemplatePreview.tsx；exportFormatCss.ts 注入的 --ef-* 变量。
- * 二次开发：新增 Word 样式时先定义稳定尺寸，再同步前端近似预览。
+ * 二次开发：新增 Word 样式时先定义稳定尺寸，再同步前端近似预览；左栏尺寸需与导出契约一致。
  */
 
 .ef-preview-wrap {
@@ -101,6 +101,12 @@
 
 .ef-heading-frame--level-3 {
   background: var(--ef-chapter-row-3-background);
+}
+
+/* 与 Word 契约一致：叶子标题左侧 2.25pt 强调线，文字与线间距 6pt */
+.ef-heading-frame--min-left {
+  border-left: 2.25pt solid var(--ef-chapter-frame-color, #2174fd);
+  padding-left: 6pt;
 }
 
 .ef-body {

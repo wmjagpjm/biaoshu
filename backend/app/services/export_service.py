@@ -13,7 +13,7 @@
 二次开发：
   - 正文图片仅支持项目内 biaoshu-image://file_<16位十六进制> 独占行引用
   - 字段兼容 snake_case 与 camelCase（_g）
-  - structure / min_heading_left_enabled 尚未映射，不得误称整章页框
+  - min_heading_left_enabled：仅叶子标题左侧强调线；structure 仍未接线，不得误称整章页框
 """
 
 from __future__ import annotations
@@ -416,6 +416,7 @@ def _heading_border_cfg(template: dict | None) -> dict:
     if not isinstance(template, dict):
         return {
             "enabled": False,
+            "min_heading_left_enabled": False,
             "border_color": "000000",
             "level_cell_colors": [],
         }
@@ -436,12 +437,62 @@ def _heading_border_cfg(template: dict | None) -> dict:
         ]
     return {
         "enabled": _strict_bool(_g(raw, "enabled", default=False)),
+        "min_heading_left_enabled": _strict_bool(
+            _g(
+                raw,
+                "min_heading_left_enabled",
+                "minHeadingLeftEnabled",
+                default=False,
+            )
+        ),
         "border_color": _hex_color(
             str(_g(raw, "border_color", "borderColor", default="#000000")),
             "000000",
         ),
         "level_cell_colors": colors,
     }
+
+
+def _markdown_heading_style_level(hashes: str) -> int:
+    """用途：Markdown 井号数映射为 Word Heading 级别（与 write_markdown_body 一致）。"""
+    return min(len(hashes) + 1, 4)
+
+
+def _collect_markdown_heading_levels(text: str) -> list[int]:
+    """用途：按文档顺序收集 Markdown 标题的 Word 级别序列。"""
+    levels: list[int] = []
+    for line in (text or "").replace("\r\n", "\n").split("\n"):
+        match = re.match(r"^(#{1,4})\s+(.+)$", line.strip())
+        if match:
+            levels.append(_markdown_heading_style_level(match.group(1)))
+    return levels
+
+
+def _leaf_flags_from_levels(levels: list[int]) -> list[bool]:
+    """
+    用途：根据标题级别序列判定每个标题是否为叶子（其后直至同级/更浅标题前无更深标题）。
+    对接：大纲 children、Markdown 标题预扫描。
+    """
+    flags: list[bool] = []
+    total = len(levels)
+    for index, level in enumerate(levels):
+        is_leaf = True
+        for later in levels[index + 1 : total]:
+            if later <= level:
+                break
+            if later > level:
+                is_leaf = False
+                break
+        flags.append(is_leaf)
+    return flags
+
+
+def _outline_node_is_leaf(node: dict) -> bool:
+    """用途：大纲节点无下级标题子节点时视为叶子。"""
+    children = node.get("children")
+    if not isinstance(children, list) or not children:
+        return True
+    return not any(isinstance(child, dict) for child in children)
 
 
 _PPR_CHILD_ORDER = (
@@ -497,8 +548,17 @@ def _insert_ppr_child_in_order(paragraph_props, child, local_name: str) -> None:
     paragraph_props.append(child)
 
 
-def _apply_heading_border(paragraph, cfg: dict | None, *, level_index: int) -> None:
-    """用途：为单个标题段落写入四边描边和对应级别底色。"""
+def _apply_heading_border(
+    paragraph,
+    cfg: dict | None,
+    *,
+    level_index: int,
+    is_leaf: bool = False,
+) -> None:
+    """
+    用途：为单个标题段落写入四边描边和对应级别底色；
+    叶子标题在双开关开启时把左侧边框升为 2.25pt / space=6 的强调线。
+    """
     if not isinstance(cfg, dict) or not cfg.get("enabled"):
         return
 
@@ -512,6 +572,8 @@ def _apply_heading_border(paragraph, cfg: dict | None, *, level_index: int) -> N
         safe_index = max(0, min(int(level_index), len(colors) - 1))
         fill_color = _hex_color(str(colors[safe_index]), "FFFFFF")
 
+    emphasize_left = bool(cfg.get("min_heading_left_enabled")) and bool(is_leaf)
+
     paragraph_props = paragraph._p.get_or_add_pPr()
     for child in list(paragraph_props):
         if child.tag in {qn("w:pBdr"), qn("w:shd")}:
@@ -521,8 +583,13 @@ def _apply_heading_border(paragraph, cfg: dict | None, *, level_index: int) -> N
     for edge_name in ("top", "left", "bottom", "right"):
         edge = OxmlElement(f"w:{edge_name}")
         edge.set(qn("w:val"), "single")
-        edge.set(qn("w:sz"), "8")
-        edge.set(qn("w:space"), "4")
+        if edge_name == "left" and emphasize_left:
+            # 2.25 pt = 18 个 1/8 pt；space 为文字与边框间距（磅）
+            edge.set(qn("w:sz"), "18")
+            edge.set(qn("w:space"), "6")
+        else:
+            edge.set(qn("w:sz"), "8")
+            edge.set(qn("w:space"), "4")
         edge.set(qn("w:color"), border_color)
         borders.append(edge)
     _insert_ppr_child_in_order(paragraph_props, borders, "pBdr")
@@ -540,14 +607,16 @@ def _add_heading(
     *,
     level: int,
     heading_border_cfg: dict | None = None,
+    is_leaf: bool = False,
 ):
-    """用途：创建 Word 标题，并按实际 Heading 级别应用标题边框。"""
+    """用途：创建 Word 标题，并按实际 Heading 级别与叶子标记应用边框。"""
     paragraph = doc.add_heading(text, level=level)
     if level >= 1:
         _apply_heading_border(
             paragraph,
             heading_border_cfg,
             level_index=min(level - 1, 5),
+            is_leaf=is_leaf,
         )
     return paragraph
 
@@ -867,6 +936,11 @@ def write_markdown_body(
     支持：普通段、-/* 无序、1. 有序、| 表格、项目内图片独占行。
     """
     lines = (text or "").replace("\r\n", "\n").split("\n")
+    # 写入前预计算叶子标题，禁止流式猜测
+    heading_leaf_flags = _leaf_flags_from_levels(
+        _collect_markdown_heading_levels(text)
+    )
+    heading_cursor = 0
     resolved_image_cfg = image_cfg or _image_cfg(None)
     resolved_image_warnings = image_warnings if image_warnings is not None else []
     i = 0
@@ -950,12 +1024,17 @@ def write_markdown_body(
         # 小标题 ##
         m_h = re.match(r"^(#{1,4})\s+(.+)$", stripped)
         if m_h:
-            level = min(len(m_h.group(1)) + 1, 4)
+            level = _markdown_heading_style_level(m_h.group(1))
+            is_leaf = True
+            if heading_cursor < len(heading_leaf_flags):
+                is_leaf = heading_leaf_flags[heading_cursor]
+                heading_cursor += 1
             _add_heading(
                 doc,
                 m_h.group(2).strip(),
                 level=level,
                 heading_border_cfg=heading_border_cfg,
+                is_leaf=is_leaf,
             )
             i += 1
             ol_index = 0
@@ -1393,6 +1472,7 @@ def build_docx_bytes(
             "三、目录大纲",
             level=1,
             heading_border_cfg=heading_border_cfg,
+            is_leaf=False,
         )
         outline_num = HeadingNumberer(headings_cfg)
 
@@ -1412,6 +1492,7 @@ def build_docx_bytes(
                     t,
                     level=style_level,
                     heading_border_cfg=heading_border_cfg,
+                    is_leaf=_outline_node_is_leaf(n),
                 )
                 desc = n.get("description")
                 if desc:
@@ -1429,6 +1510,7 @@ def build_docx_bytes(
             "四、正文",
             level=1,
             heading_border_cfg=heading_border_cfg,
+            is_leaf=False,
         )
         chapter_num = HeadingNumberer(headings_cfg)
         first_ch = True
