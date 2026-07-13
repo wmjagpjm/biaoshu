@@ -1,8 +1,9 @@
 /**
  * 模块：响应矩阵面板
- * 用途：编辑技术要求/评分点到章节和大纲节点的可追溯映射；展示多端冲突并支持显式载入远端。
- * 对接：useTechnicalPlanEditors.responseMatrix / responseMatrixConflict；串行 response_match。
- * 二次开发：保持为受控组件；冲突时禁止静默覆盖；批次进度仅展示，不写 editor-state。
+ * 用途：编辑技术要求/评分点到章节和大纲节点的可追溯映射；展示多端冲突、
+ *       字段级三方合并预览，并支持显式载入远端或应用合并。
+ * 对接：useTechnicalPlanEditors.responseMatrix / responseMatrixConflict / mergeUi；串行 response_match。
+ * 二次开发：保持为受控组件；冲突时禁止静默覆盖与预选覆盖侧；批次进度仅展示，不写 editor-state。
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -23,7 +24,12 @@ import type {
 } from "../types";
 import {
   collectOutlineOptions,
+  formatResponseMatrixFieldPreview,
   getResponseMatrixCoverage,
+  responseMatrixConflictChoiceKey,
+  responseMatrixEditableFieldLabel,
+  type ResponseMatrixConflictChoice,
+  type ResponseMatrixThreeWayMergeResult,
 } from "../lib/responseMatrix";
 
 const STATUS_OPTIONS: Array<{ value: ResponseMatrixStatus; label: string }> = [
@@ -41,6 +47,8 @@ const SUGGESTION_STATUS_LABELS: Record<
   partial: "部分覆盖",
   covered: "已覆盖",
 };
+
+const EMPTY_MERGE_CHOICES: Record<string, ResponseMatrixConflictChoice> = {};
 
 function toggleId(values: string[], id: string, checked: boolean): string[] {
   const set = new Set(values);
@@ -68,6 +76,16 @@ export function ResponseMatrixPanel(props: {
   /** 多端矩阵冲突提示；有值时展示中文说明与「重新载入远端矩阵」 */
   conflictMessage?: string | null;
   onReloadRemote?: () => void;
+  /** 409 且 base 匹配时的三方合并预览；无冲突可安全合并，有冲突须逐字段选择 */
+  mergePreview?: ResponseMatrixThreeWayMergeResult | null;
+  mergeChoices?: Record<string, ResponseMatrixConflictChoice>;
+  mergeApplyError?: string | null;
+  mergeApplying?: boolean;
+  onMergeChoice?: (
+    choiceKey: string,
+    choice: ResponseMatrixConflictChoice,
+  ) => void;
+  onApplyMerge?: () => void;
 }) {
   const outlineOptions = collectOutlineOptions(props.outline);
   const [selectedSuggestionKeys, setSelectedSuggestionKeys] = useState<Set<string>>(
@@ -85,6 +103,28 @@ export function ResponseMatrixPanel(props: {
     () => new Map(outlineOptions.map((node) => [node.id, node.title])),
     [outlineOptions],
   );
+  const mergePreview = props.mergePreview ?? null;
+  const mergeChoices = props.mergeChoices ?? EMPTY_MERGE_CHOICES;
+  const allConflictsResolved = useMemo(() => {
+    if (!mergePreview) return false;
+    for (const row of mergePreview.rowConflicts) {
+      const key = responseMatrixConflictChoiceKey(row.sourceKey, "*");
+      if (mergeChoices[key] !== "local" && mergeChoices[key] !== "remote") {
+        return false;
+      }
+    }
+    for (const field of mergePreview.fieldConflicts) {
+      const key = responseMatrixConflictChoiceKey(field.sourceKey, field.field);
+      if (mergeChoices[key] !== "local" && mergeChoices[key] !== "remote") {
+        return false;
+      }
+    }
+    return true;
+  }, [mergePreview, mergeChoices]);
+  const canApplyMerge =
+    Boolean(mergePreview) &&
+    !props.mergeApplying &&
+    (mergePreview?.hasConflicts ? allConflictsResolved : true);
 
   useEffect(() => {
     setSelectedSuggestionKeys(new Set(props.suggestions.map((item) => item.sourceKey)));
@@ -161,8 +201,8 @@ export function ResponseMatrixPanel(props: {
           role="alert"
           style={{
             display: "flex",
+            flexDirection: "column",
             gap: 12,
-            alignItems: "flex-start",
             margin: "12px 0",
             padding: "10px 12px",
             borderRadius: 8,
@@ -170,22 +210,230 @@ export function ResponseMatrixPanel(props: {
             background: "rgba(240, 180, 41, 0.12)",
           }}
         >
-          <AlertTriangle size={18} style={{ flexShrink: 0, marginTop: 2 }} />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 600, marginBottom: 4 }}>矩阵保存冲突</div>
-            <div style={{ fontSize: "0.92em", opacity: 0.92 }}>
-              {props.conflictMessage}
-              （已保留本页本地编辑，未用远端结果静默覆盖。）
+          <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+            <AlertTriangle size={18} style={{ flexShrink: 0, marginTop: 2 }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>矩阵保存冲突</div>
+              <div style={{ fontSize: "0.92em", opacity: 0.92 }}>
+                {props.conflictMessage}
+                （已保留本页本地编辑，未用远端结果静默覆盖。）
+              </div>
             </div>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => props.onReloadRemote?.()}
+              disabled={!props.onReloadRemote || props.mergeApplying}
+            >
+              <GitBranch size={14} /> 重新载入远端矩阵
+            </button>
           </div>
-          <button
-            type="button"
-            className="btn btn-primary btn-sm"
-            onClick={() => props.onReloadRemote?.()}
-            disabled={!props.onReloadRemote}
-          >
-            <GitBranch size={14} /> 重新载入远端矩阵
-          </button>
+
+          {/* 二次 409 等场景：无预览但仍需可见的可恢复说明 */}
+          {!mergePreview && props.mergeApplyError ? (
+            <div
+              role="status"
+              data-testid="response-matrix-merge-apply-error"
+              style={{
+                marginLeft: 30,
+                fontSize: "0.92em",
+                color: "#a15c00",
+              }}
+            >
+              {props.mergeApplyError}
+            </div>
+          ) : null}
+
+          {mergePreview ? (
+            <div
+              className="response-matrix__merge-preview"
+              data-testid="response-matrix-merge-preview"
+              style={{
+                marginLeft: 30,
+                padding: "10px 12px",
+                borderRadius: 8,
+                border: "1px solid rgba(0,0,0,0.08)",
+                background: "rgba(255,255,255,0.55)",
+              }}
+            >
+              {!mergePreview.hasConflicts ? (
+                <div data-testid="response-matrix-merge-safe">
+                  <div style={{ fontWeight: 600, marginBottom: 6 }}>可安全合并</div>
+                  <div style={{ fontSize: "0.92em", opacity: 0.92, marginBottom: 10 }}>
+                    本地与远端修改的字段无重叠冲突，可一键合并保留双方变更。应用前不会写入服务器。
+                  </div>
+                </div>
+              ) : (
+                <div data-testid="response-matrix-merge-conflicts">
+                  <div style={{ fontWeight: 600, marginBottom: 6 }}>存在字段冲突</div>
+                  <div style={{ fontSize: "0.92em", opacity: 0.92, marginBottom: 10 }}>
+                    请为每一个冲突字段明确选择「采用本地」或「采用远端」后，方可应用合并。不会预选任一侧。
+                  </div>
+
+                  {mergePreview.rowConflicts.map((row) => {
+                    const key = responseMatrixConflictChoiceKey(row.sourceKey, "*");
+                    const choice = mergeChoices[key];
+                    return (
+                      <div
+                        key={`row-${row.sourceKey}`}
+                        data-testid={`merge-row-conflict-${row.sourceKey}`}
+                        style={{
+                          marginBottom: 10,
+                          paddingBottom: 10,
+                          borderBottom: "1px solid rgba(0,0,0,0.06)",
+                        }}
+                      >
+                        <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                          行冲突：{row.sourceText || row.sourceKey}
+                        </div>
+                        <div style={{ fontSize: "0.88em", opacity: 0.9, marginBottom: 6 }}>
+                          base 有此行，一端删除且另一端修改；须整行选择本地或远端。
+                        </div>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          <button
+                            type="button"
+                            className={
+                              choice === "local"
+                                ? "btn btn-primary btn-sm"
+                                : "btn btn-ghost btn-sm"
+                            }
+                            aria-pressed={choice === "local"}
+                            onClick={() => props.onMergeChoice?.(key, "local")}
+                          >
+                            采用本地
+                          </button>
+                          <button
+                            type="button"
+                            className={
+                              choice === "remote"
+                                ? "btn btn-primary btn-sm"
+                                : "btn btn-ghost btn-sm"
+                            }
+                            aria-pressed={choice === "remote"}
+                            onClick={() => props.onMergeChoice?.(key, "remote")}
+                          >
+                            采用远端
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {mergePreview.fieldConflicts.map((conflict) => {
+                    const key = responseMatrixConflictChoiceKey(
+                      conflict.sourceKey,
+                      conflict.field,
+                    );
+                    const choice = mergeChoices[key];
+                    const label = responseMatrixEditableFieldLabel(conflict.field);
+                    return (
+                      <div
+                        key={key}
+                        data-testid={`merge-field-conflict-${conflict.field}`}
+                        style={{
+                          marginBottom: 10,
+                          paddingBottom: 10,
+                          borderBottom: "1px solid rgba(0,0,0,0.06)",
+                        }}
+                      >
+                        <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                          {conflict.sourceText || conflict.sourceKey} · {label}
+                        </div>
+                        <div
+                          style={{
+                            fontSize: "0.88em",
+                            display: "grid",
+                            gap: 4,
+                            marginBottom: 8,
+                          }}
+                        >
+                          <div>
+                            base：
+                            {formatResponseMatrixFieldPreview(
+                              conflict.field,
+                              conflict.baseValue,
+                              chapterTitles,
+                              outlineTitles,
+                            )}
+                          </div>
+                          <div data-testid={`merge-local-value-${conflict.field}`}>
+                            本地：
+                            {formatResponseMatrixFieldPreview(
+                              conflict.field,
+                              conflict.localValue,
+                              chapterTitles,
+                              outlineTitles,
+                            )}
+                          </div>
+                          <div data-testid={`merge-remote-value-${conflict.field}`}>
+                            远端：
+                            {formatResponseMatrixFieldPreview(
+                              conflict.field,
+                              conflict.remoteValue,
+                              chapterTitles,
+                              outlineTitles,
+                            )}
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          <button
+                            type="button"
+                            className={
+                              choice === "local"
+                                ? "btn btn-primary btn-sm"
+                                : "btn btn-ghost btn-sm"
+                            }
+                            aria-pressed={choice === "local"}
+                            data-testid={`merge-choose-local-${conflict.field}`}
+                            onClick={() => props.onMergeChoice?.(key, "local")}
+                          >
+                            采用本地
+                          </button>
+                          <button
+                            type="button"
+                            className={
+                              choice === "remote"
+                                ? "btn btn-primary btn-sm"
+                                : "btn btn-ghost btn-sm"
+                            }
+                            aria-pressed={choice === "remote"}
+                            data-testid={`merge-choose-remote-${conflict.field}`}
+                            onClick={() => props.onMergeChoice?.(key, "remote")}
+                          >
+                            采用远端
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {props.mergeApplyError ? (
+                <div
+                  role="status"
+                  data-testid="response-matrix-merge-apply-error"
+                  style={{
+                    marginBottom: 8,
+                    fontSize: "0.92em",
+                    color: "#a15c00",
+                  }}
+                >
+                  {props.mergeApplyError}
+                </div>
+              ) : null}
+
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                data-testid="response-matrix-apply-merge"
+                disabled={!canApplyMerge}
+                onClick={() => props.onApplyMerge?.()}
+              >
+                {props.mergeApplying ? "应用中…" : "应用合并"}
+              </button>
+            </div>
+          ) : null}
         </div>
       ) : null}
 

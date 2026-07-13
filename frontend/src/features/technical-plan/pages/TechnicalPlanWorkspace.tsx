@@ -1055,6 +1055,16 @@ export function TechnicalPlanWorkspace() {
             }}
             conflictMessage={editors.responseMatrixConflict?.message ?? null}
             onReloadRemote={editors.reloadRemoteResponseMatrix}
+            mergePreview={editors.responseMatrixMergeUi?.preview ?? null}
+            mergeChoices={editors.responseMatrixMergeUi?.choices ?? {}}
+            mergeApplyError={
+              editors.responseMatrixMergeUi?.applyError ??
+              editors.responseMatrixConflict?.applyError ??
+              null
+            }
+            mergeApplying={editors.responseMatrixMergeUi?.applying ?? false}
+            onMergeChoice={editors.setResponseMatrixMergeChoice}
+            onApplyMerge={() => void editors.applyResponseMatrixMerge()}
           />
 
           <ProjectGuidanceCard guidance={guidance} onChange={updateGuidance} mode="edit" />

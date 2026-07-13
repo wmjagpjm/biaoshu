@@ -7,7 +7,7 @@
 
 # 标书制作者能力补全与角色化演进路线图
 
-> **状态**：阶段 0/1/2 已完成；阶段 3 **已完成并推送**（M3-A=`5d37dba`，M3-B=`e2e5d04`）；阶段 4 **包 5** 已完成并推送（SHA=`460097a`）；**包 6**（来源分页）本批实现完成，待 Codex 审查（未授权提交/推送）。
+> **状态**：阶段 0/1/2 已完成；阶段 3 **已完成并推送**（M3-A=`5d37dba`，M3-B=`e2e5d04`）；阶段 4 **包 5** 已推送（`460097a`）；**包 6** 已推送（`1289c92` 实现响应矩阵源分页调用）；**包 7** 字段级三方合并本批实现完成，待 Codex 审查（未授权提交/推送）。
 > **当前分支**：`collab/grok-code-codex-review`
 > **协作方式**：Grok 负责限定范围的实现与测试；Codex 负责范围、审查、验收和提交授权。
 
@@ -22,7 +22,7 @@
 ## 2. 已有基础
 
 - 技术标全流程、商务标、异步任务、AI 生成与编辑、文档知识库检索、查重/废标检查、Word 导出、标讯本地库和资源中心已可用。
-- 响应矩阵已支持人工映射、候选分批智能建议、冲突保护、双浏览器冲突/刷新来源/人工确认 E2E；包 6 实现来源 80 分页（待审查）。
+- 响应矩阵已支持人工映射、候选分批智能建议、冲突保护、来源 80 分页、双浏览器冲突/刷新来源/人工确认/来源分页 E2E；包 7 字段级三方合并 MVP（待审查）。
 - 轻量解析和 MinerU Markdown 回传已经可用，但尚无内嵌或可插拔的生产级 MinerU/Docling 解析链路。
 - 当前真实缺口是中标内容模板资产化、多模板融合/差异预览、文档与图片统一卡片资产库、图片知识库后端化、外部标讯数据源，以及完整的生产化账号与权限体系。导出版式模板与中标内容模板是两个不同概念，后续不得混用术语。
 
@@ -105,7 +105,7 @@
 | 子里程碑 | 范围 | 状态 |
 |---|---|---|
 | **M3-A** | 选择模板/卡片/目标章 → 只读融合建议（result_json） | **已完成**（合并 SHA=`5d37dba`） |
-| **M3-B** | 差异预览、checkbox、base 漂移跳过、逐项确认写入 | **本地实现完成**（待 Codex 审查） |
+| **M3-B** | 差异预览、checkbox、base 漂移跳过、逐项确认写入 | **已完成并推送**（SHA=`e2e5d04`，实现融合建议人工确认写入） |
 
 **M3-A 冻结边界**（已落地）：
 
@@ -151,26 +151,34 @@
 
 #### 功能包 6：响应矩阵来源超过 80 条的分页建议
 
+**状态**：**已完成并推送**（SHA=`1289c92`，提交标题「实现响应矩阵源分页调用」）。
+
+**范围**：`sourceBatchIndex` 与 `candidateBatchIndex` 共存；单次 prompt 来源 ≤80；前端外层来源页 × 内层候选批串行；任务只写 result_json；E2E 覆盖第 2 页唯一来源。
+
+#### 功能包 7：响应矩阵字段级三方合并
+
 **状态**：本批实现完成，待 Codex 审查（未授权提交/推送）。
 
 **允许文件**：
-- `backend/app/services/task_service.py`
-- `backend/tests/test_response_matrix.py`
+- `frontend/src/features/technical-plan/lib/responseMatrix.ts`
+- `frontend/src/features/technical-plan/hooks/useTechnicalPlanEditors.ts`
+- `frontend/src/features/technical-plan/components/ResponseMatrixPanel.tsx`
 - `frontend/src/features/technical-plan/pages/TechnicalPlanWorkspace.tsx`
-- `frontend/e2e/response-matrix-source-pagination.spec.ts`（新）
-- `frontend/package.json`（仅 `test:e2e:matrix` 追加新 spec）
-- `docs/plans/2026-07-13-response-matrix-source-pagination-plan.md`（新）
+- `frontend/src/features/technical-plan/types.ts`（仅必要时）
+- `frontend/e2e/response-matrix-field-merge.spec.ts`（新）
+- `frontend/package.json`（仅 `test:e2e:matrix` 追加本 spec）
+- `docs/plans/2026-07-13-response-matrix-field-merge-plan.md`（新）
 - `docs/plans/2026-07-12-bid-writer-roadmap.md`
 - `docs/HANDOFF-next.md`
 - `docs/integration-checklist.md`
 
-**范围**：`sourceBatchIndex` 与 `candidateBatchIndex` 共存；单次 prompt 来源 ≤80；前端外层来源页 × 内层候选批串行；任务只写 result_json；E2E 覆盖第 2 页唯一来源。
+**范围**：base 快照；可编辑字段原子三方合并；409 合并预览；冲突显式选择；应用 PUT 仅矩阵+版本；E2E 无冲突/冲突/二次 409。
 
-**明确不做**：字段级合并、取消中断 E2E、409 交叉、改全局 Playwright/DB/API 路由、真实 Key/外网。
+**明确不做**：改 backend/API/DB；自动重试循环；并集/deep-merge；智能建议语义变更；包 8/9。
 
 **验收命令**：backend `pytest -q`；`npm run test:e2e:matrix`；`npm run lint` / `build`；`git diff --check`。
 
-**未做（包 7/8/9）**：字段级三方合并、可插拔解析、交付增强（Word 精细版式/外部标讯/embedding）——均须独立 task。
+**未做（包 8/9）**：可插拔解析、交付增强（Word 精细版式/外部标讯/embedding）——均须独立 task。
 
 ### 阶段 5：团队账号、角色与协作
 
@@ -215,4 +223,4 @@
 
 ## 5. 当前下一步
 
-阶段 0/1/2/3 已完成并推送（M3-A=`5d37dba`，M3-B=`e2e5d04`）。阶段 4 **包 5** 已推送（`460097a`）。**包 6** 来源分页本批实现完成，待 Codex 审查授权后提交；其后按收益独立立项 **包 7/8/9**（字段级合并、可插拔解析、交付增强）。多角色（阶段 5）仍不开始。
+阶段 0/1/2/3 已完成并推送（M3-A=`5d37dba`，M3-B=`e2e5d04`）。阶段 4 **包 5** 已推送（`460097a`）；**包 6** 已推送（`1289c92` 实现响应矩阵源分页调用）。**包 7** 字段级三方合并本批实现完成，待 Codex 审查授权后提交；其后按收益独立立项 **包 8/9**（可插拔解析、交付增强）。多角色（阶段 5）仍不开始。
