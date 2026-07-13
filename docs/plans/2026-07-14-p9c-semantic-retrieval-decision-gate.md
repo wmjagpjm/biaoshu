@@ -1,6 +1,6 @@
 # P9C 真语义检索：产品决策门与基线审计
 
-> **状态：** 等待用户产品决策；本文件不是代码实施授权。
+> **状态：** 已由 Codex 按用户 2026-07-14 授权冻结离线实施决策；实施计划见 docs/plans/2026-07-14-p9c-offline-semantic-index-plan.md。
 > **范围：** P9C 的模型、数据出域、迁移、降级和验收门；不改动 P9A/P9B，不安装模型，不调用外部 API。
 
 ## 1. 目标
@@ -36,6 +36,8 @@
 模型资料： [BAAI/bge-small-zh-v1.5 官方模型卡](https://huggingface.co/BAAI/bge-small-zh-v1.5)、[BAAI/bge-m3 官方模型卡](https://huggingface.co/BAAI/bge-m3)、[Sentence Transformers 安装说明](https://sbert.net/docs/installation.html)。
 
 ## 3. 必须由用户确认的决策
+
+**本轮冻结结果（2026-07-14）：** 用户授权 Codex 自行决策并持续推进，因此选定纯离线 BAAI/bge-small-zh-v1.5、512 维、CPU、版本并存迁移、可见关键词降级和至少 20 条合成评测。知识库正文和查询不得出域；旧 API embeddingModel 路径不再用于知识库；完整文件白名单、TDD 和验收矩阵见独立实施计划。
 
 | 决策 | 请选择或提供 | 不确认时的默认 |
 |---|---|---|

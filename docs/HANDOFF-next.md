@@ -18,8 +18,8 @@
 工作分支只能是 collab/grok-code-codex-review，禁止直接操作 main；先执行 git status -sb，并核对 HEAD 与 origin/collab/grok-code-codex-review 一致且工作区干净。
 完整阅读 docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/plans/2026-07-13-package-9-delivery-enhancement-plan.md、docs/integration-checklist.md。
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
-当前进度：P9A 与 P9B 已完整验收并推送。P9B 的国能 e 招单站受控读取已完成计划 Excel 内存导入、招标公告过滤、低频单条详情读取、人工接受和本地 E2E；固定契约见 `docs/p9b-chnenergy-integration-contract.md`，不得泛化为网页抓取器或自动立项。P9C 现在仅可进入产品决策与实施规划；当前代码审计、决策项与验收门见 `docs/plans/2026-07-14-p9c-semantic-retrieval-decision-gate.md`，决策未齐备前不得开始代码。
-下一包执行：先由用户确认 P9C 的模型、数据出域、密钥责任、迁移、降级与验收边界；Codex 写入独立计划后才向 Grok 发出单一受限实现任务。Codex 继续负责审查、独立测试、验收、提交授权和文档推送；双方直接使用协作消息箱，不要求用户中转。
+当前进度：P9A 与 P9B 已完整验收并推送。P9B 的国能 e 招单站受控读取已完成计划 Excel 内存导入、招标公告过滤、低频单条详情读取、人工接受和本地 E2E；固定契约见 `docs/p9b-chnenergy-integration-contract.md`，不得泛化为网页抓取器或自动立项。用户已授权 Codex 自行决策，P9C 已冻结为纯离线 BAAI/bge-small-zh-v1.5、512 维、CPU、版本并存迁移与可见关键词降级；实施计划为 `docs/plans/2026-07-14-p9c-offline-semantic-index-plan.md`。
+下一包执行：Codex 先提交 P9C 计划，再向 Grok 发出任务 1 的后端白名单实现；Grok 只实现与自测，Codex 负责差异审查、独立验收、中文提交、文档闭环和协作分支推送。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -357,9 +357,9 @@ frontend/src/features/
 - **包 9B 交付完成**：初始审计=`a1ba88a`；用户指定国能 e 招单站后，依次推送 `45d7214`、`1c46e41`、`6491363`、`229f1d7`、`000b403`、`a7cfcb8`。P9B 不使用未获授权的通用来源；完整固定契约、数据最小化、人工确认、验收和非目标见 `docs/p9b-chnenergy-integration-contract.md`。
 - **P9B 国内来源补充审计**：已将全国公共资源交易平台、中国政府采购网、天津/北京开放数据的公开资料写入包 9 总计划。全国平台公开公告页不等于读取 API；中国政府采购网规范是签名发布接口；天津候选虽有截止时间字段但公开页无实际端点且数据元信息陈旧；北京候选需 `userKey` 且无独立截止时间字段。均未满足完整受控读取契约，禁止据此写网页抓取或同步代码。
 - **P9B 最终验收**：Codex 独立运行后端全量 230 passed（固定 `PYTHONHASHSEED=0`，仅 1 条既有弃用警告）、前端 lint/build、P9B E2E 1 passed 和 `git diff --check`；并对用户给定公告执行只读核验，正文北京时间截止时间为 `2026-07-29 09:00:00`。无真实数据库写入、无浏览器外网同步。
-- **P9C 顺序与风险**：P9B 已闭环，可以开始产品决策与规划。当前审计新增确认：本地 256 维哈希使用 Python 内置 hash，跨进程不稳定；API embedding 失败会静默退回该哈希，`kb_chunks.embedding_json` 又没有 provider/model/version/dimension，切换模型可能让新查询向量与旧分块向量维度不一致并静默得 0。决策清单、建议架构和验收门已记录在 `docs/plans/2026-07-14-p9c-semantic-retrieval-decision-gate.md`；用户确认离线/API、模型与维度、数据出域、密钥责任、成本、失败降级、版本化重建/回滚和脱敏评测集前，禁止直接覆盖旧索引或伪称真语义。
+- **P9C 顺序与风险**：P9B 已闭环，用户于 2026-07-14 授权 Codex 自行决策。P9C 已冻结为纯离线 BAAI/bge-small-zh-v1.5（512 维、CPU）、版本并存迁移与可见关键词降级；正文/查询不得出域，旧 API embeddingModel 路径不再用于知识库。当前哈希跨进程不稳定、旧分块无 provider/model/version/dimension 的风险，均由新索引表和显式状态处理；实施白名单、TDD 和验收矩阵见 `docs/plans/2026-07-14-p9c-offline-semantic-index-plan.md`。
 - **已验证基线**：后端全量 230 passed（1 条既有弃用警告）；P9B E2E 1 passed；前端 lint/build 通过（仅既有大 chunk 警告）；`git diff --check` 通过；P9A WPS `12.1.0.26895` 实际打开技术标/商务标通过。
 - 新任务分工不变：Grok 只负责限定实现与自测，未经 Codex 审查确认不得提交；Codex 负责计划、范围冻结、差异审查、独立测试、验收、中文提交、文档闭环和 GitHub 状态核验。每一包仍按“计划提交 → 实现提交 → 文档闭环提交 → 推送协作分支”执行，禁止合包。
 - GitHub 若出现连接重置，可在当前 PowerShell 进程临时配置 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY=http://127.0.0.1:7890` 与 `NO_PROXY=localhost,127.0.0.1` 后重试；不得把代理或凭据写入仓库。
 
-**换会话可直接：核验分支与 HEAD → 读本文 §0～§2、§6、§11、P9B 集成契约和 P9C 决策门 → 等用户确认 P9C 产品决策后先写独立计划。**
+**换会话可直接：核验分支与 HEAD → 读本文 §0～§2、§6、§11、P9B 集成契约、P9C 决策门和离线实施计划 → 继续任务 1 的 Grok 受限实现。**
