@@ -581,6 +581,8 @@ def get_semantic_index_status(db: Session, workspace_id: str) -> dict[str, Any]:
     用途：汇总当前空间语义索引状态。
     规则：优先报告 queued/running（errorCode=index_building），即使存在旧 active，
     以便任务2禁用按钮与轮询；search 仍继续读旧 active 向量。
+    运行时：active 存在但 OfflineBgeEmbedder 未 ready 时，保留 status=active 与 id，
+    仅临时覆盖 errorCode=model_unavailable；只读 is_ready，禁止加载/下载/写库/触网。
     """
     building = db.scalars(
         select(SemanticEmbeddingIndexRow)
@@ -599,7 +601,12 @@ def get_semantic_index_status(db: Session, workspace_id: str) -> dict[str, Any]:
 
     active = get_active_semantic_index(db, workspace_id)
     if active is not None:
-        return semantic_index_to_dict(active)
+        data = semantic_index_to_dict(active)
+        # 进程重启后索引仍 active，但内存模型未就绪 → 可见关键词降级
+        embedder = embedding_service.get_offline_embedder()
+        if not embedder.is_ready():
+            data["errorCode"] = embedding_service.ERR_MODEL_UNAVAILABLE
+        return data
 
     latest = db.scalars(
         select(SemanticEmbeddingIndexRow)

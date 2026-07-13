@@ -930,3 +930,65 @@ def test_semantic_search_no_hits_model_unavailable(client, monkeypatch):
         assert float(it.get("vectorScore") or 0) == 0.0
     # 仍未加载
     assert emb.is_ready() is False
+
+
+def test_semantic_index_status_active_model_unavailable_no_load(client, monkeypatch):
+    """
+    用途：库内 active 但 OfflineBgeEmbedder 未 ready 时，GET /semantic-index
+    保留 id/status=active，临时 errorCode=model_unavailable；不写库、不加载模型。
+    """
+    from app.core.database import SessionLocal
+    from app.models.entities import SemanticEmbeddingIndexRow
+    from app.services import embedding_service
+
+    _install_fake_offline_embedder(monkeypatch)
+    _upload_kb_doc(
+        client,
+        "status-ready.md",
+        "# 就绪\n\n等保三级与整改方案。\n",
+    )
+    r = client.post("/api/knowledge/semantic-index/rebuild")
+    assert r.status_code == 202, r.text
+    idx = r.json()["id"]
+
+    # 确认就绪路径：模型 ready 时 errorCode 为空
+    ready_st = client.get("/api/knowledge/semantic-index")
+    assert ready_st.status_code == 200
+    ready_body = ready_st.json()
+    assert ready_body["id"] == idx
+    assert ready_body["status"] == "active"
+    assert ready_body.get("errorCode") in (None, "")
+
+    # 卸载/清除注入：模拟进程重启后模型未进内存
+    emb = embedding_service.get_offline_embedder()
+    emb.clear_injection()
+    emb.unload()
+    assert emb.is_ready() is False
+
+    load_calls = {"n": 0}
+
+    def _spy_ensure(settings=None):  # noqa: ANN001
+        load_calls["n"] += 1
+        raise AssertionError("状态查询不得调用 ensure_loaded_for_rebuild")
+
+    monkeypatch.setattr(emb, "ensure_loaded_for_rebuild", _spy_ensure)
+
+    st = client.get("/api/knowledge/semantic-index")
+    assert st.status_code == 200, st.text
+    body = st.json()
+    assert body["id"] == idx
+    assert body["status"] == "active"
+    assert body["errorCode"] == "model_unavailable"
+    assert body["dimension"] == 512
+    assert load_calls["n"] == 0
+    assert emb.is_ready() is False
+
+    # 数据库行仍为 active，error_code 未被写回
+    db = SessionLocal()
+    try:
+        row = db.get(SemanticEmbeddingIndexRow, idx)
+        assert row is not None
+        assert row.status == "active"
+        assert row.error_code is None
+    finally:
+        db.close()

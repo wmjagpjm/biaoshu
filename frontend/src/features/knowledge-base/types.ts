@@ -176,16 +176,14 @@ export function isSemanticIndexBuilding(index: SemanticIndex | null): boolean {
 export function semanticStatusLabel(index: SemanticIndex | null): string {
   if (!index) return "未构建 · 关键词降级";
   if (isSemanticIndexBuilding(index)) return "构建中";
-  if (index.status === "active") return "已就绪";
-  if (index.status === "failed") {
-    if (index.errorCode === "model_unavailable") return "模型不可用";
-    if (index.errorCode === "model_storage_insufficient") return "磁盘空间不足";
-    if (index.errorCode === "index_interrupted") return "构建中断";
-    return "构建失败";
-  }
+  // 优先 errorCode：active + model_unavailable 不得显示“已就绪”
   if (index.errorCode === "model_unavailable") return "模型不可用";
   if (index.errorCode === "model_storage_insufficient") return "磁盘空间不足";
   if (index.errorCode === "index_interrupted") return "构建中断";
+  if (index.status === "active") return "已就绪";
+  if (index.status === "failed") {
+    return "构建失败";
+  }
   if (
     index.status === "index_not_built" ||
     index.errorCode === "index_not_built"
@@ -199,13 +197,13 @@ export function semanticStatusLabel(index: SemanticIndex | null): string {
 
 /**
  * 用途：关键词降级/失败原因（固定中文，不含路径与 Token）。
+ * 说明：errorCode 优先于 status；active + model_unavailable 仍须展示关键词降级。
  */
 export function semanticDegradeReason(index: SemanticIndex | null): string | null {
   if (!index) return "尚未构建语义索引，当前仅关键词检索";
   if (isSemanticIndexBuilding(index)) {
     return "索引构建中，检索暂以关键词为主";
   }
-  if (index.status === "active") return null;
   switch (index.errorCode) {
     case "model_unavailable":
       return "本机离线模型未就绪，已降级为关键词检索";
@@ -216,12 +214,15 @@ export function semanticDegradeReason(index: SemanticIndex | null): string | nul
     case "index_failed":
       return "语义索引构建失败，已降级为关键词检索";
     case "index_not_built":
-    default:
-      if (index.status === "failed") {
-        return "语义索引不可用，已降级为关键词检索";
-      }
       return "尚未构建语义索引，当前仅关键词检索";
+    default:
+      break;
   }
+  if (index.status === "active") return null;
+  if (index.status === "failed") {
+    return "语义索引不可用，已降级为关键词检索";
+  }
+  return "尚未构建语义索引，当前仅关键词检索";
 }
 
 /** 用途：主操作按钮文案。 */

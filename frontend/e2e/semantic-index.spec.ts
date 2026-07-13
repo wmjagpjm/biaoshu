@@ -397,6 +397,51 @@ test.describe("P9C 离线语义索引状态面板", () => {
     ).toBeVisible();
   });
 
+  test("active + model_unavailable 显示模型不可用与关键词降级，不显示已就绪", async ({
+    page,
+  }) => {
+    // 模拟：库内索引 active，但进程内模型未就绪（状态 API 临时 errorCode）
+    let state = baseIndex({
+      id: "idx_active_no_model",
+      status: "active",
+      errorCode: "model_unavailable",
+      dimension: 512,
+      totalChunks: 10,
+      embeddedChunks: 10,
+      chunkCount: 10,
+      modelFingerprint: "fp_persisted",
+      finishedAt: "2026-07-14T08:00:00+00:00",
+    });
+
+    await installKbRoutes(page, {
+      getState: () => state,
+      setState: (n) => {
+        state = n;
+      },
+    });
+
+    await openKnowledgeBase(page);
+    const panel = page.getByTestId("semantic-index-panel");
+    await expect(panel.getByTestId("semantic-index-status")).toContainText(
+      "模型不可用",
+    );
+    await expect(panel.getByTestId("semantic-index-status")).not.toContainText(
+      "已就绪",
+    );
+    await expect(panel.getByTestId("semantic-index-degrade")).toContainText(
+      /模型未就绪|关键词/,
+    );
+    await expect(
+      panel.getByRole("button", { name: "重试构建" }),
+    ).toBeVisible();
+    await expect(panel.getByTestId("semantic-index-dimension")).toContainText(
+      "512",
+    );
+    await expect(panel.getByTestId("semantic-index-model")).toHaveText(
+      FIXED_MODEL,
+    );
+  });
+
   test("浏览器仅访问本机 Vite 与 /api，无模型站点请求", async ({ page }) => {
     let state = baseIndex();
     const external: string[] = [];
