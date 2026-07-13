@@ -264,13 +264,15 @@ class OpportunityWatchAcceptOut(BaseModel):
     """
     模块：国能 e 招人工接受命中结果
     用途：人工接受公告命中后的本地标讯结果；不包含外部正文或链接。
-    对接：后续接受写入 bid_opportunities 后的响应契约；当前尚无公开 HTTP 路由。
+    对接：POST /api/opportunity-watch/hits/{hit_id}/accept；accept_watch_hit。
     二次开发：不得回传 HTML、JSON、Cookie 或任意 URL；仅 opportunityId 与 created。
     """
 
     model_config = ConfigDict(populate_by_name=True)
 
-    opportunity_id: str = Field(serialization_alias="opportunityId")
+    opportunity_id: str = Field(
+        alias="opportunityId", serialization_alias="opportunityId"
+    )
     created: bool
 
 

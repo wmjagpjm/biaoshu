@@ -1784,3 +1784,350 @@ def test_sync_api_post_and_get_run_status(client: TestClient, monkeypatch: pytes
         headers={"X-Workspace-Id": other},
     )
     assert missing.status_code == 404
+
+def _seed_accept_hit(
+    *,
+    hit_id: str = "watch_hit_accept_a",
+    workspace_id: str = "ws_local",
+    plan_id: str = "watch_plan_accept_a",
+    run_id: str = "watch_run_accept_a",
+    source_info_id: str = "b2363623-ea1e-4cc1-8e2d-0c2d2850b697",
+    title: str = "某项目招标公告（接受）",
+    extraction_status: str = "resolved",
+    deadline_at_local: str | None = "2026-07-29 09:00:00",
+    buyer: str = "国能招标人甲",
+    scope: str = "甲供范围摘要",
+) -> None:
+    """用途：为人工接受用例准备同空间计划、运行与命中。"""
+    db = SessionLocal()
+    try:
+        if db.get(BidWatchPlanRow, plan_id) is None:
+            db.add(
+                BidWatchPlanRow(
+                    id=plan_id,
+                    workspace_id=workspace_id,
+                    title="接受测试计划",
+                    buyer=buyer,
+                    scope=scope,
+                    duration="",
+                    expected_publish_text="",
+                    remark="",
+                    fingerprint=f"fp-accept-{plan_id}",
+                    enabled=True,
+                )
+            )
+        if db.get(BidSourceSyncRunRow, run_id) is None:
+            db.add(
+                BidSourceSyncRunRow(
+                    id=run_id,
+                    workspace_id=workspace_id,
+                    source_name="chnenergy",
+                    status="succeeded",
+                    started_at=datetime(2026, 7, 13, 8, tzinfo=timezone.utc),
+                    finished_at=datetime(2026, 7, 13, 8, 5, tzinfo=timezone.utc),
+                )
+            )
+        db.flush()
+        db.add(
+            BidSourceHitRow(
+                id=hit_id,
+                workspace_id=workspace_id,
+                watch_plan_id=plan_id,
+                sync_run_id=run_id,
+                source_name="chnenergy",
+                source_info_id=source_info_id,
+                category_num="001002001",
+                source_publish_text="2026-07-09 17:14:11",
+                title=title,
+                deadline_at_local=deadline_at_local,
+                opening_at_local=deadline_at_local,
+                source_timezone="Asia/Shanghai",
+                extraction_status=extraction_status,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_accept_resolved_hit_creates_local_opportunity_fields():
+    """用途：resolved 命中接受后创建本地标讯，字段与 source_key 符合冻结契约。"""
+    _seed_accept_hit()
+    db = SessionLocal()
+    try:
+        result = opportunity_watch_service.accept_watch_hit(
+            db, "ws_local", "watch_hit_accept_a"
+        )
+        assert result["created"] is True
+        opp_id = result["opportunity_id"]
+        opp = db.get(BidOpportunityRow, opp_id)
+        assert opp is not None
+        assert opp.workspace_id == "ws_local"
+        assert opp.title == "某项目招标公告（接受）"
+        assert opp.buyer == "国能招标人甲"
+        assert opp.summary == "甲供范围摘要"
+        assert opp.region == "其他"
+        assert opp.source_label == "国能 e 招计划追踪"
+        assert opp.deadline == date(2026, 7, 29)
+        assert opp.source_key == "chnenergy:b2363623-ea1e-4cc1-8e2d-0c2d2850b697"
+        hit = db.get(BidSourceHitRow, "watch_hit_accept_a")
+        assert hit is not None
+        assert hit.accepted_opportunity_id == opp_id
+    finally:
+        db.close()
+
+
+def test_accept_needs_review_or_missing_deadline_rejected():
+    """用途：needs_review 或缺截止时间为 400 等价服务校验错误。"""
+    _seed_accept_hit(
+        hit_id="watch_hit_accept_review",
+        plan_id="watch_plan_accept_review",
+        run_id="watch_run_accept_review",
+        source_info_id="aaaaaaaa-bbbb-cccc-dddd-111111111111",
+        extraction_status="needs_review",
+        deadline_at_local=None,
+    )
+    _seed_accept_hit(
+        hit_id="watch_hit_accept_notime",
+        plan_id="watch_plan_accept_notime",
+        run_id="watch_run_accept_notime",
+        source_info_id="aaaaaaaa-bbbb-cccc-dddd-222222222222",
+        extraction_status="resolved",
+        deadline_at_local="",
+    )
+    _seed_accept_hit(
+        hit_id="watch_hit_accept_baddate",
+        plan_id="watch_plan_accept_baddate",
+        run_id="watch_run_accept_baddate",
+        source_info_id="aaaaaaaa-bbbb-cccc-dddd-333333333333",
+        extraction_status="resolved",
+        deadline_at_local="not-a-date",
+    )
+    db = SessionLocal()
+    try:
+        with pytest.raises(opportunity_watch_service.WatchHitAcceptValidationError):
+            opportunity_watch_service.accept_watch_hit(
+                db, "ws_local", "watch_hit_accept_review"
+            )
+        with pytest.raises(opportunity_watch_service.WatchHitAcceptValidationError):
+            opportunity_watch_service.accept_watch_hit(
+                db, "ws_local", "watch_hit_accept_notime"
+            )
+        with pytest.raises(opportunity_watch_service.WatchHitAcceptValidationError):
+            opportunity_watch_service.accept_watch_hit(
+                db, "ws_local", "watch_hit_accept_baddate"
+            )
+        assert db.get(BidSourceHitRow, "watch_hit_accept_review").accepted_opportunity_id is None
+        assert (
+            db.scalars(
+                select(BidOpportunityRow).where(
+                    BidOpportunityRow.source_key
+                    == "chnenergy:aaaaaaaa-bbbb-cccc-dddd-111111111111"
+                )
+            ).first()
+            is None
+        )
+    finally:
+        db.close()
+
+
+def test_accept_is_idempotent_and_reuses_source_key():
+    """用途：重复接受与同空间既有 source_key 均复用标讯，第二次 created=False。"""
+    info_id = "cccccccc-dddd-eeee-ffff-000000000001"
+    _seed_accept_hit(
+        hit_id="watch_hit_accept_idem",
+        plan_id="watch_plan_accept_idem",
+        run_id="watch_run_accept_idem",
+        source_info_id=info_id,
+        title="幂等接受公告",
+    )
+    first_opp_id: str
+    db = SessionLocal()
+    try:
+        first = opportunity_watch_service.accept_watch_hit(
+            db, "ws_local", "watch_hit_accept_idem"
+        )
+        second = opportunity_watch_service.accept_watch_hit(
+            db, "ws_local", "watch_hit_accept_idem"
+        )
+        assert first["created"] is True
+        assert second["created"] is False
+        assert first["opportunity_id"] == second["opportunity_id"]
+        first_opp_id = first["opportunity_id"]
+        count = len(
+            list(
+                db.scalars(
+                    select(BidOpportunityRow).where(
+                        BidOpportunityRow.workspace_id == "ws_local",
+                        BidOpportunityRow.source_key == f"chnenergy:{info_id}",
+                    )
+                ).all()
+            )
+        )
+        assert count == 1
+    finally:
+        db.close()
+
+    # 另一命中同 info_id：复用既有 source_key 标讯
+    _seed_accept_hit(
+        hit_id="watch_hit_accept_reuse",
+        plan_id="watch_plan_accept_reuse",
+        run_id="watch_run_accept_reuse",
+        source_info_id=info_id,
+        title="另一计划下的同公告",
+        buyer="另一招标人",
+        scope="另一范围",
+    )
+    db = SessionLocal()
+    try:
+        reused = opportunity_watch_service.accept_watch_hit(
+            db, "ws_local", "watch_hit_accept_reuse"
+        )
+        assert reused["created"] is False
+        assert reused["opportunity_id"] == first_opp_id
+        hit = db.get(BidSourceHitRow, "watch_hit_accept_reuse")
+        assert hit is not None
+        assert hit.accepted_opportunity_id == first_opp_id
+    finally:
+        db.close()
+
+
+def test_accept_cross_workspace_not_found_and_no_partial_on_failure():
+    """用途：跨空间不可读取；失败路径不留下半成品标讯或回写。"""
+    other = "ws_accept_other"
+    _create_watch_workspace(other)
+    _seed_accept_hit(
+        hit_id="watch_hit_accept_other",
+        workspace_id=other,
+        plan_id="watch_plan_accept_other",
+        run_id="watch_run_accept_other",
+        source_info_id="dddddddd-eeee-ffff-aaaa-111111111111",
+    )
+    db = SessionLocal()
+    try:
+        with pytest.raises(opportunity_watch_service.WatchHitNotFoundError):
+            opportunity_watch_service.accept_watch_hit(
+                db, "ws_local", "watch_hit_accept_other"
+            )
+        with pytest.raises(opportunity_watch_service.WatchHitNotFoundError):
+            opportunity_watch_service.accept_watch_hit(
+                db, "ws_local", "watch_hit_missing"
+            )
+    finally:
+        db.close()
+
+    _seed_accept_hit(
+        hit_id="watch_hit_accept_fail",
+        plan_id="watch_plan_accept_fail",
+        run_id="watch_run_accept_fail",
+        source_info_id="eeeeeeee-ffff-aaaa-bbbb-222222222222",
+        title="失败回滚样本",
+    )
+    db = SessionLocal()
+    try:
+        hit = db.get(BidSourceHitRow, "watch_hit_accept_fail")
+        assert hit is not None
+        # 模拟事务中断：校验失败不得创建半成品
+        hit.extraction_status = "needs_review"
+        db.commit()
+        with pytest.raises(opportunity_watch_service.WatchHitAcceptValidationError):
+            opportunity_watch_service.accept_watch_hit(
+                db, "ws_local", "watch_hit_accept_fail"
+            )
+        db.refresh(hit)
+        assert hit.accepted_opportunity_id is None
+        assert (
+            db.scalars(
+                select(BidOpportunityRow).where(
+                    BidOpportunityRow.source_key
+                    == "chnenergy:eeeeeeee-ffff-aaaa-bbbb-222222222222"
+                )
+            ).first()
+            is None
+        )
+    finally:
+        db.close()
+
+
+def test_accept_past_deadline_still_creates_opportunity():
+    """用途：已截止命中仍可写入本地标讯，不在此拦截立项。"""
+    _seed_accept_hit(
+        hit_id="watch_hit_accept_past",
+        plan_id="watch_plan_accept_past",
+        run_id="watch_run_accept_past",
+        source_info_id="ffffffff-aaaa-bbbb-cccc-333333333333",
+        deadline_at_local="2020-01-02 09:00:00",
+        title="已截止公告",
+    )
+    db = SessionLocal()
+    try:
+        result = opportunity_watch_service.accept_watch_hit(
+            db, "ws_local", "watch_hit_accept_past"
+        )
+        assert result["created"] is True
+        opp = db.get(BidOpportunityRow, result["opportunity_id"])
+        assert opp is not None
+        assert opp.deadline == date(2020, 1, 2)
+    finally:
+        db.close()
+
+
+def test_accept_api_status_codes_and_camel_case(client: TestClient):
+    """用途：POST accept 固定状态码与 camelCase 响应，无请求体字段。"""
+    _seed_accept_hit(
+        hit_id="watch_hit_accept_api",
+        plan_id="watch_plan_accept_api",
+        run_id="watch_run_accept_api",
+        source_info_id="aaaaaaaa-bbbb-cccc-dddd-api000000001",
+        title="接口接受公告",
+    )
+    resp = client.post("/api/opportunity-watch/hits/watch_hit_accept_api/accept")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body.keys()) == {"opportunityId", "created"}
+    assert body["created"] is True
+    assert body["opportunityId"]
+    assert OpportunityWatchAcceptOut.model_validate(
+        {"opportunityId": body["opportunityId"], "created": True}
+    ).opportunity_id == body["opportunityId"]
+
+    again = client.post("/api/opportunity-watch/hits/watch_hit_accept_api/accept")
+    assert again.status_code == 200
+    again_body = again.json()
+    assert again_body["created"] is False
+    assert again_body["opportunityId"] == body["opportunityId"]
+
+    _seed_accept_hit(
+        hit_id="watch_hit_accept_api_review",
+        plan_id="watch_plan_accept_api_r",
+        run_id="watch_run_accept_api_r",
+        source_info_id="aaaaaaaa-bbbb-cccc-dddd-api000000002",
+        extraction_status="needs_review",
+        deadline_at_local=None,
+    )
+    bad = client.post("/api/opportunity-watch/hits/watch_hit_accept_api_review/accept")
+    assert bad.status_code == 400
+
+    missing = client.post("/api/opportunity-watch/hits/watch_hit_accept_missing/accept")
+    assert missing.status_code == 404
+
+    other = "ws_accept_api_other"
+    _create_watch_workspace(other)
+    _seed_accept_hit(
+        hit_id="watch_hit_accept_api_other",
+        workspace_id=other,
+        plan_id="watch_plan_accept_api_o",
+        run_id="watch_run_accept_api_o",
+        source_info_id="aaaaaaaa-bbbb-cccc-dddd-api000000003",
+    )
+    cross = client.post(
+        "/api/opportunity-watch/hits/watch_hit_accept_api_other/accept",
+        headers={"X-Workspace-Id": "ws_local"},
+    )
+    assert cross.status_code == 404
+    # 响应不得泄漏 URL/Cookie/HTML
+    for payload in (body, again_body, bad.json(), missing.json()):
+        lowered = json.dumps(payload, ensure_ascii=False).lower()
+        assert "cookie" not in lowered
+        assert "http" not in lowered
+        assert "<html" not in lowered

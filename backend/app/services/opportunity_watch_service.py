@@ -1,16 +1,17 @@
 """
 模块：国能 e 招计划追踪服务
-用途：提供工作空间隔离的计划/运行/命中读取、中断运行收敛、本机 .xlsx 计划导入，以及受控同步执行。
-对接：app.main.lifespan；app.api.opportunity_watch；chnenergy_client；BidWatchPlanRow 等追踪实体。
-二次开发：不得在此混入任意 URL、Cookie、HTML、JSON 或浏览器请求；外部访问仅能由固定来源客户端承担。
+用途：提供工作空间隔离的计划/运行/命中读取、中断运行收敛、本机 .xlsx 计划导入、受控同步，以及命中人工接受。
+对接：app.main.lifespan；app.api.opportunity_watch；chnenergy_client；BidWatchPlanRow/BidOpportunityRow。
+二次开发：不得在此混入任意 URL、Cookie、HTML、JSON 或浏览器请求；外部访问仅能由固定来源客户端承担；接受不得自动立项。
 """
 
 from __future__ import annotations
 
 import hashlib
 import io
+import re
 import secrets
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Callable
 
 from openpyxl import load_workbook
@@ -19,7 +20,12 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.database import SessionLocal
-from app.models.entities import BidSourceHitRow, BidSourceSyncRunRow, BidWatchPlanRow
+from app.models.entities import (
+    BidOpportunityRow,
+    BidSourceHitRow,
+    BidSourceSyncRunRow,
+    BidWatchPlanRow,
+)
 from app.services.chnenergy_client import (
     ChnenergyClientError,
     ChnenergyControlledClient,
@@ -28,6 +34,15 @@ from app.services.chnenergy_client import (
     build_notice_detail_url,
     extract_notice_times,
     parse_jump_fields,
+)
+
+# 人工接受写入本地标讯时的固定展示字段；不得改成 URL 或远端原文。
+_ACCEPT_REGION = "其他"
+_ACCEPT_SOURCE_LABEL = "国能 e 招计划追踪"
+_ACCEPT_SOURCE_KEY_PREFIX = "chnenergy:"
+# 完整北京时间：YYYY-MM-DD HH:mm:ss
+_DEADLINE_LOCAL_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})$"
 )
 
 # 计划表中文表头到实体字段的固定映射；未知列忽略。
@@ -75,6 +90,30 @@ class WatchSyncConflictError(ValueError):
         super().__init__("当前工作空间已有进行中的同步运行")
 
 
+class WatchHitNotFoundError(LookupError):
+    """
+    模块：命中不存在或不属于当前工作空间
+    用途：人工接受时将跨空间/未知命中映射为 HTTP 404。
+    对接：accept_watch_hit；POST /api/opportunity-watch/hits/{hit_id}/accept。
+    二次开发：禁止区分“存在但属其它空间”与“不存在”，避免工作空间枚举。
+    """
+
+    def __init__(self) -> None:
+        super().__init__("公告命中不存在")
+
+
+class WatchHitAcceptValidationError(ValueError):
+    """
+    模块：命中人工接受校验失败
+    用途：未解析、缺截止时间或时间非法时拒绝接受，映射为 HTTP 400。
+    对接：accept_watch_hit；POST /api/opportunity-watch/hits/{hit_id}/accept。
+    二次开发：message 仅允许安全中文说明，禁止拼接 URL、HTML 或远端错误原文。
+    """
+
+    def __init__(self, message: str = "仅可接受已解析完整截止时间的命中") -> None:
+        super().__init__(message)
+
+
 def _now() -> datetime:
     """用途：统一同步运行恢复与计划导入写入的 UTC 时间源。"""
     return datetime.now(timezone.utc)
@@ -93,6 +132,34 @@ def _new_sync_run_id() -> str:
 def _new_hit_id() -> str:
     """用途：生成公告命中主键。"""
     return f"watch_hit_{secrets.token_hex(8)}"
+
+
+def _new_opportunity_id() -> str:
+    """用途：生成人工接受后的本地标讯主键，不依赖既有 opportunity_service。"""
+    return f"opp_{secrets.token_hex(8)}"
+
+
+def _parse_deadline_date_local(deadline_at_local: str | None) -> date:
+    """
+    用途：从北京时间完整本地字符串严格解析日期部分，供写入 bid_opportunities.deadline。
+    对接：accept_watch_hit；BidSourceHitRow.deadline_at_local。
+    二次开发：仅接受 YYYY-MM-DD HH:mm:ss；非法日历日必须失败，不得静默回退。
+    """
+    text = (deadline_at_local or "").strip()
+    match = _DEADLINE_LOCAL_RE.fullmatch(text)
+    if match is None:
+        raise WatchHitAcceptValidationError("命中截止时间缺失或格式非法")
+    try:
+        # 先校验完整时间，再取日期，避免 02-30 等非法日历被截断放过。
+        datetime.strptime(text.replace("T", " "), "%Y-%m-%d %H:%M:%S")
+        return date.fromisoformat(match.group(1))
+    except ValueError as exc:
+        raise WatchHitAcceptValidationError("命中截止时间缺失或格式非法") from exc
+
+
+def _chnenergy_source_key(source_info_id: str) -> str:
+    """用途：由公告 infoid 生成不透明本地来源键，禁止写入 URL 或 Cookie。"""
+    return f"{_ACCEPT_SOURCE_KEY_PREFIX}{source_info_id}"
 
 
 def _clean_text(value: Any, *, limit: int = 1000) -> str:
@@ -213,6 +280,101 @@ def list_watch_hits(db: Session, workspace_id: str) -> list[BidSourceHitRow]:
         .order_by(BidSourceHitRow.updated_at.desc(), BidSourceHitRow.id.asc())
     )
     return list(db.scalars(stmt).all())
+
+
+def accept_watch_hit(
+    db: Session,
+    workspace_id: str,
+    hit_id: str,
+) -> dict[str, Any]:
+    """
+    模块：人工接受国能公告命中
+    用途：在单事务内将当前工作空间 resolved 且有完整截止时间的命中创建或幂等复用为本地标讯。
+    对接：POST /api/opportunity-watch/hits/{hit_id}/accept；BidOpportunityRow；BidSourceHitRow。
+    二次开发：禁止批量接受、同步后自动调用、创建项目；不得持久化 URL/Cookie/HTML/JSON/正文。
+    """
+    try:
+        hit = db.scalars(
+            select(BidSourceHitRow).where(
+                BidSourceHitRow.id == hit_id,
+                BidSourceHitRow.workspace_id == workspace_id,
+            )
+        ).first()
+        if hit is None:
+            raise WatchHitNotFoundError()
+
+        if hit.extraction_status != "resolved":
+            raise WatchHitAcceptValidationError("命中尚未解析出可接受的截止时间")
+
+        deadline = _parse_deadline_date_local(hit.deadline_at_local)
+        source_key = _chnenergy_source_key(hit.source_info_id)
+        now = _now()
+
+        # 已回写过的命中：直接复用，避免重复创建。
+        if hit.accepted_opportunity_id:
+            existing_linked = db.scalars(
+                select(BidOpportunityRow).where(
+                    BidOpportunityRow.id == hit.accepted_opportunity_id,
+                    BidOpportunityRow.workspace_id == workspace_id,
+                )
+            ).first()
+            if existing_linked is not None:
+                return {
+                    "opportunity_id": existing_linked.id,
+                    "created": False,
+                }
+
+        # 同空间同来源键：幂等复用既有标讯并回写命中。
+        existing_by_key = db.scalars(
+            select(BidOpportunityRow).where(
+                BidOpportunityRow.workspace_id == workspace_id,
+                BidOpportunityRow.source_key == source_key,
+            )
+        ).first()
+        if existing_by_key is not None:
+            hit.accepted_opportunity_id = existing_by_key.id
+            hit.updated_at = now
+            db.commit()
+            return {
+                "opportunity_id": existing_by_key.id,
+                "created": False,
+            }
+
+        plan = db.scalars(
+            select(BidWatchPlanRow).where(
+                BidWatchPlanRow.id == hit.watch_plan_id,
+                BidWatchPlanRow.workspace_id == workspace_id,
+            )
+        ).first()
+        buyer = (plan.buyer if plan is not None else "") or ""
+        summary = (plan.scope if plan is not None else "") or ""
+
+        opportunity = BidOpportunityRow(
+            id=_new_opportunity_id(),
+            workspace_id=workspace_id,
+            title=(hit.title or "")[:500],
+            buyer=buyer[:500],
+            region=_ACCEPT_REGION,
+            budget_label="",
+            deadline=deadline,
+            tags_json=None,
+            summary=summary[:20000],
+            source_label=_ACCEPT_SOURCE_LABEL,
+            source_key=source_key,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(opportunity)
+        hit.accepted_opportunity_id = opportunity.id
+        hit.updated_at = now
+        db.commit()
+        return {
+            "opportunity_id": opportunity.id,
+            "created": True,
+        }
+    except Exception:
+        db.rollback()
+        raise
 
 
 def mark_interrupted_watch_runs(db: Session) -> int:

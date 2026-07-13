@@ -1,8 +1,8 @@
 """
 模块：国能 e 招计划追踪路由
-用途：提供本机招标计划 .xlsx 受控导入，以及固定来源同步的受理与运行查询。
-对接：/api/opportunity-watch；opportunity_watch_service；OpportunityWatchPlanImportOut / Sync 读模型。
-二次开发：禁止增加 URL/Cookie/Token 入参、浏览器代理、dashboard 或真实外网直出；同步仅 BackgroundTasks。
+用途：提供本机招标计划 .xlsx 受控导入、固定来源同步受理/查询，以及命中人工接受。
+对接：/api/opportunity-watch；opportunity_watch_service；OpportunityWatchPlanImportOut / Sync / Accept 读模型。
+二次开发：禁止增加 URL/Cookie/Token 入参、浏览器代理、dashboard 或真实外网直出；同步仅 BackgroundTasks；接受不得自动立项。
 """
 
 from typing import Annotated
@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_workspace_id
 from app.api.schemas import (
+    OpportunityWatchAcceptOut,
     OpportunityWatchPlanImportOut,
     OpportunityWatchSyncAcceptedOut,
     OpportunityWatchSyncRunOut,
@@ -125,3 +126,32 @@ def get_watch_sync_run(
     if row is None:
         raise HTTPException(status_code=404, detail="同步运行不存在")
     return OpportunityWatchSyncRunOut.model_validate(row)
+
+
+@router.post(
+    "/hits/{hit_id}/accept",
+    response_model=OpportunityWatchAcceptOut,
+    status_code=status.HTTP_200_OK,
+)
+def accept_watch_hit(
+    hit_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    workspace_id: Annotated[str, Depends(get_workspace_id)],
+) -> OpportunityWatchAcceptOut:
+    """
+    模块：国能命中人工接受接口
+    用途：仅在用户明确点击后，将当前工作空间 resolved 命中创建或复用为本地标讯；无请求体。
+    对接：POST /api/opportunity-watch/hits/{hit_id}/accept；accept_watch_hit；OpportunityWatchAcceptOut。
+    二次开发：禁止批量接受、同步完成后自动调用、请求体携带 URL/正文/采购字段或自动立项。
+    """
+    try:
+        result = opportunity_watch_service.accept_watch_hit(db, workspace_id, hit_id)
+    except opportunity_watch_service.WatchHitNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except opportunity_watch_service.WatchHitAcceptValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+    return OpportunityWatchAcceptOut(
+        opportunity_id=result["opportunity_id"],
+        created=result["created"],
+    )
