@@ -113,7 +113,7 @@ npm run test:e2e:fuse
 npm run test:e2e:fuse-apply
 ```
 
-当前基线：后端 **pytest 全量**（含 `test_content_fuse`、`test_knowledge_cards`、`test_bid_templates`、候选分批与**来源 80 分页**）；前端 lint/build；`test:e2e:fuse` / `fuse-apply`；`test:e2e:matrix` 覆盖 409、刷新来源、智能建议人工确认、**来源分页**与**字段级三方合并**（无冲突安全合并 / 同字段显式选择 / 二次 409 不循环）；`templates` / `cards` 为回归。阶段 3 已推送（M3-A=`5d37dba`，M3-B=`e2e5d04`）。阶段 4 包 5=`460097a`、包 6=`1289c92`（实现响应矩阵源分页调用）、包 7=`2c7b3e0`（实现响应矩阵字段级三方合并）已推送。仍未做：包 8 可插拔解析、包 9 交付增强。
+当前基线：后端 **pytest 全量**（含 `test_content_fuse`、`test_knowledge_cards`、`test_bid_templates`、候选分批与**来源 80 分页**、**parse_engines 可插拔调度**）；前端 lint/build；`test:e2e:fuse` / `fuse-apply`；`test:e2e:matrix` 覆盖 409、刷新来源、智能建议人工确认、**来源分页**与**字段级三方合并**（无冲突安全合并 / 同字段显式选择 / 二次 409 不循环）；`templates` / `cards` 为回归。阶段 3 已推送（M3-A=`5d37dba`，M3-B=`e2e5d04`）。阶段 4 包 5=`460097a`、包 6=`1289c92`、包 7=`2c7b3e0` 已推送。**包 8** 可插拔解析调度 MVP 本批实现待审查（MinerU 仅外置 callback、Docling 未接、`parseStrategy` 未接线）。仍未做：包 9 交付增强。
 
 ## 6. 已接 API 一览
 
@@ -228,7 +228,9 @@ npm run test:e2e:fuse-apply
 
 Celery、真 MinerU 安装包、外部标讯数据源、多用户鉴权、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
 
-**响应矩阵相关（已接 vs 未扩）：** 多端冲突的版本写保护、409 与双浏览器上下文 E2E 主路径已接；「刷新来源」保留人工映射 E2E 已接；**智能建议人工确认后应用** E2E 已接；**来源超过 80 分页** 已推送（`1289c92`）；**字段级三方合并** MVP + E2E 已推送（`2c7b3e0`，`response-matrix-field-merge.spec.ts`）。仍未接：Word 失效引用在浏览器层的扩展（导出逻辑以后端单测为准）；包 8 可插拔解析、包 9 交付增强。
+**响应矩阵相关（已接 vs 未扩）：** 多端冲突的版本写保护、409 与双浏览器上下文 E2E 主路径已接；「刷新来源」保留人工映射 E2E 已接；**智能建议人工确认后应用** E2E 已接；**来源超过 80 分页** 已推送（`1289c92`）；**字段级三方合并** MVP + E2E 已推送（`2c7b3e0`，`response-matrix-field-merge.spec.ts`）。仍未接：Word 失效引用在浏览器层的扩展（导出逻辑以后端单测为准）；包 9 交付增强。
+
+**解析相关（包 8 MVP）：** 可插拔调度 `parse_engines` + 默认 `lightweight` + 任务 `result.engine` 本批待审查；MinerU **仅**外置 `parse-callback`（默认 token 空=不校验，部署须自配）；Docling 未接；`parseStrategy` 未接线。
 
 ## 15. 知识库 RAG 简版
 

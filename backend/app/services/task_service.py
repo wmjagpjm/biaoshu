@@ -33,7 +33,7 @@ from app.services import (
     file_service,
     fuse_context_service,
     llm_service,
-    parse_service,
+    parse_engines,
 )
 from app.services.export_service import build_docx_bytes
 from app.services.llm_service import LlmCallError, LlmConfigError
@@ -286,7 +286,7 @@ def _execute_task(db: Session, workspace_id: str, task: ProjectTaskRow) -> None:
         _assert_not_cancelled(db, task)
         _set_task(db, task, status="running", progress=5, message="任务开始…")
         if task.type == "parse":
-            _run_parse(db, workspace_id, project_id, task)
+            _run_parse(db, workspace_id, project_id, task, payload)
         elif task.type == "analyze":
             _run_analyze(db, workspace_id, project_id, task)
         elif task.type == "outline":
@@ -405,8 +405,17 @@ def _ensure_state(db: Session, project_id: str) -> ProjectEditorStateRow:
 
 
 def _run_parse(
-    db: Session, workspace_id: str, project_id: str, task: ProjectTaskRow
+    db: Session,
+    workspace_id: str,
+    project_id: str,
+    task: ProjectTaskRow,
+    payload: dict | None = None,
 ) -> None:
+    """
+    用途：按可插拔引擎调度解析上传文件，成功后写入 editor-state.parsedMarkdown。
+    对接：parse_engines；payload.engine（缺省/空白=lightweight；非法/未注册则任务 failed）。
+    二次开发：失败不得覆盖已有 parsedMarkdown；全文权威仍在 editor-state，result 仅摘要。
+    """
     settings = get_settings()
     files = file_service.list_files(db, workspace_id, project_id)
     if not files:
@@ -417,8 +426,16 @@ def _run_parse(
     if not path.exists():
         raise RuntimeError("文件已丢失，请重新上传")
     _assert_not_cancelled(db, task)
-    _set_task(db, task, progress=50, message="提取文本…")
-    md = parse_service.parse_file_to_markdown(path, files[0].filename)
+
+    # 从 payload 解析引擎名：缺失/null/空白→lightweight；仅非空字符串合法
+    raw_engine = (payload or {}).get("engine")
+    engine_name = parse_engines.resolve_engine_name(raw_engine)
+    _set_task(db, task, progress=50, message=f"提取文本（引擎：{engine_name}）…")
+    # 调度失败或引擎异常时在此抛出，不写 state，保留既有 parsedMarkdown
+    md, used_engine = parse_engines.parse_with_engine(
+        engine_name, path, files[0].filename
+    )
+
     state = _ensure_state(db, project_id)
     state.parsed_markdown = md
     state.updated_at = _now()
@@ -436,6 +453,7 @@ def _run_parse(
             "parsedMarkdown": md[:2000],
             "chars": len(md),
             "filename": files[0].filename,
+            "engine": used_engine,
         },
     )
 

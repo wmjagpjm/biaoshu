@@ -1,6 +1,8 @@
 """
 模块：上传解析与导出任务测试（不调用外网 LLM）
-用途：验收 parse / export 任务闭环。
+用途：验收 parse / export 任务闭环；parse 默认引擎 lightweight 可追溯。
+对接：task_service parse/export；parse_engines.lightweight。
+二次开发：勿在此引入真实 MinerU/Docling 或外网 Key。
 """
 
 from io import BytesIO
@@ -27,6 +29,7 @@ def test_upload_parse_and_export(client):
     body = parse_task.json()
     assert body["status"] == "success"
     assert body["type"] == "parse"
+    assert body["result"]["engine"] == "lightweight"
 
     state = client.get(f"/api/projects/{pid}/editor-state").json()
     assert state.get("parsedMarkdown")
