@@ -24,6 +24,7 @@ from app.api import (
     compliance as compliance_api,
     export as export_api,
     files,
+    finance as finance_api,
     health,
     knowledge as knowledge_api,
     llm,
@@ -124,6 +125,7 @@ def create_app() -> FastAPI:
     # 路由前缀 /api：与前端 apiFetch 的 base（默认 /api）拼接后完整路径一致
     app.include_router(health.router, prefix="/api")
     app.include_router(auth_api.router, prefix="/api")
+    app.include_router(finance_api.router, prefix="/api")
     app.include_router(projects.router, prefix="/api")
     app.include_router(settings_api.router, prefix="/api")
     app.include_router(llm.router, prefix="/api")

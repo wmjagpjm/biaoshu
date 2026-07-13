@@ -1055,3 +1055,68 @@ class AuthMemberUpdate(BaseModel):
     role: AuthRole | None = None
     is_owner: bool | None = Field(default=None, alias="isOwner")
     is_active: bool | None = Field(default=None, alias="isActive")
+
+
+# ---------- P10B 财务只读商务投标报价 ----------
+
+
+class FinanceQuoteRowOut(BaseModel):
+    """
+    模块：财务报价分项行
+    用途：明细接口中单行报价的白名单投影；amount 仅有限数值或 null。
+    对接：GET /api/finance/business-bids/{project_id} → quoteRows。
+    二次开发：禁止附加成本/利润/税率或透传 business_json 额外键。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    name: str
+    unit: str
+    quantity: str
+    unit_price: str = Field(serialization_alias="unitPrice")
+    amount: float | None = None
+    remark: str
+
+
+class FinanceBusinessBidSummaryOut(BaseModel):
+    """
+    模块：财务商务标报价列表项
+    用途：列表接口的项目摘要 + 报价行数与合计。
+    对接：GET /api/finance/business-bids。
+    二次开发：字段集合为契约白名单，不得扩展敏感业务字段。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    project_id: str = Field(serialization_alias="projectId")
+    name: str
+    industry: str
+    status: str
+    updated_at: datetime = Field(serialization_alias="updatedAt")
+    quote_row_count: int = Field(serialization_alias="quoteRowCount")
+    quote_total: float = Field(serialization_alias="quoteTotal")
+
+
+class FinanceBusinessBidListOut(BaseModel):
+    """
+    模块：财务商务标报价列表响应
+    用途：包装 items 数组，避免裸列表难以演进。
+    对接：GET /api/finance/business-bids。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    items: list[FinanceBusinessBidSummaryOut]
+
+
+class FinanceBusinessBidDetailOut(FinanceBusinessBidSummaryOut):
+    """
+    模块：财务商务标报价明细响应
+    用途：在列表字段上追加 quoteRows 与 quoteNotes。
+    对接：GET /api/finance/business-bids/{project_id}。
+    二次开发：禁止附带 qualify/toc/commit/技术标/文件/设置。
+    """
+
+    quote_rows: list[FinanceQuoteRowOut] = Field(serialization_alias="quoteRows")
+    quote_notes: str = Field(serialization_alias="quoteNotes")
