@@ -113,7 +113,7 @@ npm run test:e2e:fuse
 npm run test:e2e:fuse-apply
 ```
 
-当前基线：后端 **pytest 全量**（含 `test_content_fuse`、`test_knowledge_cards`、`test_bid_templates`、候选分批与**来源 80 分页**、**parse_engines 可插拔调度**、**P9A 标题左栏**）；前端 lint/build；`test:e2e:fuse` / `fuse-apply`；`test:e2e:matrix` 覆盖 409、刷新来源、智能建议人工确认、**来源分页**与**字段级三方合并**（无冲突安全合并 / 同字段显式选择 / 二次 409 不循环）；`templates` / `cards` 为回归。阶段 3 已推送（M3-A=`5d37dba`，M3-B=`e2e5d04`）。阶段 4 包 5=`460097a`、包 6=`1289c92`、包 7=`2c7b3e0`、包 8=`6db1586`（实现可插拔解析引擎调度）、P9A=`c1ff160`（实现P9A最小标题左栏）已通过自动化验收。**包 8** 边界：MinerU 仅外置 callback、Docling 未接、`parseStrategy` 未接线。P9A 不做整章页框或 `structure`，其 WPS/Word 视觉抽检待人工确认；P9B/P9C 仍待前置决策。
+当前基线：后端 **pytest 全量**（含 `test_content_fuse`、`test_knowledge_cards`、`test_bid_templates`、候选分批与**来源 80 分页**、**parse_engines 可插拔调度**、**P9A 标题左栏**）；前端 lint/build；`test:e2e:fuse` / `fuse-apply`；`test:e2e:matrix` 覆盖 409、刷新来源、智能建议人工确认、**来源分页**与**字段级三方合并**（无冲突安全合并 / 同字段显式选择 / 二次 409 不循环）；`templates` / `cards` 为回归。阶段 3 已推送（M3-A=`5d37dba`，M3-B=`e2e5d04`）。阶段 4 包 5=`460097a`、包 6=`1289c92`、包 7=`2c7b3e0`、包 8=`6db1586`（实现可插拔解析引擎调度）、P9A=`c1ff160`（实现P9A最小标题左栏）已通过完整独立验收。**包 8** 边界：MinerU 仅外置 callback、Docling 未接、`parseStrategy` 未接线。P9A 自动化检查与 WPS 技术标/商务标实际渲染抽检均通过，不做整章页框或 `structure`；P9B/P9C 仍待前置决策。
 
 ## 6. 已接 API 一览
 

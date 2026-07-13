@@ -6,7 +6,7 @@
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
 > **协作分支已推送基线**：P9A=`c1ff160` — 实现P9A最小标题左栏；其下含包 8=`6db1586`、包 7=`2c7b3e0`、包 6=`1289c92`、包 5=`460097a`、M3-B=`e2e5d04`、M3-A=`5d37dba`
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **本地状态**：阶段 0/1/2/3/包5/包6/包7/包8 与 **P9A** 已推送；P9A=`c1ff160` 已通过自动化验收，WPS/Word 视觉抽检待人工确认。P9B/P9C 未立项。MinerU 仅外置 callback；Docling 未接；`parseStrategy` 未接线。
+> **本地状态**：阶段 0/1/2/3/包5/包6/包7/包8 与 **P9A** 已推送；P9A=`c1ff160` 已通过自动化验收和 WPS 技术标/商务标实际渲染抽检。P9B/P9C 未立项。MinerU 仅外置 callback；Docling 未接；`parseStrategy` 未接线。
 > **验收基线**：`pytest`（含 parse_engines）；`frontend npm run lint` / `build`；`npm run test:e2e:matrix`（含 field-merge）；`git diff --check`
 
 ---
@@ -282,7 +282,7 @@ frontend/src/features/
 ## 6. 建议下一会话方向
 
 1. 阶段 4 **功能包 8** MVP 已验收并推送（`6db1586`）；真实 MinerU/Docling 外置部署与 `parseStrategy` 接线另开 task
-2. 阶段 4 **P9A**（Word 叶子标题左栏）已实现、自动化验收并文档闭环；真实 WPS/Word 视觉抽检待人工确认。P9B 外部标讯与 P9C embedding 仍须各自补齐授权/模型决策后再开 task
+2. 阶段 4 **P9A**（Word 叶子标题左栏）已实现并完成完整独立验收与文档闭环；P9B 外部标讯与 P9C embedding 仍须各自补齐授权/模型决策后再开 task
 3. M3-B 后遗留：写入历史/回滚（可选）；多角色仍不开始
 
 资源同步后续只可由管理员配置新的签名发布方，绝不可放开浏览器 URL 或外网抓取。图片管线已冻结项目内资源引用协议，后续扩展不得放开外链或客户端路径。SSE 的多工作空间鉴权、事件游标和项目级总线不在当前范围。
@@ -344,7 +344,7 @@ frontend/src/features/
 - 阶段 4 **包 6** 已推送：`1289c92` 实现响应矩阵源分页调用。
 - 阶段 4 **包 7** 已推送：`2c7b3e0` 实现响应矩阵字段级三方合并（base 快照 + 原子字段三方合并 + 冲突显式选择 + 仅矩阵 PUT + field-merge E2E）。
 - 阶段 4 **包 8** MVP：**已验收并推送** `6db1586` 实现可插拔解析引擎调度（父提交 `834969e`；`parse_engines` + `_run_parse` 调度；默认 lightweight；测试 fake；非法引擎 failed 不静默回退；MinerU 仅外置 callback；Docling 未接；`parseStrategy` 未接线）。
-- **包 9A** 已实现并通过自动化独立验收：`c1ff160`（实现P9A最小标题左栏）；仅为大纲/Markdown 的叶子标题强化既有左边框，绝不误称整章页框，也不接 `structure`。真实 WPS/Word 视觉抽检待人工确认。P9B/P9C 未立项。
+- **包 9A** 已实现并完成完整独立验收：`c1ff160`（实现P9A最小标题左栏）；自动化检查与 WPS 技术标/商务标实际渲染抽检均通过。仅为大纲/Markdown 的叶子标题强化既有左边框，绝不误称整章页框，也不接 `structure`。P9B/P9C 未立项。
 - 新任务分工不变：Codex 负责范围、取舍、审查和验收；Grok 负责限定范围内的实现与测试。每一项先发 `task`，完成后发 `review_request`，未经 Codex `ack` 不得提交或推送。
 
 **换会话可直接：pull → 读本文 §0～§2 → 按 §6 开干。**
