@@ -287,6 +287,19 @@ class OpportunityWatchPlanImportOut(BaseModel):
     total: int
 
 
+class OpportunityWatchSyncAcceptedOut(BaseModel):
+    """
+    模块：国能 e 招同步受理响应
+    用途：POST /sync 仅返回 runId；不包含 URL、Cookie、错误原文或请求回显。
+    对接：POST /api/opportunity-watch/sync → 202；BackgroundTasks 执行器。
+    二次开发：禁止扩展为可传入搜索条件、主机或凭据的请求模型。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    run_id: str = Field(alias="runId", serialization_alias="runId")
+
+
 # ---------- 资源中心 ----------
 
 

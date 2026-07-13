@@ -1,7 +1,7 @@
 """
 模块：国能 e 招计划追踪服务
-用途：提供工作空间隔离的计划/运行/命中读取、中断运行收敛，以及本机 .xlsx 计划表内存导入。
-对接：app.main.lifespan；app.api.opportunity_watch；BidWatchPlanRow 等追踪实体。
+用途：提供工作空间隔离的计划/运行/命中读取、中断运行收敛、本机 .xlsx 计划导入，以及受控同步执行。
+对接：app.main.lifespan；app.api.opportunity_watch；chnenergy_client；BidWatchPlanRow 等追踪实体。
 二次开发：不得在此混入任意 URL、Cookie、HTML、JSON 或浏览器请求；外部访问仅能由固定来源客户端承担。
 """
 
@@ -11,13 +11,24 @@ import hashlib
 import io
 import secrets
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from openpyxl import load_workbook
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
+from app.core.database import SessionLocal
 from app.models.entities import BidSourceHitRow, BidSourceSyncRunRow, BidWatchPlanRow
+from app.services.chnenergy_client import (
+    ChnenergyClientError,
+    ChnenergyControlledClient,
+    ChnenergyNetworkError,
+    ChnenergySyncStopError,
+    build_notice_detail_url,
+    extract_notice_times,
+    parse_jump_fields,
+)
 
 # 计划表中文表头到实体字段的固定映射；未知列忽略。
 _PLAN_HEADER_TO_FIELD = {
@@ -53,6 +64,17 @@ class WatchPlanImportValidationError(ValueError):
         self.errors = errors
 
 
+class WatchSyncConflictError(ValueError):
+    """
+    模块：同步运行并发冲突
+    用途：同工作空间已存在 queued/running 运行时拒绝新建。
+    对接：create_watch_sync_run；POST /api/opportunity-watch/sync → 409。
+    """
+
+    def __init__(self) -> None:
+        super().__init__("当前工作空间已有进行中的同步运行")
+
+
 def _now() -> datetime:
     """用途：统一同步运行恢复与计划导入写入的 UTC 时间源。"""
     return datetime.now(timezone.utc)
@@ -61,6 +83,16 @@ def _now() -> datetime:
 def _new_watch_plan_id() -> str:
     """用途：生成服务端追踪计划主键，避免客户端指定持久化标识。"""
     return f"watch_plan_{secrets.token_hex(8)}"
+
+
+def _new_sync_run_id() -> str:
+    """用途：生成同步运行主键。"""
+    return f"watch_run_{secrets.token_hex(8)}"
+
+
+def _new_hit_id() -> str:
+    """用途：生成公告命中主键。"""
+    return f"watch_hit_{secrets.token_hex(8)}"
 
 
 def _clean_text(value: Any, *, limit: int = 1000) -> str:
@@ -358,3 +390,366 @@ def import_watch_plans_from_xlsx(
         raise
     finally:
         workbook.close()
+
+
+def _count_active_sync_runs(db: Session, workspace_id: str) -> int:
+    """用途：统计工作空间内仍活跃的 queued/running 同步运行。"""
+    stmt = select(BidSourceSyncRunRow.id).where(
+        BidSourceSyncRunRow.workspace_id == workspace_id,
+        BidSourceSyncRunRow.status.in_(("queued", "running")),
+    )
+    return len(list(db.scalars(stmt).all()))
+
+
+def _list_enabled_plans(db: Session, workspace_id: str, *, limit: int) -> list[BidWatchPlanRow]:
+    """用途：读取当前工作空间启用中的计划，供同步检索。"""
+    stmt = (
+        select(BidWatchPlanRow)
+        .where(
+            BidWatchPlanRow.workspace_id == workspace_id,
+            BidWatchPlanRow.enabled.is_(True),
+        )
+        .order_by(BidWatchPlanRow.created_at.asc(), BidWatchPlanRow.id.asc())
+        .limit(limit)
+    )
+    return list(db.scalars(stmt).all())
+
+
+def create_watch_sync_run(db: Session, workspace_id: str) -> BidSourceSyncRunRow:
+    """
+    模块：创建受控同步运行
+    用途：在无并发活跃运行时创建 queued 记录；仅统计当前空间启用计划数。
+    对接：POST /api/opportunity-watch/sync；BidSourceSyncRunRow。
+    二次开发：禁止接受 URL/Cookie/搜索条件；并发冲突必须由调用方映射为 409。
+    """
+    if _count_active_sync_runs(db, workspace_id) > 0:
+        raise WatchSyncConflictError()
+
+    settings = get_settings()
+    plans = _list_enabled_plans(
+        db,
+        workspace_id,
+        limit=settings.max_opportunity_watch_plans_per_sync,
+    )
+    now = _now()
+    row = BidSourceSyncRunRow(
+        id=_new_sync_run_id(),
+        workspace_id=workspace_id,
+        source_name="chnenergy",
+        status="queued",
+        started_at=now,
+        finished_at=None,
+        plan_count=len(plans),
+        candidate_count=0,
+        detail_page_count=0,
+        resolved_count=0,
+        needs_review_count=0,
+        skipped_count=0,
+        error_code=None,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def get_watch_sync_run(
+    db: Session,
+    workspace_id: str,
+    run_id: str,
+) -> BidSourceSyncRunRow | None:
+    """
+    模块：同步运行按主键读取
+    用途：仅返回当前工作空间的运行；跨空间视为不存在。
+    对接：GET /api/opportunity-watch/runs/{run_id}；OpportunityWatchSyncRunOut。
+    """
+    stmt = select(BidSourceSyncRunRow).where(
+        BidSourceSyncRunRow.id == run_id,
+        BidSourceSyncRunRow.workspace_id == workspace_id,
+    )
+    return db.scalars(stmt).first()
+
+
+def _finalize_run(
+    db: Session,
+    run: BidSourceSyncRunRow,
+    *,
+    status: str,
+    error_code: str | None,
+    counters: dict[str, int],
+) -> None:
+    """用途：写入终态、脱敏计数与结束时间；不记录 URL/正文。"""
+    now = _now()
+    run.status = status
+    run.error_code = error_code
+    run.plan_count = counters.get("plan_count", run.plan_count)
+    run.candidate_count = counters.get("candidate_count", 0)
+    run.detail_page_count = counters.get("detail_page_count", 0)
+    run.resolved_count = counters.get("resolved_count", 0)
+    run.needs_review_count = counters.get("needs_review_count", 0)
+    run.skipped_count = counters.get("skipped_count", 0)
+    run.finished_at = now
+    run.updated_at = now
+    db.commit()
+
+
+def _upsert_hit(
+    db: Session,
+    *,
+    workspace_id: str,
+    watch_plan_id: str,
+    sync_run_id: str,
+    source_info_id: str,
+    category_num: str,
+    source_publish_text: str,
+    title: str,
+    deadline_at_local: str | None,
+    opening_at_local: str | None,
+    extraction_status: str,
+) -> BidSourceHitRow:
+    """
+    用途：按 (workspace, plan, info_id) 幂等写入/更新命中，不删除既有行。
+    对接：BidSourceHitRow 唯一约束；跨计划可各自保留同一公告。
+    """
+    existing = db.scalars(
+        select(BidSourceHitRow).where(
+            BidSourceHitRow.workspace_id == workspace_id,
+            BidSourceHitRow.watch_plan_id == watch_plan_id,
+            BidSourceHitRow.source_info_id == source_info_id,
+        )
+    ).first()
+    now = _now()
+    if existing is None:
+        row = BidSourceHitRow(
+            id=_new_hit_id(),
+            workspace_id=workspace_id,
+            watch_plan_id=watch_plan_id,
+            sync_run_id=sync_run_id,
+            source_name="chnenergy",
+            source_info_id=source_info_id,
+            category_num=category_num,
+            source_publish_text=source_publish_text[:100],
+            title=title[:1000],
+            deadline_at_local=deadline_at_local,
+            opening_at_local=opening_at_local,
+            source_timezone="Asia/Shanghai",
+            extraction_status=extraction_status,
+            accepted_opportunity_id=None,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(row)
+        return row
+
+    existing.sync_run_id = sync_run_id
+    existing.category_num = category_num
+    existing.source_publish_text = source_publish_text[:100]
+    existing.title = title[:1000]
+    existing.deadline_at_local = deadline_at_local
+    existing.opening_at_local = opening_at_local
+    existing.extraction_status = extraction_status
+    existing.updated_at = now
+    return existing
+
+
+def execute_sync_run(
+    run_id: str,
+    *,
+    transport: Any | None = None,
+    sleep_fn: Callable[[float], None] | None = None,
+    min_interval_seconds: float | None = None,
+    search_retry_count: int | None = None,
+) -> None:
+    """
+    模块：执行国能 e 招受控同步
+    用途：独立打开数据库会话，将 queued 运行推进为 running 并串行限频同步；终态为 succeeded/partial/failed。
+    对接：BackgroundTasks；ChnenergyControlledClient；BidSourceHitRow。
+    二次开发：禁止真实任意 URL、自动立项、持久化 Cookie/HTML/JSON；测试须注入 MockTransport 与零等待 sleep。
+    """
+    settings = get_settings()
+    db = SessionLocal()
+    client: ChnenergyControlledClient | None = None
+    counters = {
+        "plan_count": 0,
+        "candidate_count": 0,
+        "detail_page_count": 0,
+        "resolved_count": 0,
+        "needs_review_count": 0,
+        "skipped_count": 0,
+    }
+    detail_cache: dict[str, dict[str, Any]] = {}
+    hit_detail_limit = False
+    try:
+        run = db.scalars(
+            select(BidSourceSyncRunRow).where(BidSourceSyncRunRow.id == run_id)
+        ).first()
+        if run is None:
+            return
+        if run.status not in ("queued", "running"):
+            return
+
+        now = _now()
+        run.status = "running"
+        run.updated_at = now
+        db.commit()
+
+        plans = _list_enabled_plans(
+            db,
+            run.workspace_id,
+            limit=settings.max_opportunity_watch_plans_per_sync,
+        )
+        counters["plan_count"] = len(plans)
+
+        client = ChnenergyControlledClient(
+            transport=transport,
+            sleep_fn=sleep_fn,
+            min_interval_seconds=(
+                settings.opportunity_watch_min_interval_seconds
+                if min_interval_seconds is None
+                else min_interval_seconds
+            ),
+            connect_timeout_seconds=settings.opportunity_watch_connect_timeout_seconds,
+            read_timeout_seconds=settings.opportunity_watch_read_timeout_seconds,
+            search_retry_count=(
+                settings.opportunity_watch_search_retry_count
+                if search_retry_count is None
+                else search_retry_count
+            ),
+        )
+        client.open()
+        client.ensure_session()
+
+        max_details = settings.max_opportunity_watch_detail_pages_per_sync
+        max_candidates = settings.max_opportunity_watch_candidates_per_plan
+
+        for plan in plans:
+            try:
+                records = client.search_candidates(plan.title)
+            except ChnenergySyncStopError as stop:
+                _finalize_run(
+                    db,
+                    run,
+                    status="failed",
+                    error_code=stop.error_code,
+                    counters=counters,
+                )
+                return
+            except ChnenergyNetworkError:
+                # 单次检索网络失败（未达连续两次阈值）：跳过该计划
+                counters["skipped_count"] += 1
+                continue
+
+            for record in records[:max_candidates]:
+                counters["candidate_count"] += 1
+                linkurl = record.get("linkurl") or ""
+                title = record.get("title") or ""
+                publish_text = record.get("infodate") or ""
+                try:
+                    fields = parse_jump_fields(linkurl)
+                except ChnenergyClientError:
+                    counters["skipped_count"] += 1
+                    continue
+
+                info_id = fields["infoid"]
+                category_num = fields["categorynum"]
+                date8 = fields["infodate"]
+
+                if info_id not in detail_cache:
+                    if counters["detail_page_count"] >= max_details:
+                        hit_detail_limit = True
+                        counters["skipped_count"] += 1
+                        continue
+                    try:
+                        detail_url = build_notice_detail_url(
+                            infoid=info_id,
+                            categorynum=category_num,
+                            infodate=date8,
+                        )
+                        html = client.fetch_detail_html(detail_url)
+                        times = extract_notice_times(html)
+                    except ChnenergySyncStopError as stop:
+                        _finalize_run(
+                            db,
+                            run,
+                            status="failed",
+                            error_code=stop.error_code,
+                            counters=counters,
+                        )
+                        return
+                    except (ChnenergyNetworkError, ChnenergyClientError):
+                        counters["skipped_count"] += 1
+                        continue
+                    finally:
+                        html = ""  # 丢弃正文引用
+
+                    detail_cache[info_id] = {
+                        "title": title,
+                        "publish_text": publish_text,
+                        "category_num": category_num,
+                        "deadline_at_local": times.get("deadline_at_local"),
+                        "opening_at_local": times.get("opening_at_local"),
+                        "extraction_status": times.get("extraction_status")
+                        or "needs_review",
+                    }
+                    counters["detail_page_count"] += 1
+
+                cached = detail_cache[info_id]
+                status = cached["extraction_status"]
+                _upsert_hit(
+                    db,
+                    workspace_id=run.workspace_id,
+                    watch_plan_id=plan.id,
+                    sync_run_id=run.id,
+                    source_info_id=info_id,
+                    category_num=cached["category_num"],
+                    source_publish_text=cached["publish_text"] or publish_text,
+                    title=cached["title"] or title,
+                    deadline_at_local=cached["deadline_at_local"],
+                    opening_at_local=cached["opening_at_local"],
+                    extraction_status=status,
+                )
+                if status == "resolved":
+                    counters["resolved_count"] += 1
+                else:
+                    counters["needs_review_count"] += 1
+
+            db.commit()
+
+        final_status = "partial" if hit_detail_limit else "succeeded"
+        _finalize_run(
+            db,
+            run,
+            status=final_status,
+            error_code=None,
+            counters=counters,
+        )
+    except ChnenergySyncStopError as stop:
+        run = db.scalars(
+            select(BidSourceSyncRunRow).where(BidSourceSyncRunRow.id == run_id)
+        ).first()
+        if run is not None and run.status in ("queued", "running"):
+            _finalize_run(
+                db,
+                run,
+                status="failed",
+                error_code=stop.error_code,
+                counters=counters,
+            )
+    except Exception:
+        run = db.scalars(
+            select(BidSourceSyncRunRow).where(BidSourceSyncRunRow.id == run_id)
+        ).first()
+        if run is not None and run.status in ("queued", "running"):
+            _finalize_run(
+                db,
+                run,
+                status="failed",
+                error_code="source_unavailable",
+                counters=counters,
+            )
+    finally:
+        if client is not None:
+            client.close()
+        db.close()

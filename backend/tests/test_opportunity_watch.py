@@ -1,6 +1,6 @@
 """
 模块：国能 e 招计划追踪测试
-用途：验收公告详情地址安全、正文截止时间解析，以及本机计划表 .xlsx 受控导入。
+用途：验收公告详情地址安全、正文截止时间解析、本机计划表 .xlsx 受控导入，以及受控同步。
 对接：chnenergy_client；opportunity_watch_service；fixtures/chnenergy_notice_*.html。
 二次开发：禁止真实 HTTP；扩展检索/同步用例时仍须阻断外网并保持字段白名单。
 """
@@ -8,9 +8,12 @@
 from __future__ import annotations
 
 import io
-from datetime import datetime, timezone
+import json
+from datetime import date, datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
@@ -24,6 +27,7 @@ from app.api.schemas import (
     OpportunityWatchHitOut,
     OpportunityWatchPlanImportOut,
     OpportunityWatchPlanOut,
+    OpportunityWatchSyncAcceptedOut,
     OpportunityWatchSyncRunOut,
 )
 from app.core.config import Settings
@@ -1051,3 +1055,732 @@ def test_plan_import_api_rejects_non_xlsx_and_oversized(client: TestClient):
     resp = _post_plan_import(client, oversized, filename="plans.xlsx")
     assert resp.status_code == 400
     assert _count_watch_plans("ws_local") == 0
+
+
+# ---------- P9B 任务4：国能 e 招受控同步 ----------
+
+_PORTAL_URL = "https://www.chnenergybidding.com.cn/bidweb/"
+_SEARCH_URL = (
+    "https://www.chnenergybidding.com.cn/bidfulltextsearch/rest/"
+    "inteligentSearch/getFullTextData"
+)
+_INFO_ID_A = "b2363623-ea1e-4cc1-8e2d-0c2d2850b697"
+_INFO_ID_B = "c3474734-fb2f-5dd2-9f3e-1d3e3961c7a8"
+_INFO_ID_C = "d4585845-0c30-6ee3-a04f-2e4f4a72d8b9"
+
+
+def _jump(
+    infoid: str,
+    categorynum: str = "001002001",
+    infodate: str = "20260709",
+) -> str:
+    return f"jump.html?infoid={infoid}&categorynum={categorynum}&infodate={infodate}"
+
+
+def _deadline_html() -> str:
+    return (FIXTURES / "chnenergy_notice_deadline.html").read_text(encoding="utf-8")
+
+
+def _needs_review_html() -> str:
+    return (FIXTURES / "chnenergy_notice_needs_review.html").read_text(encoding="utf-8")
+
+
+def _seed_enabled_plan(
+    *,
+    plan_id: str = "watch_plan_sync_a",
+    title: str = "某项目招标计划",
+    fingerprint: str = "fp-sync-a",
+    workspace_id: str = "ws_local",
+    enabled: bool = True,
+) -> None:
+    db = SessionLocal()
+    try:
+        db.add(
+            BidWatchPlanRow(
+                id=plan_id,
+                workspace_id=workspace_id,
+                title=title,
+                buyer="某招标人",
+                scope="建设范围",
+                duration="12 个月",
+                expected_publish_text="2026 年 7 月",
+                remark="同步测试",
+                fingerprint=fingerprint,
+                enabled=enabled,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+def _mock_transport(handler):
+    """用途：包装 MockTransport；handler 内未声明请求应 AssertionError，阻断外网。"""
+    return httpx.MockTransport(handler)
+
+
+def test_build_fixed_search_body_matches_verified_chnenergy_template():
+    """用途：整包比对已核验的国能 e 招检索 JSON 冻结模板（仅 wd 随计划名变化）。"""
+    from app.services.chnenergy_client import build_fixed_search_body
+
+    plan_title = "某项目招标计划"
+    expected = {
+        "token": "",
+        "pn": 0,
+        "rn": 5,
+        "sdt": "",
+        "edt": "",
+        "wd": quote(plan_title, safe=""),
+        "inc_wd": "",
+        "exc_wd": "",
+        "fields": "title;content",
+        "cnum": "",
+        "sort": '{"infodate":0}',
+        "ssort": "title",
+        "cl": 500,
+        "terminal": "",
+        "condition": None,
+        "time": None,
+        "highlights": "title;content",
+        "statistics": None,
+        "unionCondition": None,
+        "accuracy": "",
+        "noParticiple": "1",
+        "searchRange": None,
+    }
+    body = build_fixed_search_body(plan_title)
+    assert body == expected
+    assert "isBusiness" not in body
+    assert set(body.keys()) == set(expected.keys())
+
+
+def test_sync_client_portal_search_contract_and_limit():
+    """用途：门户 uid + 检索 HTTPS/固定 Referer/JSON/rn=5/最多五候选。"""
+    from app.services import chnenergy_client as client_mod
+
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        url = str(request.url)
+        if request.method == "GET" and url.rstrip("/") == _PORTAL_URL.rstrip("/"):
+            return httpx.Response(
+                200,
+                headers=[("set-cookie", "uid=mock-uid-token; Path=/")],
+                text="<html>portal</html>",
+            )
+        if request.method == "POST" and url == _SEARCH_URL:
+            body = json.loads(request.content.decode("utf-8"))
+            assert body["rn"] == 5
+            assert body["wd"] == quote("某项目招标计划", safe="")
+            assert body["fields"] == "title;content"
+            # 整包字段与已核验模板一致，禁止 isBusiness 等漂移字段
+            expected_body = client_mod.build_fixed_search_body("某项目招标计划")
+            assert body == expected_body
+            assert "isBusiness" not in body
+            assert body["sort"] == '{"infodate":0}'
+            assert body["condition"] is None
+            assert body["time"] is None
+            assert body["highlights"] == "title;content"
+            assert body["noParticiple"] == "1"
+            assert request.headers.get("referer") == _PORTAL_URL
+            assert request.url.scheme == "https"
+            records = [
+                {
+                    "title": f"候选{i}",
+                    "infodate": "2026-07-09 10:00:00",
+                    "linkurl": _jump(f"b2363623-ea1e-4cc1-8e2d-{i:012d}"),
+                }
+                for i in range(7)
+            ]
+            return httpx.Response(200, json={"result": {"records": records}})
+        raise AssertionError(f"未声明请求: {request.method} {url}")
+
+    sleeps: list[float] = []
+    controlled = client_mod.ChnenergyControlledClient(
+        transport=_mock_transport(handler),
+        sleep_fn=lambda seconds: sleeps.append(seconds),
+        min_interval_seconds=1.0,
+    )
+    with controlled:
+        controlled.ensure_session()
+        records = controlled.search_candidates("某项目招标计划")
+    assert len(records) == 5
+    assert all(set(item) <= {"title", "infodate", "linkurl"} for item in records)
+    assert calls[0].method == "GET"
+    assert calls[1].method == "POST"
+    assert controlled.follow_redirects is False
+    assert sleeps  # 门户与检索之间触发限频
+
+
+def test_sync_client_missing_uid_is_source_unavailable():
+    from app.services import chnenergy_client as client_mod
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, text="<html>no cookie</html>")
+        raise AssertionError("无 uid 后不得继续请求")
+
+    controlled = client_mod.ChnenergyControlledClient(
+        transport=_mock_transport(handler),
+        sleep_fn=lambda _s: None,
+        min_interval_seconds=0,
+    )
+    with controlled:
+        with pytest.raises(client_mod.ChnenergySyncStopError) as exc:
+            controlled.ensure_session()
+        assert exc.value.error_code == "source_unavailable"
+
+
+def test_sync_client_403_and_429_are_rate_limited():
+    from app.services import chnenergy_client as client_mod
+
+    for status_code in (403, 429):
+
+        def handler(request: httpx.Request, code: int = status_code) -> httpx.Response:
+            if request.method == "GET":
+                return httpx.Response(
+                    200,
+                    headers=[("set-cookie", "uid=abc; Path=/")],
+                    text="ok",
+                )
+            return httpx.Response(code, text="denied")
+
+        controlled = client_mod.ChnenergyControlledClient(
+            transport=_mock_transport(handler),
+            sleep_fn=lambda _s: None,
+            min_interval_seconds=0,
+        )
+        with controlled:
+            controlled.ensure_session()
+            with pytest.raises(client_mod.ChnenergySyncStopError) as exc:
+                controlled.search_candidates("计划")
+            assert exc.value.error_code == "rate_limited"
+
+
+def test_sync_client_malformed_search_payload():
+    from app.services import chnenergy_client as client_mod
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                headers=[("set-cookie", "uid=abc; Path=/")],
+                text="ok",
+            )
+        return httpx.Response(200, json={"result": {"items": []}})
+
+    controlled = client_mod.ChnenergyControlledClient(
+        transport=_mock_transport(handler),
+        sleep_fn=lambda _s: None,
+        min_interval_seconds=0,
+    )
+    with controlled:
+        controlled.ensure_session()
+        with pytest.raises(client_mod.ChnenergySyncStopError) as exc:
+            controlled.search_candidates("计划")
+        assert exc.value.error_code == "malformed_response"
+
+
+def test_sync_create_run_rejects_concurrent_and_isolates_workspace():
+    """用途：同空间 queued/running 冲突；跨空间不可查询运行。"""
+    _seed_enabled_plan()
+    db = SessionLocal()
+    try:
+        first = opportunity_watch_service.create_watch_sync_run(db, "ws_local")
+        assert first.status == "queued"
+        assert first.source_name == "chnenergy"
+        assert first.plan_count == 1
+        with pytest.raises(opportunity_watch_service.WatchSyncConflictError):
+            opportunity_watch_service.create_watch_sync_run(db, "ws_local")
+    finally:
+        db.close()
+
+    other = "ws_sync_other"
+    _create_watch_workspace(other)
+    _seed_enabled_plan(
+        plan_id="watch_plan_sync_other",
+        fingerprint="fp-sync-other",
+        workspace_id=other,
+        title="他空间计划",
+    )
+    db = SessionLocal()
+    try:
+        other_run = opportunity_watch_service.create_watch_sync_run(db, other)
+        assert other_run.workspace_id == other
+        assert (
+            opportunity_watch_service.get_watch_sync_run(db, "ws_local", other_run.id)
+            is None
+        )
+        assert (
+            opportunity_watch_service.get_watch_sync_run(db, other, other_run.id)
+            is not None
+        )
+    finally:
+        db.close()
+
+
+def test_sync_execute_happy_path_resolved_and_filters_non_bid():
+    """用途：resolved 命中写入；非 001002/非法 linkurl 跳过；不自动立项。"""
+    _seed_enabled_plan(title="同步计划甲")
+    detail_hits = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if request.method == "GET" and url.rstrip("/") == _PORTAL_URL.rstrip("/"):
+            return httpx.Response(
+                200,
+                headers=[("set-cookie", "uid=ok; Path=/")],
+                text="portal",
+            )
+        if request.method == "POST" and url == _SEARCH_URL:
+            body = json.loads(request.content.decode("utf-8"))
+            assert body["wd"] == quote("同步计划甲", safe="")
+            return httpx.Response(
+                200,
+                json={
+                    "result": {
+                        "records": [
+                            {
+                                "title": "可解析招标公告",
+                                "infodate": "2026-07-09 17:14:11",
+                                "linkurl": _jump(_INFO_ID_A, "001002001", "20260709"),
+                            },
+                            {
+                                "title": "中标结果应跳过",
+                                "infodate": "2026-07-09 18:00:00",
+                                "linkurl": _jump(_INFO_ID_B, "001006001", "20260709"),
+                            },
+                            {
+                                "title": "非法跳转",
+                                "infodate": "2026-07-09 19:00:00",
+                                "linkurl": "https://evil.example/x",
+                            },
+                        ]
+                    }
+                },
+            )
+        if request.method == "GET" and url.endswith(f"{_INFO_ID_A}.html"):
+            detail_hits["count"] += 1
+            assert url.startswith("https://www.chnenergybidding.com.cn/bidweb/")
+            assert "evil" not in url
+            return httpx.Response(200, text=_deadline_html())
+        if _INFO_ID_B in url:
+            raise AssertionError("非招标类别不得读详情")
+        raise AssertionError(f"未声明请求: {request.method} {url}")
+
+    db = SessionLocal()
+    try:
+        run_id = opportunity_watch_service.create_watch_sync_run(db, "ws_local").id
+    finally:
+        db.close()
+
+    opportunity_watch_service.execute_sync_run(
+        run_id,
+        transport=_mock_transport(handler),
+        sleep_fn=lambda _s: None,
+    )
+
+    db = SessionLocal()
+    try:
+        run = opportunity_watch_service.get_watch_sync_run(db, "ws_local", run_id)
+        assert run is not None
+        assert run.status == "succeeded"
+        assert run.error_code is None
+        assert run.plan_count == 1
+        assert run.candidate_count == 3
+        assert run.detail_page_count == 1
+        assert run.resolved_count == 1
+        assert run.needs_review_count == 0
+        assert run.skipped_count == 2
+        assert detail_hits["count"] == 1
+        hits = opportunity_watch_service.list_watch_hits(db, "ws_local")
+        assert len(hits) == 1
+        hit = hits[0]
+        assert hit.source_info_id == _INFO_ID_A
+        assert hit.category_num == "001002001"
+        assert hit.deadline_at_local == "2026-07-29 09:00:00"
+        assert hit.opening_at_local == "2026-07-29 09:00:00"
+        assert hit.extraction_status == "resolved"
+        assert hit.source_timezone == "Asia/Shanghai"
+        assert hit.accepted_opportunity_id is None
+        assert list(db.scalars(select(BidOpportunityRow)).all()) == []
+        dumped = json.dumps(
+            OpportunityWatchSyncRunOut.model_validate(run).model_dump(
+                by_alias=True, mode="json"
+            )
+        ).lower()
+        assert "cookie" not in dumped
+        assert "http" not in dumped
+    finally:
+        db.close()
+
+
+def test_sync_execute_needs_review_on_detail_without_deadline():
+    _seed_enabled_plan(title="待复核计划")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if request.method == "GET" and url.rstrip("/") == _PORTAL_URL.rstrip("/"):
+            return httpx.Response(
+                200,
+                headers=[("set-cookie", "uid=ok; Path=/")],
+                text="portal",
+            )
+        if request.method == "POST":
+            return httpx.Response(
+                200,
+                json={
+                    "result": {
+                        "records": [
+                            {
+                                "title": "无时间公告",
+                                "infodate": "2026-07-09 17:14:11",
+                                "linkurl": _jump(_INFO_ID_A),
+                            }
+                        ]
+                    }
+                },
+            )
+        if request.method == "GET" and url.endswith(".html"):
+            return httpx.Response(200, text=_needs_review_html())
+        raise AssertionError(url)
+
+    db = SessionLocal()
+    try:
+        run_id = opportunity_watch_service.create_watch_sync_run(db, "ws_local").id
+    finally:
+        db.close()
+
+    opportunity_watch_service.execute_sync_run(
+        run_id,
+        transport=_mock_transport(handler),
+        sleep_fn=lambda _s: None,
+    )
+    db = SessionLocal()
+    try:
+        run = opportunity_watch_service.get_watch_sync_run(db, "ws_local", run_id)
+        assert run is not None
+        assert run.status == "succeeded"
+        assert run.needs_review_count == 1
+        assert run.resolved_count == 0
+        hit = opportunity_watch_service.list_watch_hits(db, "ws_local")[0]
+        assert hit.extraction_status == "needs_review"
+        assert hit.deadline_at_local in (None, "")
+    finally:
+        db.close()
+
+
+def test_sync_execute_reuses_infoid_detail_within_run():
+    """用途：同运行同 infoid 只读一次详情；两计划各保留一条命中。"""
+    _seed_enabled_plan(plan_id="watch_plan_sync_1", title="计划一", fingerprint="fp1")
+    _seed_enabled_plan(plan_id="watch_plan_sync_2", title="计划二", fingerprint="fp2")
+    detail_hits = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if request.method == "GET" and url.rstrip("/") == _PORTAL_URL.rstrip("/"):
+            return httpx.Response(
+                200,
+                headers=[("set-cookie", "uid=ok; Path=/")],
+                text="portal",
+            )
+        if request.method == "POST" and url == _SEARCH_URL:
+            return httpx.Response(
+                200,
+                json={
+                    "result": {
+                        "records": [
+                            {
+                                "title": "共享公告",
+                                "infodate": "2026-07-09 17:14:11",
+                                "linkurl": _jump(_INFO_ID_A),
+                            }
+                        ]
+                    }
+                },
+            )
+        if request.method == "GET" and url.endswith(f"{_INFO_ID_A}.html"):
+            detail_hits["count"] += 1
+            return httpx.Response(200, text=_deadline_html())
+        raise AssertionError(f"{request.method} {url}")
+
+    db = SessionLocal()
+    try:
+        run_id = opportunity_watch_service.create_watch_sync_run(db, "ws_local").id
+    finally:
+        db.close()
+
+    opportunity_watch_service.execute_sync_run(
+        run_id,
+        transport=_mock_transport(handler),
+        sleep_fn=lambda _s: None,
+    )
+
+    db = SessionLocal()
+    try:
+        hits = opportunity_watch_service.list_watch_hits(db, "ws_local")
+        assert len(hits) == 2
+        assert {item.watch_plan_id for item in hits} == {
+            "watch_plan_sync_1",
+            "watch_plan_sync_2",
+        }
+        assert {item.source_info_id for item in hits} == {_INFO_ID_A}
+        assert detail_hits["count"] == 1
+        run = opportunity_watch_service.get_watch_sync_run(db, "ws_local", run_id)
+        assert run is not None
+        assert run.detail_page_count == 1
+        assert run.status == "succeeded"
+    finally:
+        db.close()
+
+
+def test_sync_execute_detail_cap_fifty_and_preserves_existing():
+    """用途：详情最多 50；失败路径不删除既有命中与本地标讯。"""
+    _seed_enabled_plan(title="大量候选计划")
+    db = SessionLocal()
+    try:
+        existing_run = BidSourceSyncRunRow(
+            id="watch_run_existing",
+            workspace_id="ws_local",
+            source_name="chnenergy",
+            status="succeeded",
+            started_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
+            finished_at=datetime(2026, 7, 1, 1, tzinfo=timezone.utc),
+        )
+        db.add(existing_run)
+        db.flush()
+        db.add(
+            BidSourceHitRow(
+                id="watch_hit_existing",
+                workspace_id="ws_local",
+                watch_plan_id="watch_plan_sync_a",
+                sync_run_id=existing_run.id,
+                source_name="chnenergy",
+                source_info_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                category_num="001002001",
+                source_publish_text="2026-07-01 00:00:00",
+                title="既有命中",
+                deadline_at_local="2026-07-10 09:00:00",
+                opening_at_local="2026-07-10 09:00:00",
+                source_timezone="Asia/Shanghai",
+                extraction_status="resolved",
+            )
+        )
+        db.add(
+            BidOpportunityRow(
+                id="opp_existing_sync",
+                workspace_id="ws_local",
+                title="既有本地标讯",
+                buyer="招标人",
+                region="北京",
+                budget_label="",
+                deadline=date(2026, 8, 1),
+                tags_json=None,
+                summary="",
+                source_label="本地录入",
+                source_key="manual:keep",
+            )
+        )
+        # 再写入 12 个计划，每计划 5 条唯一候选 → 60，详情封顶 50
+        for i in range(12):
+            db.add(
+                BidWatchPlanRow(
+                    id=f"watch_plan_cap_{i}",
+                    workspace_id="ws_local",
+                    title=f"计划{i}",
+                    buyer="b",
+                    scope="s",
+                    duration="",
+                    expected_publish_text="",
+                    remark="",
+                    fingerprint=f"fp-cap-{i}",
+                    enabled=True,
+                )
+            )
+        db.commit()
+    finally:
+        db.close()
+
+    detail_hits = {"count": 0}
+    search_calls = {"n": 0}
+
+    def _uuid(i: int) -> str:
+        return f"b2363623-ea1e-4cc1-8e2d-{i:012d}"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if request.method == "GET" and url.rstrip("/") == _PORTAL_URL.rstrip("/"):
+            return httpx.Response(
+                200,
+                headers=[("set-cookie", "uid=ok; Path=/")],
+                text="portal",
+            )
+        if request.method == "POST":
+            search_calls["n"] += 1
+            base = (search_calls["n"] - 1) * 5
+            return httpx.Response(
+                200,
+                json={
+                    "result": {
+                        "records": [
+                            {
+                                "title": f"公告{base + i}",
+                                "infodate": "2026-07-09 10:00:00",
+                                "linkurl": _jump(_uuid(base + i)),
+                            }
+                            for i in range(5)
+                        ]
+                    }
+                },
+            )
+        if request.method == "GET" and url.endswith(".html"):
+            detail_hits["count"] += 1
+            return httpx.Response(200, text=_deadline_html())
+        raise AssertionError(url)
+
+    db = SessionLocal()
+    try:
+        run_id = opportunity_watch_service.create_watch_sync_run(db, "ws_local").id
+    finally:
+        db.close()
+
+    opportunity_watch_service.execute_sync_run(
+        run_id,
+        transport=_mock_transport(handler),
+        sleep_fn=lambda _s: None,
+    )
+
+    db = SessionLocal()
+    try:
+        run = opportunity_watch_service.get_watch_sync_run(db, "ws_local", run_id)
+        assert run is not None
+        assert run.detail_page_count == 50
+        assert detail_hits["count"] == 50
+        assert run.status == "partial"
+        assert db.get(BidSourceHitRow, "watch_hit_existing") is not None
+        assert db.get(BidOpportunityRow, "opp_existing_sync") is not None
+    finally:
+        db.close()
+
+
+def test_sync_execute_stops_on_two_consecutive_network_errors():
+    _seed_enabled_plan(title="网络失败计划")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and str(request.url).rstrip("/") == _PORTAL_URL.rstrip(
+            "/"
+        ):
+            return httpx.Response(
+                200,
+                headers=[("set-cookie", "uid=ok; Path=/")],
+                text="portal",
+            )
+        raise httpx.ConnectError("simulated", request=request)
+
+    db = SessionLocal()
+    try:
+        run_id = opportunity_watch_service.create_watch_sync_run(db, "ws_local").id
+    finally:
+        db.close()
+
+    # 默认检索重试 1 次：两次连接失败触发连续网络失败停止
+    opportunity_watch_service.execute_sync_run(
+        run_id,
+        transport=_mock_transport(handler),
+        sleep_fn=lambda _s: None,
+    )
+    db = SessionLocal()
+    try:
+        run = opportunity_watch_service.get_watch_sync_run(db, "ws_local", run_id)
+        assert run is not None
+        assert run.status == "failed"
+        assert run.error_code == "source_unavailable"
+        assert run.finished_at is not None
+    finally:
+        db.close()
+
+
+def test_sync_api_post_and_get_run_status(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+    """用途：POST /sync 202+runId；GET 轮询；并发 409；跨空间 404。"""
+    _seed_enabled_plan(title="接口同步计划")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if request.method == "GET" and url.rstrip("/") == _PORTAL_URL.rstrip("/"):
+            return httpx.Response(
+                200,
+                headers=[("set-cookie", "uid=ok; Path=/")],
+                text="portal",
+            )
+        if request.method == "POST":
+            return httpx.Response(
+                200,
+                json={
+                    "result": {
+                        "records": [
+                            {
+                                "title": "接口公告",
+                                "infodate": "2026-07-09 17:14:11",
+                                "linkurl": _jump(_INFO_ID_A),
+                            }
+                        ]
+                    }
+                },
+            )
+        if request.method == "GET" and url.endswith(".html"):
+            return httpx.Response(200, text=_deadline_html())
+        raise AssertionError(url)
+
+    real_execute = opportunity_watch_service.execute_sync_run
+
+    def _patched_execute(run_id: str, **kwargs):
+        kwargs.setdefault("transport", _mock_transport(handler))
+        kwargs.setdefault("sleep_fn", lambda _s: None)
+        return real_execute(run_id, **kwargs)
+
+    monkeypatch.setattr(opportunity_watch_service, "execute_sync_run", _patched_execute)
+
+    resp = client.post("/api/opportunity-watch/sync")
+    assert resp.status_code == 202
+    body = resp.json()
+    assert set(body.keys()) == {"runId"}
+    run_id = body["runId"]
+    assert run_id
+    assert OpportunityWatchSyncAcceptedOut.model_validate(
+        {"runId": run_id}
+    ).run_id == run_id
+
+    got = client.get(f"/api/opportunity-watch/runs/{run_id}")
+    assert got.status_code == 200
+    payload = got.json()
+    assert payload["id"] == run_id
+    assert payload["status"] == "succeeded"
+    assert payload["sourceName"] == "chnenergy"
+    assert payload["resolvedCount"] == 1
+    assert "cookie" not in json.dumps(payload).lower()
+
+    db = SessionLocal()
+    try:
+        db.add(
+            BidSourceSyncRunRow(
+                id="watch_run_block",
+                workspace_id="ws_local",
+                source_name="chnenergy",
+                status="running",
+                started_at=datetime.now(timezone.utc),
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+    conflict = client.post("/api/opportunity-watch/sync")
+    assert conflict.status_code == 409
+
+    other = "ws_sync_api_other"
+    _create_watch_workspace(other)
+    missing = client.get(
+        f"/api/opportunity-watch/runs/{run_id}",
+        headers={"X-Workspace-Id": other},
+    )
+    assert missing.status_code == 404
