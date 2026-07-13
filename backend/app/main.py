@@ -27,6 +27,7 @@ from app.api import (
     knowledge as knowledge_api,
     llm,
     opportunities,
+    opportunity_watch as opportunity_watch_api,
     parse_callback,
     projects,
     resources,
@@ -122,6 +123,7 @@ def create_app() -> FastAPI:
     app.include_router(cards_api.router, prefix="/api")
     app.include_router(compliance_api.router, prefix="/api")
     app.include_router(opportunities.router, prefix="/api")
+    app.include_router(opportunity_watch_api.router, prefix="/api")
     app.include_router(resources.router, prefix="/api")
     app.include_router(templates_api.router, prefix="/api")
     return app

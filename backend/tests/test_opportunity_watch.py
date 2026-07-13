@@ -1,18 +1,20 @@
 """
 模块：国能 e 招计划追踪测试
-用途：验收公告详情地址安全构造与正文截止时间解析（任务1，纯本地无网络）。
-对接：chnenergy_client；fixtures/chnenergy_notice_*.html；后续 opportunity_watch 同步链路。
+用途：验收公告详情地址安全、正文截止时间解析，以及本机计划表 .xlsx 受控导入。
+对接：chnenergy_client；opportunity_watch_service；fixtures/chnenergy_notice_*.html。
 二次开发：禁止真实 HTTP；扩展检索/同步用例时仍须阻断外网并保持字段白名单。
 """
 
 from __future__ import annotations
 
+import io
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import inspect
+from openpyxl import Workbook
+from sqlalchemy import inspect, select
 from sqlalchemy.exc import IntegrityError
 
 from pydantic import ValidationError
@@ -20,6 +22,7 @@ from pydantic import ValidationError
 from app.api.schemas import (
     OpportunityWatchAcceptOut,
     OpportunityWatchHitOut,
+    OpportunityWatchPlanImportOut,
     OpportunityWatchPlanOut,
     OpportunityWatchSyncRunOut,
 )
@@ -672,3 +675,379 @@ def test_hit_rejects_cross_workspace_plan_or_run_reference():
         db.rollback()
     finally:
         db.close()
+
+
+# ---------- P9B 任务3：计划表 .xlsx 受控导入 ----------
+
+_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_PLAN_HEADERS = (
+    "招标计划名称",
+    "招标人",
+    "范围",
+    "计划工期",
+    "预计发布公告时间",
+    "备注",
+)
+
+
+def _workbook_bytes(
+    rows: list[list[object]],
+    *,
+    header_row_index: int = 3,
+    headers: tuple[str, ...] | list[str] = _PLAN_HEADERS,
+) -> bytes:
+    """用途：在内存构造国能计划表样式工作簿，供导入契约测试使用，不落盘。"""
+    wb = Workbook()
+    ws = wb.active
+    assert ws is not None
+    # 前两行说明文字，表头默认落在第 3 行，与日常计划表一致。
+    for idx in range(1, header_row_index):
+        ws.cell(idx, 1, f"说明行 {idx}")
+    for col, name in enumerate(headers, start=1):
+        ws.cell(header_row_index, col, name)
+    for offset, row in enumerate(rows):
+        for col, value in enumerate(row, start=1):
+            ws.cell(header_row_index + 1 + offset, col, value)
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
+def _post_plan_import(
+    client: TestClient,
+    content: bytes,
+    *,
+    filename: str = "plans.xlsx",
+    workspace_id: str | None = None,
+):
+    """用途：统一调用计划导入路由，可选切换工作空间请求头。"""
+    headers = {}
+    if workspace_id is not None:
+        headers["X-Workspace-Id"] = workspace_id
+    return client.post(
+        "/api/opportunity-watch/plans/import",
+        files={"file": (filename, content, _XLSX_MIME)},
+        headers=headers,
+    )
+
+
+def _count_watch_plans(workspace_id: str) -> int:
+    """用途：统计指定工作空间已写入的追踪计划数量。"""
+    db = SessionLocal()
+    try:
+        return len(
+            list(
+                db.scalars(
+                    select(BidWatchPlanRow).where(BidWatchPlanRow.workspace_id == workspace_id)
+                ).all()
+            )
+        )
+    finally:
+        db.close()
+
+
+def test_plan_import_out_schema_only_exposes_counts():
+    """用途：冻结导入成功响应只含 inserted/skipped/total，禁止文件与远端字段。"""
+    fields = set(OpportunityWatchPlanImportOut.model_fields)
+    assert fields == {"inserted", "skipped", "total"}
+    lowered = {name.lower() for name in fields}
+    assert not any(
+        forbidden in name
+        for name in lowered
+        for forbidden in ("cookie", "url", "path", "file", "html", "raw")
+    )
+    assert OpportunityWatchPlanImportOut(inserted=2, skipped=0, total=2).model_dump() == {
+        "inserted": 2,
+        "skipped": 0,
+        "total": 2,
+    }
+
+
+def test_plan_import_service_inserts_and_skips_duplicates_on_reimport():
+    """用途：验收表头在前十行、有效计划写入，以及重复导入按指纹跳过。"""
+    content = _workbook_bytes(
+        [
+            ["计划甲", "招标人甲", "范围甲", "12个月", "2026年7月", "备注甲"],
+            ["计划乙", "招标人乙", "范围乙", "6个月", "2026年8月", "备注乙"],
+        ]
+    )
+    db = SessionLocal()
+    try:
+        first = opportunity_watch_service.import_watch_plans_from_xlsx(
+            db,
+            "ws_local",
+            filename="plans.xlsx",
+            content=content,
+            max_rows=120,
+        )
+        assert first == {"inserted": 2, "skipped": 0, "total": 2}
+        second = opportunity_watch_service.import_watch_plans_from_xlsx(
+            db,
+            "ws_local",
+            filename="plans.xlsx",
+            content=content,
+            max_rows=120,
+        )
+        assert second == {"inserted": 0, "skipped": 2, "total": 2}
+        plans = opportunity_watch_service.list_watch_plans(db, "ws_local")
+        assert len(plans) == 2
+        titles = {item.title for item in plans}
+        assert titles == {"计划甲", "计划乙"}
+        assert all(item.fingerprint for item in plans)
+    finally:
+        db.close()
+
+
+def test_plan_import_service_rejects_missing_title_header_with_zero_write():
+    """用途：缺少招标计划名称表头时整批零写入。"""
+    content = _workbook_bytes(
+        [["计划甲", "招标人甲", "范围甲", "12个月", "2026年7月", "备注"]],
+        headers=("计划名称", "招标人", "范围", "计划工期", "预计发布公告时间", "备注"),
+    )
+    db = SessionLocal()
+    try:
+        with pytest.raises(opportunity_watch_service.WatchPlanImportValidationError) as exc_info:
+            opportunity_watch_service.import_watch_plans_from_xlsx(
+                db,
+                "ws_local",
+                filename="plans.xlsx",
+                content=content,
+                max_rows=120,
+            )
+        assert exc_info.value.errors
+        assert any("招标计划名称" in str(item.get("message", "")) for item in exc_info.value.errors)
+        assert _count_watch_plans("ws_local") == 0
+    finally:
+        db.close()
+
+
+def test_plan_import_service_rejects_blank_title_on_partial_row():
+    """用途：非空行缺计划名返回 Excel 实际行号，整批零写入；全空白行仍跳过。"""
+    content = _workbook_bytes(
+        [
+            ["", "招标人甲", "范围甲", "", "", ""],
+            [None, None, None, None, None, None],
+            ["计划乙", "招标人乙", "范围乙", "6个月", "2026年8月", "备注乙"],
+        ]
+    )
+    db = SessionLocal()
+    try:
+        with pytest.raises(opportunity_watch_service.WatchPlanImportValidationError) as exc_info:
+            opportunity_watch_service.import_watch_plans_from_xlsx(
+                db,
+                "ws_local",
+                filename="plans.xlsx",
+                content=content,
+                max_rows=120,
+            )
+        # 表头在第 3 行，首条数据为 Excel 第 4 行。
+        assert any(
+            item.get("row") == 4 and item.get("field") == "招标计划名称"
+            for item in exc_info.value.errors
+        )
+        assert _count_watch_plans("ws_local") == 0
+    finally:
+        db.close()
+
+
+def test_plan_import_service_rejects_when_plan_rows_exceed_limit():
+    """用途：超过 max_rows 计划行时拒绝写入。"""
+    rows = [[f"计划{i}", "招标人", "范围", "1个月", "2026年7月", ""] for i in range(121)]
+    content = _workbook_bytes(rows)
+    db = SessionLocal()
+    try:
+        with pytest.raises(ValueError, match="120"):
+            opportunity_watch_service.import_watch_plans_from_xlsx(
+                db,
+                "ws_local",
+                filename="plans.xlsx",
+                content=content,
+                max_rows=120,
+            )
+        assert _count_watch_plans("ws_local") == 0
+    finally:
+        db.close()
+
+
+def test_plan_import_service_stops_iterating_after_max_rows(monkeypatch: pytest.MonkeyPatch):
+    """用途：超过 max_rows 时立即停止枚举行，禁止先物化全表再截断。"""
+    max_rows = 3
+    total_data_rows = 80
+    yielded = {"count": 0}
+
+    header = list(_PLAN_HEADERS)
+    data_rows = [
+        [f"计划{i}", "招标人", "范围", "1个月", "2026年7月", ""] for i in range(total_data_rows)
+    ]
+
+    class _CountingSheet:
+        """可控假工作表：记录 iter_rows 实际产出次数。"""
+
+        def iter_rows(self, *args, **kwargs):
+            yielded["count"] += 1
+            yield header
+            for row in data_rows:
+                yielded["count"] += 1
+                yield row
+
+    class _CountingWorkbook:
+        worksheets = [_CountingSheet()]
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        opportunity_watch_service,
+        "load_workbook",
+        lambda *args, **kwargs: _CountingWorkbook(),
+    )
+
+    db = SessionLocal()
+    try:
+        with pytest.raises(ValueError, match=str(max_rows)):
+            opportunity_watch_service.import_watch_plans_from_xlsx(
+                db,
+                "ws_local",
+                filename="plans.xlsx",
+                content=b"fake-xlsx-bytes",
+                max_rows=max_rows,
+            )
+        # 表头 1 行 + 上限内计划行 + 触发上限的第 max_rows+1 行，不得继续枚举剩余行。
+        assert yielded["count"] == 1 + max_rows + 1
+        assert yielded["count"] < total_data_rows
+        assert _count_watch_plans("ws_local") == 0
+    finally:
+        db.close()
+
+
+def test_plan_import_service_skips_duplicate_fingerprints_in_same_batch():
+    """用途：同批重复计划名+招标人+范围只计 skipped，不得产生重复行。"""
+    content = _workbook_bytes(
+        [
+            ["计划甲", "招标人甲", "范围甲", "12个月", "2026年7月", "备注1"],
+            ["计划甲", "招标人甲", "范围甲", "24个月", "2026年8月", "备注2"],
+        ]
+    )
+    db = SessionLocal()
+    try:
+        result = opportunity_watch_service.import_watch_plans_from_xlsx(
+            db,
+            "ws_local",
+            filename="plans.xlsx",
+            content=content,
+            max_rows=120,
+        )
+        assert result == {"inserted": 1, "skipped": 1, "total": 2}
+        plans = opportunity_watch_service.list_watch_plans(db, "ws_local")
+        assert len(plans) == 1
+        assert plans[0].title == "计划甲"
+        assert plans[0].duration == "12个月"
+    finally:
+        db.close()
+
+
+def test_plan_import_service_allows_same_plan_across_workspaces():
+    """用途：跨工作空间允许各自导入同一计划指纹。"""
+    other_workspace_id = "ws_watch_import_other"
+    _create_watch_workspace(other_workspace_id)
+    content = _workbook_bytes(
+        [["共享计划", "共享招标人", "共享范围", "12个月", "2026年7月", "备注"]]
+    )
+    db = SessionLocal()
+    try:
+        local = opportunity_watch_service.import_watch_plans_from_xlsx(
+            db,
+            "ws_local",
+            filename="plans.xlsx",
+            content=content,
+            max_rows=120,
+        )
+        other = opportunity_watch_service.import_watch_plans_from_xlsx(
+            db,
+            other_workspace_id,
+            filename="plans.xlsx",
+            content=content,
+            max_rows=120,
+        )
+        assert local == {"inserted": 1, "skipped": 0, "total": 1}
+        assert other == {"inserted": 1, "skipped": 0, "total": 1}
+        assert _count_watch_plans("ws_local") == 1
+        assert _count_watch_plans(other_workspace_id) == 1
+    finally:
+        db.close()
+
+
+def test_plan_import_api_success_and_reimport(client: TestClient):
+    """用途：验收导入路由 201 响应契约与重复上传跳过。"""
+    content = _workbook_bytes(
+        [
+            ["计划甲", "招标人甲", "范围甲", "12个月", "2026年7月", "备注甲"],
+            ["计划乙", "招标人乙", "范围乙", "6个月", "2026年8月", "备注乙"],
+        ]
+    )
+    first = _post_plan_import(client, content)
+    assert first.status_code == 201
+    assert first.json() == {"inserted": 2, "skipped": 0, "total": 2}
+    second = _post_plan_import(client, content)
+    assert second.status_code == 201
+    assert second.json() == {"inserted": 0, "skipped": 2, "total": 2}
+    assert _count_watch_plans("ws_local") == 2
+
+
+def test_plan_import_api_isolates_workspaces(client: TestClient):
+    """用途：验收跨工作空间导入互不影响。"""
+    other_workspace_id = "ws_watch_api_other"
+    _create_watch_workspace(other_workspace_id)
+    content = _workbook_bytes(
+        [["跨空间计划", "招标人", "范围", "12个月", "2026年7月", ""]]
+    )
+    local = _post_plan_import(client, content)
+    other = _post_plan_import(client, content, workspace_id=other_workspace_id)
+    assert local.status_code == 201
+    assert other.status_code == 201
+    assert local.json() == {"inserted": 1, "skipped": 0, "total": 1}
+    assert other.json() == {"inserted": 1, "skipped": 0, "total": 1}
+    assert _count_watch_plans("ws_local") == 1
+    assert _count_watch_plans(other_workspace_id) == 1
+
+
+def test_plan_import_api_validation_errors_zero_write(client: TestClient):
+    """用途：缺表头与错误数据行返回 422，当前工作空间零写入。"""
+    missing_header = _workbook_bytes(
+        [["计划甲", "招标人", "范围", "1个月", "2026年7月", ""]],
+        headers=("计划名称", "招标人", "范围", "计划工期", "预计发布公告时间", "备注"),
+    )
+    resp = _post_plan_import(client, missing_header)
+    assert resp.status_code == 422
+    body = resp.json()
+    assert "detail" in body
+    assert _count_watch_plans("ws_local") == 0
+
+    blank_title = _workbook_bytes(
+        [["", "招标人甲", "范围甲", "1个月", "2026年7月", "备注"]]
+    )
+    resp2 = _post_plan_import(client, blank_title)
+    assert resp2.status_code == 422
+    detail = resp2.json()["detail"]
+    errors = detail["errors"] if isinstance(detail, dict) else detail
+    assert any(
+        (item.get("row") == 4 and item.get("field") == "招标计划名称")
+        for item in errors
+    )
+    assert _count_watch_plans("ws_local") == 0
+
+
+def test_plan_import_api_rejects_non_xlsx_and_oversized(client: TestClient):
+    """用途：非 .xlsx 扩展名与超 2MiB 文件返回 400，且不写入计划。"""
+    valid_content = _workbook_bytes(
+        [["计划甲", "招标人", "范围", "1个月", "2026年7月", ""]]
+    )
+    for filename in ("plans.csv", "plans.json", "plans.xlsx.exe", "plans"):
+        resp = _post_plan_import(client, valid_content, filename=filename)
+        assert resp.status_code == 400, filename
+    assert _count_watch_plans("ws_local") == 0
+
+    oversized = b"A" * (2 * 1024 * 1024 + 1)
+    resp = _post_plan_import(client, oversized, filename="plans.xlsx")
+    assert resp.status_code == 400
+    assert _count_watch_plans("ws_local") == 0

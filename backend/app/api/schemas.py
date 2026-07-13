@@ -274,6 +274,19 @@ class OpportunityWatchAcceptOut(BaseModel):
     created: bool
 
 
+class OpportunityWatchPlanImportOut(BaseModel):
+    """
+    模块：国能 e 招计划表导入统计
+    用途：仅返回本机 .xlsx 计划导入的插入/跳过/总数；非法整批不返回成功统计。
+    对接：POST /api/opportunity-watch/plans/import；opportunity_watch_service.import_watch_plans_from_xlsx。
+    二次开发：禁止增加文件名、路径、工作簿内容、URL、Cookie 或任意远端字段。
+    """
+
+    inserted: int
+    skipped: int
+    total: int
+
+
 # ---------- 资源中心 ----------
 
 
