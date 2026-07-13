@@ -1,13 +1,13 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-13（阶段 2 SHA=`53e012f`；阶段 3 **已完成并推送**：M3-A=`5d37dba`，M3-B=`e2e5d04`；阶段 4 **包 5**=`460097a`、**包 6**=`1289c92`、**包 7**=`2c7b3e0`、**包 8**=`6db1586`；**P9A**=`c1ff160`；**P9B**=`45d7214`/`1c46e41`/`6491363`/`229f1d7`/`000b403`/`a7cfcb8`）
+> **交接日期**：2026-07-14（阶段 2 SHA=`53e012f`；阶段 3 **已完成并推送**：M3-A=`5d37dba`，M3-B=`e2e5d04`；阶段 4 **包 5**=`460097a`、**包 6**=`1289c92`、**包 7**=`2c7b3e0`、**包 8**=`6db1586`；**P9A**=`c1ff160`；**P9B**=`45d7214`/`1c46e41`/`6491363`/`229f1d7`/`000b403`/`a7cfcb8`；**P9C**=`cc0d217`/`a0bd84b`/`71c503c`/`585e502`）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
-> **协作分支已推送功能基线**：P9B 实现最新提交为 `a7cfcb8`，其前序为解析=`45d7214`、数据域=`1c46e41`、Excel=`6491363`、同步=`229f1d7`、人工接受=`000b403`；更早的审计基线为 `a1ba88a`，其下含 P9A、包 5 至包 8 和阶段 3。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
+> **协作分支已推送功能基线**：P9C 最新代码提交为 `585e502`（合成评测与本地预检），前序为后端=`cc0d217`、前端=`a0bd84b`、运行时降级=`71c503c`；P9B 前序为解析=`45d7214`、数据域=`1c46e41`、Excel=`6491363`、同步=`229f1d7`、人工接受=`000b403`、界面=`a7cfcb8`。更早的审计基线为 `a1ba88a`，其下含 P9A、包 5 至包 8 和阶段 3。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **本地状态**：阶段 0/1/2/3、包 5 至包 8、P9A 与 **P9B** 均已推送。P9B 是国能 e 招单站受控计划追踪，已完成独立验收和契约闭环；P9C 可进入产品决策，但在模型与数据边界确认前不得实现。MinerU 仅外置 callback；Docling 未接；`parseStrategy` 未接线。
-> **验收基线**：后端全量 **230 passed**（1 条既有 Starlette/httpx 弃用警告）；P9B E2E **1 passed**；`frontend npm run lint` / `build`；`git diff --check`；P9A WPS 实际打开通过。
+> **本地状态**：阶段 0/1/2/3、包 5 至包 8、P9A、P9B 与 **P9C** 均已推送。P9C 完成实现、自动化验收和契约闭环，但本机真实模型缓存尚未准备；预检受控返回 `model_unavailable`，因此搜索保持关键词降级，不能声称真实语义效果已验证。MinerU 仅外置 callback；Docling 未接；`parseStrategy` 未接线。
+> **验收基线**：后端全量 **251 passed**（1 条既有 Starlette/httpx 弃用警告）；P9B E2E **1 passed**、P9C 语义索引 E2E **9 passed**、知识卡片 E2E **1 passed**；`frontend npm run lint` / `build`；`git diff --check`；P9A WPS 实际打开通过。
 
 ---
 
@@ -18,8 +18,8 @@
 工作分支只能是 collab/grok-code-codex-review，禁止直接操作 main；先执行 git status -sb，并核对 HEAD 与 origin/collab/grok-code-codex-review 一致且工作区干净。
 完整阅读 docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/plans/2026-07-13-package-9-delivery-enhancement-plan.md、docs/integration-checklist.md。
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
-当前进度：P9A 与 P9B 已完整验收并推送。P9B 的国能 e 招单站受控读取已完成计划 Excel 内存导入、招标公告过滤、低频单条详情读取、人工接受和本地 E2E；固定契约见 `docs/p9b-chnenergy-integration-contract.md`，不得泛化为网页抓取器或自动立项。用户已授权 Codex 自行决策，P9C 已冻结为纯离线 BAAI/bge-small-zh-v1.5、512 维、CPU、版本并存迁移与可见关键词降级；实施计划为 `docs/plans/2026-07-14-p9c-offline-semantic-index-plan.md`。
-下一包执行：Codex 先提交 P9C 计划，再向 Grok 发出任务 1 的后端白名单实现；Grok 只实现与自测，Codex 负责差异审查、独立验收、中文提交、文档闭环和协作分支推送。
+当前进度：P9A、P9B 与 P9C 已完成各自计划内的实现、独立自动化验收、中文文档闭环与协作分支推送。P9B 固定契约见 `docs/p9b-chnenergy-integration-contract.md`；P9C 固定契约见 `docs/p9c-offline-semantic-index-contract.md`。P9C 仅允许纯离线 BAAI/bge-small-zh-v1.5、512 维、CPU、版本并存和可见关键词降级；正文/查询不得出域。
+下一步：先核验 P9C 文档提交与远端一致；真实模型缓存或依赖尚未准备时，不安装、不下载、不伪造真实指标。只有用户在受控运行时显式点击“构建语义索引”并通过固定预检后，才记录真实语义索引已就绪；其余后续能力必须另立计划、限定白名单后再交 Grok 实施。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -114,9 +114,9 @@
 | 商务任务 | `services/business_task_service.py` | **齐** | qualify/toc/quote/commit |
 | 编辑态 | `services/editor_state_service.py` | **齐** | business_json、response_matrix_json 规范化与死引用收敛 |
 | 响应矩阵 | `services/editor_state_service.py`、`services/task_service.py`、`api/projects.py`、`api/tasks.py`、`services/export_service.py`、`models/entities.py`；前端 `useTechnicalPlanEditors` / `ResponseMatrixPanel` | **齐/部分** | service/API/导出与乐观锁注释齐；`response_match` 支持 `candidateBatchIndex` 候选分批且只产出待确认建议；前端冲突 UX 与串行分批进度注释齐；`entities.py` 仍按历史文件部分 |
-| 知识库 | `services/knowledge_service.py`、`api/knowledge.py` | **齐** | 混合检索；`get_chunk` 供卡片沉淀 |
+| 知识库 | `services/knowledge_service.py`、`api/knowledge.py` | **齐** | P9C 版本化离线索引、工作空间隔离、关键词降级；`get_chunk` 供卡片沉淀 |
 | 知识卡片 | `services/card_service.py`、`api/cards.py`、`models/entities.py`（KnowledgeCardRow） | **齐** | 独立 knowledge_cards；列表摘要/详情；from-chunk/from-project-image；insert-card → biaoshu-image |
-| 向量 | `services/embedding_service.py` | **齐** | 本地哈希 + 可选 API |
+| 向量与预检 | `services/embedding_service.py`、`scripts/semantic_model_preflight.py` | **齐** | 固定离线 BGE、显式重建加载、512 维、固定合成评测与本地只读预检；旧哈希不参与 P9C 语义检索 |
 | 导出 | `services/export_service.py` | **齐** | 标题段落边框/分级底色、叶子标题左栏、项目内正文图片嵌入与无效引用降级已做 |
 | 修订 | `services/revise_service.py` | **齐** | 商务结构化写回 |
 | 查重 | `services/duplicate_service.py`、`api/compliance.py` | **齐** | |
@@ -288,9 +288,9 @@ frontend/src/features/
 
 ## 6. 建议下一会话方向
 
-1. 阶段 4 **功能包 8** MVP 已验收并推送（`6db1586`）；真实 MinerU/Docling 外置部署与 `parseStrategy` 接线另开 task
-2. 阶段 4 **P9A** 和 **P9B** 已实现、独立验收并文档闭环；下一步只可为 P9C 产品决策与规划，先确认离线/API、数据出域、模型版本、成本、降级、迁移/回滚和脱敏评测集，再考虑代码实现
-3. M3-B 后遗留：写入历史/回滚（可选）；多角色仍不开始
+1. 阶段 4 **功能包 8** MVP 已验收并推送（`6db1586`）；真实 MinerU/Docling 外置部署与 `parseStrategy` 接线另开 task。
+2. 阶段 4 **P9A/P9B/P9C** 均已实现、独立验收并文档闭环。P9C 的真实模型门仍是运行时前置：固定依赖和模型缓存就绪后，用户显式构建索引，再运行固定预检；未通过前继续关键词降级。
+3. M3-B 后遗留：写入历史/回滚（可选）；多角色仍不开始。
 
 资源同步后续只可由管理员配置新的签名发布方，绝不可放开浏览器 URL 或外网抓取。图片管线已冻结项目内资源引用协议，后续扩展不得放开外链或客户端路径。SSE 的多工作空间鉴权、事件游标和项目级总线不在当前范围。
 
@@ -357,9 +357,9 @@ frontend/src/features/
 - **包 9B 交付完成**：初始审计=`a1ba88a`；用户指定国能 e 招单站后，依次推送 `45d7214`、`1c46e41`、`6491363`、`229f1d7`、`000b403`、`a7cfcb8`。P9B 不使用未获授权的通用来源；完整固定契约、数据最小化、人工确认、验收和非目标见 `docs/p9b-chnenergy-integration-contract.md`。
 - **P9B 国内来源补充审计**：已将全国公共资源交易平台、中国政府采购网、天津/北京开放数据的公开资料写入包 9 总计划。全国平台公开公告页不等于读取 API；中国政府采购网规范是签名发布接口；天津候选虽有截止时间字段但公开页无实际端点且数据元信息陈旧；北京候选需 `userKey` 且无独立截止时间字段。均未满足完整受控读取契约，禁止据此写网页抓取或同步代码。
 - **P9B 最终验收**：Codex 独立运行后端全量 230 passed（固定 `PYTHONHASHSEED=0`，仅 1 条既有弃用警告）、前端 lint/build、P9B E2E 1 passed 和 `git diff --check`；并对用户给定公告执行只读核验，正文北京时间截止时间为 `2026-07-29 09:00:00`。无真实数据库写入、无浏览器外网同步。
-- **P9C 顺序与风险**：P9B 已闭环，用户于 2026-07-14 授权 Codex 自行决策。P9C 已冻结为纯离线 BAAI/bge-small-zh-v1.5（512 维、CPU）、版本并存迁移与可见关键词降级；正文/查询不得出域，旧 API embeddingModel 路径不再用于知识库。当前哈希跨进程不稳定、旧分块无 provider/model/version/dimension 的风险，均由新索引表和显式状态处理；实施白名单、TDD 和验收矩阵见 `docs/plans/2026-07-14-p9c-offline-semantic-index-plan.md`。
-- **已验证基线**：后端全量 230 passed（1 条既有弃用警告）；P9B E2E 1 passed；前端 lint/build 通过（仅既有大 chunk 警告）；`git diff --check` 通过；P9A WPS `12.1.0.26895` 实际打开技术标/商务标通过。
+- **P9C 交付与真实模型门**：P9C 已按纯离线 BAAI/bge-small-zh-v1.5（512 维、CPU）、版本并存与可见关键词降级完成 `cc0d217`、`a0bd84b`、`71c503c`、`585e502` 四个实现提交。正文/查询不得出域，旧 API embeddingModel 与旧哈希均不参与知识库语义检索。固定评测集有 20 条完全合成查询，评测文件的版本、模型、维度和阈值均为硬校验；预检无下载/路径/跳过磁盘参数。本机无模型缓存时，Codex 实测返回 `model_unavailable`/退出码 2；这不是缺陷，未通过真实预检前不得称语义索引就绪。完整契约见 `docs/p9c-offline-semantic-index-contract.md`。
+- **已验证基线**：后端全量 251 passed（1 条既有弃用警告）；P9B E2E 1 passed、P9C 语义索引 E2E 9 passed、知识卡片 E2E 1 passed；前端 lint/build 通过（仅既有大 chunk 警告）；`git diff --check` 通过；P9A WPS `12.1.0.26895` 实际打开技术标/商务标通过。
 - 新任务分工不变：Grok 只负责限定实现与自测，未经 Codex 审查确认不得提交；Codex 负责计划、范围冻结、差异审查、独立测试、验收、中文提交、文档闭环和 GitHub 状态核验。每一包仍按“计划提交 → 实现提交 → 文档闭环提交 → 推送协作分支”执行，禁止合包。
 - GitHub 若出现连接重置，可在当前 PowerShell 进程临时配置 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY=http://127.0.0.1:7890` 与 `NO_PROXY=localhost,127.0.0.1` 后重试；不得把代理或凭据写入仓库。
 
-**换会话可直接：核验分支与 HEAD → 读本文 §0～§2、§6、§11、P9B 集成契约、P9C 决策门和离线实施计划 → 继续任务 1 的 Grok 受限实现。**
+**换会话可直接：核验分支与 HEAD → 读本文 §0～§2、§6、§11、P9B/P9C 集成契约、P9C 决策门和离线实施计划 → 先核验真实模型门或为新能力另立计划，再向 Grok 下发单一受限实现任务。**

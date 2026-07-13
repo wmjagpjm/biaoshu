@@ -193,4 +193,4 @@ Grok 启动时使用 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY=http://127.0.0.1:
 - P9A 已实现并完成完整独立验收：`c1ff160`（实现P9A最小标题左栏）；自动化检查与 WPS 技术标/商务标实际渲染抽检均通过。实现仅覆盖既有标题边框的叶子标题左侧强调线，未接 `structure` 或页框。
 - P9B 已按独立计划完成：解析基础=`45d7214`、数据域=`1c46e41`、Excel 导入=`6491363`、受控同步=`229f1d7`、人工接受=`000b403`、追踪界面与 E2E=`a7cfcb8`。Codex 独立验收为后端 230 passed、前端 lint/build 通过、P9B E2E 1 passed，并已完成固定公告的只读截止时间核验；完整契约和非目标见 `docs/p9b-chnenergy-integration-contract.md`。
 - P9B 国内官方来源补充审计仍仅是历史排除证据：全国公共资源交易平台、中国政府采购网、天津/北京开放数据均未形成可直接接入的完整读取契约，不构成对任一来源的接入或背书。
-- P9C 已满足“P9B 先闭环”的顺序前提，并已由用户授权 Codex 冻结为纯离线 BAAI/bge-small-zh-v1.5（512 维、CPU）、正文/查询不得出域、版本并存迁移、可见关键词降级和合成评测阈值。当前基线审计见 `docs/plans/2026-07-14-p9c-semantic-retrieval-decision-gate.md`，唯一可执行范围、白名单和验收矩阵见 `docs/plans/2026-07-14-p9c-offline-semantic-index-plan.md`。
+- P9C 已完成实现、独立自动化验收与文档闭环：后端版本化索引=`cc0d217`，状态面板/E2E=`a0bd84b`，运行时模型未就绪降级=`71c503c`，合成评测与本地预检=`585e502`。Codex 独立运行后端全量 **251 passed**、前端 lint/build、语义索引 E2E **9 passed**、知识卡片 E2E **1 passed**与 `git diff --check` 均通过。真实本机模型缓存当前缺失，预检按预期返回 `model_unavailable`/退出码 2；未伪造 Recall@5/NDCG@5。固定契约、部署前置条件和非目标见 `docs/p9c-offline-semantic-index-contract.md`；在用户显式构建并通过真实预检前，知识库保持可见关键词降级。

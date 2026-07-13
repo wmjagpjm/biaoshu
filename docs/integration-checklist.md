@@ -114,9 +114,12 @@ npm run test:e2e:fuse-apply
 
 # P9B：国能 e 招计划追踪（隔离 8010/5174、biaoshu-e2e.db、MockTransport；禁止真实外网）
 npm run test:e2e:opportunity-watch
+
+# P9C：离线语义索引状态面板（隔离 8010/5174、路由拦截；禁止模型站点请求）
+npm run test:e2e:semantic-index
 ```
 
-当前基线：后端 **pytest 全量 230 passed**（固定 `PYTHONHASHSEED=0`，1 条既有 Starlette/httpx 弃用警告；含 `test_opportunity_watch`）；前端 lint/build；`test:e2e:fuse` / `fuse-apply`；`test:e2e:matrix`；`templates` / `cards`；P9B `test:e2e:opportunity-watch` **1 passed**。阶段 3 已推送（M3-A=`5d37dba`，M3-B=`e2e5d04`）。阶段 4 包 5=`460097a`、包 6=`1289c92`、包 7=`2c7b3e0`、包 8=`6db1586`、P9A=`c1ff160`、P9B 界面=`a7cfcb8` 均已通过独立验收。**包 8** 边界：MinerU 仅外置 callback、Docling 未接、`parseStrategy` 未接线。P9A 不做整章页框或 `structure`；P9B 只接国能 e 招单站受控追踪，其他来源与 P9C 仍须新计划/决策。
+当前基线：后端 **pytest 全量 251 passed**（固定 `PYTHONHASHSEED=0`，1 条既有 Starlette/httpx 弃用警告；含 P9C 评测/预检契约测试）；前端 lint/build；`test:e2e:fuse` / `fuse-apply`；`test:e2e:matrix`；`templates` / `cards`；P9B `test:e2e:opportunity-watch` **1 passed**；P9C `test:e2e:semantic-index` **9 passed**。阶段 3 已推送（M3-A=`5d37dba`，M3-B=`e2e5d04`）。阶段 4 包 5=`460097a`、包 6=`1289c92`、包 7=`2c7b3e0`、包 8=`6db1586`、P9A=`c1ff160`、P9B 界面=`a7cfcb8`、P9C=`cc0d217`/`a0bd84b`/`71c503c`/`585e502` 均已完成独立自动化验收。**包 8** 边界：MinerU 仅外置 callback、Docling 未接、`parseStrategy` 未接线。P9A 不做整章页框或 `structure`；P9B 只接国能 e 招单站受控追踪；P9C 在真实本机模型预检通过前保持关键词降级。
 
 ## 6. 已接 API 一览
 
@@ -153,6 +156,9 @@ npm run test:e2e:opportunity-watch
 | GET | `/api/cards/{id}/content`（图片卡二进制） |
 | POST | `/api/projects/{id}/insert-card`（返回 Markdown；图片复制为项目 role=image） |
 | POST | `/api/projects/{id}/tasks` type=`content_fuse`（M3-A：模板/卡片只读融合建议；仅 result_json；禁止写 editor-state） |
+| GET | `/api/knowledge/semantic-index`（当前工作空间的脱敏离线语义索引状态） |
+| GET | `/api/knowledge/semantic-index/{indexId}`（当前工作空间索引详情；跨空间 404） |
+| POST | `/api/knowledge/semantic-index/rebuild`（无请求体；仅显式构建时后台加载固定离线模型） |
 
 ## 7. 本机日用主链路（目标 A 加强版）
 
@@ -195,9 +201,11 @@ npm run test:e2e:opportunity-watch
 
 ## 10. 知识库混合检索
 
-1. 上传文档后 chunk 带 embedding（本地哈希默认）  
-2. `GET /api/knowledge/search?q=` 结果可含 `vectorScore`  
-3. 设置页可选 `embeddingModel`（OpenAI 兼容 /embeddings）  
+1. 上传文档后可在「知识库」看到“离线语义索引（本机）”状态面板；模型名固定为 `BAAI/bge-small-zh-v1.5`、维度固定为 512，页面没有模型 URL、Token、模型名或缓存路径输入。
+2. 未构建、模型不可用、磁盘不足、构建中、失败或中断时，页面必须显示固定中文降级原因；搜索仍可返回关键词命中，`vectorScore=0`，不得把历史哈希向量称为语义结果。
+3. 点击“构建语义索引”仅提交无请求体的本机 API；同空间构建中按钮禁用。浏览器网络请求只能前往本机 `/api`，不得访问模型站点。
+4. 构建完成后，`GET /api/knowledge/search?q=关键词` 的响应包含 `semanticStatus`；只有 `ready` 时才允许非零语义 `vectorScore`。跨工作空间索引详情必须返回 404。
+5. 在已准备好固定模型缓存的受控环境，执行 `backend/.venv/Scripts/python.exe backend/scripts/semantic_model_preflight.py`：先检查 5 GiB 磁盘，仅读固定合成集；真实指标必须达到 Recall@5≥0.80、NDCG@5≥0.70。当前无模型缓存时应受控返回 `model_unavailable` 与退出码 2，不得下载、安装依赖或伪造通过。
 
 ## 11. 本地标讯库
 
@@ -232,7 +240,7 @@ npm run test:e2e:opportunity-watch
 
 ## 14. 仍未接（后续）
 
-Celery、真 MinerU 安装包、P9B 以外的外部标讯数据源、P9C 真语义 embedding 调优、多用户鉴权、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
+Celery、真 MinerU 安装包、P9B 以外的外部标讯数据源、P9C 的其他模型/GPU/在线 embedding/真实用户语料评测与自动模型更新、多用户鉴权、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
 
 **响应矩阵相关（已接 vs 未扩）：** 多端冲突的版本写保护、409 与双浏览器上下文 E2E 主路径已接；「刷新来源」保留人工映射 E2E 已接；**智能建议人工确认后应用** E2E 已接；**来源超过 80 分页** 已推送（`1289c92`）；**字段级三方合并** MVP + E2E 已推送（`2c7b3e0`，`response-matrix-field-merge.spec.ts`）。仍未接：Word 失效引用在浏览器层的扩展（导出逻辑以后端单测为准）；包 9 交付增强。
 
