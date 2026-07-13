@@ -1,6 +1,6 @@
 """
 模块：国能 e 招计划追踪服务
-用途：提供工作空间隔离的计划/运行/命中读取、中断运行收敛、本机 .xlsx 计划导入、受控同步，以及命中人工接受。
+用途：提供工作空间隔离的计划/运行/命中读取、仪表盘只读聚合、中断运行收敛、本机 .xlsx 计划导入、受控同步，以及命中人工接受。
 对接：app.main.lifespan；app.api.opportunity_watch；chnenergy_client；BidWatchPlanRow/BidOpportunityRow。
 二次开发：不得在此混入任意 URL、Cookie、HTML、JSON 或浏览器请求；外部访问仅能由固定来源客户端承担；接受不得自动立项。
 """
@@ -9,11 +9,16 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
+import os
 import re
 import secrets
 from datetime import date, datetime, timezone
+from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import unquote
 
+import httpx
 from openpyxl import load_workbook
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
@@ -43,6 +48,19 @@ _ACCEPT_SOURCE_KEY_PREFIX = "chnenergy:"
 # 完整北京时间：YYYY-MM-DD HH:mm:ss
 _DEADLINE_LOCAL_RE = re.compile(
     r"^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})$"
+)
+# 发布日文案或八位日期 → 详情 URL 用 YYYYMMDD
+_PUBLISH_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})")
+_DATE8_RE = re.compile(r"^\d{8}$")
+_E2E_PORTAL_URL = "https://www.chnenergybidding.com.cn/bidweb/"
+_E2E_SEARCH_URL = (
+    "https://www.chnenergybidding.com.cn/bidfulltextsearch/rest/"
+    "inteligentSearch/getFullTextData"
+)
+_E2E_INFO_RESOLVED = "b2363623-ea1e-4cc1-8e2d-0c2d2850b697"
+_E2E_INFO_REVIEW = "c3474734-fb2f-5dd2-9f3e-1d3e3961c7a8"
+_FIXTURES_DIR = (
+    Path(__file__).resolve().parents[2] / "tests" / "fixtures"
 )
 
 # 计划表中文表头到实体字段的固定映射；未知列忽略。
@@ -160,6 +178,108 @@ def _parse_deadline_date_local(deadline_at_local: str | None) -> date:
 def _chnenergy_source_key(source_info_id: str) -> str:
     """用途：由公告 infoid 生成不透明本地来源键，禁止写入 URL 或 Cookie。"""
     return f"{_ACCEPT_SOURCE_KEY_PREFIX}{source_info_id}"
+
+
+def _coerce_infodate8(source_publish_text: str) -> str | None:
+    """
+    用途：从命中发布日文案或八位数字还原详情 URL 所需的 YYYYMMDD。
+    对接：get_watch_dashboard 动态 announcementUrl；不采信任意外部链接。
+    """
+    text = (source_publish_text or "").strip()
+    if _DATE8_RE.fullmatch(text):
+        return text
+    match = _PUBLISH_DATE_RE.match(text)
+    if match is None:
+        return None
+    return f"{match.group(1)}{match.group(2)}{match.group(3)}"
+
+
+def _build_announcement_url(
+    *,
+    source_info_id: str,
+    category_num: str,
+    source_publish_text: str,
+) -> str | None:
+    """
+    用途：按命中结构化字段动态生成固定 HTTPS 公告链接；非法字段返回 None。
+    对接：dashboard 命中读模型；build_notice_detail_url。
+    二次开发：禁止直接采信远端 linkurl；不得把生成结果写回数据库。
+    """
+    date8 = _coerce_infodate8(source_publish_text)
+    if date8 is None:
+        return None
+    try:
+        return build_notice_detail_url(
+            infoid=source_info_id,
+            categorynum=category_num,
+            infodate=date8,
+        )
+    except ChnenergyClientError:
+        return None
+
+
+def _is_e2e_database() -> bool:
+    """用途：识别 Playwright 隔离库，避免 E2E 同步触达真实外网。"""
+    return "biaoshu-e2e" in os.environ.get("DATABASE_URL", "")
+
+
+def _build_e2e_mock_transport() -> httpx.MockTransport:
+    """
+    用途：为 E2E 库提供固定 MockTransport（门户 Cookie + 检索 + 详情 fixture）。
+    对接：execute_sync_run；tests/fixtures/chnenergy_notice_*.html。
+    二次开发：仅在 DATABASE_URL 含 biaoshu-e2e 时启用；禁止用于日用/pytest 库。
+    """
+    deadline_html = (
+        _FIXTURES_DIR / "chnenergy_notice_deadline.html"
+    ).read_text(encoding="utf-8")
+    review_html = (
+        _FIXTURES_DIR / "chnenergy_notice_needs_review.html"
+    ).read_text(encoding="utf-8")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if request.method == "GET" and url.rstrip("/") == _E2E_PORTAL_URL.rstrip("/"):
+            return httpx.Response(
+                200,
+                headers=[("set-cookie", "uid=e2e-mock; Path=/")],
+                text="portal",
+            )
+        if request.method == "POST" and url == _E2E_SEARCH_URL:
+            try:
+                body = json.loads(request.content.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                body = {}
+            wd = unquote(str(body.get("wd") or ""))
+            if "待复核" in wd:
+                info_id = _E2E_INFO_REVIEW
+                title = "E2E 待复核招标公告"
+            else:
+                info_id = _E2E_INFO_RESOLVED
+                title = "E2E 可解析招标公告"
+            return httpx.Response(
+                200,
+                json={
+                    "result": {
+                        "records": [
+                            {
+                                "title": title,
+                                "infodate": "2026-07-09 17:14:11",
+                                "linkurl": (
+                                    f"jump.html?infoid={info_id}"
+                                    "&categorynum=001002001&infodate=20260709"
+                                ),
+                            }
+                        ]
+                    }
+                },
+            )
+        if request.method == "GET" and url.endswith(f"{_E2E_INFO_RESOLVED}.html"):
+            return httpx.Response(200, text=deadline_html)
+        if request.method == "GET" and url.endswith(f"{_E2E_INFO_REVIEW}.html"):
+            return httpx.Response(200, text=review_html)
+        raise AssertionError(f"E2E MockTransport 未声明请求: {request.method} {url}")
+
+    return httpx.MockTransport(handler)
 
 
 def _clean_text(value: Any, *, limit: int = 1000) -> str:
@@ -280,6 +400,54 @@ def list_watch_hits(db: Session, workspace_id: str) -> list[BidSourceHitRow]:
         .order_by(BidSourceHitRow.updated_at.desc(), BidSourceHitRow.id.asc())
     )
     return list(db.scalars(stmt).all())
+
+
+def get_watch_dashboard(db: Session, workspace_id: str) -> dict[str, Any]:
+    """
+    模块：国能计划追踪仪表盘只读聚合
+    用途：返回当前工作空间计划数、最近一次运行与更新时间倒序命中；动态生成 announcementUrl。
+    对接：GET /api/opportunity-watch/dashboard；OpportunityWatchDashboardOut。
+    二次开发：禁止写入、同步或接受副作用；非法详情字段不得生成链接；不落库 URL/HTML/Cookie。
+    """
+    plans = list_watch_plans(db, workspace_id)
+    runs = list_watch_runs(db, workspace_id)
+    hits = list_watch_hits(db, workspace_id)
+    latest_run = runs[0] if runs else None
+
+    hit_items: list[dict[str, Any]] = []
+    for hit in hits:
+        announcement_url = _build_announcement_url(
+            source_info_id=hit.source_info_id,
+            category_num=hit.category_num,
+            source_publish_text=hit.source_publish_text,
+        )
+        hit_items.append(
+            {
+                "id": hit.id,
+                "workspace_id": hit.workspace_id,
+                "watch_plan_id": hit.watch_plan_id,
+                "sync_run_id": hit.sync_run_id,
+                "source_name": hit.source_name,
+                "source_info_id": hit.source_info_id,
+                "category_num": hit.category_num,
+                "source_publish_text": hit.source_publish_text,
+                "title": hit.title,
+                "deadline_at_local": hit.deadline_at_local,
+                "opening_at_local": hit.opening_at_local,
+                "source_timezone": hit.source_timezone,
+                "extraction_status": hit.extraction_status,
+                "accepted_opportunity_id": hit.accepted_opportunity_id,
+                "announcement_url": announcement_url,
+                "created_at": hit.created_at,
+                "updated_at": hit.updated_at,
+            }
+        )
+
+    return {
+        "plan_count": len(plans),
+        "latest_run": latest_run,
+        "hits": hit_items,
+    }
 
 
 def accept_watch_hit(
@@ -731,6 +899,14 @@ def execute_sync_run(
     二次开发：禁止真实任意 URL、自动立项、持久化 Cookie/HTML/JSON；测试须注入 MockTransport 与零等待 sleep。
     """
     settings = get_settings()
+    # E2E 隔离库自动注入 MockTransport 与零等待，禁止 Playwright 触达真实外网。
+    if transport is None and _is_e2e_database():
+        transport = _build_e2e_mock_transport()
+    if sleep_fn is None and _is_e2e_database():
+        sleep_fn = lambda _seconds: None
+    if min_interval_seconds is None and _is_e2e_database():
+        min_interval_seconds = 0.0
+
     db = SessionLocal()
     client: ChnenergyControlledClient | None = None
     counters = {

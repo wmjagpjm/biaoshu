@@ -1,17 +1,27 @@
 /**
- * 模块：本地标讯库数据 Hook
- * 用途：加载、保存、删除工作空间标讯，并从有效标讯创建关联技术标项目。
- * 对接：/api/opportunities、/api/opportunities/{id}/projects、BidOpportunityPage。
- * 二次开发：外部同步应仅新增服务端导入任务；前端继续使用本 Hook 的本地 API，不得回退到 mock。
+ * 模块：本地标讯库与国能计划追踪 Hook
+ * 用途：加载、保存、删除工作空间标讯；维护国能追踪仪表盘、计划导入、同步轮询与人工接受。
+ * 对接：/api/opportunities；/api/opportunity-watch/*；BidOpportunityPage。
+ * 二次开发：前端只访问本机 /api；禁止直连国能站点、拼接 URL/Cookie/Token 或自动立项。
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch } from "../../../shared/lib/api";
 import type {
   BidOpportunity,
   BidOpportunityDraft,
   OpportunityImportResult,
+  OpportunityWatchAcceptResult,
+  OpportunityWatchDashboard,
+  OpportunityWatchPlanImportResult,
+  OpportunityWatchSyncRun,
 } from "../types";
+
+const TERMINAL_RUN_STATUSES = new Set([
+  "succeeded",
+  "partial",
+  "failed",
+]);
 
 function toPayload(draft: BidOpportunityDraft) {
   return {
@@ -60,16 +70,34 @@ export function opportunityToDraft(
   };
 }
 
+function delay(ms: number) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
 /**
- * 用途：维护标讯列表、写入状态和接口错误，并封装立项操作。
- * 对接：BidOpportunityPage；shared/lib/api.ts；/api/opportunities。
- * 二次开发：外部同步完成后仍通过后端 API 刷新，不在 Hook 中维护第二份数据源。
+ * 用途：维护标讯列表、国能追踪状态和接口错误，并封装立项与人工接受。
+ * 对接：BidOpportunityPage；shared/lib/api.ts；/api/opportunities 与 /api/opportunity-watch。
+ * 二次开发：追踪状态独立于本地标讯列表；同步仅轮询本空间 runs/{runId}。
  */
 export function useOpportunities() {
   const [items, setItems] = useState<BidOpportunity[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [watchDashboard, setWatchDashboard] =
+    useState<OpportunityWatchDashboard | null>(null);
+  const [watchLoading, setWatchLoading] = useState(true);
+  const [watchError, setWatchError] = useState<string | null>(null);
+  const [watchBusy, setWatchBusy] = useState(false);
+  const [watchSyncing, setWatchSyncing] = useState(false);
+  const [activeWatchRun, setActiveWatchRun] =
+    useState<OpportunityWatchSyncRun | null>(null);
+  const [watchImportResult, setWatchImportResult] =
+    useState<OpportunityWatchPlanImportResult | null>(null);
+  const pollCancelledRef = useRef(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -84,9 +112,40 @@ export function useOpportunities() {
     }
   }, []);
 
+  const refreshWatchDashboard = useCallback(async () => {
+    setWatchLoading(true);
+    try {
+      const data = await apiFetch<OpportunityWatchDashboard>(
+        "/opportunity-watch/dashboard",
+      );
+      setWatchDashboard(data);
+      setWatchError(null);
+      return data;
+    } catch (reason) {
+      const message =
+        (reason as { message?: string }).message || "加载国能追踪面板失败";
+      setWatchError(message);
+      throw reason;
+    } finally {
+      setWatchLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    void refreshWatchDashboard().catch(() => {
+      /* 错误已写入 watchError */
+    });
+  }, [refreshWatchDashboard]);
+
+  useEffect(() => {
+    return () => {
+      pollCancelledRef.current = true;
+    };
+  }, []);
 
   const save = useCallback(
     async (draft: BidOpportunityDraft, opportunityId?: string) => {
@@ -182,6 +241,92 @@ export function useOpportunities() {
     [],
   );
 
+  const importWatchPlans = useCallback(
+    async (file: File): Promise<OpportunityWatchPlanImportResult> => {
+      setWatchBusy(true);
+      try {
+        const form = new FormData();
+        form.append("file", file);
+        const result = await apiFetch<OpportunityWatchPlanImportResult>(
+          "/opportunity-watch/plans/import",
+          { method: "POST", body: form },
+        );
+        setWatchImportResult(result);
+        await refreshWatchDashboard();
+        setWatchError(null);
+        return result;
+      } catch (reason) {
+        const message =
+          (reason as { message?: string }).message || "导入招标计划失败";
+        setWatchError(message);
+        throw reason;
+      } finally {
+        setWatchBusy(false);
+      }
+    },
+    [refreshWatchDashboard],
+  );
+
+  const startWatchSync = useCallback(async () => {
+    setWatchBusy(true);
+    setWatchSyncing(true);
+    pollCancelledRef.current = false;
+    try {
+      const accepted = await apiFetch<{ runId: string }>(
+        "/opportunity-watch/sync",
+        { method: "POST" },
+      );
+      let run = await apiFetch<OpportunityWatchSyncRun>(
+        `/opportunity-watch/runs/${encodeURIComponent(accepted.runId)}`,
+      );
+      setActiveWatchRun(run);
+
+      while (!TERMINAL_RUN_STATUSES.has(run.status) && !pollCancelledRef.current) {
+        await delay(400);
+        if (pollCancelledRef.current) break;
+        run = await apiFetch<OpportunityWatchSyncRun>(
+          `/opportunity-watch/runs/${encodeURIComponent(accepted.runId)}`,
+        );
+        setActiveWatchRun(run);
+      }
+
+      await refreshWatchDashboard();
+      setWatchError(null);
+      return run;
+    } catch (reason) {
+      const message =
+        (reason as { message?: string }).message || "同步国能 e 招失败";
+      setWatchError(message);
+      throw reason;
+    } finally {
+      setWatchSyncing(false);
+      setWatchBusy(false);
+    }
+  }, [refreshWatchDashboard]);
+
+  const acceptWatchHit = useCallback(
+    async (hitId: string): Promise<OpportunityWatchAcceptResult> => {
+      setWatchBusy(true);
+      try {
+        const result = await apiFetch<OpportunityWatchAcceptResult>(
+          `/opportunity-watch/hits/${encodeURIComponent(hitId)}/accept`,
+          { method: "POST" },
+        );
+        await Promise.all([refresh(), refreshWatchDashboard()]);
+        setWatchError(null);
+        return result;
+      } catch (reason) {
+        const message =
+          (reason as { message?: string }).message || "加入本地标讯失败";
+        setWatchError(message);
+        throw reason;
+      } finally {
+        setWatchBusy(false);
+      }
+    },
+    [refresh, refreshWatchDashboard],
+  );
+
   return {
     items,
     loading,
@@ -192,5 +337,16 @@ export function useOpportunities() {
     remove,
     importOpportunities,
     createProject,
+    watchDashboard,
+    watchLoading,
+    watchError,
+    watchBusy,
+    watchSyncing,
+    activeWatchRun,
+    watchImportResult,
+    refreshWatchDashboard,
+    importWatchPlans,
+    startWatchSync,
+    acceptWatchHit,
   };
 }

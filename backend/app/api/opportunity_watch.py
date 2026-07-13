@@ -1,8 +1,8 @@
 """
 模块：国能 e 招计划追踪路由
-用途：提供本机招标计划 .xlsx 受控导入、固定来源同步受理/查询，以及命中人工接受。
-对接：/api/opportunity-watch；opportunity_watch_service；OpportunityWatchPlanImportOut / Sync / Accept 读模型。
-二次开发：禁止增加 URL/Cookie/Token 入参、浏览器代理、dashboard 或真实外网直出；同步仅 BackgroundTasks；接受不得自动立项。
+用途：提供本机招标计划 .xlsx 受控导入、仪表盘只读聚合、固定来源同步受理/查询，以及命中人工接受。
+对接：/api/opportunity-watch；opportunity_watch_service；Dashboard / PlanImport / Sync / Accept 读模型。
+二次开发：禁止增加 URL/Cookie/Token 入参、浏览器代理或真实外网直出；同步仅 BackgroundTasks；接受不得自动立项。
 """
 
 from typing import Annotated
@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_workspace_id
 from app.api.schemas import (
     OpportunityWatchAcceptOut,
+    OpportunityWatchDashboardOut,
     OpportunityWatchPlanImportOut,
     OpportunityWatchSyncAcceptedOut,
     OpportunityWatchSyncRunOut,
@@ -22,6 +23,24 @@ from app.core.database import get_db
 from app.services import opportunity_watch_service
 
 router = APIRouter(prefix="/opportunity-watch", tags=["opportunity-watch"])
+
+
+@router.get(
+    "/dashboard",
+    response_model=OpportunityWatchDashboardOut,
+)
+def get_watch_dashboard(
+    db: Annotated[Session, Depends(get_db)],
+    workspace_id: Annotated[str, Depends(get_workspace_id)],
+) -> OpportunityWatchDashboardOut:
+    """
+    模块：国能计划追踪仪表盘
+    用途：只读返回当前工作空间计划数、最近运行与命中列表；announcementUrl 动态生成。
+    对接：GET /api/opportunity-watch/dashboard；get_watch_dashboard。
+    二次开发：禁止请求体、URL/Cookie 入参、同步或接受副作用。
+    """
+    data = opportunity_watch_service.get_watch_dashboard(db, workspace_id)
+    return OpportunityWatchDashboardOut.model_validate(data)
 
 
 @router.post(

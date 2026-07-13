@@ -2131,3 +2131,294 @@ def test_accept_api_status_codes_and_camel_case(client: TestClient):
         assert "cookie" not in lowered
         assert "http" not in lowered
         assert "<html" not in lowered
+
+
+# ---------- P9B 任务6：dashboard 只读聚合 ----------
+
+
+def _seed_dashboard_hit(
+    *,
+    hit_id: str,
+    workspace_id: str = "ws_local",
+    plan_id: str = "watch_plan_dash",
+    run_id: str = "watch_run_dash",
+    source_info_id: str = "b2363623-ea1e-4cc1-8e2d-0c2d2850b697",
+    category_num: str = "001002001",
+    source_publish_text: str = "2026-07-09 17:14:11",
+    title: str = "仪表盘公告甲",
+    extraction_status: str = "resolved",
+    deadline_at_local: str | None = "2026-07-29 09:00:00",
+    opening_at_local: str | None = "2026-07-29 09:00:00",
+    updated_at: datetime | None = None,
+) -> None:
+    """用途：为 dashboard 只读用例准备计划/运行/命中。"""
+    db = SessionLocal()
+    try:
+        if db.get(BidWatchPlanRow, plan_id) is None:
+            db.add(
+                BidWatchPlanRow(
+                    id=plan_id,
+                    workspace_id=workspace_id,
+                    title="仪表盘计划",
+                    buyer="招标人甲",
+                    scope="范围甲",
+                    duration="",
+                    expected_publish_text="",
+                    remark="",
+                    fingerprint=f"fp-dash-{plan_id}",
+                    enabled=True,
+                )
+            )
+        if db.get(BidSourceSyncRunRow, run_id) is None:
+            db.add(
+                BidSourceSyncRunRow(
+                    id=run_id,
+                    workspace_id=workspace_id,
+                    source_name="chnenergy",
+                    status="succeeded",
+                    started_at=datetime(2026, 7, 13, 8, tzinfo=timezone.utc),
+                    finished_at=datetime(2026, 7, 13, 8, 5, tzinfo=timezone.utc),
+                    plan_count=1,
+                    candidate_count=1,
+                    detail_page_count=1,
+                    resolved_count=1,
+                    needs_review_count=0,
+                    skipped_count=0,
+                )
+            )
+        db.flush()
+        hit = BidSourceHitRow(
+            id=hit_id,
+            workspace_id=workspace_id,
+            watch_plan_id=plan_id,
+            sync_run_id=run_id,
+            source_name="chnenergy",
+            source_info_id=source_info_id,
+            category_num=category_num,
+            source_publish_text=source_publish_text,
+            title=title,
+            deadline_at_local=deadline_at_local,
+            opening_at_local=opening_at_local,
+            source_timezone="Asia/Shanghai",
+            extraction_status=extraction_status,
+        )
+        if updated_at is not None:
+            hit.updated_at = updated_at
+        db.add(hit)
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_dashboard_returns_plan_count_latest_run_and_hits_desc(
+    client: TestClient,
+):
+    """用途：当前空间返回计划数、最近运行、命中按更新时间倒序，且含动态 announcementUrl。"""
+    older = datetime(2026, 7, 13, 9, 0, tzinfo=timezone.utc)
+    newer = datetime(2026, 7, 13, 10, 0, tzinfo=timezone.utc)
+    _seed_dashboard_hit(
+        hit_id="watch_hit_dash_old",
+        source_info_id="aaaaaaaa-bbbb-cccc-dddd-000000000001",
+        title="较旧命中",
+        updated_at=older,
+    )
+    _seed_dashboard_hit(
+        hit_id="watch_hit_dash_new",
+        plan_id="watch_plan_dash_b",
+        run_id="watch_run_dash_b",
+        source_info_id="aaaaaaaa-bbbb-cccc-dddd-000000000002",
+        title="较新命中",
+        updated_at=newer,
+    )
+    # 另一计划仅增加 planCount
+    db = SessionLocal()
+    try:
+        db.add(
+            BidWatchPlanRow(
+                id="watch_plan_dash_extra",
+                workspace_id="ws_local",
+                title="额外计划",
+                buyer="",
+                scope="",
+                duration="",
+                expected_publish_text="",
+                remark="",
+                fingerprint="fp-dash-extra",
+                enabled=True,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    resp = client.get("/api/opportunity-watch/dashboard")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body.keys()) == {"planCount", "latestRun", "hits"}
+    assert body["planCount"] == 3
+    assert body["latestRun"] is not None
+    assert body["latestRun"]["sourceName"] == "chnenergy"
+    assert "cookie" not in json.dumps(body["latestRun"]).lower()
+
+    titles = [item["title"] for item in body["hits"]]
+    assert titles[0] == "较新命中"
+    assert titles[1] == "较旧命中"
+    assert len(body["hits"]) == 2
+
+    hit = body["hits"][0]
+    assert hit["extractionStatus"] == "resolved"
+    assert hit["deadlineAtLocal"] == "2026-07-29 09:00:00"
+    assert hit["openingAtLocal"] == "2026-07-29 09:00:00"
+    assert hit["sourceTimezone"] == "Asia/Shanghai"
+    assert hit["announcementUrl"] == (
+        "https://www.chnenergybidding.com.cn/bidweb/"
+        "001/001002/001002001/20260709/"
+        "aaaaaaaa-bbbb-cccc-dddd-000000000002.html"
+    )
+    # 仅结构化字段 + 动态链接；不得回传 HTML/Cookie/原文
+    lowered = json.dumps(hit, ensure_ascii=False).lower()
+    assert "cookie" not in lowered
+    assert "<html" not in lowered
+    assert "raw" not in lowered
+
+
+def test_dashboard_isolates_workspace_and_skips_invalid_announcement_url(
+    client: TestClient,
+):
+    """用途：跨空间不可见；非法详情字段不生成 announcementUrl。"""
+    other = "ws_dash_other"
+    _create_watch_workspace(other)
+    _seed_dashboard_hit(
+        hit_id="watch_hit_dash_local",
+        source_info_id="bbbbbbbb-cccc-dddd-eeee-000000000011",
+        title="本空间命中",
+    )
+    _seed_dashboard_hit(
+        hit_id="watch_hit_dash_other",
+        workspace_id=other,
+        plan_id="watch_plan_dash_other",
+        run_id="watch_run_dash_other",
+        source_info_id="bbbbbbbb-cccc-dddd-eeee-000000000012",
+        title="他空间命中",
+    )
+    _seed_dashboard_hit(
+        hit_id="watch_hit_dash_bad_fields",
+        plan_id="watch_plan_dash_bad",
+        run_id="watch_run_dash_bad",
+        source_info_id="not-a-uuid",
+        category_num="001006001",
+        source_publish_text="not-a-date",
+        title="非法字段命中",
+        extraction_status="needs_review",
+        deadline_at_local=None,
+        opening_at_local=None,
+    )
+
+    local = client.get("/api/opportunity-watch/dashboard")
+    assert local.status_code == 200
+    body = local.json()
+    titles = {item["title"] for item in body["hits"]}
+    assert "本空间命中" in titles
+    assert "他空间命中" not in titles
+    assert "非法字段命中" in titles
+    bad = next(item for item in body["hits"] if item["title"] == "非法字段命中")
+    assert bad["announcementUrl"] is None
+    assert bad["extractionStatus"] == "needs_review"
+
+    other_resp = client.get(
+        "/api/opportunity-watch/dashboard",
+        headers={"X-Workspace-Id": other},
+    )
+    assert other_resp.status_code == 200
+    other_body = other_resp.json()
+    assert other_body["planCount"] == 1
+    assert [item["title"] for item in other_body["hits"]] == ["他空间命中"]
+
+
+def test_dashboard_is_read_only_without_sync_or_accept_side_effects(
+    client: TestClient,
+):
+    """用途：GET dashboard 不触发同步、不写入命中、不创建本地标讯。"""
+    _seed_dashboard_hit(
+        hit_id="watch_hit_dash_readonly",
+        source_info_id="cccccccc-dddd-eeee-ffff-000000000021",
+        title="只读命中",
+    )
+    before_hits = SessionLocal()
+    try:
+        hit_count = len(
+            list(
+                before_hits.scalars(
+                    select(BidSourceHitRow).where(
+                        BidSourceHitRow.workspace_id == "ws_local"
+                    )
+                ).all()
+            )
+        )
+        opp_count = len(
+            list(
+                before_hits.scalars(
+                    select(BidOpportunityRow).where(
+                        BidOpportunityRow.workspace_id == "ws_local"
+                    )
+                ).all()
+            )
+        )
+        run_count = len(
+            list(
+                before_hits.scalars(
+                    select(BidSourceSyncRunRow).where(
+                        BidSourceSyncRunRow.workspace_id == "ws_local"
+                    )
+                ).all()
+            )
+        )
+    finally:
+        before_hits.close()
+
+    resp = client.get("/api/opportunity-watch/dashboard")
+    assert resp.status_code == 200
+
+    after = SessionLocal()
+    try:
+        assert (
+            len(
+                list(
+                    after.scalars(
+                        select(BidSourceHitRow).where(
+                            BidSourceHitRow.workspace_id == "ws_local"
+                        )
+                    ).all()
+                )
+            )
+            == hit_count
+        )
+        assert (
+            len(
+                list(
+                    after.scalars(
+                        select(BidOpportunityRow).where(
+                            BidOpportunityRow.workspace_id == "ws_local"
+                        )
+                    ).all()
+                )
+            )
+            == opp_count
+        )
+        assert (
+            len(
+                list(
+                    after.scalars(
+                        select(BidSourceSyncRunRow).where(
+                            BidSourceSyncRunRow.workspace_id == "ws_local"
+                        )
+                    ).all()
+                )
+            )
+            == run_count
+        )
+        hit = after.get(BidSourceHitRow, "watch_hit_dash_readonly")
+        assert hit is not None
+        assert hit.accepted_opportunity_id is None
+    finally:
+        after.close()

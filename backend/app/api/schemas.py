@@ -302,6 +302,64 @@ class OpportunityWatchSyncAcceptedOut(BaseModel):
     run_id: str = Field(alias="runId", serialization_alias="runId")
 
 
+class OpportunityWatchDashboardHitOut(BaseModel):
+    """
+    模块：国能 e 招仪表盘命中读模型
+    用途：dashboard 命中列表项；结构化字段 + 服务端动态生成的 announcementUrl。
+    对接：GET /api/opportunity-watch/dashboard；get_watch_dashboard。
+    二次开发：announcementUrl 仅由后端按固定规则生成；禁止前端提交、禁止持久化该字段。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    workspace_id: str = Field(serialization_alias="workspaceId")
+    watch_plan_id: str = Field(serialization_alias="watchPlanId")
+    sync_run_id: str = Field(serialization_alias="syncRunId")
+    source_name: Literal["chnenergy"] = Field(serialization_alias="sourceName")
+    source_info_id: str = Field(serialization_alias="sourceInfoId")
+    category_num: str = Field(serialization_alias="categoryNum")
+    source_publish_text: str = Field(serialization_alias="sourcePublishText")
+    title: str
+    deadline_at_local: str | None = Field(
+        default=None, serialization_alias="deadlineAtLocal"
+    )
+    opening_at_local: str | None = Field(
+        default=None, serialization_alias="openingAtLocal"
+    )
+    source_timezone: Literal["Asia/Shanghai"] = Field(
+        serialization_alias="sourceTimezone"
+    )
+    extraction_status: OpportunityWatchExtractionStatus = Field(
+        serialization_alias="extractionStatus"
+    )
+    accepted_opportunity_id: str | None = Field(
+        default=None, serialization_alias="acceptedOpportunityId"
+    )
+    announcement_url: str | None = Field(
+        default=None, serialization_alias="announcementUrl"
+    )
+    created_at: datetime = Field(serialization_alias="createdAt")
+    updated_at: datetime = Field(serialization_alias="updatedAt")
+
+
+class OpportunityWatchDashboardOut(BaseModel):
+    """
+    模块：国能 e 招仪表盘只读聚合
+    用途：返回当前工作空间计划数、最近运行与命中列表；无同步/接受副作用。
+    对接：GET /api/opportunity-watch/dashboard；get_watch_dashboard。
+    二次开发：禁止增加 Cookie、HTML、原文、任意 URL 入参或写入字段。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    plan_count: int = Field(serialization_alias="planCount")
+    latest_run: OpportunityWatchSyncRunOut | None = Field(
+        default=None, serialization_alias="latestRun"
+    )
+    hits: list[OpportunityWatchDashboardHitOut]
+
+
 # ---------- 资源中心 ----------
 
 

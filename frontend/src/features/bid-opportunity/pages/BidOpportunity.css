@@ -1,8 +1,8 @@
 /*
 模块：标讯页样式
-用途：提供本地标讯列表、状态筛选和紧凑录入弹层的稳定布局。
+用途：提供本地标讯列表、国能计划追踪面板、状态筛选和紧凑录入弹层的稳定布局。
 对接：BidOpportunityPage.tsx；全局 btn、field、card 和颜色变量。
-二次开发：新增外部来源或批量导入时保持筛选区、列表和弹层三层结构，避免把表单嵌入标讯卡片。
+二次开发：追踪面板保持紧凑；不得引入任意 URL 输入框或把表单嵌进本地标讯卡片。
 */
 
 .opp-filters {
@@ -17,6 +17,160 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.opp-watch {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.opp-watch__head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.opp-watch__head h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.opp-watch__disclaimer {
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--warning, #b45309);
+}
+
+.opp-watch__controls {
+  display: grid;
+  grid-template-columns: 1.4fr auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.opp-watch__file small {
+  display: block;
+  margin-top: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.opp-watch__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.opp-watch__import-result {
+  padding: 8px 12px;
+  border: 1px solid rgba(22, 163, 74, 0.28);
+  border-radius: 6px;
+  color: #15803d;
+  background: #f0fdf4;
+  font-size: 13px;
+}
+
+.opp-watch__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.opp-watch__stats strong {
+  color: var(--text-body);
+  font-weight: 500;
+}
+
+.opp-watch__hits {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.opp-watch__empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-tertiary);
+}
+
+.opp-watch-hit {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #fafbfc;
+}
+
+.opp-watch-hit__top {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.opp-watch-hit__title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.opp-watch-hit__badge {
+  display: inline-flex;
+  height: 22px;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.opp-watch-hit__badge.is-resolved {
+  background: rgba(245, 158, 11, 0.14);
+  color: var(--warning, #b45309);
+}
+
+.opp-watch-hit__badge.is-needs_review {
+  background: var(--hover-bg);
+  color: var(--text-tertiary);
+}
+
+.opp-watch-hit__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.opp-watch-hit__meta strong {
+  color: var(--text-body);
+  font-weight: 400;
+}
+
+.opp-watch-hit__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.opp-watch-hit__no-link,
+.opp-watch-hit__accepted {
+  font-size: 12px;
+  color: var(--text-tertiary);
 }
 
 .opp-chips {
@@ -275,6 +429,14 @@
 @media (max-width: 800px) {
   .opp-filters {
     grid-template-columns: 1fr;
+  }
+
+  .opp-watch__controls {
+    grid-template-columns: 1fr;
+  }
+
+  .opp-watch__actions {
+    justify-content: flex-start;
   }
 
   .opp-card__source {

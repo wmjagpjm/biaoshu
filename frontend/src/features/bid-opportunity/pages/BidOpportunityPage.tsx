@@ -1,8 +1,8 @@
 /**
  * 模块：标讯页
- * 用途：浏览、筛选和维护本地标讯库，并由未截止标讯直接创建关联技术标项目。
- * 对接：useOpportunities；/api/opportunities；/api/opportunities/{id}/projects；技术标工作区。
- * 二次开发：外部信息源应写入后端本地库后复用本页；不得恢复 mock 运行时兜底或前端自行判断截止状态。
+ * 用途：浏览、筛选和维护本地标讯库；展示国能 e 招受控追踪面板并支持人工加入本地标讯。
+ * 对接：useOpportunities；/api/opportunities；/api/opportunity-watch/*；技术标工作区。
+ * 二次开发：前端只访问本机 /api；外链仅用后端 announcementUrl；不得恢复 mock 或直连国能站点。
  */
 
 import { useMemo, useState } from "react";
@@ -13,6 +13,7 @@ import {
   Newspaper,
   Pencil,
   Plus,
+  RefreshCw,
   Search,
   Trash2,
   Upload,
@@ -29,7 +30,11 @@ import type {
   BidOpportunityDraft,
   OpportunityImportResult,
 } from "../types";
-import { BID_STATUS_LABEL } from "../types";
+import {
+  BID_STATUS_LABEL,
+  WATCH_EXTRACTION_LABEL,
+  WATCH_RUN_STATUS_LABEL,
+} from "../types";
 import "./BidOpportunity.css";
 
 type StatusFilter = BidOppStatus | "all";
@@ -58,6 +63,17 @@ export function BidOpportunityPage() {
     remove,
     importOpportunities,
     createProject,
+    watchDashboard,
+    watchLoading,
+    watchError,
+    watchBusy,
+    watchSyncing,
+    activeWatchRun,
+    watchImportResult,
+    refreshWatchDashboard,
+    importWatchPlans,
+    startWatchSync,
+    acceptWatchHit,
   } = useOpportunities();
   const [query, setQuery] = useState("");
   const [region, setRegion] = useState("全部");
@@ -68,6 +84,7 @@ export function BidOpportunityPage() {
   const [selectedImportFile, setSelectedImportFile] = useState<File | null>(null);
   const [importResult, setImportResult] = useState<OpportunityImportResult | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+  const [watchPlanFile, setWatchPlanFile] = useState<File | null>(null);
 
   const regions = useMemo(
     () => ["全部", ...Array.from(new Set(items.map((item) => item.region))).sort()],
@@ -90,6 +107,12 @@ export function BidOpportunityPage() {
         .includes(normalizedQuery);
     });
   }, [items, query, region, status]);
+
+  const runStatus =
+    activeWatchRun?.status ?? watchDashboard?.latestRun?.status ?? null;
+  const syncDisabled = watchBusy || watchSyncing
+    || runStatus === "queued"
+    || runStatus === "running";
 
   const closeEditor = () => {
     if (!saving) setEditing(null);
@@ -144,6 +167,31 @@ export function BidOpportunityPage() {
     }
   };
 
+  const submitWatchImport = async () => {
+    if (!watchPlanFile) return;
+    try {
+      await importWatchPlans(watchPlanFile);
+    } catch {
+      /* 错误已由 Hook 回显。 */
+    }
+  };
+
+  const submitWatchSync = async () => {
+    try {
+      await startWatchSync();
+    } catch {
+      /* 错误已由 Hook 回显。 */
+    }
+  };
+
+  const submitAcceptHit = async (hitId: string) => {
+    try {
+      await acceptWatchHit(hitId);
+    } catch {
+      /* 错误已由 Hook 回显。 */
+    }
+  };
+
   return (
     <div className="page">
       <header className="page-header">
@@ -177,6 +225,203 @@ export function BidOpportunityPage() {
           </button>
         </div>
       </header>
+
+      <section
+        className="card card-pad opp-watch"
+        aria-labelledby="opp-watch-title"
+        data-testid="opportunity-watch-panel"
+      >
+        <div className="opp-watch__head">
+          <div>
+            <h2 id="opp-watch-title">国能 e 招计划追踪</h2>
+            <p className="opp-watch__disclaimer">
+              国能 e 招候选公告，需人工确认；不会自动创建项目
+            </p>
+          </div>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            disabled={watchBusy || watchLoading}
+            onClick={() => {
+              void refreshWatchDashboard().catch(() => undefined);
+            }}
+          >
+            <RefreshCw size={14} /> 刷新面板
+          </button>
+        </div>
+
+        <div className="opp-watch__controls">
+          <label className="field opp-watch__file">
+            <span>招标计划表（.xlsx）</span>
+            <input
+              type="file"
+              accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              disabled={watchBusy}
+              data-testid="watch-plan-file"
+              onChange={(event) => {
+                setWatchPlanFile(event.currentTarget.files?.[0] ?? null);
+              }}
+            />
+            {watchPlanFile && <small>{watchPlanFile.name}</small>}
+          </label>
+          <div className="opp-watch__actions">
+            <button
+              type="button"
+              className="btn btn-soft"
+              disabled={watchBusy || !watchPlanFile}
+              data-testid="watch-plan-import"
+              onClick={() => void submitWatchImport()}
+            >
+              {watchBusy && !watchSyncing ? (
+                <LoaderCircle className="opp-spin" size={16} />
+              ) : (
+                <Upload size={16} />
+              )}
+              上传计划表
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={syncDisabled}
+              data-testid="watch-sync"
+              onClick={() => void submitWatchSync()}
+            >
+              {watchSyncing || runStatus === "queued" || runStatus === "running" ? (
+                <LoaderCircle className="opp-spin" size={16} />
+              ) : (
+                <RefreshCw size={16} />
+              )}
+              同步国能 e 招
+            </button>
+          </div>
+        </div>
+
+        {watchImportResult && (
+          <div className="opp-watch__import-result" role="status" data-testid="watch-import-result">
+            导入 {watchImportResult.inserted} 条，跳过 {watchImportResult.skipped} 条，共{" "}
+            {watchImportResult.total} 条
+          </div>
+        )}
+
+        <div className="opp-watch__stats" aria-live="polite">
+          <span data-testid="watch-plan-count">
+            计划数 <strong>{watchLoading ? "…" : watchDashboard?.planCount ?? 0}</strong>
+          </span>
+          <span data-testid="watch-run-status">
+            最近运行{" "}
+            <strong>
+              {watchSyncing || runStatus === "queued" || runStatus === "running"
+                ? "正在同步"
+                : runStatus
+                  ? WATCH_RUN_STATUS_LABEL[runStatus]
+                  : "尚无运行"}
+            </strong>
+          </span>
+          {watchDashboard?.latestRun && (
+            <span data-testid="watch-run-resolved">
+              已解析 <strong>{watchDashboard.latestRun.resolvedCount}</strong>
+              {" / 待复核 "}
+              <strong>{watchDashboard.latestRun.needsReviewCount}</strong>
+            </span>
+          )}
+        </div>
+
+        {watchError && (
+          <div className="opp-error" role="alert" data-testid="watch-error">
+            <span>{watchError}</span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => void refreshWatchDashboard().catch(() => undefined)}
+            >
+              重试
+            </button>
+          </div>
+        )}
+
+        <div className="opp-watch__hits" data-testid="watch-hit-list">
+          {(watchDashboard?.hits ?? []).length === 0 ? (
+            <p className="opp-watch__empty">
+              {watchLoading ? "载入追踪结果…" : "暂无命中公告。上传计划表并同步后显示。"}
+            </p>
+          ) : (
+            (watchDashboard?.hits ?? []).map((hit) => {
+              const canAccept =
+                hit.extractionStatus === "resolved" && !hit.acceptedOpportunityId;
+              return (
+                <article
+                  key={hit.id}
+                  className="opp-watch-hit"
+                  data-testid={`watch-hit-${hit.id}`}
+                  data-extraction-status={hit.extractionStatus}
+                >
+                  <div className="opp-watch-hit__top">
+                    <h3 className="opp-watch-hit__title">{hit.title}</h3>
+                    <span
+                      className={`opp-watch-hit__badge is-${hit.extractionStatus}`}
+                      data-testid={`watch-hit-status-${hit.id}`}
+                    >
+                      {WATCH_EXTRACTION_LABEL[hit.extractionStatus]}
+                    </span>
+                  </div>
+                  <div className="opp-watch-hit__meta">
+                    <span>
+                      投标截止{" "}
+                      <strong data-testid={`watch-hit-deadline-${hit.id}`}>
+                        {hit.deadlineAtLocal
+                          ? `${hit.deadlineAtLocal}（北京时间）`
+                          : "未解析"}
+                      </strong>
+                    </span>
+                    <span>
+                      开标时间{" "}
+                      <strong>
+                        {hit.openingAtLocal
+                          ? `${hit.openingAtLocal}（北京时间）`
+                          : "未解析"}
+                      </strong>
+                    </span>
+                  </div>
+                  <div className="opp-watch-hit__actions">
+                    {hit.announcementUrl ? (
+                      <a
+                        className="btn btn-ghost btn-sm"
+                        href={hit.announcementUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        data-testid={`watch-hit-link-${hit.id}`}
+                      >
+                        打开公告
+                      </a>
+                    ) : (
+                      <span className="opp-watch-hit__no-link">无可用公告链接</span>
+                    )}
+                    {canAccept && (
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        disabled={watchBusy}
+                        data-testid={`watch-hit-accept-${hit.id}`}
+                        onClick={() => void submitAcceptHit(hit.id)}
+                      >
+                        加入本地标讯
+                      </button>
+                    )}
+                    {hit.acceptedOpportunityId && (
+                      <span
+                        className="opp-watch-hit__accepted"
+                        data-testid={`watch-hit-accepted-${hit.id}`}
+                      >
+                        已加入本地标讯
+                      </span>
+                    )}
+                  </div>
+                </article>
+              );
+            })
+          )}
+        </div>
+      </section>
 
       <div className="card card-pad opp-filters">
         <div className="field" style={{ margin: 0 }}>
@@ -255,11 +500,15 @@ export function BidOpportunityPage() {
           description="调整筛选条件，或录入一条新的本地标讯。"
         />
       ) : (
-        <div className="opp-list" aria-busy={loading}>
+        <div className="opp-list" aria-busy={loading} data-testid="local-opportunity-list">
           {list.map((opportunity) => {
             const isExpanded = expandedId === opportunity.id;
             return (
-              <article key={opportunity.id} className="opp-card">
+              <article
+                key={opportunity.id}
+                className="opp-card"
+                data-testid={`local-opp-${opportunity.id}`}
+              >
                 <div className="opp-card__top">
                   <h2 className="opp-card__title">{opportunity.title}</h2>
                   <span className={`opp-status is-${opportunity.status}`}>
@@ -429,6 +678,7 @@ export function BidOpportunityPage() {
                 type="file"
                 accept=".csv,.json,text/csv,application/json"
                 disabled={saving}
+                data-testid="local-import-file"
                 onChange={(event) => {
                   setSelectedImportFile(event.currentTarget.files?.[0] ?? null);
                   setImportResult(null);
