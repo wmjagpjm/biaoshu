@@ -1,13 +1,13 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-13（阶段 2 SHA=`53e012f`；阶段 3 **已完成并推送**：M3-A=`5d37dba`，M3-B=`e2e5d04`；阶段 4 **包 5** 已推送 `460097a`；**包 6** 已推送 `1289c92`；**包 7** 已推送 `2c7b3e0`；**包 8** 已验收并推送 `6db1586` 实现可插拔解析引擎调度；**P9A**=`c1ff160` 最小标题左栏）
+> **交接日期**：2026-07-13（阶段 2 SHA=`53e012f`；阶段 3 **已完成并推送**：M3-A=`5d37dba`，M3-B=`e2e5d04`；阶段 4 **包 5**=`460097a`、**包 6**=`1289c92`、**包 7**=`2c7b3e0`、**包 8**=`6db1586`；**P9A**=`c1ff160`；**P9B**=`45d7214`/`1c46e41`/`6491363`/`229f1d7`/`000b403`/`a7cfcb8`）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
-> **协作分支已推送功能/审计基线**：`a1ba88a` — 记录P9B和P9C开工审计；其下含 P9A=`c1ff160`、包 8=`6db1586`、包 7=`2c7b3e0`、包 6=`1289c92`、包 5=`460097a`、M3-B=`e2e5d04`、M3-A=`5d37dba`。本交接文档提交位于该基线之后，新会话以 `git rev-parse HEAD` 与远端分支一致为准。
+> **协作分支已推送功能基线**：P9B 实现最新提交为 `a7cfcb8`，其前序为解析=`45d7214`、数据域=`1c46e41`、Excel=`6491363`、同步=`229f1d7`、人工接受=`000b403`；更早的审计基线为 `a1ba88a`，其下含 P9A、包 5 至包 8 和阶段 3。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **本地状态**：阶段 0/1/2/3/包5/包6/包7/包8 与 **P9A** 已推送；P9A=`c1ff160` 已完成自动化和 WPS 技术标/商务标实际渲染验收。P9B/P9C 只读开工审计已推送，但 P9B 因缺少用户确认的授权来源契约而阻塞，P9C 按 A→B→C 顺序不得提前启动。MinerU 仅外置 callback；Docling 未接；`parseStrategy` 未接线。
-> **验收基线**：后端全量 **175 passed**（1 条既有 Starlette/httpx 弃用警告）；P9A 定向 **13 passed**；`frontend npm run lint` / `build`；`git diff --check`；P9A WPS 实际打开通过。
+> **本地状态**：阶段 0/1/2/3、包 5 至包 8、P9A 与 **P9B** 均已推送。P9B 是国能 e 招单站受控计划追踪，已完成独立验收和契约闭环；P9C 可进入产品决策，但在模型与数据边界确认前不得实现。MinerU 仅外置 callback；Docling 未接；`parseStrategy` 未接线。
+> **验收基线**：后端全量 **230 passed**（1 条既有 Starlette/httpx 弃用警告）；P9B E2E **1 passed**；`frontend npm run lint` / `build`；`git diff --check`；P9A WPS 实际打开通过。
 
 ---
 
@@ -18,8 +18,8 @@
 工作分支只能是 collab/grok-code-codex-review，禁止直接操作 main；先执行 git status -sb，并核对 HEAD 与 origin/collab/grok-code-codex-review 一致且工作区干净。
 完整阅读 docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/plans/2026-07-13-package-9-delivery-enhancement-plan.md、docs/integration-checklist.md。
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
-当前进度：P9A 已完整验收并推送；P9B/P9C 只读开工审计已推送。P9B 已由用户指定为“国能 e 招（国家能源招标网）”单站受控读取，独立计划为 `docs/plans/2026-07-13-p9b-chnenergy-watch-plan.md`；尚未开始 P9B 代码实现。该计划固定 HTTPS 主机、计划 Excel 内存导入、招标公告过滤、低频单条详情读取和人工接受，不允许泛化为网页抓取器或自动立项。P9B 完整闭环后才能启动 P9C。
-执行 P9B：先核对独立计划的限频、数据最小化和测试任务，再向 Grok 发单一受限实现任务；Codex 负责审查、独立测试、验收、提交授权和文档推送。Codex 与 Grok 直接使用协作消息箱，不要求用户中转。
+当前进度：P9A 与 P9B 已完整验收并推送。P9B 的国能 e 招单站受控读取已完成计划 Excel 内存导入、招标公告过滤、低频单条详情读取、人工接受和本地 E2E；固定契约见 `docs/p9b-chnenergy-integration-contract.md`，不得泛化为网页抓取器或自动立项。P9C 现在仅可进入产品决策与实施规划，决策未齐备前不得开始代码。
+下一包执行：先由用户确认 P9C 的模型、数据出域和验收边界；Codex 写入独立计划后才向 Grok 发出单一受限实现任务。Codex 继续负责审查、独立测试、验收、提交授权和文档推送；双方直接使用协作消息箱，不要求用户中转。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -125,7 +125,7 @@
 | LLM | `services/llm_service.py` | **齐** | |
 | 设置 | `services/settings_service.py`、`api/settings.py` | **部分** | 文件顶有；embedding_model 已在模型/schema 体现 |
 | 解析/文件 | `parse_service` / `file_service` / `api/files.py` | **齐** | `source`/`image` 角色隔离、Pillow 校验（公开 `verify_image_content`）和项目内安全读取 |
-| 本地标讯库 | `services/opportunity_service.py`、`api/opportunities.py` | **齐** | CRUD、服务端状态、跨 workspace 404、原子立项、离线 CSV/JSON 整批导入和弱关联清理 |
+| 本地标讯库与国能追踪 | `services/opportunity_service.py`、`api/opportunities.py`、`services/opportunity_watch_service.py`、`api/opportunity_watch.py` | **齐** | 本地 CRUD、服务端状态、跨 workspace 404、离线 CSV/JSON；P9B 另含固定来源、内存 Excel、人工接受和不存敏感网络数据 |
 | 资源中心 | `services/resource_service.py`、`resource_sync_service.py`、`api/resources.py` | **齐** | 全局系统只读资源、workspace 用户资源、服务端原子浏览量、签名清单受控同步与来源审计 |
 | 中标内容模板 | `services/template_service.py`、`api/templates.py`、`models/entities.py`（BidTemplateRow） | **齐** | workspace 快照沉淀/列表摘要/详情快照/删除/从模板新建；源项目 SET NULL；空大纲与超大快照 400 |
 | 实体 | `models/entities.py` | **部分** | 类 docstring 齐；文件顶视历史版本；KnowledgeCardRow / BidTemplateRow 已补语义 |
@@ -149,7 +149,7 @@
 | 创建/首页 | `create`、`home` | **齐** | |
 | 导出模板 | `export-format/*` | **齐** | 标题边框与叶子标题左栏控件、实时预览已补齐 |
 | 本地解析 | `local-parser` | **齐** | |
-| 标讯 | `bid-opportunity` | **齐** | 已接本地标讯库 API 与 CSV/JSON 离线导入；页面逻辑在 `hooks/useOpportunities.ts` |
+| 标讯 | `bid-opportunity`、`e2e/opportunity-watch-chnenergy.spec.ts` | **齐** | 已接本地标讯库 API 与 CSV/JSON 离线导入；P9B 面板只访问 `/api`，无浏览器外网请求 |
 | 资源中心 | `resources` | **齐** | 已接 API；页面逻辑在 `hooks/useResources.ts`，无浏览器远程 URL |
 | 中标内容模板 | `bid-templates/*`、工作区沉淀入口、E2E `e2e/bid-template-reuse.spec.ts` | **齐** | 与导出版式模板（export-format）分离；`npm run test:e2e:templates` |
 | shared/api | `shared/lib/api.ts` | **齐** | |
@@ -235,6 +235,8 @@ npm run test:e2e:matrix
 
 新工作空间默认保持为空；只有在本地演示时显式配置 `SEED_SAMPLE_OPPORTUNITIES=true`，启动时才写入两条标注为“本地示例”的演示标讯。页面不再以内置 mock 兜底，接口异常会明确显示错误。当前 `X-Workspace-Id` 仅是个人版开发期工作空间选择，不构成多用户鉴权。
 
+**P9B 国能计划追踪（已验收）**：另有 `/api/opportunity-watch` 数据域，浏览器仍只访问本机 `/api`。用户上传 `.xlsx` 后，服务端仅按固定国能 e 招主机/请求和 120 条计划、每计划 5 个候选、50 页详情、1 秒间隔执行受控读取；命中的公告链接动态生成且不入库。只有具有完整北京时间截止时间的 `resolved` 命中，才能由用户点击加入本地标讯；绝不自动立项。完整安全边界、错误码、验收和非目标见 `docs/p9b-chnenergy-integration-contract.md`。
+
 ### 4.6 资源中心
 
 资源中心已接本地 API：`GET/POST /api/resources`、`GET/PATCH/DELETE /api/resources/{id}`、`POST /api/resources/{id}/view`、`GET /api/resources/sync-sources`。现有六条精选内容作为 `source=system` 的全局只读记录启动期幂等写入，`workspaceId=null`，不会写入任何用户 workspace；`source=user` 记录只能被当前 workspace 读取和维护。浏览量使用数据库表达式原子加一，且不修改 `updatedAt`，避免阅读改变资源排序。新库由 CHECK 约束保证来源与 workspace 一致；已存在的 SQLite 资源表会在启动期补同语义触发器。
@@ -273,7 +275,7 @@ frontend/src/features/
 | 优先级 | 项 | 现状 |
 |--------|----|------|
 | 导出 | `structure` / `min_heading_left_enabled` | P9A 已实现：叶子标题左侧强调线（`c1ff160`）；整章布局与 `structure` 仍不做，详见 `docs/plans/2026-07-13-p9a-word-layout-plan.md` |
-| 业务 | 外部标讯数据源 | 资源中心已有受控签名清单同步；标讯仍只支持本机 CSV/JSON 导入，未接网站/API/RSS |
+| 业务 | 其他外部标讯数据源 | P9B 已完成唯一的国能 e 招单站受控追踪；其他网站/API/RSS、定时同步和浏览器外网请求仍未接，须另立计划 |
 | 技术标 | 响应矩阵增强 | v1 已做手工映射、持久化、Word 导出联动、待确认智能建议（**来源 80 分页 + 候选章/大纲分批 + 前端嵌套串行累计**）、`responseMatrixVersion` DB 写锁乐观锁、前端串行保存、双浏览器 409、刷新来源、智能建议人工确认与**来源分页** E2E；**字段级三方合并 MVP**（包 7 已推送 `2c7b3e0`）。**包 8** 可插拔解析调度 MVP 已验收并推送（`6db1586`：默认 lightweight + 测试 fake；MinerU 仅外置 callback；Docling 未接；`parseStrategy` 未接线）。仍未接：包 9 交付增强相关扩展 |
 | 资产 | 卡片化知识/多模板融合 | 阶段 1 模板 + 阶段 2 卡片库（`53e012f`）；阶段 3 已完成并推送：M3-A=`5d37dba`，M3-B=`e2e5d04` |
 | RAG | 真语义大模型 embedding 调优 | 有本地+可选 API，可继续增强 |
@@ -287,7 +289,7 @@ frontend/src/features/
 ## 6. 建议下一会话方向
 
 1. 阶段 4 **功能包 8** MVP 已验收并推送（`6db1586`）；真实 MinerU/Docling 外置部署与 `parseStrategy` 接线另开 task
-2. 阶段 4 **P9A**（Word 叶子标题左栏）已实现并完成完整独立验收与文档闭环；P9B/P9C 只读开工审计已记录在包 9 总计划。P9B 外部标讯仍须先提供授权来源契约，P9B 闭环后再按已确认模型边界启动 P9C
+2. 阶段 4 **P9A** 和 **P9B** 已实现、独立验收并文档闭环；下一步只可为 P9C 产品决策与规划，先确认离线/API、数据出域、模型版本、成本、降级、迁移/回滚和脱敏评测集，再考虑代码实现
 3. M3-B 后遗留：写入历史/回滚（可选）；多角色仍不开始
 
 资源同步后续只可由管理员配置新的签名发布方，绝不可放开浏览器 URL 或外网抓取。图片管线已冻结项目内资源引用协议，后续扩展不得放开外链或客户端路径。SSE 的多工作空间鉴权、事件游标和项目级总线不在当前范围。
@@ -345,19 +347,19 @@ frontend/src/features/
 ## 11. 当前会话状态（2026-07-13）
 
 - **用户长期目标（必须完整保留）**：持续完成 biaoshu 标书制作者剩余主线任务，按既定路线图完成独立规划、受限实现审查、独立验收、中文文档闭环与协作分支推送；不直接操作 `main`。
-- 当前分支仍为 `collab/grok-code-codex-review`；换会话前功能/审计基线 HEAD=`a1ba88a`，本交接文档提交位于其后。新会话第一步必须用 `git status -sb`、`git rev-parse HEAD`、`git rev-parse origin/collab/grok-code-codex-review` 重新核验，不可只信本文静态 SHA。
+- 当前分支仍为 `collab/grok-code-codex-review`；P9B 最新实现 SHA=`a7cfcb8`，本交接文档提交位于其后。新会话第一步必须用 `git status -sb`、`git rev-parse HEAD`、`git rev-parse origin/collab/grok-code-codex-review` 重新核验，不可只信本文静态 SHA。
 - 阶段 3 **已完成并推送**：M3-A 只读融合建议；M3-B 差异预览 + 勾选确认写入（SHA=`e2e5d04`）。
 - 阶段 4 **包 5** 已推送：`460097a` 智能建议人工确认 E2E。
 - 阶段 4 **包 6** 已推送：`1289c92` 实现响应矩阵源分页调用。
 - 阶段 4 **包 7** 已推送：`2c7b3e0` 实现响应矩阵字段级三方合并（base 快照 + 原子字段三方合并 + 冲突显式选择 + 仅矩阵 PUT + field-merge E2E）。
 - 阶段 4 **包 8** MVP：**已验收并推送** `6db1586` 实现可插拔解析引擎调度（父提交 `834969e`；`parse_engines` + `_run_parse` 调度；默认 lightweight；测试 fake；非法引擎 failed 不静默回退；MinerU 仅外置 callback；Docling 未接；`parseStrategy` 未接线）。
 - **包 9A** 已实现并完成完整独立验收：计划=`57b394a`，实现=`c1ff160`，自动化文档闭环=`6d36365`，WPS 视觉验收闭环=`3dadaf8`。技术标父标题保持普通边框，叶子标题“部署架构/机房节点/售后保障”强化左栏；商务标叶子小节“二、资格响应”强化左栏；均无整章页框。不接 `structure`。
-- **包 9B/P9C 审计**：`a1ba88a` 已记录代码接缝和风险。P9B 未发现任何可证明授权的来源、许可证、API/RSS/导出契约、限频、游标、凭据归属或可存字段规则；资源同步示例明确不是标讯协议。目标模式已在连续三次相同阻塞后标记为 `blocked`。收到用户授权来源后视为新一轮恢复，不得沿用“仍阻塞”的旧结论。
+- **包 9B 交付完成**：初始审计=`a1ba88a`；用户指定国能 e 招单站后，依次推送 `45d7214`、`1c46e41`、`6491363`、`229f1d7`、`000b403`、`a7cfcb8`。P9B 不使用未获授权的通用来源；完整固定契约、数据最小化、人工确认、验收和非目标见 `docs/p9b-chnenergy-integration-contract.md`。
 - **P9B 国内来源补充审计**：已将全国公共资源交易平台、中国政府采购网、天津/北京开放数据的公开资料写入包 9 总计划。全国平台公开公告页不等于读取 API；中国政府采购网规范是签名发布接口；天津候选虽有截止时间字段但公开页无实际端点且数据元信息陈旧；北京候选需 `userKey` 且无独立截止时间字段。均未满足完整受控读取契约，禁止据此写网页抓取或同步代码。
-- **P9B 当前恢复状态**：用户已指定国能 e 招并提供本机每日 08:30 检索任务和实际结果 Excel；Codex 已验证其 HTTPS 检索连通性和公告正文中的投标截止时间条款，并冻结 `docs/plans/2026-07-13-p9b-chnenergy-watch-plan.md`。该站不是正式开放 API：只能按计划定义的固定主机、低频、类别过滤、单条详情读取和人工确认实现；禁止通用爬虫、浏览器直连、把 URL/Token 写入 `sourceKey`、保存 Cookie/HTML/原始响应、附件下载或自动立项。独立计划提交后才可向活跃 Grok 发送限定任务；没有活跃 Grok 进程必须如实记录，不得假装已分派。
-- **P9C 顺序与风险**：严格在 P9B 闭环后启动。当前 API embedding 失败会静默退回 256 维哈希，`kb_chunks.embedding_json` 没有 provider/model/version/dimension，切换模型可能让新查询向量与旧分块向量维度不一致并静默得 0。未来必须先确认离线/API、模型与维度、数据出域、成本、失败降级、版本化重建/回滚和脱敏评测集，禁止直接覆盖旧索引或伪称真语义。
-- **已验证基线**：后端全量 175 passed（1 条既有弃用警告）；P9A 定向 13 passed；前端 lint/build 通过（仅既有大 chunk 警告）；`git diff --check` 通过；WPS `12.1.0.26895` 实际打开技术标/商务标通过。
+- **P9B 最终验收**：Codex 独立运行后端全量 230 passed（固定 `PYTHONHASHSEED=0`，仅 1 条既有弃用警告）、前端 lint/build、P9B E2E 1 passed 和 `git diff --check`；并对用户给定公告执行只读核验，正文北京时间截止时间为 `2026-07-29 09:00:00`。无真实数据库写入、无浏览器外网同步。
+- **P9C 顺序与风险**：P9B 已闭环，可以开始产品决策与规划，但当前 API embedding 失败会静默退回 256 维哈希，`kb_chunks.embedding_json` 没有 provider/model/version/dimension，切换模型可能让新查询向量与旧分块向量维度不一致并静默得 0。必须先确认离线/API、模型与维度、数据出域、成本、失败降级、版本化重建/回滚和脱敏评测集，禁止直接覆盖旧索引或伪称真语义。
+- **已验证基线**：后端全量 230 passed（1 条既有弃用警告）；P9B E2E 1 passed；前端 lint/build 通过（仅既有大 chunk 警告）；`git diff --check` 通过；P9A WPS `12.1.0.26895` 实际打开技术标/商务标通过。
 - 新任务分工不变：Grok 只负责限定实现与自测，未经 Codex 审查确认不得提交；Codex 负责计划、范围冻结、差异审查、独立测试、验收、中文提交、文档闭环和 GitHub 状态核验。每一包仍按“计划提交 → 实现提交 → 文档闭环提交 → 推送协作分支”执行，禁止合包。
 - GitHub 若出现连接重置，可在当前 PowerShell 进程临时配置 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY=http://127.0.0.1:7890` 与 `NO_PROXY=localhost,127.0.0.1` 后重试；不得把代理或凭据写入仓库。
 
-**换会话可直接：核验分支与 HEAD → 读本文 §0～§2、§6、§11 → 等用户提供 P9B 授权来源后恢复目标并先写独立计划。**
+**换会话可直接：核验分支与 HEAD → 读本文 §0～§2、§6、§11 和 P9B 集成契约 → 等用户确认 P9C 产品决策后先写独立计划。**

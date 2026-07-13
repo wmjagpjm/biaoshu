@@ -111,9 +111,12 @@ npm run test:e2e:fuse
 
 # 阶段3 M3-B：差异预览 + 勾选确认写入 / base 漂移跳过 E2E
 npm run test:e2e:fuse-apply
+
+# P9B：国能 e 招计划追踪（隔离 8010/5174、biaoshu-e2e.db、MockTransport；禁止真实外网）
+npm run test:e2e:opportunity-watch
 ```
 
-当前基线：后端 **pytest 全量**（含 `test_content_fuse`、`test_knowledge_cards`、`test_bid_templates`、候选分批与**来源 80 分页**、**parse_engines 可插拔调度**、**P9A 标题左栏**）；前端 lint/build；`test:e2e:fuse` / `fuse-apply`；`test:e2e:matrix` 覆盖 409、刷新来源、智能建议人工确认、**来源分页**与**字段级三方合并**（无冲突安全合并 / 同字段显式选择 / 二次 409 不循环）；`templates` / `cards` 为回归。阶段 3 已推送（M3-A=`5d37dba`，M3-B=`e2e5d04`）。阶段 4 包 5=`460097a`、包 6=`1289c92`、包 7=`2c7b3e0`、包 8=`6db1586`（实现可插拔解析引擎调度）、P9A=`c1ff160`（实现P9A最小标题左栏）已通过完整独立验收。**包 8** 边界：MinerU 仅外置 callback、Docling 未接、`parseStrategy` 未接线。P9A 自动化检查与 WPS 技术标/商务标实际渲染抽检均通过，不做整章页框或 `structure`；P9B/P9C 仍待前置决策。
+当前基线：后端 **pytest 全量 230 passed**（固定 `PYTHONHASHSEED=0`，1 条既有 Starlette/httpx 弃用警告；含 `test_opportunity_watch`）；前端 lint/build；`test:e2e:fuse` / `fuse-apply`；`test:e2e:matrix`；`templates` / `cards`；P9B `test:e2e:opportunity-watch` **1 passed**。阶段 3 已推送（M3-A=`5d37dba`，M3-B=`e2e5d04`）。阶段 4 包 5=`460097a`、包 6=`1289c92`、包 7=`2c7b3e0`、包 8=`6db1586`、P9A=`c1ff160`、P9B 界面=`a7cfcb8` 均已通过独立验收。**包 8** 边界：MinerU 仅外置 callback、Docling 未接、`parseStrategy` 未接线。P9A 不做整章页框或 `structure`；P9B 只接国能 e 招单站受控追踪，其他来源与 P9C 仍须新计划/决策。
 
 ## 6. 已接 API 一览
 
@@ -205,6 +208,9 @@ npm run test:e2e:fuse-apply
 5. 仅演示环境需要初始数据时，在 `backend/.env` 设置 `SEED_SAMPLE_OPPORTUNITIES=true` 后重启；默认不得自动写入示例记录。
 6. 点击“导入标讯”选择 UTF-8 CSV 或 JSON；合法记录导入后出现在列表。重复 `sourceKey` 应统计为跳过；任一行日期/标题非法时弹层显示行号且列表不新增记录。
 7. 导入仅接受本机 CSV/JSON（默认上限 2 MiB、2,000 行）；不得填写外部 URL、Token 或附件路径。
+8. P9B：在同页“国能 e 招计划追踪”上传本机 `.xlsx`；页面应显示“需人工确认；不会自动创建项目”。同步期间按钮禁用，结束后显示计划数、运行状态、命中和北京时间。
+9. P9B：仅 `resolved` 命中显示“加入本地标讯”；`needs_review` 不显示该操作。接受后本地列表出现一条标讯，重复接受不重复创建；公告外链具有新窗口和 `noreferrer` 属性。
+10. P9B：浏览器网络请求只能前往本机 `/api`；E2E 必须使用隔离数据库和 MockTransport，不得以真实国能网络作为测试依赖。完整边界见 `docs/p9b-chnenergy-integration-contract.md`。
 
 ## 12. 中标内容模板
 
@@ -226,7 +232,7 @@ npm run test:e2e:fuse-apply
 
 ## 14. 仍未接（后续）
 
-Celery、真 MinerU 安装包、P9B 外部标讯数据源、P9C 真语义 embedding 调优、多用户鉴权、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
+Celery、真 MinerU 安装包、P9B 以外的外部标讯数据源、P9C 真语义 embedding 调优、多用户鉴权、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
 
 **响应矩阵相关（已接 vs 未扩）：** 多端冲突的版本写保护、409 与双浏览器上下文 E2E 主路径已接；「刷新来源」保留人工映射 E2E 已接；**智能建议人工确认后应用** E2E 已接；**来源超过 80 分页** 已推送（`1289c92`）；**字段级三方合并** MVP + E2E 已推送（`2c7b3e0`，`response-matrix-field-merge.spec.ts`）。仍未接：Word 失效引用在浏览器层的扩展（导出逻辑以后端单测为准）；包 9 交付增强。
 
