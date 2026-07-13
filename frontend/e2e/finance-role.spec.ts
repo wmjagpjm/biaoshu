@@ -1,8 +1,9 @@
 /**
- * 模块：P10B 财务报价前端只读 E2E
+ * 模块：P10B/P10C 财务报价前端 E2E（角色门禁与列表明细）
  * 用途：验收 finance 入口/列表/明细、非财务与 disabled 受限、网络仅专用端点、存储无敏感字段。
  * 对接：Playwright chromium；前端 5174；npm run test:e2e:finance-role。
  * 二次开发：required 场景用 route 桩；禁止回退通用 projects/editor-state/settings。
+ * 说明（P10C）：明细选中后会 GET cost-draft，故桩必须识别该路径为财务专用端点，不可记入 forbiddenHits。
  */
 import { expect, test, type Page, type Route } from "@playwright/test";
 
@@ -264,6 +265,50 @@ async function installFinanceRoutes(page: Page, state: FinanceAuthState) {
         return;
       }
       await json(route, SAMPLE_LIST);
+      return;
+    }
+
+    // P10C：选中项目后前端会 GET cost-draft；须记为 financeHits，不可落入 forbiddenHits
+    const costDraftMatch = path.match(
+      /^\/api\/finance\/business-bids\/([^/]+)\/cost-draft$/,
+    );
+    if (costDraftMatch && method === "GET") {
+      state.financeHits.push(`${method} ${path}`);
+      if (!state.session || state.session.workspaces[0]?.role !== "finance") {
+        await json(
+          route,
+          { detail: { code: "role_forbidden", message: "角色不允许" } },
+          403,
+        );
+        return;
+      }
+      const projectId = decodeURIComponent(costDraftMatch[1]);
+      const summary = SAMPLE_LIST.items.find((i) => i.projectId === projectId);
+      if (!summary) {
+        await json(
+          route,
+          {
+            detail: {
+              code: "project_not_found",
+              message: "项目不存在或不可访问",
+            },
+          },
+          404,
+        );
+        return;
+      }
+      // 最小空草案：仅满足 P10B 角色门禁用例，完整 CRUD 见 finance-cost-draft.spec.ts
+      const quoteFen = Math.round(Number(summary.quoteTotal) * 100);
+      await json(route, {
+        projectId,
+        projectName: summary.name,
+        quoteTotalFen: Number.isFinite(quoteFen) ? quoteFen : 0,
+        costTotalFen: 0,
+        grossProfitFen: Number.isFinite(quoteFen) ? quoteFen : 0,
+        grossMarginBasisPoints:
+          Number.isFinite(quoteFen) && quoteFen > 0 ? 10000 : null,
+        costEntries: [],
+      });
       return;
     }
 
