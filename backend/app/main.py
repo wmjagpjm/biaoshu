@@ -39,7 +39,11 @@ from app.core.config import get_settings
 from app.core.database import Base, SessionLocal, engine, ensure_schema_columns
 # 导入实体以注册 Base.metadata（create_all 依赖）
 from app.models import (  # noqa: F401
+    BidOpportunityRow,
+    BidSourceHitRow,
+    BidSourceSyncRunRow,
     BidTemplateRow,
+    BidWatchPlanRow,
     KbChunkRow,
     KbDocumentRow,
     KbFolderRow,
@@ -48,7 +52,6 @@ from app.models import (  # noqa: F401
     ProjectEditorStateRow,
     ProjectFileRow,
     ProjectTaskRow,
-    BidOpportunityRow,
     ResourceRow,
     ResourceSyncItemRow,
     ResourceSyncRunRow,
@@ -58,6 +61,7 @@ from app.models import (  # noqa: F401
 )
 from app.services.project_service import ensure_default_workspace
 from app.services.opportunity_service import ensure_sample_opportunities
+from app.services.opportunity_watch_service import mark_interrupted_watch_runs
 from app.services.resource_service import ensure_system_resources
 from app.services.task_service import fail_interrupted_tasks
 
@@ -77,6 +81,7 @@ async def lifespan(_app: FastAPI):
         if settings.seed_sample_opportunities:
             ensure_sample_opportunities(db, settings.default_workspace_id)
         ensure_system_resources(db)
+        mark_interrupted_watch_runs(db)
         fail_interrupted_tasks(db)
     finally:
         db.close()

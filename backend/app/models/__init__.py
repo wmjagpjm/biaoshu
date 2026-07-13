@@ -7,7 +7,10 @@
 
 from app.models.entities import (
     BidOpportunityRow,
+    BidSourceHitRow,
+    BidSourceSyncRunRow,
     BidTemplateRow,
+    BidWatchPlanRow,
     KbChunkRow,
     KbDocumentRow,
     KbFolderRow,
@@ -36,6 +39,9 @@ __all__ = [
     "KbChunkRow",
     "KnowledgeCardRow",
     "BidOpportunityRow",
+    "BidWatchPlanRow",
+    "BidSourceSyncRunRow",
+    "BidSourceHitRow",
     "BidTemplateRow",
     "ResourceRow",
     "ResourceSyncSourceRow",

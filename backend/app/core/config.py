@@ -46,6 +46,16 @@ class Settings(BaseSettings):
     # 标讯离线导入仅在请求内存解析；限制文件与行数，避免本地误选大文件拖垮服务
     max_opportunity_import_bytes: int = 2 * 1024 * 1024
     max_opportunity_import_rows: int = 2000
+    # 国能 e 招计划追踪：均为服务端固定上限，前端不得传入或覆盖。
+    max_opportunity_watch_import_bytes: int = 2 * 1024 * 1024
+    max_opportunity_watch_plan_rows: int = 120
+    max_opportunity_watch_plans_per_sync: int = 120
+    max_opportunity_watch_candidates_per_plan: int = 5
+    max_opportunity_watch_detail_pages_per_sync: int = 50
+    opportunity_watch_min_interval_seconds: float = 1.0
+    opportunity_watch_connect_timeout_seconds: float = 5.0
+    opportunity_watch_read_timeout_seconds: float = 15.0
+    opportunity_watch_search_retry_count: int = 1
     # 受控资源同步：来源仅由服务端 JSON 配置；默认空数组，浏览器不接收 URL 或同步密钥
     resource_sync_sources: str = "[]"
     resource_sync_allowed_hosts: str = ""

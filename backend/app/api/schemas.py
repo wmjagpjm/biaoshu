@@ -161,6 +161,119 @@ class OpportunityImportOut(BaseModel):
     total: int
 
 
+# ---------- 国能 e 招计划追踪 ----------
+
+
+OpportunityWatchRunStatus = Literal[
+    "queued", "running", "succeeded", "partial", "failed"
+]
+OpportunityWatchExtractionStatus = Literal["resolved", "needs_review"]
+# 同步错误码固定字典；读模型与 ORM 约束保持一致，禁止透传远端错误文本。
+OpportunityWatchErrorCode = Literal[
+    "source_unavailable",
+    "rate_limited",
+    "malformed_response",
+    "interrupted",
+]
+
+
+class OpportunityWatchPlanOut(BaseModel):
+    """
+    模块：国能 e 招计划追踪读模型
+    用途：工作空间内的计划追踪读模型；不含上传文件或外部请求字段。
+    对接：BidWatchPlanRow；opportunity_watch_service.list_watch_plans；当前尚无公开 HTTP 路由。
+    二次开发：不得加入 URL、Cookie、HTML、上传文件或任意远端地址字段；后续路由序列化时复用本模型。
+    """
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id: str
+    workspace_id: str = Field(serialization_alias="workspaceId")
+    title: str
+    buyer: str
+    scope: str
+    duration: str
+    expected_publish_text: str = Field(serialization_alias="expectedPublishText")
+    remark: str
+    fingerprint: str
+    enabled: bool
+    created_at: datetime = Field(serialization_alias="createdAt")
+    updated_at: datetime = Field(serialization_alias="updatedAt")
+
+
+class OpportunityWatchSyncRunOut(BaseModel):
+    """
+    模块：国能 e 招同步运行读模型
+    用途：受控同步的脱敏运行读模型；errorCode 仅允许服务端固定码。
+    对接：BidSourceSyncRunRow；opportunity_watch_service.list_watch_runs；当前尚无公开 HTTP 路由。
+    二次开发：errorCode 仅允许固定枚举或 None；不得加入远端错误原文、URL、Cookie 或 HTML。
+    """
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id: str
+    workspace_id: str = Field(serialization_alias="workspaceId")
+    source_name: Literal["chnenergy"] = Field(serialization_alias="sourceName")
+    status: OpportunityWatchRunStatus
+    started_at: datetime = Field(serialization_alias="startedAt")
+    finished_at: datetime | None = Field(default=None, serialization_alias="finishedAt")
+    plan_count: int = Field(serialization_alias="planCount")
+    candidate_count: int = Field(serialization_alias="candidateCount")
+    detail_page_count: int = Field(serialization_alias="detailPageCount")
+    resolved_count: int = Field(serialization_alias="resolvedCount")
+    needs_review_count: int = Field(serialization_alias="needsReviewCount")
+    skipped_count: int = Field(serialization_alias="skippedCount")
+    error_code: OpportunityWatchErrorCode | None = Field(
+        default=None, serialization_alias="errorCode"
+    )
+    created_at: datetime = Field(serialization_alias="createdAt")
+    updated_at: datetime = Field(serialization_alias="updatedAt")
+
+
+class OpportunityWatchHitOut(BaseModel):
+    """
+    模块：国能 e 招公告命中读模型
+    用途：公告命中脱敏读模型；不持久化、不序列化详情链接或外部正文。
+    对接：BidSourceHitRow；opportunity_watch_service.list_watch_hits；当前尚无公开 HTTP 路由。
+    二次开发：详情链接若需展示，须由后续路由按固定来源客户端动态生成，不得写入本模型字段。
+    """
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id: str
+    workspace_id: str = Field(serialization_alias="workspaceId")
+    watch_plan_id: str = Field(serialization_alias="watchPlanId")
+    sync_run_id: str = Field(serialization_alias="syncRunId")
+    source_name: Literal["chnenergy"] = Field(serialization_alias="sourceName")
+    source_info_id: str = Field(serialization_alias="sourceInfoId")
+    category_num: str = Field(serialization_alias="categoryNum")
+    source_publish_text: str = Field(serialization_alias="sourcePublishText")
+    title: str
+    deadline_at_local: str | None = Field(default=None, serialization_alias="deadlineAtLocal")
+    opening_at_local: str | None = Field(default=None, serialization_alias="openingAtLocal")
+    source_timezone: Literal["Asia/Shanghai"] = Field(serialization_alias="sourceTimezone")
+    extraction_status: OpportunityWatchExtractionStatus = Field(serialization_alias="extractionStatus")
+    accepted_opportunity_id: str | None = Field(
+        default=None, serialization_alias="acceptedOpportunityId"
+    )
+    created_at: datetime = Field(serialization_alias="createdAt")
+    updated_at: datetime = Field(serialization_alias="updatedAt")
+
+
+class OpportunityWatchAcceptOut(BaseModel):
+    """
+    模块：国能 e 招人工接受命中结果
+    用途：人工接受公告命中后的本地标讯结果；不包含外部正文或链接。
+    对接：后续接受写入 bid_opportunities 后的响应契约；当前尚无公开 HTTP 路由。
+    二次开发：不得回传 HTML、JSON、Cookie 或任意 URL；仅 opportunityId 与 created。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    opportunity_id: str = Field(serialization_alias="opportunityId")
+    created: bool
+
+
 # ---------- 资源中心 ----------
 
 

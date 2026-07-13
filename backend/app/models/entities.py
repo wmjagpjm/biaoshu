@@ -13,10 +13,12 @@
 from datetime import date, datetime, timezone
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Integer,
     String,
     Text,
@@ -137,6 +139,206 @@ class BidOpportunityRow(Base):
     )
     # 离线导入的可选不透明来源键；SQLite 对 NULL 唯一约束允许多行，手工录入不受影响
     source_key: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
+class BidWatchPlanRow(Base):
+    """
+    模块：国能 e 招计划追踪计划实体
+    用途：保存工作空间内的本机招标计划字段，供受控同步任务按完整计划名检索。
+    对接：opportunity_watch_service；后续 /api/opportunity-watch 计划导入接口。
+    二次开发：fingerprint 仅用于工作空间内幂等，禁止写入外部 URL、Cookie、原始 Excel 或用户路径。
+    """
+
+    __tablename__ = "bid_watch_plans"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "fingerprint",
+            name="uq_bid_watch_plans_workspace_fingerprint",
+        ),
+        # 供命中表复合外键引用，强制 plan 与 hit 同属一个 workspace。
+        UniqueConstraint(
+            "id",
+            "workspace_id",
+            name="uq_bid_watch_plans_id_workspace",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    buyer: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    scope: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    duration: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    expected_publish_text: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    remark: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
+class BidSourceSyncRunRow(Base):
+    """
+    模块：国能 e 招同步运行实体
+    用途：保存单次受控同步的脱敏状态、时间和数量统计，支持启动期恢复中断任务。
+    对接：opportunity_watch_service.mark_interrupted_watch_runs；后续同步 API 轮询。
+    二次开发：error_code 只能是服务端固定码；禁止保存 URL、Cookie、请求/响应正文或远端异常原文。
+    """
+
+    __tablename__ = "bid_source_sync_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "source_name = 'chnenergy'",
+            name="ck_bid_source_sync_runs_source_name",
+        ),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'succeeded', 'partial', 'failed')",
+            name="ck_bid_source_sync_runs_status",
+        ),
+        # error_code 仅允许 NULL 或服务端固定字典，禁止落库远端异常原文。
+        CheckConstraint(
+            "error_code IS NULL OR error_code IN ("
+            "'source_unavailable', 'rate_limited', 'malformed_response', 'interrupted'"
+            ")",
+            name="ck_bid_source_sync_runs_error_code",
+        ),
+        # 供命中表复合外键引用，强制 run 与 hit 同属一个 workspace。
+        UniqueConstraint(
+            "id",
+            "workspace_id",
+            name="uq_bid_source_sync_runs_id_workspace",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    source_name: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="chnenergy"
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    plan_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    candidate_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    detail_page_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    resolved_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    needs_review_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    skipped_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
+class BidSourceHitRow(Base):
+    """
+    模块：国能 e 招公告命中实体
+    用途：保存计划与公告的结构化匹配结果及解析时间，供人工确认后创建本地标讯。
+    对接：opportunity_watch_service；后续命中列表和人工接受接口。
+    二次开发：公告链接必须由 source_info_id/category_num/source_publish_text 动态生成；不得落库正文、HTML、JSON、附件或 Cookie。
+    复合外键保证 hit.workspace_id 与其 watch_plan / sync_run 同属一个工作空间，禁止跨空间关系。
+    """
+
+    __tablename__ = "bid_source_hits"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "watch_plan_id",
+            "source_info_id",
+            name="uq_bid_source_hits_workspace_plan_info",
+        ),
+        CheckConstraint(
+            "source_name = 'chnenergy'",
+            name="ck_bid_source_hits_source_name",
+        ),
+        CheckConstraint(
+            "source_timezone = 'Asia/Shanghai'",
+            name="ck_bid_source_hits_source_timezone",
+        ),
+        CheckConstraint(
+            "extraction_status IN ('resolved', 'needs_review')",
+            name="ck_bid_source_hits_extraction_status",
+        ),
+        # 复合外键：命中的 workspace 必须与计划、运行一致，阻止跨空间关系写入。
+        ForeignKeyConstraint(
+            ["workspace_id", "watch_plan_id"],
+            ["bid_watch_plans.workspace_id", "bid_watch_plans.id"],
+            ondelete="CASCADE",
+            name="fk_bid_source_hits_plan_same_workspace",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "sync_run_id"],
+            ["bid_source_sync_runs.workspace_id", "bid_source_sync_runs.id"],
+            ondelete="CASCADE",
+            name="fk_bid_source_hits_run_same_workspace",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # 计划/运行归属由上方复合外键强制与 workspace_id 一致；保留单列索引便于查询。
+    watch_plan_id: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        index=True,
+    )
+    sync_run_id: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        index=True,
+    )
+    source_name: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="chnenergy"
+    )
+    source_info_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    category_num: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_publish_text: Mapped[str] = mapped_column(String(100), nullable=False)
+    title: Mapped[str] = mapped_column(String(1000), nullable=False)
+    deadline_at_local: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    opening_at_local: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    source_timezone: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="Asia/Shanghai"
+    )
+    extraction_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="needs_review"
+    )
+    accepted_opportunity_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("bid_opportunities.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now
     )
