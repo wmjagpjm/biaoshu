@@ -9,6 +9,7 @@
 """
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -65,6 +66,14 @@ class Settings(BaseSettings):
     seed_sample_opportunities: bool = False
     # 本地 MinerU 回传 Token；空字符串表示不校验（保密机默认）
     local_parser_token: str = ""
+    # P9C 离线语义索引：模型/维度/缓存/磁盘下限均由服务端固定，禁止 API/前端传入
+    semantic_model_id: str = "BAAI/bge-small-zh-v1.5"
+    semantic_embedding_dim: int = 512
+    # data 下固定子目录名；真实路径必须由 resolve_semantic_model_cache_dir 从 upload_dir 推导
+    # 禁止依赖进程 cwd，禁止 HTTP/前端/工作空间设置覆盖
+    semantic_model_cache_dir: str = "semantic-models"
+    # 重建前最低可用磁盘（字节），默认 5 GiB
+    semantic_min_free_disk_bytes: int = 5 * 1024 * 1024 * 1024
 
     def cors_origin_list(self) -> list[str]:
         """用途：将 cors_origins 字符串拆成列表，供 CORSMiddleware 使用。"""
@@ -90,3 +99,19 @@ def get_settings() -> Settings:
     注意：改 .env 后开发热重载会重启进程；单测改 env 必须 cache_clear()。
     """
     return Settings()
+
+
+def resolve_semantic_model_cache_dir(settings: Settings | None = None) -> Path:
+    """
+    用途：解析 P9C 离线模型固定缓存目录。
+    规则：与 knowledge_service._kb_root 同根——upload_dir 父目录 / data / <子目录名>；
+    不依赖进程启动工作目录；不可由 HTTP/前端/工作空间设置传入。
+    对接：embedding_service.OfflineBgeEmbedder。
+    """
+    s = settings or get_settings()
+    # 仅取末段目录名，防止配置写成绝对路径或 ../ 逃逸
+    raw = (s.semantic_model_cache_dir or "semantic-models").strip().replace("\\", "/")
+    name = Path(raw.rstrip("/")).name
+    if not name or name in {".", ".."}:
+        name = "semantic-models"
+    return Path(s.upload_dir).resolve().parent / "data" / name

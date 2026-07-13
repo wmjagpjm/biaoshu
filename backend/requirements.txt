@@ -10,3 +10,6 @@ python-docx>=1.1.0
 Pillow>=11.0.0
 pypdf>=5.0.0
 openpyxl>=3.1.5
+# P9C 离线语义索引（仅后台受控重建加载；pytest 使用注入假模型，不下载）
+sentence-transformers>=3.0.0
+torch>=2.2.0

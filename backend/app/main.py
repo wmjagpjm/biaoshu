@@ -57,12 +57,15 @@ from app.models import (  # noqa: F401
     ResourceSyncItemRow,
     ResourceSyncRunRow,
     ResourceSyncSourceRow,
+    SemanticChunkEmbeddingRow,
+    SemanticEmbeddingIndexRow,
     Workspace,
     WorkspaceSettingsRow,
 )
 from app.services.project_service import ensure_default_workspace
 from app.services.opportunity_service import ensure_sample_opportunities
 from app.services.opportunity_watch_service import mark_interrupted_watch_runs
+from app.services.knowledge_service import mark_interrupted_semantic_indexes
 from app.services.resource_service import ensure_system_resources
 from app.services.task_service import fail_interrupted_tasks
 
@@ -71,7 +74,7 @@ from app.services.task_service import fail_interrupted_tasks
 async def lifespan(_app: FastAPI):
     """
     用途：应用生命周期钩子。
-    启动阶段：建表 + seed workspace + 中断残留任务。
+    启动阶段：建表 + seed workspace + 中断残留任务/语义索引。
     """
     Base.metadata.create_all(bind=engine)
     ensure_schema_columns()
@@ -83,6 +86,7 @@ async def lifespan(_app: FastAPI):
             ensure_sample_opportunities(db, settings.default_workspace_id)
         ensure_system_resources(db)
         mark_interrupted_watch_runs(db)
+        mark_interrupted_semantic_indexes(db)
         fail_interrupted_tasks(db)
     finally:
         db.close()

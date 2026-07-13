@@ -120,6 +120,24 @@ def ensure_schema_columns(target_engine=None) -> None:
         CREATE UNIQUE INDEX IF NOT EXISTS uq_bid_opportunities_workspace_source_key
         ON bid_opportunities(workspace_id, source_key)
         """,
+        # P9C：新表由 create_all 建立；此处仅补列与常用查询索引（幂等）
+        "ALTER TABLE semantic_embedding_indexes ADD COLUMN total_chunks INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE semantic_embedding_indexes ADD COLUMN embedded_chunks INTEGER NOT NULL DEFAULT 0",
+        """
+        CREATE INDEX IF NOT EXISTS ix_semantic_embedding_indexes_workspace_status
+        ON semantic_embedding_indexes(workspace_id, status)
+        """,
+        # P9C：同 workspace 同时最多一条 queued/running；不影响 active/failed/superseded 并存
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS
+        uq_semantic_embedding_indexes_workspace_building
+        ON semantic_embedding_indexes(workspace_id)
+        WHERE status IN ('queued', 'running')
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_semantic_chunk_embeddings_workspace_index
+        ON semantic_chunk_embeddings(workspace_id, index_id)
+        """,
         """
         CREATE TRIGGER IF NOT EXISTS trg_resources_validate_insert
         BEFORE INSERT ON resources

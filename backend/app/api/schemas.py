@@ -469,6 +469,63 @@ class HealthOut(BaseModel):
     db_ok: bool | None = Field(default=None, serialization_alias="dbOk")
 
 
+# ---------- P9C 离线语义索引 ----------
+
+
+SemanticIndexStatus = Literal[
+    "queued", "running", "active", "failed", "superseded", "index_not_built"
+]
+SemanticIndexErrorCode = Literal[
+    "model_unavailable",
+    "model_storage_insufficient",
+    "index_interrupted",
+    "index_failed",
+    "index_not_built",
+    "index_building",
+]
+SemanticSearchStatus = Literal[
+    "ready",
+    "model_unavailable",
+    "model_storage_insufficient",
+    "index_interrupted",
+    "index_failed",
+    "index_not_built",
+    "index_building",
+]
+
+
+class SemanticIndexOut(BaseModel):
+    """
+    模块：P9C 语义索引读模型
+    用途：版本化离线索引状态；不含路径、密钥、正文或远端错误原文。
+    对接：GET/POST /api/knowledge/semantic-index*；knowledge_service.semantic_index_to_dict。
+    二次开发：禁止加入 modelUrl、apiKey、cachePath 或任意用户可填向量配置字段。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str | None = None
+    workspace_id: str | None = Field(default=None, serialization_alias="workspaceId")
+    status: str
+    provider: Literal["offline_bge"] = "offline_bge"
+    model_id: str = Field(serialization_alias="modelId")
+    model_fingerprint: str | None = Field(
+        default=None, serialization_alias="modelFingerprint"
+    )
+    dimension: int = 512
+    # 构建进度：total=待嵌入总数；embedded=已写入；chunkCount 兼容等价 embeddedChunks
+    total_chunks: int = Field(default=0, serialization_alias="totalChunks")
+    embedded_chunks: int = Field(default=0, serialization_alias="embeddedChunks")
+    chunk_count: int = Field(default=0, serialization_alias="chunkCount")
+    error_code: SemanticIndexErrorCode | None = Field(
+        default=None, serialization_alias="errorCode"
+    )
+    started_at: datetime | None = Field(default=None, serialization_alias="startedAt")
+    finished_at: datetime | None = Field(default=None, serialization_alias="finishedAt")
+    created_at: datetime | None = Field(default=None, serialization_alias="createdAt")
+    updated_at: datetime | None = Field(default=None, serialization_alias="updatedAt")
+
+
 # ---------- 工作空间设置（对齐前端 WorkspaceSettings）----------
 
 

@@ -1,15 +1,16 @@
 """
-模块：知识库服务（RAG：入库 + 关键词/向量混合检索）
+模块：知识库服务（RAG：入库 + 关键词/P9C 离线语义混合检索）
 用途：
-  - 文件夹/文档 CRUD；上传落盘 → parse → chunk → embedding → ready
-  - search_chunks：关键词分 + 向量余弦混合；可选 folder_ids
+  - 文件夹/文档 CRUD；上传落盘 → parse → chunk → 兼容哈希 → ready
+  - P9C 版本化语义索引：queued/running → 校验后切 active；失败保留旧 active
+  - search_chunks：关键词 + 仅 active 同维语义向量；无索引时关键词降级
   - build_kb_prompt_block / search_prompt_block 供生成注入
 对接：
-  - 路由 /api/knowledge/*
+  - 路由 /api/knowledge/*、/api/knowledge/semantic-index*
   - task_service._kb_search_block（outline/chapter）
-  - embedding_service（本地哈希 / 可选 API）
+  - embedding_service.OfflineBgeEmbedder（离线 512 维，禁外发）
 二次开发：
-  - 可换 FTS5/真语义模型；勿与 project_files 混表混目录
+  - 禁止把 legacy embedding_json 或 API embedding 当作语义结果
   - 注入硬顶见 _PROMPT_MAX_CHARS；analyze 任务禁止调用本检索
 """
 
@@ -23,12 +24,27 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
-from app.models.entities import KbChunkRow, KbDocumentRow, KbFolderRow
+from app.core.database import SessionLocal
+from app.models.entities import (
+    KbChunkRow,
+    KbDocumentRow,
+    KbFolderRow,
+    SemanticChunkEmbeddingRow,
+    SemanticEmbeddingIndexRow,
+)
 from app.services import embedding_service, parse_service
+
+# 语义索引固定错误/状态码（API 与落库共用）
+SEMANTIC_READY = "ready"
+SEMANTIC_INDEX_NOT_BUILT = "index_not_built"
+SEMANTIC_INDEX_BUILDING = "index_building"
+SEMANTIC_INDEX_FAILED = "index_failed"
+SEMANTIC_INDEX_INTERRUPTED = "index_interrupted"
 
 # 分块参数
 _CHUNK_SIZE = 1000
@@ -44,6 +60,10 @@ _TOKEN_SPLIT = re.compile(r"[\s,，。；;、\|/\\（）()【】\[\]「」\"'`~!
 
 class KnowledgeNotFoundError(KeyError):
     """用途：文档/文件夹不存在。"""
+
+
+class SemanticIndexConflictError(RuntimeError):
+    """用途：同工作空间已存在 queued/running 语义索引重建。"""
 
 
 def _now() -> datetime:
@@ -484,6 +504,402 @@ def move_docs(
     return n
 
 
+def semantic_index_to_dict(row: SemanticEmbeddingIndexRow | None) -> dict[str, Any]:
+    """
+    用途：语义索引脱敏读模型；不含路径、密钥、正文或远端错误。
+    说明：chunkCount 兼容字段，语义等价于 embeddedChunks（已成功嵌入分块数）。
+    """
+    if row is None:
+        return {
+            "id": None,
+            "workspaceId": None,
+            "status": SEMANTIC_INDEX_NOT_BUILT,
+            "provider": embedding_service.OFFLINE_PROVIDER,
+            "modelId": get_settings().semantic_model_id,
+            "modelFingerprint": None,
+            "dimension": embedding_service.OFFLINE_DIM,
+            "totalChunks": 0,
+            "embeddedChunks": 0,
+            "chunkCount": 0,
+            "errorCode": SEMANTIC_INDEX_NOT_BUILT,
+            "startedAt": None,
+            "finishedAt": None,
+            "createdAt": None,
+            "updatedAt": None,
+        }
+    total = int(getattr(row, "total_chunks", 0) or 0)
+    embedded = int(getattr(row, "embedded_chunks", 0) or 0)
+    # 兼容：chunkCount 等价 embeddedChunks；旧行可能仅有 chunk_count
+    if embedded <= 0 and int(row.chunk_count or 0) > 0:
+        embedded = int(row.chunk_count)
+    return {
+        "id": row.id,
+        "workspaceId": row.workspace_id,
+        "status": row.status,
+        "provider": row.provider,
+        "modelId": row.model_id,
+        "modelFingerprint": row.model_fingerprint or None,
+        "dimension": row.dimension,
+        "totalChunks": total,
+        "embeddedChunks": embedded,
+        "chunkCount": embedded,
+        "errorCode": row.error_code,
+        "startedAt": row.started_at.isoformat() if row.started_at else None,
+        "finishedAt": row.finished_at.isoformat() if row.finished_at else None,
+        "createdAt": row.created_at.isoformat() if row.created_at else None,
+        "updatedAt": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def get_active_semantic_index(
+    db: Session, workspace_id: str
+) -> SemanticEmbeddingIndexRow | None:
+    """用途：读取工作空间当前 active 语义索引（0 或 1）。"""
+    stmt = (
+        select(SemanticEmbeddingIndexRow)
+        .where(
+            SemanticEmbeddingIndexRow.workspace_id == workspace_id,
+            SemanticEmbeddingIndexRow.status == "active",
+        )
+        .limit(1)
+    )
+    return db.scalars(stmt).first()
+
+
+def get_semantic_index(
+    db: Session, workspace_id: str, index_id: str
+) -> SemanticEmbeddingIndexRow:
+    """用途：按 workspace 读取索引；跨空间/不存在 → KnowledgeNotFoundError。"""
+    row = db.get(SemanticEmbeddingIndexRow, index_id)
+    if row is None or row.workspace_id != workspace_id:
+        raise KnowledgeNotFoundError(index_id)
+    return row
+
+
+def get_semantic_index_status(db: Session, workspace_id: str) -> dict[str, Any]:
+    """
+    用途：汇总当前空间语义索引状态。
+    规则：优先报告 queued/running（errorCode=index_building），即使存在旧 active，
+    以便任务2禁用按钮与轮询；search 仍继续读旧 active 向量。
+    """
+    building = db.scalars(
+        select(SemanticEmbeddingIndexRow)
+        .where(
+            SemanticEmbeddingIndexRow.workspace_id == workspace_id,
+            SemanticEmbeddingIndexRow.status.in_(("queued", "running")),
+        )
+        .order_by(SemanticEmbeddingIndexRow.created_at.desc())
+        .limit(1)
+    ).first()
+    if building is not None:
+        data = semantic_index_to_dict(building)
+        # 对外状态码：构建中（覆盖库内 null，供前端轮询）
+        data["errorCode"] = SEMANTIC_INDEX_BUILDING
+        return data
+
+    active = get_active_semantic_index(db, workspace_id)
+    if active is not None:
+        return semantic_index_to_dict(active)
+
+    latest = db.scalars(
+        select(SemanticEmbeddingIndexRow)
+        .where(SemanticEmbeddingIndexRow.workspace_id == workspace_id)
+        .order_by(SemanticEmbeddingIndexRow.created_at.desc())
+        .limit(1)
+    ).first()
+    if latest is not None:
+        return semantic_index_to_dict(latest)
+    return semantic_index_to_dict(None)
+
+
+def _count_active_semantic_builds(db: Session, workspace_id: str) -> int:
+    stmt = select(SemanticEmbeddingIndexRow).where(
+        SemanticEmbeddingIndexRow.workspace_id == workspace_id,
+        SemanticEmbeddingIndexRow.status.in_(("queued", "running")),
+    )
+    return len(list(db.scalars(stmt).all()))
+
+
+def create_semantic_index_rebuild(
+    db: Session, workspace_id: str
+) -> SemanticEmbeddingIndexRow:
+    """
+    用途：无请求体创建 queued 语义索引运行；同空间并发 queued/running → 409 语义。
+    对接：POST /api/knowledge/semantic-index/rebuild。
+    二次开发：快路径 count 防常见冲突；最终靠 SQLite 部分唯一索引堵竞态，
+    IntegrityError 统一映射 SemanticIndexConflictError，禁止向上暴露库细节。
+    """
+    if _count_active_semantic_builds(db, workspace_id) > 0:
+        raise SemanticIndexConflictError("语义索引正在构建，请稍后再试")
+    settings = get_settings()
+    now = _now()
+    row = SemanticEmbeddingIndexRow(
+        id=f"sem_{secrets.token_hex(8)}",
+        workspace_id=workspace_id,
+        status="queued",
+        provider=embedding_service.OFFLINE_PROVIDER,
+        model_id=settings.semantic_model_id,
+        model_fingerprint="",
+        dimension=int(settings.semantic_embedding_dim),
+        total_chunks=0,
+        embedded_chunks=0,
+        chunk_count=0,
+        error_code=None,
+        started_at=None,
+        finished_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(row)
+    try:
+        db.commit()
+    except IntegrityError:
+        # 并发：两条 queued/running 同 workspace 时部分唯一索引拒绝
+        db.rollback()
+        raise SemanticIndexConflictError("语义索引正在构建，请稍后再试") from None
+    db.refresh(row)
+    return row
+
+
+def mark_interrupted_semantic_indexes(db: Session) -> int:
+    """
+    模块：语义索引中断收敛
+    用途：将进程重启前残留的 queued/running 标为 failed/index_interrupted，保留 active。
+    对接：app.main.lifespan。
+    """
+    now = _now()
+    result = db.execute(
+        update(SemanticEmbeddingIndexRow)
+        .where(SemanticEmbeddingIndexRow.status.in_(("queued", "running")))
+        .values(
+            status="failed",
+            error_code=SEMANTIC_INDEX_INTERRUPTED,
+            finished_at=now,
+            updated_at=now,
+        )
+    )
+    db.commit()
+    return int(result.rowcount or 0)
+
+
+def execute_semantic_index_rebuild(index_id: str) -> None:
+    """
+    模块：语义索引后台执行器
+    用途：独立 Session 将 queued 推进为 running，写全部分块向量，校验后单事务切 active。
+    对接：BackgroundTasks；OfflineBgeEmbedder；任何异常仅 failed 新索引。
+    二次开发：禁止记录正文/路径/远端错误原文；不得删除旧 active 向量直至切换成功。
+    """
+    db = SessionLocal()
+    try:
+        row = db.get(SemanticEmbeddingIndexRow, index_id)
+        if row is None:
+            return
+        if row.status not in ("queued", "running"):
+            return
+        workspace_id = row.workspace_id
+        settings = get_settings()
+        now = _now()
+        row.status = "running"
+        row.started_at = row.started_at or now
+        row.updated_at = now
+        row.error_code = None
+        db.commit()
+
+        embedder = embedding_service.get_offline_embedder()
+        try:
+            fingerprint = embedder.ensure_loaded_for_rebuild(settings)
+            dim = int(settings.semantic_embedding_dim)
+            if dim != embedding_service.OFFLINE_DIM:
+                raise embedding_service.OfflineEmbedderError(
+                    embedding_service.ERR_MODEL_UNAVAILABLE, "dim"
+                )
+
+            # 仅 ready 文档的分块
+            ready_docs = list(
+                db.scalars(
+                    select(KbDocumentRow).where(
+                        KbDocumentRow.workspace_id == workspace_id,
+                        KbDocumentRow.status == "ready",
+                    )
+                ).all()
+            )
+            ready_ids = {d.id for d in ready_docs}
+            chunks = []
+            if ready_ids:
+                chunks = list(
+                    db.scalars(
+                        select(KbChunkRow).where(
+                            KbChunkRow.workspace_id == workspace_id,
+                            KbChunkRow.document_id.in_(ready_ids),
+                        )
+                    ).all()
+                )
+
+            texts: list[str] = []
+            chunk_ids: list[str] = []
+            for ch in chunks:
+                content = (ch.content or "").strip()
+                if not content:
+                    continue
+                title = (ch.title or "").strip()
+                texts.append(f"{title}\n{content}" if title else content)
+                chunk_ids.append(ch.id)
+
+            # 收集有效分块后先写 total，embedded 从 0 起；失败不得虚报完成
+            row = db.get(SemanticEmbeddingIndexRow, index_id)
+            if row is None:
+                return
+            row.total_chunks = len(chunk_ids)
+            row.embedded_chunks = 0
+            row.chunk_count = 0
+            row.updated_at = _now()
+            db.commit()
+
+            vectors = embedder.embed_texts(texts) if texts else []
+            if len(vectors) != len(chunk_ids):
+                raise embedding_service.OfflineEmbedderError(
+                    embedding_service.ERR_MODEL_UNAVAILABLE, "len"
+                )
+
+            # 写入新索引向量（旧 active 不动）
+            embedded_n = 0
+            for cid, vec in zip(chunk_ids, vectors):
+                if len(vec) != dim:
+                    raise embedding_service.OfflineEmbedderError(
+                        embedding_service.ERR_MODEL_UNAVAILABLE, "dim"
+                    )
+                db.add(
+                    SemanticChunkEmbeddingRow(
+                        id=f"sce_{secrets.token_hex(8)}",
+                        index_id=index_id,
+                        chunk_id=cid,
+                        workspace_id=workspace_id,
+                        dimension=dim,
+                        embedding_json=embedding_service.dumps_embedding(vec) or "[]",
+                        created_at=_now(),
+                    )
+                )
+                embedded_n += 1
+            db.flush()
+
+            # 校验计数
+            written = list(
+                db.scalars(
+                    select(SemanticChunkEmbeddingRow).where(
+                        SemanticChunkEmbeddingRow.index_id == index_id,
+                        SemanticChunkEmbeddingRow.workspace_id == workspace_id,
+                    )
+                ).all()
+            )
+            if len(written) != len(chunk_ids) or embedded_n != len(chunk_ids):
+                raise RuntimeError("index_count_mismatch")
+            for w in written:
+                if w.dimension != dim:
+                    raise RuntimeError("index_dim_mismatch")
+
+            # 写入成功后 embedded 与 total 一致，再允许切 active
+            row = db.get(SemanticEmbeddingIndexRow, index_id)
+            if row is None:
+                return
+            row.embedded_chunks = len(written)
+            row.chunk_count = len(written)  # 兼容：等价 embeddedChunks
+            row.updated_at = _now()
+            if int(row.embedded_chunks) != int(row.total_chunks):
+                raise RuntimeError("index_progress_mismatch")
+
+            # 单事务切换 active
+            old_actives = list(
+                db.scalars(
+                    select(SemanticEmbeddingIndexRow).where(
+                        SemanticEmbeddingIndexRow.workspace_id == workspace_id,
+                        SemanticEmbeddingIndexRow.status == "active",
+                        SemanticEmbeddingIndexRow.id != index_id,
+                    )
+                ).all()
+            )
+            for old in old_actives:
+                old.status = "superseded"
+                old.updated_at = _now()
+
+            row.status = "active"
+            row.model_fingerprint = fingerprint
+            row.dimension = dim
+            row.error_code = None
+            row.finished_at = _now()
+            row.updated_at = _now()
+            db.commit()
+        except embedding_service.OfflineEmbedderError as exc:
+            db.rollback()
+            _fail_semantic_index(db, index_id, exc.code)
+        except Exception:  # noqa: BLE001
+            db.rollback()
+            _fail_semantic_index(db, index_id, SEMANTIC_INDEX_FAILED)
+    finally:
+        db.close()
+
+
+def _fail_semantic_index(db: Session, index_id: str, error_code: str) -> None:
+    """用途：将新索引标 failed，不触碰旧 active。"""
+    row = db.get(SemanticEmbeddingIndexRow, index_id)
+    if row is None:
+        return
+    if row.status == "active":
+        return
+    now = _now()
+    row.status = "failed"
+    row.error_code = error_code if error_code in {
+        "model_unavailable",
+        "model_storage_insufficient",
+        "index_interrupted",
+        "index_failed",
+        "index_not_built",
+        "index_building",
+    } else SEMANTIC_INDEX_FAILED
+    row.finished_at = now
+    row.updated_at = now
+    db.commit()
+
+
+def resolve_search_semantic_meta(
+    db: Session, workspace_id: str
+) -> tuple[str, str | None, SemanticEmbeddingIndexRow | None]:
+    """
+    用途：决定检索侧 semanticStatus / semanticIndexId / active 行。
+    返回：(status, index_id|None, active_row|None)
+    说明：active 存在但 embedder 未 ready 时，无论命中与否均 model_unavailable；
+    本函数只读 is_ready，绝不加载模型或触网。
+    """
+    active = get_active_semantic_index(db, workspace_id)
+    if active is not None:
+        # 维度必须匹配固定契约
+        if int(active.dimension) != embedding_service.OFFLINE_DIM:
+            return SEMANTIC_INDEX_NOT_BUILT, None, None
+        embedder = embedding_service.get_offline_embedder()
+        if not embedder.is_ready():
+            return (
+                embedding_service.ERR_MODEL_UNAVAILABLE,
+                active.id,
+                active,
+            )
+        return SEMANTIC_READY, active.id, active
+    if _count_active_semantic_builds(db, workspace_id) > 0:
+        return SEMANTIC_INDEX_BUILDING, None, None
+    latest_failed = db.scalars(
+        select(SemanticEmbeddingIndexRow)
+        .where(
+            SemanticEmbeddingIndexRow.workspace_id == workspace_id,
+            SemanticEmbeddingIndexRow.status == "failed",
+        )
+        .order_by(SemanticEmbeddingIndexRow.created_at.desc())
+        .limit(1)
+    ).first()
+    if latest_failed is not None and latest_failed.error_code:
+        # 无 active 时对外仍可提示最近失败码，但默认关键词降级用 index_not_built
+        # 计划要求：无 active → index_not_built/关键词降级
+        return SEMANTIC_INDEX_NOT_BUILT, None, None
+    return SEMANTIC_INDEX_NOT_BUILT, None, None
+
+
 def search_chunks(
     db: Session,
     workspace_id: str,
@@ -493,15 +909,19 @@ def search_chunks(
     folder_ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """
-    用途：混合检索 ready 文档分块 = 关键词分 + 向量余弦。
+    用途：混合检索 ready 文档分块 = 关键词分 +（仅 active P9C 索引）语义余弦。
     folder_ids：非空时只搜这些文件夹；None/[] 表示全库。
-    返回：[{chunkId, documentId, docName, title, content, score, keywordScore, vectorScore}, ...]
+    返回项含 semanticStatus/semanticIndexId（每条一致）与 vectorScore（非 ready 为 0）。
+    说明：绝不读取 legacy embedding_json 计算 vectorScore，禁止静默哈希伪语义。
     """
     q = (query or "").strip()
     tokens = _tokenize_query(q)
-    # 无 token 时仍可用向量（整句 local embed）
     if not tokens and not q:
         return []
+
+    semantic_status, semantic_index_id, active = resolve_search_semantic_meta(
+        db, workspace_id
+    )
 
     stmt_docs = select(KbDocumentRow).where(
         KbDocumentRow.workspace_id == workspace_id,
@@ -526,9 +946,45 @@ def search_chunks(
         ).all()
     )
 
-    q_vec = embedding_service.embed_one(q, db=db, workspace_id=workspace_id)
+    # 语义向量：仅 active + 模型可用时
+    q_vec: list[float] | None = None
+    chunk_vecs: dict[str, list[float]] = {}
+    if active is not None and semantic_status == SEMANTIC_READY:
+        embedder = embedding_service.get_offline_embedder()
+        try:
+            if not embedder.is_ready():
+                # 搜索不得触发下载；若仅本地缓存可加载由 ensure 的注入/已载路径覆盖
+                # 无注入且未加载 → 降级为无语义分
+                raise embedding_service.OfflineEmbedderError(
+                    embedding_service.ERR_MODEL_UNAVAILABLE
+                )
+            q_vec = embedder.embed_one(q)
+            if len(q_vec) != int(active.dimension):
+                q_vec = None
+                semantic_status = SEMANTIC_INDEX_NOT_BUILT
+                semantic_index_id = None
+            else:
+                rows = list(
+                    db.scalars(
+                        select(SemanticChunkEmbeddingRow).where(
+                            SemanticChunkEmbeddingRow.workspace_id == workspace_id,
+                            SemanticChunkEmbeddingRow.index_id == active.id,
+                            SemanticChunkEmbeddingRow.dimension == active.dimension,
+                        )
+                    ).all()
+                )
+                for r in rows:
+                    vec = embedding_service.loads_embedding(r.embedding_json)
+                    if vec and len(vec) == active.dimension:
+                        chunk_vecs[r.chunk_id] = vec
+        except embedding_service.OfflineEmbedderError:
+            q_vec = None
+            chunk_vecs = {}
+            # active 存在但模型不可用：状态改为 model_unavailable，仍返回关键词
+            semantic_status = embedding_service.ERR_MODEL_UNAVAILABLE
+            semantic_index_id = active.id if active is not None else None
+
     scored: list[tuple[float, float, float, KbChunkRow]] = []
-    # (hybrid, kw, vec, chunk)
     for ch in chunks:
         text = (ch.content or "").lower()
         title = (ch.title or "").lower()
@@ -539,22 +995,17 @@ def search_chunks(
             c = text.count(t)
             if c:
                 kw += min(c, 5) * 1.0
-        emb = embedding_service.loads_embedding(
-            getattr(ch, "embedding_json", None)
-        )
-        if emb is None and (ch.content or "").strip():
-            # 旧数据无向量：即时本地补算（不写库，避免检索侧写）
-            emb = embedding_service.local_embed(
-                f"{ch.title or ''}\n{ch.content or ''}"
-            )
-        vec_s = embedding_service.cosine(q_vec, emb) if emb else 0.0
-        # 混合：关键词归一近似 + 向量加权
+
+        vec_s = 0.0
+        if q_vec is not None:
+            emb = chunk_vecs.get(ch.id)
+            if emb is not None:
+                vec_s = embedding_service.cosine(q_vec, emb)
+
         kw_norm = min(kw / 10.0, 1.0)
         hybrid = kw_norm * 4.0 + vec_s * 6.0
-        # 无任何信号则跳过
         if hybrid <= 0 and kw <= 0 and vec_s < 0.15:
             continue
-        # 纯向量弱相关也保留（改写查询）
         if kw <= 0 and vec_s < 0.22:
             continue
         scored.append((hybrid, kw, vec_s, ch))
@@ -574,7 +1025,17 @@ def search_chunks(
                 "content": ch.content,
                 "score": round(hybrid, 4),
                 "keywordScore": round(kw, 4),
-                "vectorScore": round(vec_s, 4),
+                "vectorScore": round(vec_s, 4)
+                if semantic_status == SEMANTIC_READY
+                else 0.0,
+                "semanticStatus": semantic_status,
+                "semanticIndexId": semantic_index_id
+                if semantic_status == SEMANTIC_READY
+                else (
+                    semantic_index_id
+                    if semantic_status == embedding_service.ERR_MODEL_UNAVAILABLE
+                    else None
+                ),
             }
         )
     return results

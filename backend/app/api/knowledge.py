@@ -1,16 +1,28 @@
 """
 模块：知识库路由
-用途：文件夹/文档 CRUD、上传并同步解析分块、重索引、移动、关键词检索。
+用途：文件夹/文档 CRUD、上传并同步解析分块、重索引、移动、混合检索；P9C 语义索引状态与重建。
 对接：
   - 前端 useKnowledgeBase / KnowledgeBasePage
   - knowledge_service（业务）
   - 生成侧不经本路由，直接调 knowledge_service.search_prompt_block
-二次开发：大文件可改为异步 task；检索可加 folderId 查询参数（已支持）。
+二次开发：
+  - 大文件可改为异步 task；检索可加 folderId 查询参数（已支持）
+  - 语义索引 API 禁止接受模型 URL/Token/路径/维度；重建仅 BackgroundTasks
 """
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    UploadFile,
+    status,
+)
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
@@ -18,7 +30,10 @@ from app.api.deps import get_workspace_id
 from app.core.config import Settings, get_settings
 from app.core.database import get_db
 from app.services import knowledge_service
-from app.services.knowledge_service import KnowledgeNotFoundError
+from app.services.knowledge_service import (
+    KnowledgeNotFoundError,
+    SemanticIndexConflictError,
+)
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 
@@ -167,12 +182,25 @@ def search(
         Query(alias="folderId", description="限定文件夹，可重复"),
     ] = None,
 ) -> dict[str, Any]:
+    """
+    用途：知识库混合检索；附加 semanticStatus / semanticIndexId / vectorScore。
+    说明：无 active 语义索引时仅关键词，vectorScore=0，semanticStatus=index_not_built。
+    """
     hits = knowledge_service.search_chunks(
         db, workspace_id, q, top_k=top_k, folder_ids=folder_ids
     )
+    if hits:
+        semantic_status = hits[0].get("semanticStatus") or "index_not_built"
+        semantic_index_id = hits[0].get("semanticIndexId")
+    else:
+        semantic_status, semantic_index_id, _ = (
+            knowledge_service.resolve_search_semantic_meta(db, workspace_id)
+        )
     return {
         "query": q,
         "count": len(hits),
+        "semanticStatus": semantic_status,
+        "semanticIndexId": semantic_index_id,
         "items": [
             {
                 "chunkId": h["chunkId"],
@@ -182,7 +210,62 @@ def search(
                 "title": h["title"],
                 "content": (h["content"] or "")[:800],
                 "score": h["score"],
+                "vectorScore": h.get("vectorScore", 0.0),
+                "keywordScore": h.get("keywordScore", 0.0),
             }
             for h in hits
         ],
     }
+
+
+@router.get("/semantic-index")
+def get_semantic_index_status(
+    db: Annotated[Session, Depends(get_db)],
+    workspace_id: Annotated[str, Depends(get_workspace_id)],
+) -> dict[str, Any]:
+    """
+    用途：当前工作空间语义索引状态读模型（脱敏）。
+    对接：GET /api/knowledge/semantic-index。
+    """
+    return knowledge_service.get_semantic_index_status(db, workspace_id)
+
+
+@router.get("/semantic-index/{index_id}")
+def get_semantic_index_detail(
+    index_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    workspace_id: Annotated[str, Depends(get_workspace_id)],
+) -> dict[str, Any]:
+    """
+    用途：按 id 查询语义索引；跨空间 404。
+    对接：GET /api/knowledge/semantic-index/{index_id}。
+    """
+    try:
+        row = knowledge_service.get_semantic_index(db, workspace_id, index_id)
+    except KnowledgeNotFoundError:
+        raise HTTPException(status_code=404, detail="语义索引不存在") from None
+    return knowledge_service.semantic_index_to_dict(row)
+
+
+@router.post(
+    "/semantic-index/rebuild",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def rebuild_semantic_index(
+    background_tasks: BackgroundTasks,
+    db: Annotated[Session, Depends(get_db)],
+    workspace_id: Annotated[str, Depends(get_workspace_id)],
+) -> dict[str, Any]:
+    """
+    用途：无请求体创建 queued 重建并注册后台执行；并发 409。
+    对接：POST /api/knowledge/semantic-index/rebuild；BackgroundTasks。
+    二次开发：禁止接受模型名/URL/Token/路径/维度。
+    """
+    try:
+        row = knowledge_service.create_semantic_index_rebuild(db, workspace_id)
+    except SemanticIndexConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    background_tasks.add_task(
+        knowledge_service.execute_semantic_index_rebuild, row.id
+    )
+    return knowledge_service.semantic_index_to_dict(row)

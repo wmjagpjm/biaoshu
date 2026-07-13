@@ -702,7 +702,7 @@ class KbChunkRow(Base):
     """
     用途：知识库文本分块，供关键词/向量混合检索与生成注入。
     对接：knowledge_service.search_chunks；task_service RAG 注入
-    embedding_json：本地哈希或 API embedding 的 float 数组 JSON
+    embedding_json：历史本地哈希或旧 API 向量 JSON；P9C 语义检索改读 semantic_chunk_embeddings
     """
 
     __tablename__ = "kb_chunks"
@@ -728,6 +728,122 @@ class KbChunkRow(Base):
         DateTime(timezone=True),
         nullable=False,
         default=utc_now,
+    )
+
+
+class SemanticEmbeddingIndexRow(Base):
+    """
+    模块：P9C 语义索引运行实体
+    用途：按工作空间记录离线模型版本化索引状态；版本并存，成功后才切 active。
+    对接：knowledge_service 重建/查询；/api/knowledge/semantic-index*。
+    二次开发：error_code 仅允许服务端固定码；禁止存 URL、Token、正文、远端错误原文或用户路径。
+    """
+
+    __tablename__ = "semantic_embedding_indexes"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'running', 'active', 'failed', 'superseded')",
+            name="ck_semantic_embedding_indexes_status",
+        ),
+        CheckConstraint(
+            "provider = 'offline_bge'",
+            name="ck_semantic_embedding_indexes_provider",
+        ),
+        CheckConstraint(
+            "error_code IS NULL OR error_code IN ("
+            "'model_unavailable', 'model_storage_insufficient', "
+            "'index_interrupted', 'index_failed', 'index_not_built', 'index_building'"
+            ")",
+            name="ck_semantic_embedding_indexes_error_code",
+        ),
+        UniqueConstraint(
+            "id",
+            "workspace_id",
+            name="uq_semantic_embedding_indexes_id_workspace",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
+    provider: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="offline_bge"
+    )
+    model_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    model_fingerprint: Mapped[str] = mapped_column(
+        String(128), nullable=False, default=""
+    )
+    dimension: Mapped[int] = mapped_column(Integer, nullable=False, default=512)
+    # total_chunks：收集有效分块后写入；embedded_chunks：成功写入向量数
+    total_chunks: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    embedded_chunks: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # chunk_count 兼容字段：语义等价于 embedded_chunks（已成功嵌入分块数）
+    chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
+class SemanticChunkEmbeddingRow(Base):
+    """
+    模块：P9C 语义分块向量实体
+    用途：保存某次索引运行下每个分块的离线 512 维向量；与历史 embedding_json 并存。
+    对接：knowledge_service 重建执行与 hybrid 检索；SemanticEmbeddingIndexRow。
+    二次开发：所有读写必须带 workspace_id 过滤；跨空间 index/chunk 一律视为不存在。
+    """
+
+    __tablename__ = "semantic_chunk_embeddings"
+    __table_args__ = (
+        UniqueConstraint(
+            "index_id",
+            "chunk_id",
+            name="uq_semantic_chunk_embeddings_index_chunk",
+        ),
+        ForeignKeyConstraint(
+            ["index_id", "workspace_id"],
+            [
+                "semantic_embedding_indexes.id",
+                "semantic_embedding_indexes.workspace_id",
+            ],
+            ondelete="CASCADE",
+            name="fk_semantic_chunk_embeddings_index_workspace",
+        ),
+        ForeignKeyConstraint(
+            ["chunk_id"],
+            ["kb_chunks.id"],
+            ondelete="CASCADE",
+            name="fk_semantic_chunk_embeddings_chunk",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    index_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    chunk_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    dimension: Mapped[int] = mapped_column(Integer, nullable=False, default=512)
+    embedding_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
     )
 
 

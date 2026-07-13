@@ -23,6 +23,8 @@ from app.models.entities import (
     ResourceSyncItemRow,
     ResourceSyncRunRow,
     ResourceSyncSourceRow,
+    SemanticChunkEmbeddingRow,
+    SemanticEmbeddingIndexRow,
     Workspace,
     WorkspaceSettingsRow,
 )
@@ -37,6 +39,8 @@ __all__ = [
     "KbFolderRow",
     "KbDocumentRow",
     "KbChunkRow",
+    "SemanticEmbeddingIndexRow",
+    "SemanticChunkEmbeddingRow",
     "KnowledgeCardRow",
     "BidOpportunityRow",
     "BidWatchPlanRow",
