@@ -120,9 +120,12 @@ npm run test:e2e:semantic-index
 
 # P10A：本机身份、会话恢复与受限导航（隔离 8010/5174、路由桩；禁止外部业务主机）
 npm run test:e2e:auth-rbac
+
+# P10B：财务只读商务标报价（隔离 8010/5174、路由桩；仅两个专用 GET）
+npm run test:e2e:finance-role
 ```
 
-当前基线：后端 **pytest 全量 290 passed**（固定 `PYTHONHASHSEED=0`，1 条既有 Starlette/httpx 弃用警告；含 P10A 39 项身份/RBAC/CSRF 测试）；前端 lint/build；P10A `test:e2e:auth-rbac` **11 passed**；P9C `test:e2e:semantic-index` **9 passed**；知识卡片 `test:e2e:cards` **1 passed**。P10A 仅为本机身份底座：`AUTH_MODE=disabled` 兼容个人版，`required` 须先用交互脚本引导管理员；财务、人力、投标人业务授权属于后续 P10B。完整安全契约见 `docs/p10a-local-identity-rbac-contract.md`。
+当前基线：后端 **pytest 全量 299 passed**（按串行分组，1 条既有 Starlette/httpx 弃用警告；含 P10A 39 项身份/RBAC/CSRF 与 P10B 9 项财务报价测试）；前端 lint/build；P10A `test:e2e:auth-rbac` **11 passed**；P10B `test:e2e:finance-role` **7 passed**；P9C `test:e2e:semantic-index` **9 passed**；知识卡片 `test:e2e:cards` **1 passed**。P10A 是本机身份底座；P10B 仅向 strict `finance` 开放商务标报价只读投影，`AUTH_MODE=disabled` 不开放该入口。完整契约见 `docs/p10a-local-identity-rbac-contract.md` 与 `docs/p10b-finance-business-quote-contract.md`。
 
 ## 6. 已接 API 一览
 
@@ -136,6 +139,8 @@ npm run test:e2e:auth-rbac
 | GET | `/api/auth/csrf`（当前会话；轮换 CSRF，`no-store`） |
 | PUT | `/api/auth/active-workspace`（当前会话 + CSRF） |
 | GET/POST/PATCH/DELETE | `/api/auth/members*`（仅工作空间所有者） |
+| GET | `/api/finance/business-bids`（仅 strict `finance`；当前 workspace 商务标报价摘要；`no-store`） |
+| GET | `/api/finance/business-bids/{projectId}`（仅 strict `finance`；白名单报价分项；技术标/跨空间/不存在统一 404；`no-store`） |
 | GET/POST | `/api/projects` |
 | GET/PATCH/DELETE | `/api/projects/{id}` |
 | GET | `/api/projects/{id}/tasks/{taskId}/events`（SSE） |
@@ -250,7 +255,7 @@ npm run test:e2e:auth-rbac
 
 ## 14. 仍未接（后续）
 
-Celery、真 MinerU 安装包、P9B 以外的外部标讯数据源、P9C 的其他模型/GPU/在线 embedding/真实用户语料评测与自动模型更新、多用户鉴权、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
+Celery、真 MinerU 安装包、P9B 以外的外部标讯数据源、P9C 的其他模型/GPU/在线 embedding/真实用户语料评测与自动模型更新、P10B 以外的财务成本/利润/税务/审批/导出、人力团队数据域、投标人匿名预览/版本/合规数据域、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
 
 **响应矩阵相关（已接 vs 未扩）：** 多端冲突的版本写保护、409 与双浏览器上下文 E2E 主路径已接；「刷新来源」保留人工映射 E2E 已接；**智能建议人工确认后应用** E2E 已接；**来源超过 80 分页** 已推送（`1289c92`）；**字段级三方合并** MVP + E2E 已推送（`2c7b3e0`，`response-matrix-field-merge.spec.ts`）。仍未接：Word 失效引用在浏览器层的扩展（导出逻辑以后端单测为准）；包 9 交付增强。
 
