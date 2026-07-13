@@ -138,6 +138,19 @@ def ensure_schema_columns(target_engine=None) -> None:
         CREATE INDEX IF NOT EXISTS ix_semantic_chunk_embeddings_workspace_index
         ON semantic_chunk_embeddings(workspace_id, index_id)
         """,
+        # P10A：身份表由 create_all 建立；此处仅幂等补常用查询索引
+        """
+        CREATE INDEX IF NOT EXISTS ix_workspace_members_user
+        ON workspace_members(user_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_auth_sessions_user_expires
+        ON auth_sessions(user_id, expires_at)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_auth_audit_events_created
+        ON auth_audit_events(created_at)
+        """,
         """
         CREATE TRIGGER IF NOT EXISTS trg_resources_validate_insert
         BEFORE INSERT ON resources

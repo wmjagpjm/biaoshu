@@ -19,6 +19,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import (
+    auth as auth_api,
     cards as cards_api,
     compliance as compliance_api,
     export as export_api,
@@ -36,10 +37,13 @@ from app.api import (
     tasks,
     templates as templates_api,
 )
+from app.api.auth_middleware import AuthMiddleware
 from app.core.config import get_settings
 from app.core.database import Base, SessionLocal, engine, ensure_schema_columns
 # 导入实体以注册 Base.metadata（create_all 依赖）
 from app.models import (  # noqa: F401
+    AuthAuditEventRow,
+    AuthSessionRow,
     BidOpportunityRow,
     BidSourceHitRow,
     BidSourceSyncRunRow,
@@ -49,6 +53,7 @@ from app.models import (  # noqa: F401
     KbDocumentRow,
     KbFolderRow,
     KnowledgeCardRow,
+    LocalUserRow,
     Project,
     ProjectEditorStateRow,
     ProjectFileRow,
@@ -60,6 +65,7 @@ from app.models import (  # noqa: F401
     SemanticChunkEmbeddingRow,
     SemanticEmbeddingIndexRow,
     Workspace,
+    WorkspaceMemberRow,
     WorkspaceSettingsRow,
 )
 from app.services.project_service import ensure_default_workspace
@@ -105,6 +111,8 @@ def create_app() -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
     )
+    # 先注册鉴权中间件，再注册 CORS（后添加的 CORS 处于最外层，便于预检）
+    app.add_middleware(AuthMiddleware)
     # 开发期允许 Vite 源；生产请在 .env 收紧 CORS_ORIGINS
     app.add_middleware(
         CORSMiddleware,
@@ -115,6 +123,7 @@ def create_app() -> FastAPI:
     )
     # 路由前缀 /api：与前端 apiFetch 的 base（默认 /api）拼接后完整路径一致
     app.include_router(health.router, prefix="/api")
+    app.include_router(auth_api.router, prefix="/api")
     app.include_router(projects.router, prefix="/api")
     app.include_router(settings_api.router, prefix="/api")
     app.include_router(llm.router, prefix="/api")

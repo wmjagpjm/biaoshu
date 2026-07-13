@@ -924,3 +924,72 @@ class InsertCardOut(BaseModel):
     card_type: KnowledgeCardType = Field(serialization_alias="cardType")
     title: str
     source_label: str = Field(default="", serialization_alias="sourceLabel")
+
+
+# ---------- P10A 本机身份与会话 ----------
+
+
+AuthRole = Literal["bid_writer", "finance", "hr", "bidder"]
+
+
+class AuthBootstrapStatusOut(BaseModel):
+    """用途：公开引导状态；不含任何用户信息。"""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    bootstrapped: bool
+
+
+class AuthLoginRequest(BaseModel):
+    """用途：登录请求；仅用户名与口令。"""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    username: str
+    password: str
+
+
+class AuthUserOut(BaseModel):
+    """用途：脱敏用户。"""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    username: str
+
+
+class AuthWorkspaceOut(BaseModel):
+    """用途：当前用户可访问的工作空间成员视图。"""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    name: str
+    role: AuthRole
+    is_owner: bool = Field(alias="isOwner", serialization_alias="isOwner")
+
+
+class AuthMeOut(BaseModel):
+    """
+    用途：登录/me/切换空间的脱敏响应。
+    csrfToken 仅登录时非空；后续 GET /me 可为 null（客户端内存持有）。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    user: AuthUserOut
+    workspaces: list[AuthWorkspaceOut]
+    active_workspace_id: str | None = Field(
+        alias="activeWorkspaceId", serialization_alias="activeWorkspaceId"
+    )
+    csrf_token: str | None = Field(
+        default=None, alias="csrfToken", serialization_alias="csrfToken"
+    )
+
+
+class ActiveWorkspaceUpdate(BaseModel):
+    """用途：切换会话活动工作空间。"""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    workspace_id: str = Field(alias="workspaceId")

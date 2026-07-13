@@ -11,7 +11,11 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# P10A：AUTH_MODE 白名单；未知值必须在配置加载时拒绝，禁止静默降级为 disabled
+_AUTH_MODE_ALLOWED = frozenset({"disabled", "required"})
 
 
 class Settings(BaseSettings):
@@ -74,10 +78,43 @@ class Settings(BaseSettings):
     semantic_model_cache_dir: str = "semantic-models"
     # 重建前最低可用磁盘（字节），默认 5 GiB
     semantic_min_free_disk_bytes: int = 5 * 1024 * 1024 * 1024
+    # P10A 本机身份：仅允许 disabled（默认，个人版兼容）或 required（强制会话与成员校验）
+    # 大小写不敏感；任何未知值在配置加载时拒绝，绝不可静默按 disabled 运行
+    auth_mode: str = "disabled"
+    # 会话有效期（小时）；仅服务端配置，禁止由请求覆盖
+    auth_session_ttl_hours: int = 72
+    # Cookie 名与 Secure 标记；Path 固定 /api，SameSite 固定 Strict
+    auth_cookie_name: str = "biaoshu_session"
+    auth_cookie_secure: bool = False
+    # 变更请求 CSRF 头名；原始值仅存浏览器内存，库内仅 SHA-256 摘要
+    auth_csrf_header_name: str = "X-CSRF-Token"
+
+    @field_validator("auth_mode", mode="before")
+    @classmethod
+    def validate_auth_mode(cls, value: object) -> str:
+        """
+        用途：在应用启动/配置加载时校验 AUTH_MODE。
+        规则：仅 disabled|required（去空白、大小写不敏感）；非法值抛 ValidationError。
+        """
+        if value is None:
+            raise ValueError("AUTH_MODE 仅允许 disabled 或 required，不能为空")
+        normalized = str(value).strip().lower()
+        if normalized not in _AUTH_MODE_ALLOWED:
+            raise ValueError(
+                f"AUTH_MODE 仅允许 disabled 或 required，当前值非法: {value!r}"
+            )
+        return normalized
 
     def cors_origin_list(self) -> list[str]:
         """用途：将 cors_origins 字符串拆成列表，供 CORSMiddleware 使用。"""
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    def is_auth_required(self) -> bool:
+        """
+        用途：是否启用强制本机会话。
+        规则：auth_mode 经校验后仅为 disabled|required；仅 required 为真。
+        """
+        return self.auth_mode == "required"
 
     def resource_sync_allowed_host_set(self) -> set[str]:
         """

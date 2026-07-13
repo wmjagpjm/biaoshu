@@ -895,6 +895,137 @@ class KnowledgeCardRow(Base):
     )
 
 
+class LocalUserRow(Base):
+    """
+    模块：P10A 本机用户实体
+    用途：保存用户名与 scrypt 口令派生值；不含邮箱/手机/第三方身份。
+    对接：auth_service；/api/auth/*；bootstrap_local_admin。
+    二次开发：禁止回显 password_* 字段；username_normalized 为唯一键。
+    """
+
+    __tablename__ = "local_users"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    username: Mapped[str] = mapped_column(String(100), nullable=False)
+    username_normalized: Mapped[str] = mapped_column(
+        String(100), nullable=False, unique=True, index=True
+    )
+    password_salt: Mapped[str] = mapped_column(String(64), nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
+class WorkspaceMemberRow(Base):
+    """
+    模块：P10A 工作空间成员实体
+    用途：用户与工作空间的角色关系；is_owner 为所有者标记，不新增第五业务角色。
+    对接：auth_service；deps.get_workspace_id；后续成员管理 API。
+    二次开发：role 仅允许 bid_writer|finance|hr|bidder；最后所有者保护在服务层。
+    """
+
+    __tablename__ = "workspace_members"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "user_id",
+            name="uq_workspace_members_workspace_user",
+        ),
+        CheckConstraint(
+            "role IN ('bid_writer', 'finance', 'hr', 'bidder')",
+            name="ck_workspace_members_role",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("local_users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="bid_writer")
+    is_owner: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
+class AuthSessionRow(Base):
+    """
+    模块：P10A 会话实体
+    用途：不透明 Cookie 会话；库内仅存 token/CSRF 的 SHA-256 摘要与过期/撤销时间。
+    对接：auth_service；auth_middleware；/api/auth/login|logout|me。
+    二次开发：禁止落库原始 Cookie/CSRF；禁止 JWT。
+    """
+
+    __tablename__ = "auth_sessions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("local_users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    token_digest: Mapped[str] = mapped_column(
+        String(64), nullable=False, unique=True, index=True
+    )
+    csrf_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    active_workspace_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("workspaces.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
+class AuthAuditEventRow(Base):
+    """
+    模块：P10A 最小审计事件
+    用途：记录登录/退出/拒绝等固定动作与结果；不得写入口令、Cookie、摘要或 Token。
+    对接：auth_service.record_audit；测试断言脱敏。
+    """
+
+    __tablename__ = "auth_audit_events"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    actor_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    workspace_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    result: Mapped[str] = mapped_column(String(64), nullable=False)
+    target: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, index=True
+    )
+
+
 class ProjectTaskRow(Base):
     """
     用途：本机日用任务（解析/分析/大纲/正文/导出）状态。

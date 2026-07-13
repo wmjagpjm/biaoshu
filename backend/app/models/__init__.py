@@ -6,6 +6,8 @@
 """
 
 from app.models.entities import (
+    AuthAuditEventRow,
+    AuthSessionRow,
     BidOpportunityRow,
     BidSourceHitRow,
     BidSourceSyncRunRow,
@@ -15,6 +17,7 @@ from app.models.entities import (
     KbDocumentRow,
     KbFolderRow,
     KnowledgeCardRow,
+    LocalUserRow,
     Project,
     ProjectEditorStateRow,
     ProjectFileRow,
@@ -26,6 +29,7 @@ from app.models.entities import (
     SemanticChunkEmbeddingRow,
     SemanticEmbeddingIndexRow,
     Workspace,
+    WorkspaceMemberRow,
     WorkspaceSettingsRow,
 )
 
@@ -51,4 +55,8 @@ __all__ = [
     "ResourceSyncSourceRow",
     "ResourceSyncRunRow",
     "ResourceSyncItemRow",
+    "LocalUserRow",
+    "WorkspaceMemberRow",
+    "AuthSessionRow",
+    "AuthAuditEventRow",
 ]
