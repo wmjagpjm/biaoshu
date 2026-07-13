@@ -1,15 +1,30 @@
 /**
  * 模块：知识库文档状态
- * 用途：文件夹树 + 文档列表/筛选/批量移动/上传索引/重试；优先 API，失败回退 localStorage。
- * 对接：GET|POST /api/knowledge/*；页面 KnowledgeBasePage
- * 二次开发：图片/素材卡片走 useKnowledgeCards（后端 /api/cards），勿再混入 localStorage。
+ * 用途：文件夹树 + 文档列表/筛选/批量移动/上传索引/重试 + P9C 语义索引状态刷新/重建/轮询。
+ * 对接：GET|POST /api/knowledge/*；GET|POST /api/knowledge/semantic-index*；页面 KnowledgeBasePage。
+ * 二次开发：语义索引禁止写入 localStorage 伪就绪；图片/素材卡片走 useKnowledgeCards，勿混入文档存储。
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch } from "../../../shared/lib/api";
 import { mockDocs, mockFolders } from "../mock";
-import type { DocParseStatus, KbFolder, KnowledgeDoc } from "../types";
-import { KB_FOLDER_ALL } from "../types";
+import type {
+  DocParseStatus,
+  KbFolder,
+  KnowledgeDoc,
+  SemanticIndex,
+} from "../types";
+import {
+  isSemanticIndexBuilding,
+  KB_FOLDER_ALL,
+  normalizeSemanticIndex,
+  SEMANTIC_LOCAL_MODE_MSG,
+  SEMANTIC_REBUILD_FAILED_MSG,
+  SEMANTIC_STATUS_UNAVAILABLE_MSG,
+} from "../types";
+
+/** 语义索引构建中轮询间隔（毫秒） */
+const SEMANTIC_POLL_MS = 2000;
 
 type StoredKb = {
   folders: KbFolder[];
@@ -80,6 +95,47 @@ export function useKnowledgeBase() {
   const [docQuery, setDocQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<DocParseStatus | "all">("all");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  // P9C：仅内存态，禁止 localStorage 伪造语义就绪
+  const [semanticIndex, setSemanticIndex] = useState<SemanticIndex | null>(null);
+  const [semanticError, setSemanticError] = useState<string | null>(null);
+  const [semanticBusy, setSemanticBusy] = useState(false);
+  const semanticPollRef = useRef<number | null>(null);
+  const sourceRef = useRef<"api" | "local">("local");
+
+  useEffect(() => {
+    sourceRef.current = source;
+  }, [source]);
+
+  const clearSemanticPoll = useCallback(() => {
+    if (semanticPollRef.current != null) {
+      window.clearInterval(semanticPollRef.current);
+      semanticPollRef.current = null;
+    }
+  }, []);
+
+  /**
+   * 用途：拉取当前工作空间语义索引状态；失败不写本地伪状态。
+   * 说明：错误文案固定中文，禁止透传 apiFetch/代理 detail（路径、密钥、远端原文）。
+   */
+  const refreshSemanticIndex = useCallback(async () => {
+    if (sourceRef.current !== "api") {
+      setSemanticIndex(null);
+      return null;
+    }
+    try {
+      const raw = await apiFetch<unknown>("/knowledge/semantic-index");
+      const row = normalizeSemanticIndex(raw);
+      setSemanticIndex(row);
+      setSemanticError(null);
+      return row;
+    } catch {
+      // 固定安全文案：不回显 err.message（可能含 C:\、apiKey、URL）
+      setSemanticError(SEMANTIC_STATUS_UNAVAILABLE_MSG);
+      // 不写 localStorage，不伪造成就绪
+      setSemanticIndex(null);
+      return null;
+    }
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -92,30 +148,84 @@ export function useKnowledgeBase() {
       setFolders(foldersNext);
       setDocs(docsNext);
       setSource("api");
+      sourceRef.current = "api";
       setError(null);
       saveLocal({ folders: foldersNext, docs: docsNext });
+      await refreshSemanticIndex();
       return true;
     } catch (err) {
       const local = loadLocal();
       setFolders(local.folders);
       setDocs(local.docs);
       setSource("local");
+      sourceRef.current = "local";
       setError((err as { message?: string })?.message || "知识库 API 不可用，已用本地数据");
+      // local 回退：不伪造语义索引就绪
+      setSemanticIndex(null);
+      setSemanticError(null);
+      clearSemanticPoll();
       return false;
     } finally {
       setHydrated(true);
     }
-  }, []);
+  }, [refreshSemanticIndex, clearSemanticPoll]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
-  // 仅 local 模式写 localStorage（API 成功时 refresh 已写缓存）
+  // 仅 local 模式写 localStorage（API 成功时 refresh 已写缓存；绝不持久化语义索引）
   useEffect(() => {
     if (!hydrated || source !== "local") return;
     saveLocal({ folders, docs });
   }, [folders, docs, hydrated, source]);
+
+  // 构建中轮询；组件卸载时清理
+  useEffect(() => {
+    if (source !== "api" || !isSemanticIndexBuilding(semanticIndex)) {
+      clearSemanticPoll();
+      return;
+    }
+    if (semanticPollRef.current != null) return;
+    semanticPollRef.current = window.setInterval(() => {
+      void refreshSemanticIndex();
+    }, SEMANTIC_POLL_MS);
+    return () => {
+      clearSemanticPoll();
+    };
+  }, [source, semanticIndex, refreshSemanticIndex, clearSemanticPoll]);
+
+  useEffect(() => {
+    return () => {
+      clearSemanticPoll();
+    };
+  }, [clearSemanticPoll]);
+
+  /**
+   * 用途：触发 POST /knowledge/semantic-index/rebuild（无请求体）；仅 API 模式。
+   * 说明：失败仅展示固定中文，禁止透传后端/代理 detail。
+   */
+  const rebuildSemanticIndex = useCallback(async () => {
+    if (source !== "api") {
+      setSemanticError(SEMANTIC_LOCAL_MODE_MSG);
+      return;
+    }
+    setSemanticBusy(true);
+    setSemanticError(null);
+    try {
+      const raw = await apiFetch<unknown>(
+        "/knowledge/semantic-index/rebuild",
+        { method: "POST" },
+      );
+      setSemanticIndex(normalizeSemanticIndex(raw));
+    } catch {
+      // 先刷新状态，再写入固定错误文案（refresh 成功会清空 error，故须后置）
+      await refreshSemanticIndex();
+      setSemanticError(SEMANTIC_REBUILD_FAILED_MSG);
+    } finally {
+      setSemanticBusy(false);
+    }
+  }, [source, refreshSemanticIndex]);
 
   const folderCounts = useMemo(() => {
     const map = new Map<string, number>();
@@ -381,6 +491,8 @@ export function useKnowledgeBase() {
     void uploadFiles([]);
   }, [uploadFiles]);
 
+  const semanticBuilding = isSemanticIndexBuilding(semanticIndex);
+
   return {
     folders,
     docs,
@@ -409,5 +521,12 @@ export function useKnowledgeBase() {
     source,
     hydrated,
     totalDocCount: docs.length,
+    // P9C 语义索引面板
+    semanticIndex,
+    semanticError,
+    semanticBusy,
+    semanticBuilding,
+    refreshSemanticIndex,
+    rebuildSemanticIndex,
   };
 }

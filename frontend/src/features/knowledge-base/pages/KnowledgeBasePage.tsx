@@ -1,13 +1,14 @@
 /**
  * 模块：知识库页
- * 用途：文档（文件夹树 + 状态筛选 + 上传索引）+ 素材卡片库 + 后端化图片卡。
- * 对接：/api/knowledge；/api/cards；useKnowledgeBase / useKnowledgeCards。
- * 二次开发：图片禁止回退 localStorage/data URL；AI 注入与融合属阶段 3。
+ * 用途：文档（文件夹树 + 状态筛选 + 上传索引）+ 素材卡片库 + 后端化图片卡 + P9C 离线语义索引状态面板。
+ * 对接：/api/knowledge；/api/knowledge/semantic-index*；/api/cards；useKnowledgeBase / useKnowledgeCards。
+ * 二次开发：图片禁止回退 localStorage/data URL；语义索引禁止模型 URL/Token/缓存路径输入；AI 注入与融合属阶段 3。
  */
 
 import { useMemo, useRef, useState, type DragEvent, type FormEvent } from "react";
 import {
   BookOpen,
+  Cpu,
   FolderInput,
   ImageIcon,
   Images,
@@ -29,8 +30,24 @@ import type {
   KnowledgeCardType,
   KbTab,
 } from "../types";
-import { CARD_TYPE_LABEL, DOC_STATUS_LABEL } from "../types";
+import {
+  CARD_TYPE_LABEL,
+  DOC_STATUS_LABEL,
+  SEMANTIC_FIXED_DIMENSION,
+  SEMANTIC_FIXED_MODEL_ID,
+  semanticActionLabel,
+  semanticDegradeReason,
+  semanticStatusLabel,
+} from "../types";
 import "./KnowledgeBase.css";
+
+/** 用途：格式化完成时间（本地可读）；空则 —。 */
+function formatFinishedAt(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString("zh-CN", { hour12: false });
+}
 
 function statusClass(status: DocParseStatus): string {
   if (status === "ready") return "is-ready";
@@ -255,6 +272,120 @@ export function KnowledgeBasePage() {
                 {kb.error}
               </div>
             )}
+
+            {/* P9C：离线语义索引状态面板（固定模型，无配置入口） */}
+            <section
+              className="kb-semantic-panel card card-pad"
+              data-testid="semantic-index-panel"
+              aria-label="离线语义索引状态"
+            >
+              <div className="kb-semantic-panel__head">
+                <div className="kb-semantic-panel__title">
+                  <Cpu size={16} aria-hidden />
+                  <strong>离线语义索引（本机）</strong>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  data-testid="semantic-index-rebuild"
+                  aria-label={semanticActionLabel(kb.semanticIndex)}
+                  disabled={
+                    kb.source !== "api" ||
+                    kb.semanticBusy ||
+                    kb.semanticBuilding ||
+                    kb.busy
+                  }
+                  onClick={() => void kb.rebuildSemanticIndex()}
+                  title={
+                    kb.source !== "api"
+                      ? "本地演示模式不可构建"
+                      : "仅使用本机固定模型，不外发正文"
+                  }
+                >
+                  {kb.semanticBusy || kb.semanticBuilding
+                    ? "构建中…"
+                    : semanticActionLabel(kb.semanticIndex)}
+                </button>
+              </div>
+              <dl className="kb-semantic-panel__meta">
+                <div>
+                  <dt>模型</dt>
+                  {/* 始终展示固定离线模型；禁止回显服务端脏数据 modelId */}
+                  <dd data-testid="semantic-index-model">
+                    {SEMANTIC_FIXED_MODEL_ID}
+                  </dd>
+                </div>
+                <div>
+                  <dt>状态</dt>
+                  <dd data-testid="semantic-index-status">
+                    {kb.source !== "api"
+                      ? "本地演示 · 不可构建"
+                      : semanticStatusLabel(kb.semanticIndex)}
+                  </dd>
+                </div>
+                <div>
+                  <dt>维度</dt>
+                  {/* 始终展示固定 512 维；禁止回显服务端脏数据 dimension */}
+                  <dd data-testid="semantic-index-dimension">
+                    {SEMANTIC_FIXED_DIMENSION}
+                  </dd>
+                </div>
+                <div>
+                  <dt>进度</dt>
+                  <dd data-testid="semantic-index-counts">
+                    {kb.semanticIndex
+                      ? `${kb.semanticIndex.embeddedChunks}/${kb.semanticIndex.totalChunks} 分块`
+                      : "0/0 分块"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>完成时间</dt>
+                  <dd data-testid="semantic-index-finished">
+                    {formatFinishedAt(kb.semanticIndex?.finishedAt)}
+                  </dd>
+                </div>
+              </dl>
+              {kb.source !== "api" ? (
+                <p
+                  className="kb-semantic-panel__hint"
+                  data-testid="semantic-index-degrade"
+                  role="status"
+                >
+                  文档当前为本地演示模式，无法构建离线语义索引；连接后端 API 后可使用固定模型{" "}
+                  {SEMANTIC_FIXED_MODEL_ID}。
+                </p>
+              ) : (
+                <>
+                  {semanticDegradeReason(kb.semanticIndex) ? (
+                    <p
+                      className="kb-semantic-panel__hint"
+                      data-testid="semantic-index-degrade"
+                      role="status"
+                    >
+                      {semanticDegradeReason(kb.semanticIndex)}
+                    </p>
+                  ) : (
+                    <p
+                      className="kb-semantic-panel__hint is-ok"
+                      data-testid="semantic-index-degrade"
+                      role="status"
+                    >
+                      语义索引已就绪，检索将混合关键词与本机向量。
+                    </p>
+                  )}
+                  {kb.semanticError ? (
+                    <p
+                      className="kb-semantic-panel__error"
+                      role="alert"
+                      data-testid="semantic-index-error"
+                    >
+                      {kb.semanticError}
+                    </p>
+                  ) : null}
+                </>
+              )}
+            </section>
+
             <div className="kb-docs-toolbar card card-pad">
               <div className="field" style={{ margin: 0, flex: 1, minWidth: 180 }}>
                 <label htmlFor="kb-search">检索文档</label>
