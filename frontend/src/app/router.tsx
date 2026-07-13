@@ -18,6 +18,7 @@ import { MyTemplatesPage } from "../features/export-format/pages/MyTemplatesPage
 import { TemplateEditorPage } from "../features/export-format/pages/TemplateEditorPage";
 import { SettingsPage } from "../features/settings/pages/SettingsPage";
 import { LoginPage } from "../features/auth/pages/LoginPage";
+import { FinanceQuotePage } from "../features/finance/pages/FinanceQuotePage";
 import {
   authRoleLabel,
   useAuthSession,
@@ -27,9 +28,10 @@ import "../features/auth/pages/LoginPage.css";
 
 /**
  * 前端路由
- * 用途：对齐 C 端模块地图；按认证模式门禁业务壳；非 bid_writer 重定向受限页。
+ * 用途：对齐 C 端模块地图；按认证模式门禁业务壳；非 bid_writer 重定向受限页；
+ *       严格 finance 可进 /finance 只读报价页。
  * 对接：AuthProvider；页面均挂 AppShell（登录页除外）。
- * 二次开发：导航隐藏不替代后端鉴权；disabled 保持全部既有路径。
+ * 二次开发：导航隐藏不替代后端鉴权；disabled 保持全部既有业务路径但不开放财务入口。
  */
 
 /** 用途：加载中占位（握手未完成）。 */
@@ -72,7 +74,7 @@ function AuthHandshakeErrorPage() {
 }
 
 /**
- * 用途：受限角色说明页（finance/hr/bidder 或非所有者访问设置）。
+ * 用途：受限角色说明页（非财务访问 /finance，或 finance/hr/bidder 访问业务页等）。
  */
 function RestrictedAccessPage({ reason }: { reason?: string }) {
   const { activeMembership, me } = useAuthSession();
@@ -85,7 +87,7 @@ function RestrictedAccessPage({ reason }: { reason?: string }) {
           {reason ??
             `账号「${me?.user.username ?? "未知"}」在本工作空间的角色为「${authRoleLabel(
               role,
-            )}」。P10A 阶段仅标书制作者可使用既有业务功能；财务、人力与投标人业务面将在后续权限包开放。权限以服务端校验为准，本页仅作体验分流。`}
+            )}」。P10A 阶段仅标书制作者可使用既有业务功能；P10B 起严格财务角色可进入「财务报价」只读页。权限以服务端校验为准，本页仅作体验分流。`}
         </p>
       </div>
     </div>
@@ -108,6 +110,20 @@ function RequireOwner({ children }: { children: ReactNode }) {
   if (phase === "disabled") return <>{children}</>;
   if (!canAccessSettings) {
     return <Navigate to="/restricted" replace />;
+  }
+  return <>{children}</>;
+}
+
+/**
+ * 用途：要求严格 finance 才渲染财务报价页。
+ * 约束：disabled / 其他角色不渲染业务页、不重定向到 /create，只显示受限说明。
+ */
+function RequireFinance({ children }: { children: ReactNode }) {
+  const { canAccessFinance } = useAuthSession();
+  if (!canAccessFinance) {
+    return (
+      <RestrictedAccessPage reason="仅财务角色可查看财务报价只读页。个人版兼容模式与所有者、标书制作者、人力、投标人均不可通过本入口访问。" />
+    );
   }
   return <>{children}</>;
 }
@@ -309,6 +325,14 @@ function AuthGate() {
             <RequireOwner>
               <SettingsPage />
             </RequireOwner>
+          }
+        />
+        <Route
+          path="finance"
+          element={
+            <RequireFinance>
+              <FinanceQuotePage />
+            </RequireFinance>
           }
         />
         <Route path="restricted" element={<RestrictedAccessPage />} />

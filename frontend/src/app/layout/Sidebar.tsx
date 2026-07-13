@@ -3,6 +3,7 @@ import { NavLink } from "react-router-dom";
 import {
   BookOpen,
   Briefcase,
+  Calculator,
   FileSearch,
   FileWarning,
   FolderKanban,
@@ -25,6 +26,8 @@ type NavItem = {
   end?: boolean;
   business?: boolean;
   ownerOnly?: boolean;
+  /** 仅严格 finance 可见（与 AppShell 同源） */
+  financeOnly?: boolean;
 };
 
 const primaryNav: NavItem[] = [
@@ -91,6 +94,16 @@ const moreNav: NavItem[] = [
   },
 ];
 
+/** P10B：财务只读入口，与 AppShell 可见性一致 */
+const financeNav: NavItem[] = [
+  {
+    to: "/finance",
+    label: "财务报价",
+    icon: <Calculator size={18} />,
+    financeOnly: true,
+  },
+];
+
 function NavGroup({ title, items }: { title: string; items: NavItem[] }) {
   if (items.length === 0) return null;
   return (
@@ -115,10 +128,12 @@ function filterNav(
   items: NavItem[],
   canAccessBusiness: boolean,
   canAccessSettings: boolean,
+  canAccessFinance: boolean,
 ): NavItem[] {
   return items.filter((item) => {
     if (item.business && !canAccessBusiness) return false;
     if (item.ownerOnly && !canAccessSettings) return false;
+    if (item.financeOnly && !canAccessFinance) return false;
     return true;
   });
 }
@@ -136,11 +151,33 @@ export function Sidebar() {
     activeMembership,
     canAccessBusiness,
     canAccessSettings,
+    canAccessFinance,
   } = useAuthSession();
 
-  const primary = filterNav(primaryNav, canAccessBusiness, canAccessSettings);
-  const quality = filterNav(qualityNav, canAccessBusiness, canAccessSettings);
-  const more = filterNav(moreNav, canAccessBusiness, canAccessSettings);
+  const primary = filterNav(
+    primaryNav,
+    canAccessBusiness,
+    canAccessSettings,
+    canAccessFinance,
+  );
+  const quality = filterNav(
+    qualityNav,
+    canAccessBusiness,
+    canAccessSettings,
+    canAccessFinance,
+  );
+  const more = filterNav(
+    moreNav,
+    canAccessBusiness,
+    canAccessSettings,
+    canAccessFinance,
+  );
+  const finance = filterNav(
+    financeNav,
+    canAccessBusiness,
+    canAccessSettings,
+    canAccessFinance,
+  );
 
   const username =
     phase === "disabled" ? "本机用户" : (me?.user.username ?? "未登录");
@@ -167,6 +204,7 @@ export function Sidebar() {
         <NavGroup title="主流程" items={primary} />
         <NavGroup title="质检与交付" items={quality} />
         <NavGroup title="扩展" items={more} />
+        <NavGroup title="财务" items={finance} />
       </nav>
 
       <div className="sidebar__foot">

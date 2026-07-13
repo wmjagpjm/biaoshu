@@ -1,0 +1,229 @@
+/**
+ * 模块：P10B 财务报价只读页样式
+ * 用途：列表 + 明细双栏布局；前缀 fq- 避免与商务标/技术方案耦合。
+ * 对接：FinanceQuotePage。
+ * 二次开发：勿引入无关视觉改动到既有业务页。
+ */
+
+.fq-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.fq-layout .page-header p {
+  max-width: 52rem;
+}
+
+.fq-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 960px) {
+  .fq-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.fq-panel {
+  background: var(--surface-card, #fff);
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: var(--radius-lg, 12px);
+  padding: 16px;
+  min-height: 220px;
+}
+
+.fq-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.fq-panel__title {
+  margin: 0;
+  font-size: var(--fs-md, 1rem);
+  font-weight: 600;
+  color: var(--text-primary, #111827);
+}
+
+.fq-panel__hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-tertiary, #9ca3af);
+}
+
+.fq-alert {
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  color: #991b1b;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  margin-bottom: 12px;
+}
+
+.fq-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fq-list__item {
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: var(--radius-md, 8px);
+  background: #fff;
+  padding: 12px 14px;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.fq-list__item:hover {
+  border-color: var(--primary, #2563eb);
+  background: var(--primary-soft, #eff6ff);
+}
+
+.fq-list__item.is-active {
+  border-color: var(--primary, #2563eb);
+  background: var(--primary-soft, #eff6ff);
+  box-shadow: 0 0 0 1px var(--primary, #2563eb);
+}
+
+.fq-list__name {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary, #111827);
+  margin-bottom: 6px;
+}
+
+.fq-list__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  font-size: 12px;
+  color: var(--text-secondary, #6b7280);
+}
+
+.fq-list__meta strong {
+  color: var(--text-body, #374151);
+  font-weight: 600;
+}
+
+.fq-detail__summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px 14px;
+  margin-bottom: 16px;
+  padding: 12px;
+  border-radius: var(--radius-md, 8px);
+  background: var(--surface, #f9fafb);
+  border: 1px solid var(--rule-color, #f3f4f6);
+}
+
+.fq-detail__field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.fq-detail__label {
+  font-size: 12px;
+  color: var(--text-tertiary, #9ca3af);
+}
+
+.fq-detail__value {
+  font-size: 13px;
+  color: var(--text-body, #374151);
+  word-break: break-word;
+}
+
+.fq-detail__value--total {
+  font-weight: 700;
+  color: var(--text-primary, #111827);
+  font-variant-numeric: tabular-nums;
+}
+
+.fq-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: var(--radius-md, 8px);
+  margin-bottom: 14px;
+}
+
+.fq-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.fq-table th,
+.fq-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--rule-color, #f3f4f6);
+  text-align: left;
+  vertical-align: top;
+}
+
+.fq-table th {
+  background: var(--surface, #f9fafb);
+  color: var(--text-secondary, #6b7280);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.fq-table tr:last-child td {
+  border-bottom: none;
+}
+
+.fq-table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.fq-notes {
+  margin: 0;
+  padding: 12px;
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid var(--border, #e5e7eb);
+  background: #fff;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-body, #374151);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.fq-notes--empty {
+  color: var(--text-tertiary, #9ca3af);
+}
+
+.fq-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 24px 8px;
+  color: var(--text-secondary, #6b7280);
+  font-size: 13px;
+}
+
+.fq-placeholder strong {
+  color: var(--text-primary, #111827);
+  font-size: 14px;
+}

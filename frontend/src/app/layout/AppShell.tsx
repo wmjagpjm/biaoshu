@@ -3,6 +3,7 @@ import { NavLink, Outlet, useLocation } from "react-router-dom";
 import {
   BookOpen,
   Briefcase,
+  Calculator,
   FileSearch,
   FileStack,
   FileText,
@@ -33,7 +34,8 @@ import "./AppShell.css";
  * 模块：应用壳（易标式左侧栏 + 主内容区）
  * 用途：固定侧栏导航，主区浅色渐变 + 大圆角内容；展示用户/角色/空间与退出。
  * 对接：checkApiHealth → GET /api/health；useAuthSession
- * 二次开发：导航隐藏不替代后端鉴权；禁止展示 Cookie/CSRF/API Key。
+ * 二次开发：导航隐藏不替代后端鉴权；禁止展示 Cookie/CSRF/API Key；
+ *           财务入口仅严格 finance 可见，不向其他角色扩展。
  */
 
 type NavItem = {
@@ -45,6 +47,8 @@ type NavItem = {
   business?: boolean;
   /** 仅所有者可见 */
   ownerOnly?: boolean;
+  /** 仅严格 finance 可见（P10B 财务报价） */
+  financeOnly?: boolean;
 };
 
 const mainNav: NavItem[] = [
@@ -130,6 +134,17 @@ const systemNav: NavItem[] = [
   },
 ];
 
+/** P10B：财务只读入口，独立于业务/系统导航，避免与制作者权限耦合 */
+const financeNav: NavItem[] = [
+  {
+    to: "/finance",
+    label: "财务报价",
+    icon: <Calculator size={18} />,
+    matchPrefix: "/finance",
+    financeOnly: true,
+  },
+];
+
 function isNavActive(pathname: string, item: NavItem): boolean {
   if (item.to === "/create") {
     return pathname === "/" || pathname.startsWith("/create");
@@ -179,6 +194,7 @@ export function AppShell() {
     activeMembership,
     canAccessBusiness,
     canAccessSettings,
+    canAccessFinance,
     logout,
   } = useAuthSession();
 
@@ -191,13 +207,18 @@ export function AppShell() {
   const visibleMain = mainNav.filter((item) => {
     if (item.business && !canAccessBusiness) return false;
     if (item.ownerOnly && !canAccessSettings) return false;
+    if (item.financeOnly && !canAccessFinance) return false;
     return true;
   });
   const visibleSystem = systemNav.filter((item) => {
     if (item.business && !canAccessBusiness) return false;
     if (item.ownerOnly && !canAccessSettings) return false;
+    if (item.financeOnly && !canAccessFinance) return false;
     return true;
   });
+  const visibleFinance = financeNav.filter(
+    (item) => !item.financeOnly || canAccessFinance,
+  );
 
   useEffect(() => {
     setMobileOpen(false);
@@ -292,18 +313,34 @@ export function AppShell() {
               ))}
             </>
           )}
-          {!canAccessBusiness && phase === "authenticated" && (
-            <div className="side-nav__section">说明</div>
+          {visibleFinance.length > 0 && (
+            <>
+              <div className="side-nav__section">财务</div>
+              {visibleFinance.map((item) => (
+                <SideLink
+                  key={item.to}
+                  item={item}
+                  onNavigate={() => setMobileOpen(false)}
+                />
+              ))}
+            </>
           )}
-          {!canAccessBusiness && phase === "authenticated" && (
-            <NavLink
-              to="/restricted"
-              className="side-nav__item"
-              onClick={() => setMobileOpen(false)}
-            >
-              <span>权限说明</span>
-            </NavLink>
-          )}
+          {!canAccessBusiness &&
+            !canAccessFinance &&
+            phase === "authenticated" && (
+              <div className="side-nav__section">说明</div>
+            )}
+          {!canAccessBusiness &&
+            !canAccessFinance &&
+            phase === "authenticated" && (
+              <NavLink
+                to="/restricted"
+                className="side-nav__item"
+                onClick={() => setMobileOpen(false)}
+              >
+                <span>权限说明</span>
+              </NavLink>
+            )}
         </nav>
 
         <div className="app-sidebar__foot">

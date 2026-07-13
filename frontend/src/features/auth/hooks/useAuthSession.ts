@@ -45,6 +45,12 @@ type AuthContextValue = {
   canAccessBusiness: boolean;
   /** 是否可看设置入口（当前空间所有者） */
   canAccessSettings: boolean;
+  /**
+   * 是否可进入财务报价只读入口。
+   * 仅 phase=authenticated 且当前空间角色严格为 finance 时为 true；
+   * disabled / 握手失败 / 未认证 / 其他角色一律 false。
+   */
+  canAccessFinance: boolean;
   errorMessage: string | null;
   refresh: () => Promise<void>;
   login: (username: string, password: string) => Promise<void>;
@@ -225,6 +231,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const canAccessSettings =
     phase === "disabled" ||
     (phase === "authenticated" && Boolean(activeMembership?.isOwner));
+  // P10B：严格 finance；个人兼容（disabled）与所有者/制作者均不隐式放开
+  const canAccessFinance =
+    phase === "authenticated" && activeMembership?.role === "finance";
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -235,6 +244,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       activeMembership,
       canAccessBusiness,
       canAccessSettings,
+      canAccessFinance,
       errorMessage,
       refresh,
       login,
@@ -248,6 +258,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       activeMembership,
       canAccessBusiness,
       canAccessSettings,
+      canAccessFinance,
       errorMessage,
       refresh,
       login,
