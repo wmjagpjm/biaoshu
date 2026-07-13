@@ -4,18 +4,23 @@
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
-> **协作分支已推送基线**：P9A=`c1ff160` — 实现P9A最小标题左栏；其下含包 8=`6db1586`、包 7=`2c7b3e0`、包 6=`1289c92`、包 5=`460097a`、M3-B=`e2e5d04`、M3-A=`5d37dba`
+> **协作分支已推送功能/审计基线**：`a1ba88a` — 记录P9B和P9C开工审计；其下含 P9A=`c1ff160`、包 8=`6db1586`、包 7=`2c7b3e0`、包 6=`1289c92`、包 5=`460097a`、M3-B=`e2e5d04`、M3-A=`5d37dba`。本交接文档提交位于该基线之后，新会话以 `git rev-parse HEAD` 与远端分支一致为准。
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **本地状态**：阶段 0/1/2/3/包5/包6/包7/包8 与 **P9A** 已推送；P9A=`c1ff160` 已通过自动化验收和 WPS 技术标/商务标实际渲染抽检。P9B/P9C 未立项。MinerU 仅外置 callback；Docling 未接；`parseStrategy` 未接线。
-> **验收基线**：`pytest`（含 parse_engines）；`frontend npm run lint` / `build`；`npm run test:e2e:matrix`（含 field-merge）；`git diff --check`
+> **本地状态**：阶段 0/1/2/3/包5/包6/包7/包8 与 **P9A** 已推送；P9A=`c1ff160` 已完成自动化和 WPS 技术标/商务标实际渲染验收。P9B/P9C 只读开工审计已推送，但 P9B 因缺少用户确认的授权来源契约而阻塞，P9C 按 A→B→C 顺序不得提前启动。MinerU 仅外置 callback；Docling 未接；`parseStrategy` 未接线。
+> **验收基线**：后端全量 **175 passed**（1 条既有 Starlette/httpx 弃用警告）；P9A 定向 **13 passed**；`frontend npm run lint` / `build`；`git diff --check`；P9A WPS 实际打开通过。
 
 ---
 
 ## 0. 新会话第一句（复制即用）
 
 ```text
-继续 biaoshu。仓库 C:\Users\Administrator\biaoshu，请严格按 docs/HANDOFF-next.md 执行。
-先 git status；对话/注释/Commit Message 一律简体中文。
+继续 biaoshu 标书制作者剩余主线任务。仓库 C:\Users\Administrator\biaoshu，GitHub https://github.com/wmjagpjm/biaoshu.git。
+工作分支只能是 collab/grok-code-codex-review，禁止直接操作 main；先执行 git status -sb，并核对 HEAD 与 origin/collab/grok-code-codex-review 一致且工作区干净。
+完整阅读 docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/plans/2026-07-13-package-9-delivery-enhancement-plan.md、docs/integration-checklist.md。
+长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
+当前进度：P9A 已完整验收并推送；P9B/P9C 只读开工审计已推送。P9B 因缺少用户确认的授权标讯来源而处于阻塞状态；未获得来源名称、API/RSS/导出契约与授权说明前，只保留本地 CSV/JSON 导入，不得写外部同步代码。P9B 完整闭环后才能启动 P9C。
+如果用户提供 P9B 来源契约：先新建 docs/plans 独立计划，冻结许可证、限频、游标、凭据、可存字段与保留期，再向 Grok 发单一受限实现任务；Codex 负责审查、独立测试、验收、提交授权和文档推送。Codex 与 Grok 直接使用协作消息箱，不要求用户中转。
+对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
 新增或修改 PowerShell 脚本后必须转换为 UTF-8 BOM 编码。
@@ -331,20 +336,27 @@ frontend/src/features/
 1. 只做清单内目标；勿大改 UI 信息架构。  
 2. 先改 hook / service，页面只组合。  
 3. **注释与 HANDOFF 路径表保持一致。**  
-4. 远程以 GitHub `main` 为准；有本地脏文件先 `git status`。  
-5. Grok-Codex 协作时：Grok 先通过接入器发送 `ready`，Codex 写任务与审查结论；不得绕过消息箱把密钥写入工作区。
+4. 协作开发以 `origin/collab/grok-code-codex-review` 为准；`main` 仅作参考，严禁直接提交、推送或合并到 `main`。有本地脏文件先查明归属，不得覆盖用户改动。
+5. Grok-Codex 协作时：Grok 先通过接入器发送 `ready`，Codex 写任务与审查结论；Codex 直接使用协作消息箱，不要求用户中转。若没有活跃 Grok 进程，必须如实记录并停止假装已分派；不得绕过消息箱把密钥写入工作区。
+6. 当 Codex 界面可见额度约剩 10%，或用户明确要求换新会话时，停止启动新代码包：先核验 `git status`、HEAD/远端、最近测试与未提交差异，再更新本文件和相关计划/联调文档，中文提交并推送协作分支。若代理无法读取账户额度，应在用户提醒时立即执行，不得声称能后台监控不可见额度。
 
 ---
 
 ## 11. 当前会话状态（2026-07-13）
 
-- 当前分支仍为 `collab/grok-code-codex-review`；已推送基线：包 8=`6db1586`（实现可插拔解析引擎调度）、包 7=`2c7b3e0`、包 6=`1289c92`、包 5=`460097a`、M3-B=`e2e5d04`、M3-A=`5d37dba`，禁止直接合入 `main`。
+- **用户长期目标（必须完整保留）**：持续完成 biaoshu 标书制作者剩余主线任务，按既定路线图完成独立规划、受限实现审查、独立验收、中文文档闭环与协作分支推送；不直接操作 `main`。
+- 当前分支仍为 `collab/grok-code-codex-review`；换会话前功能/审计基线 HEAD=`a1ba88a`，本交接文档提交位于其后。新会话第一步必须用 `git status -sb`、`git rev-parse HEAD`、`git rev-parse origin/collab/grok-code-codex-review` 重新核验，不可只信本文静态 SHA。
 - 阶段 3 **已完成并推送**：M3-A 只读融合建议；M3-B 差异预览 + 勾选确认写入（SHA=`e2e5d04`）。
 - 阶段 4 **包 5** 已推送：`460097a` 智能建议人工确认 E2E。
 - 阶段 4 **包 6** 已推送：`1289c92` 实现响应矩阵源分页调用。
 - 阶段 4 **包 7** 已推送：`2c7b3e0` 实现响应矩阵字段级三方合并（base 快照 + 原子字段三方合并 + 冲突显式选择 + 仅矩阵 PUT + field-merge E2E）。
 - 阶段 4 **包 8** MVP：**已验收并推送** `6db1586` 实现可插拔解析引擎调度（父提交 `834969e`；`parse_engines` + `_run_parse` 调度；默认 lightweight；测试 fake；非法引擎 failed 不静默回退；MinerU 仅外置 callback；Docling 未接；`parseStrategy` 未接线）。
-- **包 9A** 已实现并完成完整独立验收：`c1ff160`（实现P9A最小标题左栏）；自动化检查与 WPS 技术标/商务标实际渲染抽检均通过。仅为大纲/Markdown 的叶子标题强化既有左边框，绝不误称整章页框，也不接 `structure`。P9B/P9C 只读开工审计已完成，但因授权来源与模型/数据边界未确认，均未产生代码差异。
-- 新任务分工不变：Codex 负责范围、取舍、审查和验收；Grok 负责限定范围内的实现与测试。每一项先发 `task`，完成后发 `review_request`，未经 Codex `ack` 不得提交或推送。
+- **包 9A** 已实现并完成完整独立验收：计划=`57b394a`，实现=`c1ff160`，自动化文档闭环=`6d36365`，WPS 视觉验收闭环=`3dadaf8`。技术标父标题保持普通边框，叶子标题“部署架构/机房节点/售后保障”强化左栏；商务标叶子小节“二、资格响应”强化左栏；均无整章页框。不接 `structure`。
+- **包 9B/P9C 审计**：`a1ba88a` 已记录代码接缝和风险。P9B 未发现任何可证明授权的来源、许可证、API/RSS/导出契约、限频、游标、凭据归属或可存字段规则；资源同步示例明确不是标讯协议。目标模式已在连续三次相同阻塞后标记为 `blocked`。收到用户授权来源后视为新一轮恢复，不得沿用“仍阻塞”的旧结论。
+- **P9B 恢复所需最小输入**：来源名称；正式 API/RSS/导出契约或样例；许可证/授权说明。随后由 Codex 补齐限频与时区、增量游标、凭据归属/撤销、允许存储字段和保留期、失败回退，再冻结独立计划。未确认前只保留本机 CSV/JSON 导入，禁止通用爬虫、浏览器直连、把 URL/Token 写入 `sourceKey`，也禁止复用资源同步绕过边界。
+- **P9C 顺序与风险**：严格在 P9B 闭环后启动。当前 API embedding 失败会静默退回 256 维哈希，`kb_chunks.embedding_json` 没有 provider/model/version/dimension，切换模型可能让新查询向量与旧分块向量维度不一致并静默得 0。未来必须先确认离线/API、模型与维度、数据出域、成本、失败降级、版本化重建/回滚和脱敏评测集，禁止直接覆盖旧索引或伪称真语义。
+- **已验证基线**：后端全量 175 passed（1 条既有弃用警告）；P9A 定向 13 passed；前端 lint/build 通过（仅既有大 chunk 警告）；`git diff --check` 通过；WPS `12.1.0.26895` 实际打开技术标/商务标通过。
+- 新任务分工不变：Grok 只负责限定实现与自测，未经 Codex 审查确认不得提交；Codex 负责计划、范围冻结、差异审查、独立测试、验收、中文提交、文档闭环和 GitHub 状态核验。每一包仍按“计划提交 → 实现提交 → 文档闭环提交 → 推送协作分支”执行，禁止合包。
+- GitHub 若出现连接重置，可在当前 PowerShell 进程临时配置 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY=http://127.0.0.1:7890` 与 `NO_PROXY=localhost,127.0.0.1` 后重试；不得把代理或凭据写入仓库。
 
-**换会话可直接：pull → 读本文 §0～§2 → 按 §6 开干。**
+**换会话可直接：核验分支与 HEAD → 读本文 §0～§2、§6、§11 → 等用户提供 P9B 授权来源后恢复目标并先写独立计划。**
