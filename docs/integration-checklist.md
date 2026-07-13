@@ -117,15 +117,25 @@ npm run test:e2e:opportunity-watch
 
 # P9C：离线语义索引状态面板（隔离 8010/5174、路由拦截；禁止模型站点请求）
 npm run test:e2e:semantic-index
+
+# P10A：本机身份、会话恢复与受限导航（隔离 8010/5174、路由桩；禁止外部业务主机）
+npm run test:e2e:auth-rbac
 ```
 
-当前基线：后端 **pytest 全量 251 passed**（固定 `PYTHONHASHSEED=0`，1 条既有 Starlette/httpx 弃用警告；含 P9C 评测/预检契约测试）；前端 lint/build；`test:e2e:fuse` / `fuse-apply`；`test:e2e:matrix`；`templates` / `cards`；P9B `test:e2e:opportunity-watch` **1 passed**；P9C `test:e2e:semantic-index` **9 passed**。阶段 3 已推送（M3-A=`5d37dba`，M3-B=`e2e5d04`）。阶段 4 包 5=`460097a`、包 6=`1289c92`、包 7=`2c7b3e0`、包 8=`6db1586`、P9A=`c1ff160`、P9B 界面=`a7cfcb8`、P9C=`cc0d217`/`a0bd84b`/`71c503c`/`585e502` 均已完成独立自动化验收。**包 8** 边界：MinerU 仅外置 callback、Docling 未接、`parseStrategy` 未接线。P9A 不做整章页框或 `structure`；P9B 只接国能 e 招单站受控追踪；P9C 在真实本机模型预检通过前保持关键词降级。
+当前基线：后端 **pytest 全量 290 passed**（固定 `PYTHONHASHSEED=0`，1 条既有 Starlette/httpx 弃用警告；含 P10A 39 项身份/RBAC/CSRF 测试）；前端 lint/build；P10A `test:e2e:auth-rbac` **11 passed**；P9C `test:e2e:semantic-index` **9 passed**；知识卡片 `test:e2e:cards` **1 passed**。P10A 仅为本机身份底座：`AUTH_MODE=disabled` 兼容个人版，`required` 须先用交互脚本引导管理员；财务、人力、投标人业务授权属于后续 P10B。完整安全契约见 `docs/p10a-local-identity-rbac-contract.md`。
 
 ## 6. 已接 API 一览
 
 | 方法 | 路径 |
 |------|------|
 | GET | `/api/health` |
+| GET | `/api/auth/bootstrap-status`（公开；`bootstrapped`、`authRequired`） |
+| POST | `/api/auth/login`（公开；设置 HttpOnly 会话 Cookie） |
+| POST | `/api/auth/logout`（当前会话 + CSRF） |
+| GET | `/api/auth/me`（当前会话；仅脱敏身份） |
+| GET | `/api/auth/csrf`（当前会话；轮换 CSRF，`no-store`） |
+| PUT | `/api/auth/active-workspace`（当前会话 + CSRF） |
+| GET/POST/PATCH/DELETE | `/api/auth/members*`（仅工作空间所有者） |
 | GET/POST | `/api/projects` |
 | GET/PATCH/DELETE | `/api/projects/{id}` |
 | GET | `/api/projects/{id}/tasks/{taskId}/events`（SSE） |

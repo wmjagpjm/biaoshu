@@ -1,13 +1,13 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-14（阶段 2 SHA=`53e012f`；阶段 3 **已完成并推送**：M3-A=`5d37dba`，M3-B=`e2e5d04`；阶段 4 **包 5**=`460097a`、**包 6**=`1289c92`、**包 7**=`2c7b3e0`、**包 8**=`6db1586`；**P9A**=`c1ff160`；**P9B**=`45d7214`/`1c46e41`/`6491363`/`229f1d7`/`000b403`/`a7cfcb8`；**P9C**=`cc0d217`/`a0bd84b`/`71c503c`/`585e502`）
+> **交接日期**：2026-07-14（P9A/P9B/P9C 已完成；**P10A 本机身份、成员 RBAC、前端会话与 CSRF 续发已完成，提交以本分支 HEAD 为准**）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
 > **协作分支已推送功能基线**：P9C 最新代码提交为 `585e502`（合成评测与本地预检），前序为后端=`cc0d217`、前端=`a0bd84b`、运行时降级=`71c503c`；P9B 前序为解析=`45d7214`、数据域=`1c46e41`、Excel=`6491363`、同步=`229f1d7`、人工接受=`000b403`、界面=`a7cfcb8`。更早的审计基线为 `a1ba88a`，其下含 P9A、包 5 至包 8 和阶段 3。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **本地状态**：阶段 0/1/2/3、包 5 至包 8、P9A、P9B 与 **P9C** 均已推送。P9C 完成实现、自动化验收和契约闭环，但本机真实模型缓存尚未准备；预检受控返回 `model_unavailable`，因此搜索保持关键词降级，不能声称真实语义效果已验证。MinerU 仅外置 callback；Docling 未接；`parseStrategy` 未接线。
-> **验收基线**：后端全量 **251 passed**（1 条既有 Starlette/httpx 弃用警告）；P9B E2E **1 passed**、P9C 语义索引 E2E **9 passed**、知识卡片 E2E **1 passed**；`frontend npm run lint` / `build`；`git diff --check`；P9A WPS 实际打开通过。
+> **本地状态**：P10A 已完成并推送：本机 scrypt 身份、HttpOnly 会话、成员/所有者保护、默认拒绝角色、设置 owner 收口、认证模式握手、前端会话门禁与刷新后 CSRF 续发。P9C 的真实模型缓存仍未准备；预检受控返回 `model_unavailable`，因此搜索保持关键词降级，不能声称真实语义效果已验证。
+> **验收基线**：后端全量 **290 passed**（1 条既有 Starlette/httpx 弃用警告）；P10A 认证 E2E **11 passed**、P9C 语义索引 E2E **9 passed**、知识卡片 E2E **1 passed**；`frontend npm run lint` / `build`；`git diff --check`。
 
 ---
 
@@ -18,8 +18,8 @@
 工作分支只能是 collab/grok-code-codex-review，禁止直接操作 main；先执行 git status -sb，并核对 HEAD 与 origin/collab/grok-code-codex-review 一致且工作区干净。
 完整阅读 docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/plans/2026-07-13-package-9-delivery-enhancement-plan.md、docs/integration-checklist.md。
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
-当前进度：P9A、P9B 与 P9C 已完成各自计划内的实现、独立自动化验收、中文文档闭环与协作分支推送。P9B 固定契约见 `docs/p9b-chnenergy-integration-contract.md`；P9C 固定契约见 `docs/p9c-offline-semantic-index-contract.md`。P9C 仅允许纯离线 BAAI/bge-small-zh-v1.5、512 维、CPU、版本并存和可见关键词降级；正文/查询不得出域。
-下一步：先核验 P9C 文档提交与远端一致；真实模型缓存或依赖尚未准备时，不安装、不下载、不伪造真实指标。只有用户在受控运行时显式点击“构建语义索引”并通过固定预检后，才记录真实语义索引已就绪；其余后续能力必须另立计划、限定白名单后再交 Grok 实施。
+当前进度：P9A、P9B、P9C 与 P10A 均已完成各自计划内的实现、独立自动化验收、中文文档闭环与协作分支推送。P10A 固定契约见 `docs/p10a-local-identity-rbac-contract.md`，两份实施修订见 `docs/plans/2026-07-14-p10a-*-amendment.md`。P9C 仍仅允许纯离线 BAAI/bge-small-zh-v1.5、512 维、CPU、版本并存和可见关键词降级；正文/查询不得出域。
+下一步：P10B 必须另立计划，先定义财务、人力、投标人各自的业务数据契约和权限矩阵，不能按前端路径猜测授权；P10A 的 `finance`、`hr`、`bidder` 继续默认拒绝既有业务。真实模型缓存或依赖尚未准备时，也不得安装、下载或伪造 P9C 指标；只有用户在受控运行时显式构建并通过固定预检后，才记录语义索引已就绪。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -358,7 +358,8 @@ frontend/src/features/
 - **P9B 国内来源补充审计**：已将全国公共资源交易平台、中国政府采购网、天津/北京开放数据的公开资料写入包 9 总计划。全国平台公开公告页不等于读取 API；中国政府采购网规范是签名发布接口；天津候选虽有截止时间字段但公开页无实际端点且数据元信息陈旧；北京候选需 `userKey` 且无独立截止时间字段。均未满足完整受控读取契约，禁止据此写网页抓取或同步代码。
 - **P9B 最终验收**：Codex 独立运行后端全量 230 passed（固定 `PYTHONHASHSEED=0`，仅 1 条既有弃用警告）、前端 lint/build、P9B E2E 1 passed 和 `git diff --check`；并对用户给定公告执行只读核验，正文北京时间截止时间为 `2026-07-29 09:00:00`。无真实数据库写入、无浏览器外网同步。
 - **P9C 交付与真实模型门**：P9C 已按纯离线 BAAI/bge-small-zh-v1.5（512 维、CPU）、版本并存与可见关键词降级完成 `cc0d217`、`a0bd84b`、`71c503c`、`585e502` 四个实现提交。正文/查询不得出域，旧 API embeddingModel 与旧哈希均不参与知识库语义检索。固定评测集有 20 条完全合成查询，评测文件的版本、模型、维度和阈值均为硬校验；预检无下载/路径/跳过磁盘参数。本机无模型缓存时，Codex 实测返回 `model_unavailable`/退出码 2；这不是缺陷，未通过真实预检前不得称语义索引就绪。完整契约见 `docs/p9c-offline-semantic-index-contract.md`。
-- **已验证基线**：后端全量 251 passed（1 条既有弃用警告）；P9B E2E 1 passed、P9C 语义索引 E2E 9 passed、知识卡片 E2E 1 passed；前端 lint/build 通过（仅既有大 chunk 警告）；`git diff --check` 通过；P9A WPS `12.1.0.26895` 实际打开技术标/商务标通过。
+- **P10A 身份/RBAC 交付**：实现提交为 `a025627`（身份会话）、`c60a2d2`（成员管理和权限收口）、`64d32e0`（前端会话、认证模式握手和 CSRF 续发）；两份实施修订文档为 `1a442c0`、`3716e4f`。`required` 使用 HttpOnly 不透明会话、scrypt、成员工作空间校验、最后所有者保护和设置 owner 收口；前端不会持久化口令/Cookie/CSRF，硬刷新用受会话保护的 `/api/auth/csrf` 安全续发。P10A 不开放 finance/hr/bidder 业务面，P10B 必须先冻结权限矩阵。
+- **已验证基线**：后端全量 290 passed（1 条既有弃用警告）；P10A 认证 E2E 11 passed、P9C 语义索引 E2E 9 passed、知识卡片 E2E 1 passed；前端 lint/build 通过（仅既有大 chunk 警告）；`git diff --check` 通过；P9A WPS `12.1.0.26895` 实际打开技术标/商务标通过。
 - 新任务分工不变：Grok 只负责限定实现与自测，未经 Codex 审查确认不得提交；Codex 负责计划、范围冻结、差异审查、独立测试、验收、中文提交、文档闭环和 GitHub 状态核验。每一包仍按“计划提交 → 实现提交 → 文档闭环提交 → 推送协作分支”执行，禁止合包。
 - GitHub 若出现连接重置，可在当前 PowerShell 进程临时配置 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY=http://127.0.0.1:7890` 与 `NO_PROXY=localhost,127.0.0.1` 后重试；不得把代理或凭据写入仓库。
 
