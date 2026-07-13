@@ -7,7 +7,7 @@
 
 # 标书制作者能力补全与角色化演进路线图
 
-> **状态**：阶段 0/1/2 已完成；阶段 3 **已完成并推送**（M3-A=`5d37dba`，M3-B=`e2e5d04`）；阶段 4 功能包 5（响应矩阵智能建议人工确认 E2E）本批实现完成，待 Codex 审查（未授权提交/推送）。
+> **状态**：阶段 0/1/2 已完成；阶段 3 **已完成并推送**（M3-A=`5d37dba`，M3-B=`e2e5d04`）；阶段 4 **包 5** 已完成并推送（SHA=`460097a`）；**包 6**（来源分页）本批实现完成，待 Codex 审查（未授权提交/推送）。
 > **当前分支**：`collab/grok-code-codex-review`
 > **协作方式**：Grok 负责限定范围的实现与测试；Codex 负责范围、审查、验收和提交授权。
 
@@ -22,7 +22,7 @@
 ## 2. 已有基础
 
 - 技术标全流程、商务标、异步任务、AI 生成与编辑、文档知识库检索、查重/废标检查、Word 导出、标讯本地库和资源中心已可用。
-- 响应矩阵已支持人工映射、候选分批智能建议、冲突保护，以及双浏览器冲突和刷新来源 E2E。
+- 响应矩阵已支持人工映射、候选分批智能建议、冲突保护、双浏览器冲突/刷新来源/人工确认 E2E；包 6 实现来源 80 分页（待审查）。
 - 轻量解析和 MinerU Markdown 回传已经可用，但尚无内嵌或可插拔的生产级 MinerU/Docling 解析链路。
 - 当前真实缺口是中标内容模板资产化、多模板融合/差异预览、文档与图片统一卡片资产库、图片知识库后端化、外部标讯数据源，以及完整的生产化账号与权限体系。导出版式模板与中标内容模板是两个不同概念，后续不得混用术语。
 
@@ -145,23 +145,32 @@
 
 #### 功能包 5：响应矩阵智能建议“人工确认后应用”浏览器 E2E
 
-**状态**：本批实现完成，待 Codex 审查（未授权提交/推送）。**无业务代码改动。**
+**状态**：**已完成并推送**（SHA=`460097a`）。**无业务代码改动。**
+
+**范围**：本机 OpenAI-compatible mock LLM + API 种子；真实驱动分析步响应矩阵 UI；`response_match` 应用前不写 editor-state；部分勾选应用；notes 保护；base 漂移跳过。
+
+#### 功能包 6：响应矩阵来源超过 80 条的分页建议
+
+**状态**：本批实现完成，待 Codex 审查（未授权提交/推送）。
 
 **允许文件**：
-- `frontend/e2e/response-matrix-suggest-apply.spec.ts`（新）
-- `frontend/package.json`（仅 `test:e2e:matrix` 纳入新 spec）
-- `docs/plans/2026-07-11-response-matrix-e2e-plan.md`
+- `backend/app/services/task_service.py`
+- `backend/tests/test_response_matrix.py`
+- `frontend/src/features/technical-plan/pages/TechnicalPlanWorkspace.tsx`
+- `frontend/e2e/response-matrix-source-pagination.spec.ts`（新）
+- `frontend/package.json`（仅 `test:e2e:matrix` 追加新 spec）
+- `docs/plans/2026-07-13-response-matrix-source-pagination-plan.md`（新）
 - `docs/plans/2026-07-12-bid-writer-roadmap.md`
 - `docs/HANDOFF-next.md`
 - `docs/integration-checklist.md`
 
-**范围**：本机 OpenAI-compatible mock LLM + API 种子；真实驱动分析步响应矩阵 UI；`response_match` 应用前不写 editor-state；部分勾选应用；notes 保护；base 漂移跳过。
+**范围**：`sourceBatchIndex` 与 `candidateBatchIndex` 共存；单次 prompt 来源 ≤80；前端外层来源页 × 内层候选批串行；任务只写 result_json；E2E 覆盖第 2 页唯一来源。
 
-**明确不做**：多批来源分页、取消中断、409 与建议交叉、真实 Key/外网、任何 `frontend/src` 或 `backend` 业务改动。
+**明确不做**：字段级合并、取消中断 E2E、409 交叉、改全局 Playwright/DB/API 路由、真实 Key/外网。
 
-**验收命令**：`npm run test:e2e:matrix`；`npm run lint` / `build`；回归 `test:e2e:fuse` / `fuse-apply` / `cards` / `templates`；backend `pytest -q`（无后端 diff）；`git diff --check`。
+**验收命令**：backend `pytest -q`；`npm run test:e2e:matrix`；`npm run lint` / `build`；`git diff --check`。
 
-**未做（包 6/7/8/9）**：来源超过 80 分页、字段级三方合并、可插拔解析、交付增强（Word 精细版式/外部标讯/embedding）——均须独立 task。
+**未做（包 7/8/9）**：字段级三方合并、可插拔解析、交付增强（Word 精细版式/外部标讯/embedding）——均须独立 task。
 
 ### 阶段 5：团队账号、角色与协作
 
@@ -206,4 +215,4 @@
 
 ## 5. 当前下一步
 
-阶段 0/1/2/3 已完成并推送（M3-A=`5d37dba`，M3-B=`e2e5d04`）。阶段 4 **功能包 5** 本批 E2E 与文档已落地，待 Codex 审查授权后提交；通过后按收益拆分独立立项 **包 6/7/8/9**（分页、字段级合并、可插拔解析、交付增强）。多角色（阶段 5）仍不开始。
+阶段 0/1/2/3 已完成并推送（M3-A=`5d37dba`，M3-B=`e2e5d04`）。阶段 4 **包 5** 已推送（`460097a`）。**包 6** 来源分页本批实现完成，待 Codex 审查授权后提交；其后按收益独立立项 **包 7/8/9**（字段级合并、可插拔解析、交付增强）。多角色（阶段 5）仍不开始。

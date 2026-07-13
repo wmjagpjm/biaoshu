@@ -465,6 +465,9 @@ def test_response_match_returns_sanitized_suggestions_without_writing_state(
     assert task["result"]["candidateBatchIndex"] == 0
     assert task["result"]["candidateBatchCount"] == 1
     assert task["result"]["isLastCandidateBatch"] is True
+    assert task["result"]["sourceBatchIndex"] == 0
+    assert task["result"]["sourceBatchCount"] == 1
+    assert task["result"]["isLastSourceBatch"] is True
     assert task["result"]["chapterCandidateTotal"] == 2
     assert task["result"]["outlineCandidateTotal"] == 2
     assert task["result"]["chapterCandidateInBatch"] == 2
@@ -496,6 +499,27 @@ def _extract_prompt_option_ids(user_content: str, section: str) -> list[str]:
         if option_id:
             ids.append(option_id)
     return ids
+
+
+def _extract_prompt_source_keys(user_content: str) -> list[str]:
+    """用途：从模型 user 提示中解析待匹配条目的 sourceKey，用于验收来源分页窗口。"""
+    marker = "【待匹配条目】\n"
+    start = user_content.find(marker)
+    if start < 0:
+        return []
+    rest = user_content[start + len(marker) :]
+    end = rest.find("\n\n【")
+    block = rest if end < 0 else rest[:end]
+    keys: list[str] = []
+    for line in block.splitlines():
+        line = line.strip()
+        if not line.startswith("- sourceKey="):
+            continue
+        part = line[len("- sourceKey=") :]
+        source_key = part.split("；", 1)[0].strip()
+        if source_key:
+            keys.append(source_key)
+    return keys
 
 
 def test_response_match_candidate_batches_cover_without_overlap(client, monkeypatch):
@@ -590,9 +614,12 @@ def test_response_match_candidate_batches_cover_without_overlap(client, monkeypa
     assert r1["outlineCandidateInBatch"] == 40
     assert r2["chapterCandidateInBatch"] == 10
     assert r2["outlineCandidateInBatch"] == 0
-    # 来源产品上限 80 不变
+    # 未传 sourceBatchIndex 时等价来源页 0；单次仍最多 80 条来源
     assert r0["sourceCount"] == 80
     assert r0["totalSourceCount"] == 90
+    assert r0["sourceBatchIndex"] == 0
+    assert r0["sourceBatchCount"] == 2
+    assert r0["isLastSourceBatch"] is False
     assert r1["sourceCount"] == 80
     assert r2["sourceCount"] == 80
 
@@ -613,6 +640,227 @@ def test_response_match_candidate_batches_cover_without_overlap(client, monkeypa
     assert r0["suggestions"][0]["chapterIds"] == ["chapter_000"]
     assert r1["suggestions"][0]["chapterIds"] == ["chapter_120"]
     assert r2["suggestions"][0]["chapterIds"] == ["chapter_240"]
+
+    after = client.get(f"/api/projects/{pid}/editor-state").json()["responseMatrix"]
+    assert after == before
+
+
+def test_response_match_source_batches_page_without_overflow(client, monkeypatch):
+    """用途：81 条非 waived 来源分页；页 0=80、页 1=1；prompt 不含跨页来源。"""
+    pid = _create_project(client)
+    matrix = [
+        {
+            "kind": "requirement",
+            "sourceKey": f"requirement:来源{i:03d}",
+            "sourceText": f"来源{i:03d}",
+            "status": "uncovered",
+        }
+        for i in range(81)
+    ]
+    # waived 不计入分页总数
+    matrix.append(
+        {
+            "kind": "requirement",
+            "sourceKey": "requirement:已放弃",
+            "sourceText": "已放弃",
+            "status": "waived",
+        }
+    )
+    saved = client.put(
+        f"/api/projects/{pid}/editor-state",
+        json={
+            "outline": [{"id": "node_1", "title": "大纲1"}],
+            "chapters": [{"id": "chapter_1", "title": "章节1"}],
+            "responseMatrix": matrix,
+        },
+    )
+    assert saved.status_code == 200
+    before = client.get(f"/api/projects/{pid}/editor-state").json()["responseMatrix"]
+    captured: list[str] = []
+
+    def fake_chat(db, workspace_id, *, messages, temperature=0.4, timeout_sec=120.0):
+        user_content = messages[-1]["content"]
+        captured.append(user_content)
+        keys = _extract_prompt_source_keys(user_content)
+        return ChatResult(
+            content=json.dumps(
+                [
+                    {
+                        "sourceKey": keys[0],
+                        "chapterIds": ["chapter_1"],
+                        "outlineNodeIds": ["node_1"],
+                        "status": "covered",
+                        "confidence": 80 + len(captured),
+                        "reason": f"来源页探测{len(captured)}",
+                    }
+                ],
+                ensure_ascii=False,
+            ),
+            model="demo",
+        )
+
+    monkeypatch.setattr("app.services.llm_service.chat_completion", fake_chat)
+
+    page0 = client.post(
+        f"/api/projects/{pid}/tasks?sync=true",
+        json={
+            "type": "response_match",
+            "payload": {"sourceBatchIndex": 0, "candidateBatchIndex": 0},
+        },
+    ).json()
+    page1 = client.post(
+        f"/api/projects/{pid}/tasks?sync=true",
+        json={
+            "type": "response_match",
+            "payload": {"sourceBatchIndex": 1, "candidateBatchIndex": 0},
+        },
+    ).json()
+
+    assert page0["status"] == "success"
+    assert page1["status"] == "success"
+    r0, r1 = page0["result"], page1["result"]
+    assert r0["sourceBatchIndex"] == 0
+    assert r1["sourceBatchIndex"] == 1
+    assert r0["sourceBatchCount"] == 2
+    assert r1["sourceBatchCount"] == 2
+    assert r0["sourceCount"] == 80
+    assert r1["sourceCount"] == 1
+    assert r0["totalSourceCount"] == 81
+    assert r1["totalSourceCount"] == 81
+    assert r0["isLastSourceBatch"] is False
+    assert r1["isLastSourceBatch"] is True
+    assert r0["candidateBatchIndex"] == 0
+    assert r0["isLastCandidateBatch"] is True
+
+    keys0 = _extract_prompt_source_keys(captured[0])
+    keys1 = _extract_prompt_source_keys(captured[1])
+    assert len(keys0) == 80
+    assert len(keys1) == 1
+    assert keys0 == [f"requirement:来源{i:03d}" for i in range(80)]
+    assert keys1 == ["requirement:来源080"]
+    assert "requirement:来源080" not in keys0
+    assert "requirement:已放弃" not in keys0
+    assert "requirement:已放弃" not in keys1
+    assert set(keys0).isdisjoint(set(keys1))
+
+    after = client.get(f"/api/projects/{pid}/editor-state").json()["responseMatrix"]
+    assert after == before
+
+
+def test_response_match_source_and_candidate_nested_batches(client, monkeypatch):
+    """用途：来源页 × 候选批嵌套；每请求仅含对应来源页与候选窗口，ID 校验不放宽。"""
+    pid = _create_project(client)
+    chapters = [
+        {"id": f"chapter_{i:03d}", "title": f"章节{i:03d}"} for i in range(130)
+    ]
+    outline = [{"id": f"node_{i:03d}", "title": f"大纲{i:03d}"} for i in range(10)]
+    matrix = [
+        {
+            "kind": "requirement",
+            "sourceKey": f"requirement:来源{i:03d}",
+            "sourceText": f"来源{i:03d}",
+            "status": "uncovered",
+        }
+        for i in range(85)
+    ]
+    saved = client.put(
+        f"/api/projects/{pid}/editor-state",
+        json={
+            "outline": outline,
+            "chapters": chapters,
+            "responseMatrix": matrix,
+        },
+    )
+    assert saved.status_code == 200
+    before = client.get(f"/api/projects/{pid}/editor-state").json()["responseMatrix"]
+    captured: list[tuple[int, int, str]] = []
+
+    def fake_chat(db, workspace_id, *, messages, temperature=0.4, timeout_sec=120.0):
+        user_content = messages[-1]["content"]
+        source_keys = _extract_prompt_source_keys(user_content)
+        chapter_ids = _extract_prompt_option_ids(user_content, "章节候选")
+        # 从 sourceKey 推断来源页：0..79 为页0，80+ 为页1
+        src_idx = 0 if source_keys and source_keys[0].endswith("000") else 1
+        cand_idx = 0 if chapter_ids and chapter_ids[0] == "chapter_000" else 1
+        captured.append((src_idx, cand_idx, user_content))
+        foreign_chapter = "chapter_120" if "chapter_000" in chapter_ids else "chapter_000"
+        return ChatResult(
+            content=json.dumps(
+                [
+                    {
+                        "sourceKey": source_keys[0],
+                        "chapterIds": ([chapter_ids[0]] if chapter_ids else [])
+                        + [foreign_chapter],
+                        "outlineNodeIds": [],
+                        "status": "covered",
+                        "confidence": 75,
+                        "reason": f"嵌套探测 s{src_idx}c{cand_idx}",
+                    }
+                ],
+                ensure_ascii=False,
+            ),
+            model="demo",
+        )
+
+    monkeypatch.setattr("app.services.llm_service.chat_completion", fake_chat)
+
+    results = []
+    for source_idx in (0, 1):
+        for cand_idx in (0, 1):
+            task = client.post(
+                f"/api/projects/{pid}/tasks?sync=true",
+                json={
+                    "type": "response_match",
+                    "payload": {
+                        "sourceBatchIndex": source_idx,
+                        "candidateBatchIndex": cand_idx,
+                    },
+                },
+            ).json()
+            assert task["status"] == "success"
+            results.append(task["result"])
+
+    assert len(captured) == 4
+    assert len(results) == 4
+    for result in results:
+        assert result["sourceBatchCount"] == 2
+        assert result["candidateBatchCount"] == 2
+        assert result["totalSourceCount"] == 85
+
+    r_s0c0, r_s0c1, r_s1c0, r_s1c1 = results
+    assert r_s0c0["sourceBatchIndex"] == 0 and r_s0c0["candidateBatchIndex"] == 0
+    assert r_s0c0["sourceCount"] == 80
+    assert r_s0c0["isLastSourceBatch"] is False
+    assert r_s0c0["isLastCandidateBatch"] is False
+    assert r_s0c1["sourceCount"] == 80
+    assert r_s0c1["isLastCandidateBatch"] is True
+    assert r_s1c0["sourceBatchIndex"] == 1
+    assert r_s1c0["sourceCount"] == 5
+    assert r_s1c0["isLastSourceBatch"] is True
+    assert r_s1c1["isLastSourceBatch"] is True
+    assert r_s1c1["isLastCandidateBatch"] is True
+
+    keys_s0 = _extract_prompt_source_keys(captured[0][2])
+    keys_s1 = _extract_prompt_source_keys(captured[2][2])
+    assert len(keys_s0) == 80
+    assert len(keys_s1) == 5
+    assert keys_s0 == [f"requirement:来源{i:03d}" for i in range(80)]
+    assert keys_s1 == [f"requirement:来源{i:03d}" for i in range(80, 85)]
+    assert set(keys_s0).isdisjoint(set(keys_s1))
+
+    # 同一来源页上候选窗口无重叠；跨来源页可重复同一候选窗口
+    c_s0c0 = _extract_prompt_option_ids(captured[0][2], "章节候选")
+    c_s0c1 = _extract_prompt_option_ids(captured[1][2], "章节候选")
+    c_s1c0 = _extract_prompt_option_ids(captured[2][2], "章节候选")
+    assert len(c_s0c0) == 120 and len(c_s0c1) == 10
+    assert set(c_s0c0).isdisjoint(c_s0c1)
+    assert c_s1c0 == c_s0c0
+
+    # 跨批 foreign chapter 仍被剔除
+    assert r_s0c0["suggestions"][0]["chapterIds"] == ["chapter_000"]
+    assert r_s0c1["suggestions"][0]["chapterIds"] == ["chapter_120"]
+    assert r_s1c0["suggestions"][0]["chapterIds"] == ["chapter_000"]
+    assert r_s1c1["suggestions"][0]["chapterIds"] == ["chapter_120"]
 
     after = client.get(f"/api/projects/{pid}/editor-state").json()["responseMatrix"]
     assert after == before
@@ -658,8 +906,53 @@ def test_response_match_batch_out_of_range_fails(client, monkeypatch):
     assert after == before
 
 
+def test_response_match_source_batch_out_of_range_fails(client, monkeypatch):
+    """用途：来源页越界时任务 failed、模型 0 次、editor-state 不变。"""
+    pid = _create_project(client)
+    matrix = [
+        {
+            "kind": "requirement",
+            "sourceKey": f"requirement:来源{i:03d}",
+            "sourceText": f"来源{i:03d}",
+            "status": "uncovered",
+        }
+        for i in range(81)
+    ]
+    client.put(
+        f"/api/projects/{pid}/editor-state",
+        json={
+            "outline": [{"id": "node_1", "title": "大纲1"}],
+            "chapters": [{"id": "chapter_1", "title": "章节1"}],
+            "responseMatrix": matrix,
+        },
+    )
+    before = client.get(f"/api/projects/{pid}/editor-state").json()["responseMatrix"]
+    called = {"n": 0}
+
+    def fake_chat(db, workspace_id, *, messages, temperature=0.4, timeout_sec=120.0):
+        called["n"] += 1
+        return ChatResult(content="[]", model="demo")
+
+    monkeypatch.setattr("app.services.llm_service.chat_completion", fake_chat)
+    response = client.post(
+        f"/api/projects/{pid}/tasks?sync=true",
+        json={
+            "type": "response_match",
+            "payload": {"sourceBatchIndex": 9, "candidateBatchIndex": 0},
+        },
+    )
+    assert response.status_code == 201
+    task = response.json()
+    assert task["status"] == "failed"
+    detail = (task.get("error") or task.get("message") or "")
+    assert "来源批次越界" in detail
+    assert called["n"] == 0
+    after = client.get(f"/api/projects/{pid}/editor-state").json()["responseMatrix"]
+    assert after == before
+
+
 def test_response_match_invalid_batch_index_defaults_to_zero(client, monkeypatch):
-    """用途：缺失/非法类型/负值 candidateBatchIndex 均视为 batch0（不接受 bool/float/字符串隐式转换）。"""
+    """用途：缺失/非法类型/负值 candidateBatchIndex 与 sourceBatchIndex 均视为 0。"""
     pid = _create_project(client)
     client.put(
         f"/api/projects/{pid}/editor-state",
@@ -704,6 +997,12 @@ def test_response_match_invalid_batch_index_defaults_to_zero(client, monkeypatch
         {"candidateBatchIndex": True},
         {"candidateBatchIndex": 1.5},
         {"candidateBatchIndex": "1"},
+        {"sourceBatchIndex": "bad"},
+        {"sourceBatchIndex": -2},
+        {"sourceBatchIndex": True},
+        {"sourceBatchIndex": 1.5},
+        {"sourceBatchIndex": "1"},
+        {"sourceBatchIndex": None, "candidateBatchIndex": None},
     ):
         body: dict = {"type": "response_match"}
         if payload is not None:
@@ -715,6 +1014,8 @@ def test_response_match_invalid_batch_index_defaults_to_zero(client, monkeypatch
         assert task["status"] == "success"
         assert task["result"]["candidateBatchIndex"] == 0
         assert task["result"]["isLastCandidateBatch"] is True
+        assert task["result"]["sourceBatchIndex"] == 0
+        assert task["result"]["isLastSourceBatch"] is True
 
 
 def test_response_matrix_version_stable_and_empty(client):

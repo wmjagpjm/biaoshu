@@ -108,22 +108,28 @@ const STEP_IDS: TechnicalPlanStepId[] = [
  * 模块：技术方案工作区
  * 用途：六步流水线 + 异步任务 + 反馈修订 + 知识库引用展示。
  *   - 取消任务、大纲 revise「应用到大纲树」、生成后展示 kbCitations
- *   - 响应矩阵智能建议：串行候选分批、本地累计、禁止自动写 editor-state
+ *   - 响应矩阵智能建议：外层来源页 × 内层候选批串行、本地累计、禁止自动写 editor-state
  * 对接：
  *   - useProjectPipeline / useTechnicalPlanEditors / useProjectGuidance
- *   - editor-state、POST .../tasks（response_match payload.candidateBatchIndex）、POST .../revise
- * 二次开发：勿在此堆业务；任务与持久化进 hooks；分批合并用 mergeResponseMatrixSuggestions。
+ *   - editor-state、POST .../tasks（response_match payload.sourceBatchIndex + candidateBatchIndex）、POST .../revise
+ * 二次开发：勿在此堆业务；任务与持久化进 hooks；分批合并用 mergeResponseMatrixSuggestions；禁止字段级合并。
  */
 
 type MatrixMatchProgress = {
+  /** 当前候选批（1-based 展示） */
   current: number;
+  /** 候选批总数 */
   total: number;
+  /** 当前来源页（1-based 展示） */
+  sourceCurrent: number;
+  /** 来源页总数 */
+  sourceTotal: number;
   accumulated: number;
   status: "idle" | "running" | "success" | "failed" | "cancelled";
 };
 
 function readBatchMeta(result: Record<string, unknown> | null | undefined) {
-  /** 用途：从 response_match 任务结果读取批次元数据；旧后端缺字段时视为单批。 */
+  /** 用途：从 response_match 任务结果读取候选/来源分页元数据；旧后端缺 source 字段时视为单页。 */
   const indexRaw = Number(result?.candidateBatchIndex);
   const countRaw = Number(result?.candidateBatchCount);
   const index = Number.isFinite(indexRaw) && indexRaw >= 0 ? Math.floor(indexRaw) : 0;
@@ -131,7 +137,44 @@ function readBatchMeta(result: Record<string, unknown> | null | undefined) {
     Number.isFinite(countRaw) && countRaw >= 1 ? Math.floor(countRaw) : 1;
   const isLast =
     result?.isLastCandidateBatch === true || index + 1 >= total;
-  return { index, total, isLast };
+
+  const sourceIndexRaw = Number(result?.sourceBatchIndex);
+  const sourceCountRaw = Number(result?.sourceBatchCount);
+  // 旧后端无 source 元数据：兼容为单页（与仅 candidateBatchIndex 的历史语义一致）
+  const hasSourceMeta =
+    result != null &&
+    (result.sourceBatchIndex !== undefined ||
+      result.sourceBatchCount !== undefined ||
+      result.isLastSourceBatch !== undefined);
+  const sourceIndex = hasSourceMeta
+    ? Number.isFinite(sourceIndexRaw) && sourceIndexRaw >= 0
+      ? Math.floor(sourceIndexRaw)
+      : 0
+    : 0;
+  const sourceTotal = hasSourceMeta
+    ? Number.isFinite(sourceCountRaw) && sourceCountRaw >= 1
+      ? Math.floor(sourceCountRaw)
+      : 1
+    : 1;
+  const isLastSource =
+    !hasSourceMeta ||
+    result?.isLastSourceBatch === true ||
+    sourceIndex + 1 >= sourceTotal;
+
+  return {
+    index,
+    total,
+    isLast,
+    sourceIndex,
+    sourceTotal,
+    isLastSource,
+  };
+}
+
+function formatMatchProgressLabel(progress: MatrixMatchProgress): string {
+  const sourcePart = `来源页 ${Math.max(progress.sourceCurrent, 1)}/${Math.max(progress.sourceTotal, 1)}`;
+  const candPart = `候选批次 ${Math.max(progress.current, 1)}/${Math.max(progress.total, 1)}`;
+  return `${sourcePart} · ${candPart} · 已累计 ${progress.accumulated} 条待确认`;
 }
 
 export function TechnicalPlanWorkspace() {
@@ -259,76 +302,93 @@ export function TechnicalPlanWorkspace() {
     setMatchProgress({
       current: 1,
       total: 1,
+      sourceCurrent: 1,
+      sourceTotal: 1,
       accumulated: 0,
       status: "running",
     });
-    setTaskTip("正在串行拉取候选批次建议…");
+    setTaskTip("正在串行拉取来源页与候选批次建议…");
 
     try {
-      for (let batchIndex = 0; ; batchIndex += 1) {
-        if (matchSessionRef.current !== session) return;
+      // 外层来源页 → 内层候选批；仅当「当前来源末页且当前候选末批」才停止
+      for (let sourceBatchIndex = 0; ; sourceBatchIndex += 1) {
+        for (let batchIndex = 0; ; batchIndex += 1) {
+          if (matchSessionRef.current !== session) return;
 
-        const task = await pipeline.runTask("response_match", {
-          candidateBatchIndex: batchIndex,
-        });
-
-        if (matchSessionRef.current !== session) return;
-
-        if (task.status === "cancelled") {
-          setMatchProgress({
-            current: batchIndex + 1,
-            total: Math.max(batchIndex + 1, 1),
-            accumulated: accumulated.length,
-            status: "cancelled",
+          const task = await pipeline.runTask("response_match", {
+            sourceBatchIndex,
+            candidateBatchIndex: batchIndex,
           });
-          setTaskTip(
-            accumulated.length > 0
-              ? `已取消；保留已成功批次的 ${accumulated.length} 条待确认建议`
-              : "智能建议已取消",
-          );
-          return;
-        }
 
-        if (task.status !== "success") {
-          setMatchProgress({
-            current: batchIndex + 1,
-            total: Math.max(batchIndex + 1, 1),
-            accumulated: accumulated.length,
-            status: "failed",
-          });
-          setTaskTip(
-            accumulated.length > 0
-              ? `候选批次 ${batchIndex + 1} 失败，已停止后续批次；保留已累计 ${accumulated.length} 条建议`
-              : task.error || task.message || "智能建议失败",
-          );
-          return;
-        }
+          if (matchSessionRef.current !== session) return;
 
-        const batchSuggestions = normalizeResponseMatrixSuggestions(
-          task.result?.suggestions,
-        );
-        accumulated = mergeResponseMatrixSuggestions(
-          accumulated,
-          batchSuggestions,
-        );
-        setMatrixSuggestions(accumulated);
-
-        const meta = readBatchMeta(task.result);
-        setMatchProgress({
-          current: meta.index + 1,
-          total: meta.total,
-          accumulated: accumulated.length,
-          status: meta.isLast ? "success" : "running",
-        });
-        setTaskTip(
-          `候选批次 ${meta.index + 1}/${meta.total} · 已累计 ${accumulated.length} 条待确认`,
-        );
-
-        if (meta.isLast) {
-          if (accumulated.length === 0) {
-            setTaskTip("未生成可用映射建议，请人工维护响应矩阵");
+          if (task.status === "cancelled") {
+            setMatchProgress({
+              current: batchIndex + 1,
+              total: Math.max(batchIndex + 1, 1),
+              sourceCurrent: sourceBatchIndex + 1,
+              sourceTotal: Math.max(sourceBatchIndex + 1, 1),
+              accumulated: accumulated.length,
+              status: "cancelled",
+            });
+            setTaskTip(
+              accumulated.length > 0
+                ? `已取消；保留已成功批次的 ${accumulated.length} 条待确认建议`
+                : "智能建议已取消",
+            );
+            return;
           }
-          return;
+
+          if (task.status !== "success") {
+            setMatchProgress({
+              current: batchIndex + 1,
+              total: Math.max(batchIndex + 1, 1),
+              sourceCurrent: sourceBatchIndex + 1,
+              sourceTotal: Math.max(sourceBatchIndex + 1, 1),
+              accumulated: accumulated.length,
+              status: "failed",
+            });
+            setTaskTip(
+              accumulated.length > 0
+                ? `来源页 ${sourceBatchIndex + 1} · 候选批次 ${batchIndex + 1} 失败，已停止后续分页；保留已累计 ${accumulated.length} 条建议`
+                : task.error || task.message || "智能建议失败",
+            );
+            return;
+          }
+
+          const batchSuggestions = normalizeResponseMatrixSuggestions(
+            task.result?.suggestions,
+          );
+          accumulated = mergeResponseMatrixSuggestions(
+            accumulated,
+            batchSuggestions,
+          );
+          setMatrixSuggestions(accumulated);
+
+          const meta = readBatchMeta(task.result);
+          const done = meta.isLast && meta.isLastSource;
+          setMatchProgress({
+            current: meta.index + 1,
+            total: meta.total,
+            sourceCurrent: meta.sourceIndex + 1,
+            sourceTotal: meta.sourceTotal,
+            accumulated: accumulated.length,
+            status: done ? "success" : "running",
+          });
+          setTaskTip(
+            `来源页 ${meta.sourceIndex + 1}/${meta.sourceTotal} · 候选批次 ${meta.index + 1}/${meta.total} · 已累计 ${accumulated.length} 条待确认`,
+          );
+
+          if (meta.isLast) {
+            if (meta.isLastSource) {
+              if (accumulated.length === 0) {
+                setTaskTip("未生成可用映射建议，请人工维护响应矩阵");
+              }
+              return;
+            }
+            // 当前来源页的候选批已走完，进入下一来源页（重置候选批从 0）
+            break;
+          }
         }
       }
     } catch {
@@ -339,6 +399,8 @@ export function TechnicalPlanWorkspace() {
           : {
               current: 0,
               total: 1,
+              sourceCurrent: 0,
+              sourceTotal: 1,
               accumulated: accumulated.length,
               status: "failed",
             },
@@ -377,7 +439,10 @@ export function TechnicalPlanWorkspace() {
     (pipeline.busy && pipeline.lastTask?.type === "response_match");
   const matchProgressLabel =
     matchProgress && matchProgress.status !== "idle"
-      ? `候选批次 ${Math.max(matchProgress.current, 1)}/${Math.max(matchProgress.total, 1)} · 已累计 ${matrixSuggestions.length} 条待确认`
+      ? formatMatchProgressLabel({
+          ...matchProgress,
+          accumulated: matrixSuggestions.length,
+        })
       : null;
 
   return (

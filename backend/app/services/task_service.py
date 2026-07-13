@@ -658,6 +658,22 @@ def _parse_candidate_batch_index(payload: dict | None) -> int:
     return raw
 
 
+def _parse_source_batch_index(payload: dict | None) -> int:
+    """
+    用途：解析 payload.sourceBatchIndex；仅接受非负 int（排除 bool）。
+    对接：_run_response_match；旧客户端不传或只传 candidateBatchIndex 时等价来源页 0。
+    二次开发：缺失/null/bool/float/字符串/其它类型/负值一律视为 0，禁止 int() 隐式转换。
+    """
+    if not isinstance(payload, dict):
+        return 0
+    raw = payload.get("sourceBatchIndex")
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return 0
+    if raw < 0:
+        return 0
+    return raw
+
+
 def _run_response_match(
     db: Session,
     workspace_id: str,
@@ -666,13 +682,15 @@ def _run_response_match(
     payload: dict | None = None,
 ) -> None:
     """
-    用途：按候选批次调用模型生成响应矩阵待确认建议，绝不直接修改 editor-state。
-    对接：POST /api/projects/{id}/tasks type=response_match，payload.candidateBatchIndex；
-      前端 TechnicalPlanWorkspace 串行拉批。
+    用途：按来源页 × 候选批次调用模型生成响应矩阵待确认建议，绝不直接修改 editor-state。
+    对接：POST /api/projects/{id}/tasks type=response_match，
+      payload.sourceBatchIndex + payload.candidateBatchIndex；
+      前端 TechnicalPlanWorkspace 外层来源页、内层候选批串行拉取。
     二次开发：
-      - 来源仍截断为前 80 条非 waived，分批只覆盖章节/大纲候选窗口，禁止扩大单次输入上限；
+      - 单次 prompt 来源上限仍为 80（_RESPONSE_MATCH_SOURCE_LIMIT），超过则按 sourceBatchIndex 分页；
+      - 章节/大纲仍仅按 candidateBatchIndex 切片；禁止扩大单次 LLM 输入上限；
       - 建议以 sourceKey 绑定，应用时仍需校验生成快照与当前有效引用；
-      - ID 仅允许落在本批候选集合。
+      - ID 仅允许落在本批候选集合；任务只写 result_json，禁止写 editor-state。
     """
     state = editor_state_service.get_editor_state(db, workspace_id, project_id)
     matrix = state.get("responseMatrix")
@@ -689,7 +707,18 @@ def _run_response_match(
     if not (chapter_options or outline_options):
         raise ValueError("请先生成或维护大纲、章节，再获取智能建议")
 
+    source_batch_index = _parse_source_batch_index(payload)
     batch_index = _parse_candidate_batch_index(payload)
+    total_source_count = len(sources)
+    source_batch_count = max(
+        _response_match_batch_count(total_source_count, _RESPONSE_MATCH_SOURCE_LIMIT),
+        1,
+    )
+    if source_batch_index >= source_batch_count:
+        raise ValueError(
+            f"来源批次越界：sourceBatchIndex={source_batch_index}，共 {source_batch_count} 页"
+        )
+
     chapter_total = len(chapter_options)
     outline_total = len(outline_options)
     chapter_batches = _response_match_batch_count(
@@ -704,15 +733,19 @@ def _run_response_match(
             f"候选批次越界：candidateBatchIndex={batch_index}，共 {candidate_batch_count} 批"
         )
 
+    source_start = source_batch_index * _RESPONSE_MATCH_SOURCE_LIMIT
     chapter_start = batch_index * _RESPONSE_MATCH_CHAPTER_BATCH_SIZE
     outline_start = batch_index * _RESPONSE_MATCH_OUTLINE_BATCH_SIZE
-    prompt_sources = sources[:_RESPONSE_MATCH_SOURCE_LIMIT]
+    prompt_sources = sources[
+        source_start : source_start + _RESPONSE_MATCH_SOURCE_LIMIT
+    ]
     prompt_chapters = chapter_options[
         chapter_start : chapter_start + _RESPONSE_MATCH_CHAPTER_BATCH_SIZE
     ]
     prompt_outline = outline_options[
         outline_start : outline_start + _RESPONSE_MATCH_OUTLINE_BATCH_SIZE
     ]
+    is_last_source_batch = source_batch_index + 1 >= source_batch_count
     is_last_batch = batch_index + 1 >= candidate_batch_count
 
     _assert_not_cancelled(db, task)
@@ -721,7 +754,9 @@ def _run_response_match(
         task,
         progress=25,
         message=(
-            f"整理响应矩阵与候选位置（批次 {batch_index + 1}/{candidate_batch_count}）…"
+            f"整理响应矩阵与候选位置"
+            f"（来源页 {source_batch_index + 1}/{source_batch_count}"
+            f" · 候选批次 {batch_index + 1}/{candidate_batch_count}）…"
         ),
     )
     source_lines = [
@@ -740,7 +775,9 @@ def _run_response_match(
         task,
         progress=50,
         message=(
-            f"调用模型生成待确认映射（批次 {batch_index + 1}/{candidate_batch_count}）…"
+            f"调用模型生成待确认映射"
+            f"（来源页 {source_batch_index + 1}/{source_batch_count}"
+            f" · 候选批次 {batch_index + 1}/{candidate_batch_count}）…"
         ),
     )
     result = llm_service.chat_completion(
@@ -792,15 +829,19 @@ def _run_response_match(
         progress=100,
         message=(
             f"已生成 {len(suggestions)} 条待确认建议"
-            f"（批次 {batch_index + 1}/{candidate_batch_count}）"
+            f"（来源页 {source_batch_index + 1}/{source_batch_count}"
+            f" · 候选批次 {batch_index + 1}/{candidate_batch_count}）"
         ),
         result={
             "suggestions": suggestions,
             "model": result.model,
             "sourceCount": len(prompt_sources),
-            "totalSourceCount": len(sources),
+            "totalSourceCount": total_source_count,
             "skippedInvalidCount": skipped_invalid_count,
             "baseUpdatedAt": state.get("updatedAt"),
+            "sourceBatchIndex": source_batch_index,
+            "sourceBatchCount": source_batch_count,
+            "isLastSourceBatch": is_last_source_batch,
             "candidateBatchIndex": batch_index,
             "candidateBatchCount": candidate_batch_count,
             "isLastCandidateBatch": is_last_batch,
