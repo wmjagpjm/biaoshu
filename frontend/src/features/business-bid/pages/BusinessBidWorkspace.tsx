@@ -4,6 +4,7 @@
  * 对接：useProjectPipeline、useBusinessBidWorkspace、GET project、useWorkspaceParseStrategy
  * 二次开发：勿大改步骤信息架构；新任务类型扩在 pipeline TaskType；解析入口统一 handleParse。
  *       项目详情只认 GET /api/projects/{id}，禁止 mockBusinessProjects 复活。
+ *       P11B：editor-state 加载失败显示固定失败卡，禁止挂步骤/表格/编辑控件。
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -98,6 +99,7 @@ export function BusinessBidWorkspace() {
     workspace,
     history,
     loading: wsLoading,
+    loadError,
     saveError,
     refreshFromApi,
     setParseMarkdown,
@@ -311,6 +313,30 @@ export function BusinessBidWorkspace() {
     );
   }
 
+  // P11B：editor-state 加载失败固定卡；不挂步骤/表格/编辑控件，不闪旧/演示内容
+  if (loadError) {
+    return (
+      <div className="page bb-layout" data-testid="business-editor-load-error">
+        <p style={{ color: "var(--danger)" }}>{loadError}</p>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            data-testid="business-editor-retry"
+            onClick={() => {
+              void refreshFromApi();
+            }}
+          >
+            重试
+          </button>
+          <Link to="/business-bid" className="btn btn-ghost">
+            返回列表
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
   if (!step) {
     const defaultStep =
       STEP_IDS[Math.max(0, (project.technicalPlanStep || 1) - 1)] ?? "parse";
@@ -334,13 +360,17 @@ export function BusinessBidWorkspace() {
   ).length;
 
   return (
-    <div className="page bb-layout">
+    <div className="page bb-layout" data-testid="business-editor-workspace">
       <header className="page-header">
         <div>
           <h1>{project.name}</h1>
           <p>
             {project.industry} · 可手动编辑，也可填写修改意见后修订 · 与技术标分册
-            {saveError ? ` · 保存异常：${saveError}` : ""}
+            {saveError ? (
+              <span data-testid="business-editor-save-error">
+                {` · ${saveError}`}
+              </span>
+            ) : null}
           </p>
         </div>
         <div className="page-actions">

@@ -1,10 +1,14 @@
 /**
- * 模块：商务标工作区状态
- * 用途：分步编辑数据 + 反馈历史；优先 editor-state API，失败回退 localStorage。
+ * 模块：商务标工作区状态（P11B 服务端权威）
+ * 用途：分步编辑数据只认 GET|PUT /api/projects/{id}/editor-state；真实空态保持空。
  * 对接：
  *   - GET|PUT /api/projects/{id}/editor-state（businessQualify/Toc/Quote/Commit、parsedMarkdown）
  *   - POST /api/projects/{id}/artifacts/workspace/revise（stage=business_*）
- * 二次开发：形状保持 BusinessBidWorkspaceState，勿拆 UI 信息架构。
+ * 明确非目标：
+ *   - 禁止读写/删除/迁移 biaoshu.businessBid.workspace.*（旧键忽略并保值）
+ *   - biaoshu.businessBid.feedback.{projectId} 仅作 AI 反馈历史本地存储，
+ *     绝不参与 workspace 水合、API 成功判定或加载失败回退
+ * 二次开发：形状保持 BusinessBidWorkspaceState；不得复活 createDemoWorkspace 生产路径。
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -13,7 +17,7 @@ import type {
   AiFeedbackRecord,
   FeedbackStage,
 } from "../../../shared/types/aiFeedback";
-import { createDemoWorkspace, createEmptyWorkspace } from "../mock";
+import { createEmptyWorkspace } from "../mock";
 import type {
   BusinessBidWorkspaceState,
   CommitBlock,
@@ -22,18 +26,23 @@ import type {
   TocItem,
 } from "../types";
 
-const storageKey = (projectId: string) =>
-  `biaoshu.businessBid.workspace.${projectId}`;
+/** 固定加载失败文案（脱敏，不得拼接后端原文） */
+export const BUSINESS_EDITOR_LOAD_ERROR =
+  "商务标工作区加载失败，请稍后重试";
+
+/** 固定保存失败文案（脱敏，不得拼接后端原文） */
+export const BUSINESS_EDITOR_SAVE_ERROR =
+  "商务标工作区保存失败，请稍后重试";
+
+/**
+ * 反馈历史 localStorage 键。
+ * 非 editor-state 权威；仅保留既有 AI 反馈记录语义。
+ */
 const feedbackKey = (projectId: string) =>
   `biaoshu.businessBid.feedback.${projectId}`;
 
-/** 演示 id 前缀：离线仍可看满数据 */
-function isDemoProjectId(projectId: string): boolean {
-  return projectId.startsWith("bb_");
-}
-
 type EditorStateApi = {
-  projectId: string;
+  projectId?: string;
   parsedMarkdown?: string | null;
   businessQualify?: QualifyItem[] | null;
   businessToc?: TocItem[] | null;
@@ -41,20 +50,7 @@ type EditorStateApi = {
   businessCommit?: CommitBlock[] | null;
 };
 
-function loadLocalWorkspace(projectId: string): BusinessBidWorkspaceState {
-  const fallback = isDemoProjectId(projectId)
-    ? createDemoWorkspace(projectId)
-    : createEmptyWorkspace(projectId);
-  try {
-    const raw = localStorage.getItem(storageKey(projectId));
-    if (!raw) return fallback;
-    const parsed = JSON.parse(raw) as BusinessBidWorkspaceState;
-    return { ...fallback, ...parsed, projectId };
-  } catch {
-    return fallback;
-  }
-}
-
+/** 用途：读取反馈历史；失败返回 []，不抛原文。 */
 function loadHistory(projectId: string): AiFeedbackRecord[] {
   try {
     const raw = localStorage.getItem(feedbackKey(projectId));
@@ -66,7 +62,7 @@ function loadHistory(projectId: string): AiFeedbackRecord[] {
 }
 
 /**
- * 用途：远端 editor-state → 工作区；空数组保留为空，不回填演示 mock。
+ * 用途：远端 editor-state → 工作区；空数组/空字段保留为空，不回填演示 mock。
  */
 function fromApi(
   projectId: string,
@@ -96,52 +92,104 @@ function fromApi(
 
 export function useBusinessBidWorkspace(projectId: string) {
   const [workspace, setWorkspace] = useState<BusinessBidWorkspaceState>(() =>
-    loadLocalWorkspace(projectId),
+    createEmptyWorkspace(projectId),
   );
   const [history, setHistory] = useState<AiFeedbackRecord[]>(() =>
     loadHistory(projectId),
   );
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [apiReady, setApiReady] = useState(false);
+
+  /** 跳过水合后的下一次防抖 PUT */
   const skipNextSave = useRef(true);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** 项目会话代次：切项目或重置时递增，作废所有飞行中回调 */
+  const sessionRef = useRef(0);
+  /** 当前活跃项目 id（与 session 成对校验） */
+  const activeProjectRef = useRef(projectId);
+  /** 最新 workspace 引用，供防抖 PUT 闭包读取 */
+  const workspaceRef = useRef(workspace);
+  workspaceRef.current = workspace;
 
-  const refreshFromApi = useCallback(async () => {
-    if (!projectId) return;
+  /** 用途：判断回调是否仍属于当前项目会话。 */
+  const isCurrentSession = useCallback(
+    (session: number, pid: string) =>
+      sessionRef.current === session &&
+      activeProjectRef.current === pid &&
+      pid === projectId,
+    [projectId],
+  );
+
+  /**
+   * 用途：从 editor-state 刷新当前项目。
+   * 成功：水合真实字段、清 load/save error、apiReady=true，返回 true。
+   * 失败：重置空 workspace、apiReady=false、固定 loadError，返回 false；不抛原文。
+   */
+  const refreshFromApi = useCallback(async (): Promise<boolean> => {
+    const pid = projectId;
+    if (!pid) {
+      setLoading(false);
+      return false;
+    }
+    const session = sessionRef.current;
+    setLoading(true);
     try {
       const remote = await apiFetch<EditorStateApi>(
-        `/projects/${encodeURIComponent(projectId)}/editor-state`,
+        `/projects/${encodeURIComponent(pid)}/editor-state`,
       );
+      if (!isCurrentSession(session, pid)) return false;
       skipNextSave.current = true;
-      setWorkspace(fromApi(projectId, remote));
+      setWorkspace(fromApi(pid, remote));
       setApiReady(true);
+      setLoadError(null);
       setSaveError(null);
+      return true;
     } catch {
+      if (!isCurrentSession(session, pid)) return false;
       skipNextSave.current = true;
-      setWorkspace(loadLocalWorkspace(projectId));
+      setWorkspace(createEmptyWorkspace(pid));
       setApiReady(false);
+      setLoadError(BUSINESS_EDITOR_LOAD_ERROR);
+      setSaveError(null);
+      return false;
     } finally {
-      setLoading(false);
+      if (isCurrentSession(session, pid)) {
+        setLoading(false);
+      }
     }
-  }, [projectId]);
+  }, [isCurrentSession, projectId]);
 
+  // 切项目：立即作废旧会话、清计时器/错误、重置空 workspace，再拉真实 GET
   useEffect(() => {
-    setLoading(true);
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
+    sessionRef.current += 1;
+    activeProjectRef.current = projectId;
+    skipNextSave.current = true;
+    setApiReady(false);
+    setLoadError(null);
+    setSaveError(null);
+    setWorkspace(createEmptyWorkspace(projectId));
     setHistory(loadHistory(projectId));
+    setLoading(true);
     void refreshFromApi();
   }, [projectId, refreshFromApi]);
 
-  // 本地备份
+  // 仅 feedback 历史落盘；禁止写入 workspace 键
   useEffect(() => {
-    localStorage.setItem(storageKey(projectId), JSON.stringify(workspace));
-  }, [projectId, workspace]);
-
-  useEffect(() => {
-    localStorage.setItem(feedbackKey(projectId), JSON.stringify(history));
+    if (!projectId) return;
+    try {
+      localStorage.setItem(feedbackKey(projectId), JSON.stringify(history));
+    } catch {
+      // 存储失败静默；不得 console 敏感内容
+    }
   }, [projectId, history]);
 
-  // 防抖写回 editor-state
+  // 防抖写回 editor-state：仅当前项目 GET 成功（apiReady）后可 PUT
   useEffect(() => {
     if (!apiReady || !projectId) return;
     if (skipNextSave.current) {
@@ -149,37 +197,42 @@ export function useBusinessBidWorkspace(projectId: string) {
       return;
     }
     if (saveTimer.current) clearTimeout(saveTimer.current);
+    const session = sessionRef.current;
+    const pid = projectId;
     saveTimer.current = setTimeout(() => {
       void (async () => {
+        if (!isCurrentSession(session, pid)) return;
+        const ws = workspaceRef.current;
         try {
           await apiFetch(
-            `/projects/${encodeURIComponent(projectId)}/editor-state`,
+            `/projects/${encodeURIComponent(pid)}/editor-state`,
             {
               method: "PUT",
               body: JSON.stringify({
-                parsedMarkdown: workspace.parseMarkdown,
-                businessQualify: workspace.qualifyItems,
-                businessToc: workspace.tocItems,
+                parsedMarkdown: ws.parseMarkdown,
+                businessQualify: ws.qualifyItems,
+                businessToc: ws.tocItems,
                 businessQuote: {
-                  rows: workspace.quoteRows,
-                  notes: workspace.quoteNotes,
+                  rows: ws.quoteRows,
+                  notes: ws.quoteNotes,
                 },
-                businessCommit: workspace.commitBlocks,
+                businessCommit: ws.commitBlocks,
               }),
             },
           );
+          if (!isCurrentSession(session, pid)) return;
           setSaveError(null);
-        } catch (err) {
-          setSaveError(
-            (err as { message?: string })?.message || "保存工作区失败",
-          );
+        } catch {
+          if (!isCurrentSession(session, pid)) return;
+          // 固定中文；不得写异常 message 到页面/console/history/存储
+          setSaveError(BUSINESS_EDITOR_SAVE_ERROR);
         }
       })();
     }, 600);
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
-  }, [apiReady, projectId, workspace]);
+  }, [apiReady, isCurrentSession, projectId, workspace]);
 
   const setParseMarkdown = useCallback((parseMarkdown: string) => {
     setWorkspace((prev) => ({ ...prev, parseMarkdown }));
@@ -261,7 +314,6 @@ export function useBusinessBidWorkspace(projectId: string) {
       setHistory((prev) => [applying, ...prev]);
 
       try {
-        // 按阶段取 baseContent
         let baseContent = workspace.parseMarkdown;
         if (input.stage === "business_qualify") {
           baseContent = JSON.stringify(workspace.qualifyItems, null, 2);
@@ -311,7 +363,7 @@ export function useBusinessBidWorkspace(projectId: string) {
           ),
         );
 
-        // 后端已写 editor-state（结构化/解析）；刷新对齐表格
+        // 业务成功事实不反转；刷新失败进入固定加载失败态，不把旧内容当最新
         if (
           input.stage === "business_parse" ||
           input.stage === "business_qualify" ||
@@ -341,6 +393,7 @@ export function useBusinessBidWorkspace(projectId: string) {
     workspace,
     history,
     loading,
+    loadError,
     saveError,
     apiReady,
     refreshFromApi,
