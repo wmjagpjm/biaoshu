@@ -1,7 +1,8 @@
 /**
  * 模块：商务标入口页
- * 用途：项目列表 + 概念区分 + 进入分步工作区；列表走 API kind=business。
+ * 用途：项目列表 + 概念区分 + 进入分步工作区；列表只认 API kind=business，真实空态不补演示卡。
  * 对接：listProjectsAsync / createProjectAsync；路由 /business-bid/:id/:step
+ * 二次开发：失败固定中文；禁止 mockBusinessProjects 回退、本地假 ID 导航。
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -19,8 +20,10 @@ import {
   listProjectsAsync,
 } from "../../technical-plan/lib/projectStore";
 import { BUSINESS_STEPS } from "../components/BusinessStepStepper";
-import { mockBusinessProjects } from "../mock";
 import "./BusinessBid.css";
+
+const LIST_ERROR = "商务标项目加载失败，请稍后重试";
+const CREATE_ERROR = "项目创建失败，请稍后重试";
 
 function stepIdFromIndex(stepIndex: number): string {
   return (
@@ -32,44 +35,23 @@ function stepIdFromIndex(stepIndex: number): string {
 export function BusinessBidPage() {
   const navigate = useNavigate();
   const [projects, setProjects] = useState<Project[]>([]);
-  const [source, setSource] = useState<"api" | "local" | "mock">("mock");
-  const [offlineHint, setOfflineHint] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [listError, setListError] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
 
   const reload = useCallback(async () => {
+    setLoading(true);
+    setListError(null);
     try {
       const res = await listProjectsAsync({ kind: "business" });
-      if (res.projects.length) {
-        setProjects(res.projects);
-        setSource(res.source);
-        setOfflineHint(res.offlineHint ?? null);
-        return;
-      }
-      // API 空列表时仍展示演示项目，便于首次体验
-      if (res.source === "api") {
-        setProjects([]);
-        setSource("api");
-        setOfflineHint(null);
-        return;
-      }
+      setProjects(res.projects);
     } catch {
-      /* fallthrough */
+      setProjects([]);
+      setListError(LIST_ERROR);
+    } finally {
+      setLoading(false);
     }
-    setProjects(
-      mockBusinessProjects.map((p) => ({
-        id: p.id,
-        workspaceId: p.workspaceId,
-        name: p.name,
-        industry: p.industry,
-        status: "draft" as const,
-        updatedAt: p.updatedAt,
-        technicalPlanStep: p.currentStep,
-        wordCount: 0,
-        kind: "business" as const,
-        linkedProjectId: p.linkedTechnicalProjectId,
-      })),
-    );
-    setSource("mock");
   }, []);
 
   useEffect(() => {
@@ -81,7 +63,9 @@ export function BusinessBidPage() {
   }
 
   async function createProject() {
+    if (creating) return;
     setCreating(true);
+    setCreateError(null);
     try {
       const p = await createProjectAsync({
         name: `商务标 ${new Date().toLocaleDateString("zh-CN")}`,
@@ -90,8 +74,7 @@ export function BusinessBidPage() {
       });
       navigate(`/business-bid/${p.id}/parse`);
     } catch {
-      // 回退演示
-      openProject(mockBusinessProjects[0].id, 1);
+      setCreateError(CREATE_ERROR);
     } finally {
       setCreating(false);
     }
@@ -122,6 +105,12 @@ export function BusinessBidPage() {
         </div>
       </header>
 
+      {createError ? (
+        <div className="card card-pad" role="alert" style={{ color: "var(--danger)" }}>
+          {createError}
+        </div>
+      ) : null}
+
       <div className="bb-hint">
         <Briefcase size={16} />
         <div>
@@ -145,15 +134,37 @@ export function BusinessBidPage() {
           <strong>商务标项目</strong>
           <div className="bb-toolbar__spacer" />
           <span style={{ fontSize: 12, color: "var(--text-tertiary)" }}>
-            {source === "api"
-              ? "已接后端 · kind=business"
-              : source === "local"
-                ? "本地回退"
-                : "演示 mock"}
-            {offlineHint ? ` · ${offlineHint}` : ""}
+            {listError
+              ? "加载失败"
+              : loading
+                ? "加载中…"
+                : "已接后端 · kind=business"}
           </span>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => void reload()}
+            disabled={loading}
+          >
+            刷新
+          </button>
         </div>
-        {projects.length === 0 ? (
+        {loading ? (
+          <div className="card card-pad" style={{ textAlign: "center" }}>
+            <p>加载商务标项目…</p>
+          </div>
+        ) : listError ? (
+          <div className="card card-pad" role="alert" style={{ textAlign: "center" }}>
+            <p style={{ color: "var(--danger)" }}>{listError}</p>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => void reload()}
+            >
+              重试
+            </button>
+          </div>
+        ) : projects.length === 0 ? (
           <div className="card card-pad" style={{ textAlign: "center" }}>
             <FileStack size={28} style={{ opacity: 0.5, marginBottom: 8 }} />
             <p>暂无商务标项目，点击「从招标文件开始」创建。</p>

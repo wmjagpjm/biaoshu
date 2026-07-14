@@ -3,6 +3,7 @@
  * 用途：命中列表 + 本文/来源对照 + 改写建议。
  * 对接：POST /api/projects/{id}/duplicate-check；listProjectsAsync kind=technical
  * 二次开发：改写建议可接 LLM；历史范围已由后端 kb+history 覆盖。
+ *       项目选择器失败时选项为空并固定中文提示，不读演示项目。
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -39,10 +40,17 @@ export function DuplicateCheckPage() {
 
   useEffect(() => {
     void (async () => {
-      const res = await listProjectsAsync({ kind: "technical" });
-      setProjects(res.projects);
-      setLoadHint(res.offlineHint ?? null);
-      if (res.projects[0]) setProjectId(res.projects[0].id);
+      try {
+        const res = await listProjectsAsync({ kind: "technical" });
+        setProjects(res.projects);
+        setLoadHint(null);
+        if (res.projects[0]) setProjectId(res.projects[0].id);
+        else setProjectId("");
+      } catch {
+        setProjects([]);
+        setProjectId("");
+        setLoadHint("项目列表加载失败，请稍后重试");
+      }
     })();
   }, []);
 

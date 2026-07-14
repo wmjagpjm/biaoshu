@@ -3,6 +3,7 @@
  * 用途：六步流水线；上传/解析/biz_* 生成/导出接 project/task/editor-state。
  * 对接：useProjectPipeline、useBusinessBidWorkspace、GET project、useWorkspaceParseStrategy
  * 二次开发：勿大改步骤信息架构；新任务类型扩在 pipeline TaskType；解析入口统一 handleParse。
+ *       项目详情只认 GET /api/projects/{id}，禁止 mockBusinessProjects 复活。
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -38,7 +39,6 @@ import {
   BUSINESS_STEPS,
 } from "../components/BusinessStepStepper";
 import { useBusinessBidWorkspace } from "../hooks/useBusinessBidWorkspace";
-import { mockBusinessProjects } from "../mock";
 import type { BusinessBidStepId, QualifyItemStatus } from "../types";
 import "./BusinessBid.css";
 
@@ -115,29 +115,10 @@ export function BusinessBidWorkspace() {
     let cancelled = false;
     void (async () => {
       setProjectLoading(true);
+      // 只认服务端详情；404/失败不得用 mock 复活
       const remote = await getProjectAsync(projectId);
       if (cancelled) return;
-      if (remote) {
-        setProject(remote);
-      } else {
-        const mock = mockBusinessProjects.find((p) => p.id === projectId);
-        if (mock) {
-          setProject({
-            id: mock.id,
-            workspaceId: mock.workspaceId,
-            name: mock.name,
-            industry: mock.industry,
-            status: "draft",
-            updatedAt: mock.updatedAt,
-            technicalPlanStep: mock.currentStep,
-            wordCount: 0,
-            kind: "business",
-            linkedProjectId: mock.linkedTechnicalProjectId,
-          });
-        } else {
-          setProject(null);
-        }
-      }
+      setProject(remote ?? null);
       setProjectLoading(false);
     })();
     return () => {

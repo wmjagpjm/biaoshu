@@ -1,3 +1,10 @@
+/**
+ * 模块：技术方案项目列表（我的项目）
+ * 用途：只展示服务端 GET /api/projects?kind=technical 真值；真实空态保持空；失败固定中文且不混入 mock/localStorage。
+ * 对接：listProjectsAsync → GET /api/projects?kind=technical
+ * 二次开发：禁止回退 biaoshu.projects.v1 或演示项目；错误不得回显 detail/code/路径/ID。
+ */
+
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { FolderKanban, Plus, ArrowRight } from "lucide-react";
@@ -9,17 +16,12 @@ import type { Project } from "../../../shared/types/workspace";
 import { listProjectsAsync } from "../lib/projectStore";
 import "./TechnicalPlan.css";
 
-/**
- * 模块：技术方案项目列表（我的项目）
- * 用途：异步加载项目；展示数据来源（API / 本地）与离线提示，便于联调。
- * 对接：listProjectsAsync → GET /api/projects
- */
+const LIST_ERROR = "项目列表加载失败，请稍后重试";
+
 export function TechnicalPlanListPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [source, setSource] = useState<"api" | "local">("local");
-  const [offlineHint, setOfflineHint] = useState<string | undefined>();
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -27,12 +29,9 @@ export function TechnicalPlanListPage() {
     try {
       const res = await listProjectsAsync({ kind: "technical" });
       setProjects(res.projects);
-      setSource(res.source);
-      setOfflineHint(res.offlineHint);
     } catch {
-      setError("加载项目列表失败");
+      setError(LIST_ERROR);
       setProjects([]);
-      setSource("local");
     } finally {
       setLoading(false);
     }
@@ -70,17 +69,11 @@ export function TechnicalPlanListPage() {
         </div>
       </header>
 
-      {!loading && (
-        <div
-          className={`tp-source-banner${source === "api" ? " is-api" : " is-local"}`}
-          role="status"
-        >
+      {!loading && !error && (
+        <div className="tp-source-banner is-api" role="status">
           数据来源：
-          <strong>{source === "api" ? "后端 API" : "本地/演示兜底"}</strong>
-          {source === "api"
-            ? " · 刷新后仍保留服务端项目"
-            : " · 请启动后端并检查 /api/health"}
-          {offlineHint ? ` · ${offlineHint}` : null}
+          <strong>后端 API</strong>
+          {" · 刷新后仍保留服务端项目"}
         </div>
       )}
 

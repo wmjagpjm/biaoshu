@@ -3,6 +3,7 @@
  * 用途：风险列表 + 招标条款 / 现状对照 + 处理跳转。
  * 对接：POST /api/projects/{id}/rejection-check；listProjectsAsync
  * 二次开发：规则表可后端配置；可接 LLM 复核。
+ *       项目选择器失败时选项为空并固定中文提示，不读演示项目。
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -45,12 +46,21 @@ export function RejectionCheckPage() {
   const [running, setRunning] = useState(false);
   const [ranOnce, setRanOnce] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadHint, setLoadHint] = useState<string | null>(null);
 
   useEffect(() => {
     void (async () => {
-      const res = await listProjectsAsync({ kind: "technical" });
-      setProjects(res.projects);
-      if (res.projects[0]) setProjectId(res.projects[0].id);
+      try {
+        const res = await listProjectsAsync({ kind: "technical" });
+        setProjects(res.projects);
+        setLoadHint(null);
+        if (res.projects[0]) setProjectId(res.projects[0].id);
+        else setProjectId("");
+      } catch {
+        setProjects([]);
+        setProjectId("");
+        setLoadHint("项目列表加载失败，请稍后重试");
+      }
     })();
   }, []);
 
@@ -150,6 +160,15 @@ export function RejectionCheckPage() {
       {error && (
         <div className="card card-pad" style={{ color: "var(--danger)" }}>
           {error}
+        </div>
+      )}
+      {loadHint && (
+        <div
+          className="card card-pad"
+          role="alert"
+          style={{ fontSize: 13, color: "var(--danger)" }}
+        >
+          {loadHint}
         </div>
       )}
 

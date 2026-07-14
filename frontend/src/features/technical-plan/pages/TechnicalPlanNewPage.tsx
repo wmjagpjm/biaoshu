@@ -1,3 +1,10 @@
+/**
+ * 模块：新建技术方案项目页
+ * 用途：表单收集名称/行业/备注 → 真实 POST createProjectAsync → 进入文档解析步。
+ * 对接：createProjectAsync → POST /api/projects；标讯页 navigate state 预填。
+ * 二次开发：失败停留本页、固定中文错误、不导航假工作区；备注目前仅展示未入库。
+ */
+
 import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
@@ -10,14 +17,8 @@ type LocationState = {
   oppId?: string;
 };
 
-/**
- * 模块：新建技术方案项目页
- * 用途：表单收集名称/行业/备注 → createProjectAsync → 进入文档解析步。
- * 对接：
- *   - createProjectAsync → POST /api/projects
- *   - 标讯页 navigate state：fromOpportunity / title / oppId 预填
- * 二次开发：备注目前仅展示，未入库；若需持久化请扩展后端 Project 字段。
- */
+const CREATE_ERROR = "项目创建失败，请稍后重试";
+
 export function TechnicalPlanNewPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -30,18 +31,28 @@ export function TechnicalPlanNewPage() {
       ? `来自标讯 ${state.oppId}`
       : "",
   );
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const project = await createProjectAsync({
-      name: name.trim() || "未命名技术标项目",
-      industry,
-      featureId: "core",
-      fileNames: note ? undefined : undefined,
-      technicalPlanStep: 1,
-      status: "draft",
-    });
-    navigate(`/technical-plan/${project.id}/document`);
+    if (submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const project = await createProjectAsync({
+        name: name.trim() || "未命名技术标项目",
+        industry,
+        featureId: "core",
+        technicalPlanStep: 1,
+        status: "draft",
+      });
+      navigate(`/technical-plan/${project.id}/document`);
+    } catch {
+      setError(CREATE_ERROR);
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -56,8 +67,13 @@ export function TechnicalPlanNewPage() {
         </Link>
       </header>
 
-      <form className="card card-pad" onSubmit={handleSubmit}>
+      <form className="card card-pad" onSubmit={(e) => void handleSubmit(e)}>
         <div style={{ display: "grid", gap: 14 }}>
+          {error ? (
+            <div role="alert" style={{ color: "var(--danger)", fontSize: 14 }}>
+              {error}
+            </div>
+          ) : null}
           <div className="field">
             <label htmlFor="name">项目名称</label>
             <input
@@ -67,6 +83,7 @@ export function TechnicalPlanNewPage() {
               onChange={(e) => setName(e.target.value)}
               placeholder="例如：某某智慧平台技术标"
               required
+              disabled={submitting}
             />
           </div>
           <div className="field">
@@ -76,6 +93,7 @@ export function TechnicalPlanNewPage() {
               name="industry"
               value={industry}
               onChange={(e) => setIndustry(e.target.value)}
+              disabled={submitting}
             >
               <option>智慧城市</option>
               <option>医疗信息化</option>
@@ -93,12 +111,17 @@ export function TechnicalPlanNewPage() {
               value={note}
               onChange={(e) => setNote(e.target.value)}
               placeholder="招标编号、截止时间等"
+              disabled={submitting}
             />
           </div>
           <div className="tp-toolbar" style={{ marginBottom: 0 }}>
             <div className="tp-toolbar__spacer" />
-            <button type="submit" className="btn btn-primary">
-              创建并开始解析
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={submitting}
+            >
+              {submitting ? "创建中…" : "创建并开始解析"}
             </button>
           </div>
         </div>

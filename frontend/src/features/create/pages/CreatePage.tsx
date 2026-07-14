@@ -44,20 +44,24 @@ function FeatureIcon({ id, color }: { id: string; color: FeatureColor }) {
 
 type LocalFile = { id: string; name: string; sizeLabel: string };
 
+const CREATE_ERROR = "项目创建失败，请稍后重试";
+
 /**
  * 模块：创建投标方案页
- * 用途：选开工能力 → 选/模拟招标文件 → 创建项目并进入对应工作区。
+ * 用途：选开工能力 → 选/模拟招标文件 → 真实 POST 创建项目并进入对应工作区。
  * 布局：左侧功能入口轨 + 右侧标题/亮点/上传区 + 底部主操作（对齐喜鹊式交互）。
  * 对接：
- *   - createProjectAsync（技术标等）→ 后端 POST /api/projects 或本地兜底
+ *   - createProjectAsync（技术标等）→ 仅 POST /api/projects，失败固定中文且不导航
  *   - 商务类能力直接 navigate 到 /business-bid
- * 二次开发：真实文件上传改为 multipart + 后端解析任务，勿在页面散落 API。
+ * 二次开发：真实文件上传改为 multipart + 后端解析任务，勿在页面散落 API；禁止本地假 ID。
  */
 export function CreatePage() {
   const navigate = useNavigate();
   const [activeId, setActiveId] = useState("core");
   const [files, setFiles] = useState<LocalFile[]>([]);
   const [dragOver, setDragOver] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const feature: CreateFeature = useMemo(() => findFeature(activeId), [activeId]);
 
@@ -82,24 +86,33 @@ export function CreatePage() {
       navigate("/business-bid");
       return;
     }
+    if (submitting) return;
+    setSubmitting(true);
+    setError(null);
 
     // 技术标类 / 完整投标 / 框架等：创建项目并进入文档解析步
     const fileNames = files.map((f) => f.name);
     const baseName =
       fileNames[0]?.replace(/\.[^.]+$/, "") ||
       feature.title.replace(/生成$/, "");
-    const project = await createProjectAsync({
-      name: `${baseName} · ${feature.title}`,
-      industry: industryFromFeature(feature.id),
-      featureId: feature.id,
-      fileNames: fileNames.length
-        ? fileNames
-        : ["招标文件-正式稿.pdf"],
-      technicalPlanStep: feature.id === "framework" ? 3 : 1,
-      status: "draft",
-    });
-    const step = feature.id === "framework" ? "outline" : "document";
-    navigate(`/technical-plan/${project.id}/${step}`);
+    try {
+      const project = await createProjectAsync({
+        name: `${baseName} · ${feature.title}`,
+        industry: industryFromFeature(feature.id),
+        featureId: feature.id,
+        fileNames: fileNames.length
+          ? fileNames
+          : ["招标文件-正式稿.pdf"],
+        technicalPlanStep: feature.id === "framework" ? 3 : 1,
+        status: "draft",
+      });
+      const step = feature.id === "framework" ? "outline" : "document";
+      navigate(`/technical-plan/${project.id}/${step}`);
+    } catch {
+      setError(CREATE_ERROR);
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -263,12 +276,23 @@ export function CreatePage() {
 
           <footer className="create-footer">
             <div className="create-footer__tip">
-              {files.length > 0
-                ? `已选择 ${files.length} 个文件，将创建项目并进入工作区`
-                : "可不上传文件，直接进入工作区"}
+              {error ? (
+                <span role="alert" style={{ color: "var(--danger)" }}>
+                  {error}
+                </span>
+              ) : files.length > 0 ? (
+                `已选择 ${files.length} 个文件，将创建项目并进入工作区`
+              ) : (
+                "可不上传文件，直接进入工作区"
+              )}
             </div>
-            <button type="button" className="btn btn-primary btn-lg" onClick={handleStart}>
-              {feature.cta}
+            <button
+              type="button"
+              className="btn btn-primary btn-lg"
+              onClick={() => void handleStart()}
+              disabled={submitting}
+            >
+              {submitting ? "创建中…" : feature.cta}
             </button>
           </footer>
 
