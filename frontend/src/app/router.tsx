@@ -22,6 +22,7 @@ import { FinanceQuotePage } from "../features/finance/pages/FinanceQuotePage";
 import { HrCredentialCardsPage } from "../features/hr/pages/HrCredentialCardsPage";
 import { HrTeamRecommendationsPage } from "../features/hr-team-recommendation/pages/HrTeamRecommendationsPage";
 import { BidderCompliancePreviewPage } from "../features/bidder/pages/BidderCompliancePreviewPage";
+import { BidderProjectCompliancePage } from "../features/bidder-project-compliance/pages/BidderProjectCompliancePage";
 import {
   authRoleLabel,
   useAuthSession,
@@ -33,7 +34,8 @@ import "../features/auth/pages/LoginPage.css";
  * 模块：前端路由
  * 用途：对齐 C 端模块地图；按认证模式门禁业务壳；非 bid_writer 重定向受限页；
  *       严格 finance 可进 /finance 只读报价页；严格 hr 可进 /hr 人员资质与
- *       /hr/team-recommendations 团队推荐页；严格 bidder 可进 /bidder 匿名合规预览页。
+ *       /hr/team-recommendations 团队推荐页；严格 bidder 可进 /bidder 匿名合规预览
+ *       与 /bidder/project-compliance 项目级合规统计页。
  * 对接：AuthProvider；页面均挂 AppShell（登录页除外）。
  * 二次开发：导航隐藏不替代后端鉴权；disabled 保持既有业务路径但不开放财务/人力/投标人入口。
  */
@@ -147,14 +149,14 @@ function RequireHr({ children }: { children: ReactNode }) {
 }
 
 /**
- * 用途：要求严格 bidder 才渲染匿名合规预览页。
- * 约束：disabled / 其他角色不渲染预览页、不发预览请求，只显示受限说明。
+ * 用途：要求严格 bidder 才渲染投标人合规页（匿名预览 / 项目合规）。
+ * 约束：disabled / 其他角色不渲染投标人页、不发投标人 API，只显示受限说明。
  */
 function RequireBidder({ children }: { children: ReactNode }) {
   const { canAccessBidder } = useAuthSession();
   if (!canAccessBidder) {
     return (
-      <RestrictedAccessPage reason="仅投标人角色可查看匿名合规预览。个人版兼容模式与所有者、标书制作者、财务、人力均不可通过本入口访问。" />
+      <RestrictedAccessPage reason="仅投标人角色可查看合规预览与项目合规统计。个人版兼容模式与所有者、标书制作者、财务、人力均不可通过本入口访问。" />
     );
   }
   return <>{children}</>;
@@ -388,6 +390,14 @@ function AuthGate() {
           element={
             <RequireBidder>
               <BidderCompliancePreviewPage />
+            </RequireBidder>
+          }
+        />
+        <Route
+          path="bidder/project-compliance"
+          element={
+            <RequireBidder>
+              <BidderProjectCompliancePage />
             </RequireBidder>
           }
         />

@@ -39,7 +39,7 @@ import "./AppShell.css";
  * 对接：checkApiHealth → GET /api/health；useAuthSession
  * 二次开发：导航隐藏不替代后端鉴权；禁止展示 Cookie/CSRF/API Key；
  *           财务入口仅严格 finance 可见；人力入口（人员资质/团队推荐）仅严格 hr 可见；
- *           投标人入口仅严格 bidder 可见；不得改动遗留 Sidebar 组件路径。
+ *           投标人入口（合规预览/项目合规）仅严格 bidder 可见；不得改动遗留 Sidebar 组件路径。
  */
 
 type NavItem = {
@@ -170,13 +170,19 @@ const hrNav: NavItem[] = [
   },
 ];
 
-/** P10E：投标人匿名合规预览入口，独立「投标人」分组；仅严格 bidder 可见 */
+/** P10E/P10G：投标人入口，独立「投标人」分组；仅严格 bidder 可见 */
 const bidderNav: NavItem[] = [
   {
     to: "/bidder",
     label: "合规预览",
     icon: <ShieldCheck size={18} />,
-    matchPrefix: "/bidder",
+    bidderOnly: true,
+  },
+  {
+    to: "/bidder/project-compliance",
+    label: "项目合规",
+    icon: <FileSearch size={18} />,
+    matchPrefix: "/bidder/project-compliance",
     bidderOnly: true,
   },
 ];
@@ -193,6 +199,10 @@ function isNavActive(pathname: string, item: NavItem): boolean {
   // 人员资质仅精确匹配 /hr，避免与 /hr/team-recommendations 激活态冲突
   if (item.to === "/hr") {
     return pathname === "/hr";
+  }
+  // 合规预览仅精确匹配 /bidder，避免与 /bidder/project-compliance 激活态冲突
+  if (item.to === "/bidder") {
+    return pathname === "/bidder";
   }
   if (item.matchPrefix) {
     return pathname === item.to || pathname.startsWith(item.matchPrefix);
