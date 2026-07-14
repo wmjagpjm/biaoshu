@@ -22,6 +22,7 @@
     "test:e2e:hr-credential-cards": "playwright test e2e/hr-credential-cards.spec.ts",
     "test:e2e:hr-team-recommendations": "playwright test e2e/hr-team-recommendations.spec.ts",
     "test:e2e:hr-performance-cards": "playwright test e2e/hr-performance-cards.spec.ts",
+    "test:e2e:hr-credential-expiry": "playwright test e2e/hr-credential-expiry.spec.ts",
     "test:e2e:bidder-compliance-preview": "playwright test e2e/bidder-compliance-preview.spec.ts",
     "test:e2e:bidder-project-compliance": "playwright test e2e/bidder-project-compliance.spec.ts",
     "test:e2e:parse-strategy": "playwright test e2e/parse-strategy-wiring.spec.ts"
