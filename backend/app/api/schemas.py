@@ -1516,3 +1516,47 @@ class BidderCompliancePreviewOut(BaseModel):
 
     data_state: BidderComplianceDataState = Field(serialization_alias="dataState")
     summary: BidderComplianceSummaryOut
+
+
+# ---------- P10G 投标人项目级合规统计预览 ----------
+
+
+class BidderProjectComplianceSelectorItemOut(BaseModel):
+    """
+    模块：投标人项目合规选择器项
+    用途：仅暴露技术标项目 id 与 name。
+    对接：GET /api/bidder/project-compliance/projects。
+    二次开发：禁止附加行业/状态/步骤/矩阵/文件等字段。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    name: str
+
+
+class BidderProjectComplianceSelectorListOut(BaseModel):
+    """
+    模块：投标人项目合规选择器列表
+    用途：包装当前空间技术标 id/name 白名单。
+    对接：GET /api/bidder/project-compliance/projects。
+    二次开发：items 字段集合固定，不得扩展分页或筛选元数据。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    items: list[BidderProjectComplianceSelectorItemOut]
+
+
+class BidderProjectComplianceDetailOut(BaseModel):
+    """
+    模块：投标人单项目合规统计响应
+    用途：仅输出 dataState 与五项 summary；空矩阵为 empty。
+    对接：GET /api/bidder/project-compliance/{projectId}。
+    二次开发：禁止回显 projectId/name、矩阵行、sourceKey、章节/大纲、人员/财务。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    data_state: BidderComplianceDataState = Field(serialization_alias="dataState")
+    summary: BidderComplianceSummaryOut
