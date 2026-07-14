@@ -1,11 +1,13 @@
 /**
- * 模块：模板/卡片融合建议对话框（阶段3 M3-A/M3-B/M3-C）
+ * 模块：模板/卡片融合建议对话框（阶段3 M3-A/M3-B/M3-D）
  * 用途：多选模板与 active 文本卡片、目标章节，发起 content_fuse 只读建议；
- *      M3-B 双栏差异预览与确认写入；M3-C 最近成功批次一次性、漂移安全撤销。
- * 对接：useProjectPipeline.runTask("content_fuse")；editors.replaceChapterBody；
- *      /api/templates；/api/cards；TechnicalPlanWorkspace 编写步入口。
- * 二次开发：未确认/关闭/取消/base 漂移不得写章节；撤销快照仅 Dialog 实例内存且一次消费；
- *       禁止新增 API/存储/历史栈；禁止改矩阵/大纲。
+ *      M3-B 双栏差异预览；M3-D 服务端原子确认写入与持久恢复批次一次消费。
+ * 对接：useProjectPipeline.runTask("content_fuse")；editors.reloadFromApi；
+ *      contentFuseApplications 三接口；/api/templates；/api/cards；TechnicalPlanWorkspace。
+ * 二次开发：确认前零本地写章节；POST/consume 成功后只调用一次 onReloadFromApi；
+ *       据其 boolean 判定刷新成败，禁止再直连 apiFetch(editor-state)；
+ *       taskId/batchId 仅 Dialog 实例内存，禁止 URL/存储/console/剪贴板；
+ *       关闭或切项目立即使在途请求失效；错误固定中文，不回显服务端原文。
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -18,7 +20,6 @@ import type { BidTemplateSummary } from "../../bid-templates/types";
 import type { PipelineTask } from "../hooks/useProjectPipeline";
 import type { ChapterContent } from "../types";
 import {
-  buildAppliedChapterBody,
   buildContentFusePayload,
   CONTENT_FUSE_LIMITS,
   formatFuseQuotaTip,
@@ -28,6 +29,12 @@ import {
   type ContentFuseResult,
   type ContentFuseSuggestion,
 } from "../lib/contentFuse";
+import {
+  consumeContentFuseApplication,
+  createContentFuseApplication,
+  listContentFuseApplications,
+  type ContentFuseApplicationListItem,
+} from "../lib/contentFuseApplications";
 
 export type ContentFuseDialogProps = {
   open: boolean;
@@ -39,43 +46,23 @@ export type ContentFuseDialogProps = {
   onRun: (payload: Record<string, unknown>) => Promise<PipelineTask>;
   onCancelTask: () => Promise<PipelineTask | null>;
   /**
-   * 用途：M3-B 确认写入 / M3-C 撤销恢复时调用既有 replaceChapterBody；无专用 PUT。
-   * 对接：useTechnicalPlanEditors.replaceChapterBody。
-   * 二次开发：第三参数仅撤销时传入原 status；写入路径保持两参数。
+   * 用途：原子确认/恢复成功后唯一一次 GET editor-state 并写父级状态。
+   * 对接：useTechnicalPlanEditors.reloadFromApi（返回 Promise boolean）。
+   * true=重载成功可刷批次；false=保持本地并显示“已完成但刷新失败”。
    */
-  onReplaceChapterBody: (
-    chapterId: string,
-    body: string,
-    originalStatus?: ChapterContent["status"],
-  ) => void;
+  onReloadFromApi: () => Promise<boolean>;
 };
 
 const TEXT_TYPES = new Set(["document", "qualification", "performance"]);
 
-type ApplyOutcome = {
-  suggestionId: string;
-  status: "applied" | "skipped";
-  reason?: string;
-};
-
-/**
- * 用途：最近一次成功确认写入批次的最小章节快照（仅 Dialog 实例内存）。
- * 对接：handleConfirmApply 建立；handleUndoBatch 校验后恢复。
- * 二次开发：禁止持久化；不得保存模板/卡片/模型原文或密钥类字段。
- */
-type BatchUndoChapterSnapshot = {
-  chapterId: string;
-  title: string;
-  beforeBody: string;
-  beforeStatus: ChapterContent["status"];
-  afterBody: string;
-  afterStatus: ChapterContent["status"];
-  suggestionIds: string[];
-};
-
-type BatchUndoSnapshot = {
-  chapters: BatchUndoChapterSnapshot[];
-};
+const MSG_SAME_CHAPTER = "同一目标章节只能选择一条建议";
+const MSG_APPLY_FAIL = "融合确认失败，请刷新后重试";
+/** 用途：POST 已成功但 editor-state 重读失败；禁止谎报业务失败。 */
+const MSG_APPLY_RELOAD_FAIL = "融合已写入，但刷新失败，请关闭后重新打开";
+const MSG_RESTORE_FAIL = "恢复失败，请刷新后重试";
+/** 用途：consume 已成功但 editor-state 重读失败；禁止谎报业务失败。 */
+const MSG_RESTORE_RELOAD_FAIL = "恢复已完成，但刷新失败，请关闭后重新打开";
+const MSG_BATCH_WINDOW = "最多保留最近 20 批，不是完整版本历史";
 
 function toggleId(
   list: string[],
@@ -99,7 +86,8 @@ function findChapter(
 }
 
 /**
- * 用途：单条建议是否可勾选/写入；空正文永远不可。
+ * 用途：单条建议是否可勾选；空正文永远不可。
+ * 二次开发：同章唯一在 toggle 层处理，此处不隐藏勾选框。
  */
 function canSelectSuggestion(
   suggestion: ContentFuseSuggestion,
@@ -120,8 +108,16 @@ function canSelectSuggestion(
   return { selectable: true, reason: null };
 }
 
+/** 用途：列表时间展示；不输出 batchId/taskId。 */
+function formatBatchTime(iso: string): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("zh-CN", { hour12: false });
+}
+
 /**
- * 用途：M3-A/M3-B/M3-C 融合入口 UI；建议预览、确认写入与最近批次撤销。
+ * 用途：M3-A/M3-B/M3-D 融合入口 UI；建议预览、原子确认与持久恢复。
  */
 export function ContentFuseDialog({
   open,
@@ -131,7 +127,7 @@ export function ContentFuseDialog({
   onClose,
   onRun,
   onCancelTask,
-  onReplaceChapterBody,
+  onReloadFromApi,
 }: ContentFuseDialogProps) {
   const [templates, setTemplates] = useState<BidTemplateSummary[]>([]);
   const [cards, setCards] = useState<KnowledgeCardSummary[]>([]);
@@ -143,21 +139,27 @@ export function ContentFuseDialog({
   const [localError, setLocalError] = useState<string | null>(null);
   const [runMessage, setRunMessage] = useState<string | null>(null);
   const [result, setResult] = useState<ContentFuseResult | null>(null);
+  /** 用途：当前 Dialog 实例内成功 content_fuse 任务 id；禁止持久化。 */
+  const [applyTaskId, setApplyTaskId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [appliedIds, setAppliedIds] = useState<string[]>([]);
-  const [applyOutcomes, setApplyOutcomes] = useState<ApplyOutcome[]>([]);
   const [applyMessage, setApplyMessage] = useState<string | null>(null);
-  const [undoMessage, setUndoMessage] = useState<string | null>(null);
-  const [undoSnapshot, setUndoSnapshot] = useState<BatchUndoSnapshot | null>(
-    null,
-  );
+  const [applyBusy, setApplyBusy] = useState(false);
+  const [batches, setBatches] = useState<ContentFuseApplicationListItem[]>([]);
+  const [batchesLoading, setBatchesLoading] = useState(false);
+  const [batchesError, setBatchesError] = useState<string | null>(null);
+  const [restoreMessage, setRestoreMessage] = useState<string | null>(null);
+  /** 用途：组件内二次确认中的 batchId；关闭即清空。 */
+  const [pendingRestoreBatchId, setPendingRestoreBatchId] = useState<
+    string | null
+  >(null);
+  const [restoreBusy, setRestoreBusy] = useState(false);
+  /** 用途：打开/切项目/关闭时递增，使迟到响应失效。 */
   const sessionRef = useRef(0);
 
   const appliedSet = useMemo(() => new Set(appliedIds), [appliedIds]);
 
-  useEffect(() => {
-    if (!open) return;
-    sessionRef.current += 1;
+  const clearSessionState = useCallback(() => {
     setTemplateIds([]);
     setCardIds([]);
     setTargetIds([]);
@@ -165,12 +167,52 @@ export function ContentFuseDialog({
     setRunMessage(null);
     setResult(null);
     setSourceError(null);
+    setApplyTaskId(null);
     setSelectedIds([]);
     setAppliedIds([]);
-    setApplyOutcomes([]);
     setApplyMessage(null);
-    setUndoMessage(null);
-    setUndoSnapshot(null);
+    setApplyBusy(false);
+    setBatches([]);
+    setBatchesLoading(false);
+    setBatchesError(null);
+    setRestoreMessage(null);
+    setPendingRestoreBatchId(null);
+    setRestoreBusy(false);
+  }, []);
+
+  /**
+   * 用途：按当前项目拉取最近批次；代次不匹配时丢弃。
+   */
+  const refreshBatches = useCallback(
+    async (session: number, pid: string) => {
+      setBatchesLoading(true);
+      setBatchesError(null);
+      try {
+        const res = await listContentFuseApplications(pid);
+        if (session !== sessionRef.current) return;
+        const items = Array.isArray(res?.items) ? res.items : [];
+        setBatches(items);
+      } catch {
+        if (session !== sessionRef.current) return;
+        setBatchesError("批次列表加载失败，请关闭后重试");
+        setBatches([]);
+      } finally {
+        if (session === sessionRef.current) {
+          setBatchesLoading(false);
+        }
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    // 关闭或切换项目：使在途请求失效并清空实例态
+    sessionRef.current += 1;
+    clearSessionState();
+    if (!open) {
+      return;
+    }
+    const session = sessionRef.current;
     setLoadingSources(true);
     let cancelled = false;
     void Promise.all([
@@ -178,7 +220,7 @@ export function ContentFuseDialog({
       listCards({ status: "active" }),
     ])
       .then(([tpl, cardList]) => {
-        if (cancelled) return;
+        if (cancelled || session !== sessionRef.current) return;
         setTemplates(Array.isArray(tpl) ? tpl : []);
         setCards(
           (Array.isArray(cardList) ? cardList : []).filter((c) =>
@@ -187,19 +229,22 @@ export function ContentFuseDialog({
         );
       })
       .catch((err) => {
-        if (!cancelled) {
+        if (!cancelled && session === sessionRef.current) {
           setSourceError(
             (err as { message?: string }).message || "加载模板/卡片失败",
           );
         }
       })
       .finally(() => {
-        if (!cancelled) setLoadingSources(false);
+        if (!cancelled && session === sessionRef.current) {
+          setLoadingSources(false);
+        }
       });
+    void refreshBatches(session, projectId);
     return () => {
       cancelled = true;
     };
-  }, [open, projectId]);
+  }, [open, projectId, clearSessionState, refreshBatches]);
 
   // 实时基线变化时，清掉已不可选的勾选
   useEffect(() => {
@@ -227,6 +272,8 @@ export function ContentFuseDialog({
   const canSubmit =
     !busy &&
     !loadingSources &&
+    !applyBusy &&
+    !restoreBusy &&
     payload.templateIds.length + payload.cardIds.length >= 1 &&
     payload.templateIds.length + payload.cardIds.length <=
       CONTENT_FUSE_LIMITS.maxSourcesTotal &&
@@ -238,12 +285,12 @@ export function ContentFuseDialog({
     setLocalError(null);
     setRunMessage("正在生成只读融合建议…");
     setResult(null);
+    setApplyTaskId(null);
     setSelectedIds([]);
     setAppliedIds([]);
-    setApplyOutcomes([]);
     setApplyMessage(null);
-    setUndoMessage(null);
-    setUndoSnapshot(null);
+    setRestoreMessage(null);
+    setPendingRestoreBatchId(null);
     try {
       const task = await onRun(payload);
       if (session !== sessionRef.current) return;
@@ -260,6 +307,12 @@ export function ContentFuseDialog({
         (task.result as Record<string, unknown> | null) ?? null,
       );
       setResult(normalized);
+      // 仅成功任务在当前实例内存保留 task.id，供原子确认
+      if (task.status === "success" && typeof task.id === "string" && task.id) {
+        setApplyTaskId(task.id);
+      } else {
+        setApplyTaskId(null);
+      }
       setRunMessage(
         normalized
           ? `已生成 ${normalized.suggestions.length} 条只读建议（默认不写入，需勾选确认）`
@@ -269,6 +322,7 @@ export function ContentFuseDialog({
       if (session !== sessionRef.current) return;
       setLocalError((err as { message?: string }).message || "请求失败");
       setRunMessage(null);
+      setApplyTaskId(null);
     }
   }, [onRun, payload]);
 
@@ -276,171 +330,219 @@ export function ContentFuseDialog({
     (suggestion: ContentFuseSuggestion, checked: boolean) => {
       const gate = canSelectSuggestion(suggestion, chapters, appliedSet);
       if (checked && !gate.selectable) return;
-      setSelectedIds((prev) => {
-        if (checked) {
-          if (prev.includes(suggestion.suggestionId)) return prev;
-          return [...prev, suggestion.suggestionId];
+
+      // 先基于当前 selectedIds/result 纯计算，再分别 setState（禁止在 updater 内调其他 setState）
+      if (!checked) {
+        const next = selectedIds.filter((id) => id !== suggestion.suggestionId);
+        setSelectedIds(next);
+        // 取消勾选时清掉遗留的同章提示
+        if (localError === MSG_SAME_CHAPTER) {
+          setLocalError(null);
         }
-        return prev.filter((id) => id !== suggestion.suggestionId);
-      });
+        setApplyMessage(null);
+        return;
+      }
+
+      if (selectedIds.includes(suggestion.suggestionId)) {
+        setApplyMessage(null);
+        return;
+      }
+
+      // 同一目标章最多一条：第二条保持未选并提示，不靠隐藏按钮
+      if (result) {
+        const conflict = selectedIds.some((id) => {
+          const other = result.suggestions.find((x) => x.suggestionId === id);
+          return (
+            !!other &&
+            other.targetChapterId === suggestion.targetChapterId &&
+            other.suggestionId !== suggestion.suggestionId
+          );
+        });
+        if (conflict) {
+          setLocalError(MSG_SAME_CHAPTER);
+          setApplyMessage(null);
+          return;
+        }
+      }
+
+      if (localError === MSG_SAME_CHAPTER) {
+        setLocalError(null);
+      }
+      setSelectedIds([...selectedIds, suggestion.suggestionId]);
       setApplyMessage(null);
     },
-    [chapters, appliedSet],
+    [chapters, appliedSet, result, selectedIds, localError],
   );
 
   /**
-   * 用途：确认写入所选；点击瞬间再校验 base；部分成功允许；至少一条成功则建撤销快照。
-   * 对接：onReplaceChapterBody → debounce PUT editor-state（既有路径）。
-   * 二次开发：多建议同章保留最早 before 与最终 after；无成功写入不得建快照。
+   * 用途：原子确认所选；点击前本地校验，真正写入仅一次 POST。
+   * 二次开发：在途与成功前禁止 onReplaceChapterBody / editor-state PUT / 先改本地 chapters。
    */
-  const handleConfirmApply = useCallback(() => {
-    if (!result) return;
-    const outcomes: ApplyOutcome[] = [];
-    const newlyApplied: string[] = [];
-    const batchMap = new Map<string, BatchUndoChapterSnapshot>();
-    let appliedCount = 0;
-    let skippedCount = 0;
+  const handleConfirmApply = useCallback(async () => {
+    if (!result || !applyTaskId || applyBusy || restoreBusy || busy) return;
+    const session = sessionRef.current;
+    const pid = projectId;
 
+    // 本地可选性校验 + 同章唯一（服务端仍为最终校验）
+    const validIds: string[] = [];
+    const seenChapters = new Set<string>();
     for (const suggestionId of selectedIds) {
       const suggestion = result.suggestions.find(
         (s) => s.suggestionId === suggestionId,
       );
-      if (!suggestion) {
-        outcomes.push({
-          suggestionId,
-          status: "skipped",
-          reason: "建议不存在",
-        });
-        skippedCount += 1;
-        continue;
+      if (!suggestion) continue;
+      const gate = canSelectSuggestion(suggestion, chapters, appliedSet);
+      if (!gate.selectable) continue;
+      if (seenChapters.has(suggestion.targetChapterId)) {
+        setLocalError(MSG_SAME_CHAPTER);
+        return;
       }
-      if (appliedSet.has(suggestion.suggestionId)) {
-        outcomes.push({
-          suggestionId,
-          status: "skipped",
-          reason: "已写入，跳过重复",
-        });
-        skippedCount += 1;
-        continue;
-      }
-      if (!(suggestion.proposedMarkdown || "").length) {
-        outcomes.push({
-          suggestionId,
-          status: "skipped",
-          reason: "建议正文为空，不可写入",
-        });
-        skippedCount += 1;
-        continue;
-      }
-      const chapter = findChapter(chapters, suggestion.targetChapterId);
-      const match = matchFuseSuggestionBase(chapter, suggestion.base);
-      if (!match.ok) {
-        outcomes.push({
-          suggestionId,
-          status: "skipped",
-          reason: match.reason,
-        });
-        skippedCount += 1;
-        continue;
-      }
-      const beforeBody = chapter?.body || "";
-      const nextBody = buildAppliedChapterBody(
-        suggestion.action,
-        beforeBody,
-        suggestion.proposedMarkdown,
-      );
-      if (nextBody == null) {
-        outcomes.push({
-          suggestionId,
-          status: "skipped",
-          reason: "建议正文为空，不可写入",
-        });
-        skippedCount += 1;
-        continue;
-      }
-      const beforeStatus: ChapterContent["status"] =
-        chapter?.status ?? "pending";
-      const afterStatus: ChapterContent["status"] = nextBody.trim()
-        ? "needs_review"
-        : beforeStatus;
-      onReplaceChapterBody(suggestion.targetChapterId, nextBody);
-      const existing = batchMap.get(suggestion.targetChapterId);
-      if (existing) {
-        existing.afterBody = nextBody;
-        existing.afterStatus = afterStatus;
-        existing.suggestionIds.push(suggestion.suggestionId);
-      } else {
-        batchMap.set(suggestion.targetChapterId, {
-          chapterId: suggestion.targetChapterId,
-          title: chapter?.title ?? "",
-          beforeBody,
-          beforeStatus,
-          afterBody: nextBody,
-          afterStatus,
-          suggestionIds: [suggestion.suggestionId],
-        });
-      }
-      outcomes.push({ suggestionId, status: "applied" });
-      newlyApplied.push(suggestion.suggestionId);
-      appliedCount += 1;
+      seenChapters.add(suggestion.targetChapterId);
+      validIds.push(suggestion.suggestionId);
+    }
+    if (validIds.length === 0) {
+      setLocalError("请先勾选可写入的建议");
+      return;
+    }
+    if (validIds.length > 5) {
+      setLocalError("最多选择 5 条建议");
+      return;
     }
 
-    if (newlyApplied.length) {
-      setAppliedIds((prev) => [...new Set([...prev, ...newlyApplied])]);
-      setSelectedIds((prev) => prev.filter((id) => !newlyApplied.includes(id)));
-      setUndoSnapshot({ chapters: [...batchMap.values()] });
-      setUndoMessage(null);
+    setLocalError(null);
+    setApplyMessage(null);
+    setRestoreMessage(null);
+    setApplyBusy(true);
+
+    // 区分业务 POST 失败 与 POST 已成功后的刷新失败
+    let created: Awaited<ReturnType<typeof createContentFuseApplication>>;
+    try {
+      created = await createContentFuseApplication(pid, {
+        taskId: applyTaskId,
+        suggestionIds: validIds,
+      });
+    } catch {
+      if (session !== sessionRef.current) return;
+      setLocalError(MSG_APPLY_FAIL);
+      setApplyMessage(null);
+      setApplyBusy(false);
+      return;
     }
-    setApplyOutcomes(outcomes);
-    setApplyMessage(
-      `已写入 ${appliedCount} 条，跳过 ${skippedCount} 条` +
-        (appliedCount > 0 ? "（已沿用编辑器自动保存）" : ""),
-    );
+    if (session !== sessionRef.current) return;
+
+    // POST 已成功：立即标记已应用并清空勾选，阻止同 Dialog 重复 POST
+    setAppliedIds((prev) => [...new Set([...prev, ...validIds])]);
+    setSelectedIds((prev) => prev.filter((id) => !validIds.includes(id)));
+
+    try {
+      // 唯一一次实际重载：父级 GET + setState；禁止再直连 apiFetch(editor-state)
+      const reloaded = await onReloadFromApi();
+      if (session !== sessionRef.current) return;
+      if (!reloaded) {
+        setLocalError(MSG_APPLY_RELOAD_FAIL);
+        setApplyMessage(null);
+        return;
+      }
+      await refreshBatches(session, pid);
+      if (session !== sessionRef.current) return;
+      setApplyMessage(`已写入 ${created.appliedChapterCount} 章`);
+    } catch {
+      // refreshBatches 等后续失败：业务已写入，仍按刷新失败处理
+      if (session !== sessionRef.current) return;
+      setLocalError(MSG_APPLY_RELOAD_FAIL);
+      setApplyMessage(null);
+    } finally {
+      if (session === sessionRef.current) {
+        setApplyBusy(false);
+      }
+    }
   }, [
     result,
+    applyTaskId,
+    applyBusy,
+    restoreBusy,
+    busy,
+    projectId,
     selectedIds,
-    appliedSet,
     chapters,
-    onReplaceChapterBody,
+    appliedSet,
+    onReloadFromApi,
+    refreshBatches,
   ]);
 
   /**
-   * 用途：撤销最近成功批次；仅标题/正文/状态均等于 after 的章恢复 before。
-   * 对接：onReplaceChapterBody(id, beforeBody, beforeStatus)。
-   * 二次开发：点击后无条件消费快照；仅移除成功恢复章的已写入建议 ID；漂移章保留已写入标记。
+   * 用途：二次确认后一次消费恢复；完整/部分/零恢复均刷新为已消费。
    */
-  const handleUndoBatch = useCallback(() => {
-    if (!undoSnapshot) return;
-    let restored = 0;
-    let skipped = 0;
-    const restoredSuggestionIds: string[] = [];
+  const handleConfirmRestore = useCallback(async () => {
+    if (!pendingRestoreBatchId || restoreBusy || applyBusy || busy) return;
+    const session = sessionRef.current;
+    const pid = projectId;
+    const batchId = pendingRestoreBatchId;
+    setRestoreBusy(true);
+    setLocalError(null);
+    setRestoreMessage(null);
+    setApplyMessage(null);
 
-    for (const snap of undoSnapshot.chapters) {
-      const current = findChapter(chapters, snap.chapterId);
-      const bodyMatch = (current?.body || "") === snap.afterBody;
-      const titleMatch = (current?.title ?? "") === snap.title;
-      const statusMatch = (current?.status ?? "pending") === snap.afterStatus;
-      if (current && titleMatch && bodyMatch && statusMatch) {
-        onReplaceChapterBody(
-          snap.chapterId,
-          snap.beforeBody,
-          snap.beforeStatus,
-        );
-        restored += 1;
-        restoredSuggestionIds.push(...snap.suggestionIds);
-      } else {
-        skipped += 1;
+    // 区分业务 consume 失败 与 consume 已成功后的刷新失败
+    let res: Awaited<ReturnType<typeof consumeContentFuseApplication>>;
+    try {
+      res = await consumeContentFuseApplication(pid, batchId);
+    } catch {
+      if (session !== sessionRef.current) return;
+      setLocalError(MSG_RESTORE_FAIL);
+      setPendingRestoreBatchId(null);
+      setRestoreBusy(false);
+      return;
+    }
+    if (session !== sessionRef.current) return;
+
+    // consume 已成功：立即清空二次确认，并在内存把该批标为 consumed，阻止再次 consume
+    setPendingRestoreBatchId(null);
+    setBatches((prev) =>
+      prev.map((b) =>
+        b.batchId === batchId
+          ? {
+              ...b,
+              state: "consumed" as const,
+              consumedAt: res.consumedAt,
+            }
+          : b,
+      ),
+    );
+
+    try {
+      // 唯一一次实际重载；禁止再直连 apiFetch(editor-state)
+      const reloaded = await onReloadFromApi();
+      if (session !== sessionRef.current) return;
+      if (!reloaded) {
+        setLocalError(MSG_RESTORE_RELOAD_FAIL);
+        setRestoreMessage(null);
+        return;
+      }
+      await refreshBatches(session, pid);
+      if (session !== sessionRef.current) return;
+      setRestoreMessage(
+        `已恢复 ${res.restoredChapterCount} 章，跳过 ${res.skippedChapterCount} 章`,
+      );
+    } catch {
+      // 列表刷新等后续失败：consume 已成功，仍按刷新失败处理
+      if (session !== sessionRef.current) return;
+      setLocalError(MSG_RESTORE_RELOAD_FAIL);
+      setRestoreMessage(null);
+    } finally {
+      if (session === sessionRef.current) {
+        setRestoreBusy(false);
       }
     }
-
-    setUndoSnapshot(null);
-    if (restoredSuggestionIds.length) {
-      const drop = new Set(restoredSuggestionIds);
-      setAppliedIds((prev) => prev.filter((id) => !drop.has(id)));
-    }
-    setUndoMessage(`已撤销 ${restored} 章，跳过 ${skipped} 章`);
-    setApplyMessage(null);
-  }, [undoSnapshot, chapters, onReplaceChapterBody]);
+  }, [
+    pendingRestoreBatchId,
+    restoreBusy,
+    applyBusy,
+    busy,
+    projectId,
+    onReloadFromApi,
+    refreshBatches,
+  ]);
 
   const selectedSelectableCount = useMemo(() => {
     if (!result) return 0;
@@ -450,6 +552,8 @@ export function ContentFuseDialog({
       return canSelectSuggestion(s, chapters, appliedSet).selectable;
     }).length;
   }, [result, selectedIds, chapters, appliedSet]);
+
+  const opBusy = busy || applyBusy || restoreBusy;
 
   if (!open) return null;
 
@@ -473,7 +577,8 @@ export function ContentFuseDialog({
               模板/卡片融合建议
             </strong>
             <p className="content-fuse-dialog__sub">
-              M3-B/M3-C：生成建议后可双栏预览并勾选确认写入；未确认关闭不会改章节。最近一次成功写入可在本对话框内一次性撤销（漂移章跳过）。
+              M3-B/M3-D：生成建议后可双栏预览并勾选，由服务端原子确认写入；关闭未确认不改章节。
+              最近批次可跨刷新恢复。
             </p>
           </div>
           <button
@@ -496,7 +601,11 @@ export function ContentFuseDialog({
             </p>
           )}
           {localError && (
-            <p className="content-fuse-dialog__error" role="alert">
+            <p
+              className="content-fuse-dialog__error"
+              role="alert"
+              data-testid="content-fuse-local-error"
+            >
               {localError}
             </p>
           )}
@@ -515,14 +624,14 @@ export function ContentFuseDialog({
               {applyMessage}
             </p>
           )}
-          {undoMessage && (
+          {restoreMessage && (
             <p
               className="content-fuse-dialog__msg"
               role="status"
               aria-live="polite"
-              data-testid="content-fuse-undo-summary"
+              data-testid="content-fuse-restore-summary"
             >
-              {undoMessage}
+              {restoreMessage}
             </p>
           )}
 
@@ -547,7 +656,7 @@ export function ContentFuseDialog({
                             <input
                               type="checkbox"
                               checked={checked}
-                              disabled={busy}
+                              disabled={opBusy}
                               aria-label={`模板 ${t.title}`}
                               onChange={() => {
                                 const { next, error } = toggleId(
@@ -592,7 +701,7 @@ export function ContentFuseDialog({
                             <input
                               type="checkbox"
                               checked={checked}
-                              disabled={busy}
+                              disabled={opBusy}
                               aria-label={`卡片 ${c.title}`}
                               onChange={() => {
                                 const { next, error } = toggleId(
@@ -638,7 +747,7 @@ export function ContentFuseDialog({
                             <input
                               type="checkbox"
                               checked={checked}
-                              disabled={busy}
+                              disabled={opBusy}
                               aria-label={`目标章节 ${ch.title}`}
                               onChange={() => {
                                 const { next, error } = toggleId(
@@ -668,6 +777,95 @@ export function ContentFuseDialog({
             </div>
           )}
 
+          {/* 持久恢复批次：打开时读一次；不展示 ID/正文/来源 */}
+          <section
+            className="content-fuse-batches"
+            aria-label="融合写入恢复批次"
+            data-testid="content-fuse-batches"
+          >
+            <h4>最近恢复批次</h4>
+            <p className="content-fuse-dialog__sub">{MSG_BATCH_WINDOW}</p>
+            {batchesLoading ? (
+              <LoadingLine label="加载恢复批次…" />
+            ) : batchesError ? (
+              <p className="content-fuse-dialog__error" role="alert">
+                {batchesError}
+              </p>
+            ) : batches.length === 0 ? (
+              <p className="content-fuse-empty">暂无恢复批次</p>
+            ) : (
+              <ul className="content-fuse-batch-list">
+                {batches.map((b) => {
+                  const isActive = b.state === "active";
+                  const pending = pendingRestoreBatchId === b.batchId;
+                  // 列表 key 用 batchId 保证 React 稳定，但不渲染到可见文案
+                  return (
+                    <li
+                      key={b.batchId}
+                      className="content-fuse-batch-item"
+                      data-testid="content-fuse-batch-item"
+                      data-batch-state={isActive ? "active" : "consumed"}
+                    >
+                      <div className="content-fuse-batch-item__meta">
+                        <span>{formatBatchTime(b.createdAt)}</span>
+                        <span>{b.chapterCount} 章</span>
+                        <span className="badge">
+                          {isActive ? "可恢复" : "已消费"}
+                        </span>
+                      </div>
+                      {isActive && !pending && (
+                        <button
+                          type="button"
+                          className="btn btn-soft btn-sm"
+                          disabled={opBusy}
+                          aria-label="恢复此批次"
+                          data-testid="content-fuse-restore-start"
+                          onClick={() => {
+                            setPendingRestoreBatchId(b.batchId);
+                            setLocalError(null);
+                            setRestoreMessage(null);
+                          }}
+                        >
+                          恢复
+                        </button>
+                      )}
+                      {isActive && pending && (
+                        <div
+                          className="content-fuse-batch-item__confirm"
+                          data-testid="content-fuse-restore-confirm"
+                        >
+                          <span>确认恢复该批次？</span>
+                          <button
+                            type="button"
+                            className="btn btn-primary btn-sm"
+                            disabled={opBusy}
+                            aria-label="确认恢复批次"
+                            data-testid="content-fuse-restore-yes"
+                            onClick={() => {
+                              void handleConfirmRestore();
+                            }}
+                          >
+                            {restoreBusy ? "恢复中…" : "确认"}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            disabled={opBusy}
+                            aria-label="取消恢复批次"
+                            data-testid="content-fuse-restore-no"
+                            onClick={() => setPendingRestoreBatchId(null)}
+                          >
+                            取消
+                          </button>
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
+
           {result && (
             <section
               className="content-fuse-results"
@@ -678,7 +876,7 @@ export function ContentFuseDialog({
                 {result.model ? ` · 模型 ${result.model}` : ""}
                 <span className="content-fuse-results__hint">
                   {" "}
-                  · 默认不勾选；仅基线匹配项可确认写入
+                  · 默认不勾选；仅基线匹配项可确认写入；同章仅一条
                 </span>
               </h4>
               {result.skippedSources.length > 0 && (
@@ -695,9 +893,6 @@ export function ContentFuseDialog({
                     const gate = canSelectSuggestion(s, chapters, appliedSet);
                     const checked = selectedIds.includes(s.suggestionId);
                     const liveBody = chapter?.body || "";
-                    const outcome = applyOutcomes.find(
-                      (o) => o.suggestionId === s.suggestionId,
-                    );
                     return (
                       <li
                         key={s.suggestionId}
@@ -716,14 +911,16 @@ export function ContentFuseDialog({
                             <input
                               type="checkbox"
                               checked={checked}
-                              disabled={!gate.selectable || busy}
+                              disabled={!gate.selectable || opBusy}
                               aria-label={`勾选写入建议 ${s.targetTitle || s.targetChapterId}`}
                               onChange={(e) => {
                                 toggleSuggestion(s, e.target.checked);
                               }}
                             />
                             <span>
-                              <strong>{s.targetTitle || s.targetChapterId}</strong>
+                              <strong>
+                                {s.targetTitle || s.targetChapterId}
+                              </strong>
                             </span>
                           </label>
                           <span className="badge badge-primary">
@@ -739,11 +936,6 @@ export function ContentFuseDialog({
                               data-testid={`fuse-block-${s.suggestionId}`}
                             >
                               {gate.reason}
-                            </span>
-                          )}
-                          {outcome?.status === "skipped" && outcome.reason && (
-                            <span className="content-fuse-suggestion__skip">
-                              跳过：{outcome.reason}
                             </span>
                           )}
                         </div>
@@ -820,26 +1012,22 @@ export function ContentFuseDialog({
             <button
               type="button"
               className="btn btn-soft btn-sm"
-              disabled={busy || selectedSelectableCount === 0}
+              disabled={
+                opBusy || selectedSelectableCount === 0 || !applyTaskId
+              }
               aria-label="确认写入所选"
-              onClick={handleConfirmApply}
+              data-testid="content-fuse-confirm-apply"
+              onClick={() => {
+                void handleConfirmApply();
+              }}
             >
-              确认写入所选
-              {selectedSelectableCount > 0
-                ? `（${selectedSelectableCount}）`
-                : ""}
-            </button>
-          )}
-          {undoSnapshot && (
-            <button
-              type="button"
-              className="btn btn-soft btn-sm"
-              disabled={busy}
-              aria-label="撤销本次写入"
-              data-testid="content-fuse-undo-batch"
-              onClick={handleUndoBatch}
-            >
-              撤销本次写入
+              {applyBusy
+                ? "确认中…"
+                : `确认写入所选${
+                    selectedSelectableCount > 0
+                      ? `（${selectedSelectableCount}）`
+                      : ""
+                  }`}
             </button>
           )}
           <button

@@ -14,6 +14,7 @@
     "test:e2e:cards": "playwright test e2e/knowledge-cards.spec.ts",
     "test:e2e:fuse": "playwright test e2e/content-fuse-suggest.spec.ts",
     "test:e2e:fuse-apply": "playwright test e2e/content-fuse-apply.spec.ts",
+    "test:e2e:fuse-persistent-recovery": "playwright test e2e/content-fuse-persistent-recovery.spec.ts",
     "test:e2e:opportunity-watch": "playwright test e2e/opportunity-watch-chnenergy.spec.ts",
     "test:e2e:semantic-index": "playwright test e2e/semantic-index.spec.ts",
     "test:e2e:auth-rbac": "playwright test e2e/auth-rbac.spec.ts",

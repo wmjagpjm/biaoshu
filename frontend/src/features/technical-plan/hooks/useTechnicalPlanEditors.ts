@@ -764,8 +764,13 @@ export function useTechnicalPlanEditors(projectId: string) {
     [],
   );
 
-  /** 用途：任务成功后从服务端重新拉取 editor-state */
-  const reloadFromApi = useCallback(async () => {
+  /**
+   * 用途：任务成功后从服务端重新拉取 editor-state（单次 GET）。
+   * 返回 true：GET 成功且已完成 setState/版本/冲突态更新；
+   * 返回 false：请求或转换失败，保持本地状态；不抛出、不泄露服务端错误。
+   * 二次开发：调用方可忽略 boolean；ContentFuseDialog 必须据返回值判定刷新成败。
+   */
+  const reloadFromApi = useCallback(async (): Promise<boolean> => {
     try {
       const remote = await apiFetch<EditorStateApi>(
         `/projects/${encodeURIComponent(projectId)}/editor-state`,
@@ -780,8 +785,10 @@ export function useTechnicalPlanEditors(projectId: string) {
       setMatrixConflict(null);
       setMergeChoices({});
       setPersistSource("api");
+      return true;
     } catch {
-      /* 保持本地 */
+      /* 保持本地；不抛出、不泄露 */
+      return false;
     }
   }, [projectId, applyMatrixVersion, snapshotMatrixBase]);
 
