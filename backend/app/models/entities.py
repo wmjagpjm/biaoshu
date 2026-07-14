@@ -20,6 +20,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
+    Index,
     Integer,
     String,
     Text,
@@ -1070,6 +1071,56 @@ class FinanceCostEntryRow(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
+class FinanceProjectCostChangeEventRow(Base):
+    """
+    模块：P10K 财务项目成本变更最小不可变事件
+    用途：在 P10C 成功写操作同一事务内记录 workspace/project/entry/action/actor/time。
+    对接：finance_project_cost_change_event_service；finance_cost_service；
+      GET /api/finance/business-bids/{projectId}/cost-change-events。
+    二次开发：
+      - 禁止金额/名称/备注/快照/失败尝试等业务正文列
+      - entry_id 故意无外键，删除条目后事件仍保留
+      - 禁止客户端指定 id/时间；无 update/delete API
+    """
+
+    __tablename__ = "finance_project_cost_change_events"
+    __table_args__ = (
+        CheckConstraint(
+            "action IN ('create', 'update', 'delete')",
+            name="ck_finance_project_cost_change_events_action",
+        ),
+        Index(
+            "ix_fpce_workspace_project_created",
+            "workspace_id",
+            "project_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # 故意无外键：删除成本条目后仍保留 entry_id
+    entry_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    actor_user_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, index=True
     )
 
 

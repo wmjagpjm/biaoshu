@@ -1,10 +1,11 @@
 """
-模块：P10B/P10C/P10J 财务路由
-用途：P10B 两个只读报价 GET；P10C 成本草案读与受控写；P10J 本人成本变更记录只读。
+模块：P10B/P10C/P10J/P10K 财务路由
+用途：P10B 两个只读报价 GET；P10C 成本草案读与受控写；P10J 本人成本变更记录只读；
+  P10K 项目成本变更最小事件只读。
 对接：/api/finance/*；deps.require_finance；finance_service；finance_cost_service；
-  finance_cost_change_event_service。
+  finance_cost_change_event_service；finance_project_cost_change_event_service。
 二次开发：禁止放宽角色；P10B 只读语义不得附加成本字段；写操作依赖既有 CSRF；
-  P10J 不得扩展为全员/项目审计或返回金额正文。
+  P10J/P10K 不得扩展为全员审计或返回金额正文/成员身份。
 """
 
 from typing import Annotated
@@ -23,10 +24,17 @@ from app.api.schemas import (
     FinanceCostEntryCreate,
     FinanceCostEntryOut,
     FinanceCostEntryUpdate,
+    FinanceProjectCostChangeEventOut,
+    FinanceProjectCostChangeEventsOut,
     FinanceQuoteRowOut,
 )
 from app.core.database import get_db
-from app.services import finance_cost_change_event_service, finance_cost_service, finance_service
+from app.services import (
+    finance_cost_change_event_service,
+    finance_cost_service,
+    finance_project_cost_change_event_service,
+    finance_service,
+)
 from app.services.finance_cost_service import FinanceCostValidationError
 from app.services.project_service import ProjectNotFoundError
 
@@ -215,6 +223,51 @@ def get_business_bid(
     except ProjectNotFoundError:
         raise _http_project_not_found() from None
     return _to_detail(item)
+
+
+@router.get(
+    "/business-bids/{project_id}/cost-change-events",
+    response_model=FinanceProjectCostChangeEventsOut,
+)
+def list_project_cost_change_events(
+    project_id: str,
+    request: Request,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    workspace_id: Annotated[str, Depends(require_finance)],
+) -> FinanceProjectCostChangeEventsOut:
+    """
+    用途：严格 finance 读取当前空间商务标项目最近 50 条成功成本变更固定投影。
+    对接：GET /api/finance/business-bids/{project_id}/cost-change-events；
+      finance_project_cost_change_event_service。
+    二次开发：
+      - actor 仅来自已验证 request.state；禁止客户端 limit/筛选
+      - 响应仅 items[].action|entryId|actorScope|occurredAt；固定 no-store
+      - 404 统一 project_not_found，不反射路径 ID
+      - 不得返回金额、项目名、成员身份、完整审计或事件 ID
+    """
+    _no_store(response)
+    actor = _actor_user_id(request)
+    try:
+        payload = finance_project_cost_change_event_service.list_project_cost_change_events(
+            db,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            actor_user_id=actor,
+        )
+    except ProjectNotFoundError:
+        raise _http_project_not_found() from None
+    return FinanceProjectCostChangeEventsOut(
+        items=[
+            FinanceProjectCostChangeEventOut(
+                action=item["action"],
+                entry_id=item["entry_id"],
+                actor_scope=item["actor_scope"],
+                occurred_at=item["occurred_at"],
+            )
+            for item in payload.get("items") or []
+        ]
+    )
 
 
 @router.get(

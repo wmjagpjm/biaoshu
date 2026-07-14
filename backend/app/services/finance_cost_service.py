@@ -1,10 +1,12 @@
 """
 模块：P10C 财务成本草案服务
 用途：在商务标上维护人工成本条目，并基于 P10B 报价合计给出整数分毛利快照。
-对接：api.finance 成本路由；finance_service.get_business_bid_quote；auth_service.record_audit。
+对接：api.finance 成本路由；finance_service.get_business_bid_quote；auth_service.record_audit；
+  finance_project_cost_change_event_service（P10K 同事务项目事件）。
 二次开发：
   - 金额仅人民币分整数；禁止浮点持久化与税务/审批推算
   - 审计 target 仅条目 ID，禁止写金额/名称/备注
+  - create/update/delete 须在唯一事务内同时写 P10A 审计与 P10K 事件，不得第二次 commit
   - 不得改动 P10B 只读投影语义
 """
 
@@ -19,7 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.entities import FinanceCostEntryRow, utc_now
-from app.services import auth_service, finance_service
+from app.services import auth_service, finance_project_cost_change_event_service, finance_service
 from app.services.project_service import ProjectNotFoundError
 
 # 成本类别固定枚举
@@ -229,6 +231,16 @@ def create_entry(
         target=row.id,
         commit=False,
     )
+    # P10K：与业务/审计同事务追加项目事件，禁止二次 commit
+    finance_project_cost_change_event_service.record_project_cost_change_event(
+        db,
+        workspace_id=workspace_id,
+        project_id=project_id,
+        entry_id=row.id,
+        action="create",
+        actor_user_id=actor_user_id,
+        commit=False,
+    )
     db.commit()
     db.refresh(row)
     return _entry_to_dict(row)
@@ -295,6 +307,15 @@ def update_entry(
         target=row.id,
         commit=False,
     )
+    finance_project_cost_change_event_service.record_project_cost_change_event(
+        db,
+        workspace_id=workspace_id,
+        project_id=project_id,
+        entry_id=row.id,
+        action="update",
+        actor_user_id=actor_user_id,
+        commit=False,
+    )
     db.commit()
     db.refresh(row)
     return _entry_to_dict(row)
@@ -318,7 +339,10 @@ def delete_entry(
         project_id=project_id,
         entry_id=entry_id,
     )
+    # 删除前保留 entry/project/actor，避免事件因业务行消失而丢失
     target_id = row.id
+    event_project_id = row.project_id
+    event_workspace_id = row.workspace_id
     db.delete(row)
     auth_service.record_audit(
         db,
@@ -327,6 +351,15 @@ def delete_entry(
         actor_user_id=actor_user_id,
         workspace_id=workspace_id,
         target=target_id,
+        commit=False,
+    )
+    finance_project_cost_change_event_service.record_project_cost_change_event(
+        db,
+        workspace_id=event_workspace_id,
+        project_id=event_project_id,
+        entry_id=target_id,
+        action="delete",
+        actor_user_id=actor_user_id,
         commit=False,
     )
     db.commit()

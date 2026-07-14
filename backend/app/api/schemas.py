@@ -1253,6 +1253,43 @@ class FinanceCostChangeEventsOut(BaseModel):
     items: list[FinanceCostChangeEventOut]
 
 
+# ---------- P10K 财务项目成本变更记录 ----------
+
+
+FinanceProjectCostChangeActorScope = Literal["self", "other"]
+
+
+class FinanceProjectCostChangeEventOut(BaseModel):
+    """
+    模块：财务项目成本变更单条响应
+    用途：固定投影动作、条目 ID、本人/其他作用域与时间；不含事件 ID/成员身份/金额。
+    对接：GET /api/finance/business-bids/{projectId}/cost-change-events → items[]。
+    二次开发：字段集合为契约白名单，禁止附加项目/workspace/actor 原始 ID。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    action: FinanceCostChangeAction
+    entry_id: str = Field(serialization_alias="entryId")
+    actor_scope: FinanceProjectCostChangeActorScope = Field(
+        serialization_alias="actorScope"
+    )
+    occurred_at: datetime = Field(serialization_alias="occurredAt")
+
+
+class FinanceProjectCostChangeEventsOut(BaseModel):
+    """
+    模块：财务项目成本变更列表响应
+    用途：包装 items 数组；顶层仅此键。
+    对接：GET /api/finance/business-bids/{projectId}/cost-change-events。
+    二次开发：禁止分页游标、total、limit 或任何额外顶层字段。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    items: list[FinanceProjectCostChangeEventOut]
+
+
 # ---------- P10D 人员资质素材卡 ----------
 
 

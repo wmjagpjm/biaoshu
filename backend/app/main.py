@@ -53,6 +53,7 @@ from app.models import (  # noqa: F401
     BidTemplateRow,
     BidWatchPlanRow,
     FinanceCostEntryRow,
+    FinanceProjectCostChangeEventRow,
     HrCredentialCardRow,
     HrPerformanceCardRow,
     HrTeamRecommendationMemberRow,
