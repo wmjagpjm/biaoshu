@@ -12,7 +12,7 @@
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
 
 # 与前端 ProjectStatus 字面量一致
@@ -1204,3 +1204,105 @@ class FinanceCostEntryUpdate(BaseModel):
         default=None, alias="amountFen", ge=1, le=999_999_999_999
     )
     remark: str | None = Field(default=None, max_length=500)
+
+
+# ---------- P10D 人员资质素材卡 ----------
+
+
+HrCredentialCategory = Literal[
+    "professional", "safety", "performance", "other"
+]
+
+
+class HrCredentialCardSummaryOut(BaseModel):
+    """
+    模块：人员资质卡摘要响应
+    用途：列表白名单字段；不含 remark 与创建人。
+    对接：GET /api/hr/credential-cards。
+    二次开发：字段集合为契约白名单，禁止附加证件/联系方式/附件。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    person_name: str = Field(serialization_alias="personName")
+    category: HrCredentialCategory
+    credential_name: str = Field(serialization_alias="credentialName")
+    level: str = ""
+    valid_until: date | None = Field(
+        default=None, serialization_alias="validUntil"
+    )
+    is_active: bool = Field(serialization_alias="isActive")
+    created_at: datetime = Field(serialization_alias="createdAt")
+    updated_at: datetime = Field(serialization_alias="updatedAt")
+
+
+class HrCredentialCardDetailOut(HrCredentialCardSummaryOut):
+    """
+    模块：人员资质卡详情响应
+    用途：在摘要上追加 remark。
+    对接：GET/POST/PATCH /api/hr/credential-cards*。
+    二次开发：仍不得返回 createdBy/workspace/证件号等越界字段。
+    """
+
+    remark: str = ""
+
+
+class HrCredentialCardListOut(BaseModel):
+    """
+    模块：人员资质卡列表响应
+    用途：包装 items 数组。
+    对接：GET /api/hr/credential-cards。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    items: list[HrCredentialCardSummaryOut]
+
+
+class HrCredentialCardCreate(BaseModel):
+    """
+    模块：新建人员资质卡请求
+    用途：校验显示名、类别、证书名与可选字段；拒绝额外敏感键。
+    对接：POST /api/hr/credential-cards。
+    二次开发：extra=forbid，禁止 idNumber/phone/attachment 等额外字段；
+      isActive 仅接受 JSON 布尔（StrictBool），拒绝字符串/数值强制转换。
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    person_name: str = Field(alias="personName", min_length=1, max_length=80)
+    category: HrCredentialCategory
+    credential_name: str = Field(
+        alias="credentialName", min_length=1, max_length=120
+    )
+    level: str | None = Field(default="", max_length=80)
+    valid_until: date | None = Field(default=None, alias="validUntil")
+    remark: str = Field(default="", max_length=500)
+    # StrictBool：仅 JSON true/false；"false"/0/1 均 422
+    is_active: StrictBool = Field(default=True, alias="isActive")
+
+
+class HrCredentialCardUpdate(BaseModel):
+    """
+    模块：更新人员资质卡请求
+    用途：至少一个可修改字段；服务端再做归属与边界校验。
+    对接：PATCH /api/hr/credential-cards/{cardId}。
+    二次开发：extra=forbid；禁止改 id/workspace/user/时间戳；
+      isActive 与创建一致用 StrictBool。
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    person_name: str | None = Field(
+        default=None, alias="personName", min_length=1, max_length=80
+    )
+    category: HrCredentialCategory | None = None
+    credential_name: str | None = Field(
+        default=None, alias="credentialName", min_length=1, max_length=120
+    )
+    level: str | None = Field(default=None, max_length=80)
+    valid_until: date | None = Field(default=None, alias="validUntil")
+    remark: str | None = Field(default=None, max_length=500)
+    # StrictBool：仅 JSON true/false；"false"/0/1 均 422
+    is_active: StrictBool | None = Field(default=None, alias="isActive")

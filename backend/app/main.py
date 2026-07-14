@@ -26,6 +26,7 @@ from app.api import (
     files,
     finance as finance_api,
     health,
+    hr as hr_api,
     knowledge as knowledge_api,
     llm,
     opportunities,
@@ -51,6 +52,7 @@ from app.models import (  # noqa: F401
     BidTemplateRow,
     BidWatchPlanRow,
     FinanceCostEntryRow,
+    HrCredentialCardRow,
     KbChunkRow,
     KbDocumentRow,
     KbFolderRow,
@@ -127,6 +129,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router, prefix="/api")
     app.include_router(auth_api.router, prefix="/api")
     app.include_router(finance_api.router, prefix="/api")
+    app.include_router(hr_api.router, prefix="/api")
     app.include_router(projects.router, prefix="/api")
     app.include_router(settings_api.router, prefix="/api")
     app.include_router(llm.router, prefix="/api")

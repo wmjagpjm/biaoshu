@@ -1073,6 +1073,45 @@ class FinanceCostEntryRow(Base):
     )
 
 
+class HrCredentialCardRow(Base):
+    """
+    模块：P10D 人员资质素材卡
+    用途：由 strict hr 在当前工作空间登记最小人员资质显示信息；不做物理删除。
+    对接：hr_credential_service；/api/hr/credential-cards*。
+    二次开发：禁止身份证号/手机/住址/照片/附件/URL/证件号码字段；客户端不得写 id/workspace/user/时间戳。
+    """
+
+    __tablename__ = "hr_credential_cards"
+    __table_args__ = (
+        CheckConstraint(
+            "category IN ('professional', 'safety', 'performance', 'other')",
+            name="ck_hr_credential_cards_category",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    person_name: Mapped[str] = mapped_column(String(80), nullable=False)
+    category: Mapped[str] = mapped_column(String(32), nullable=False)
+    credential_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    level: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    valid_until: Mapped[date | None] = mapped_column(Date, nullable=True)
+    remark: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_by_user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
 class ProjectTaskRow(Base):
     """
     用途：本机日用任务（解析/分析/大纲/正文/导出）状态。
