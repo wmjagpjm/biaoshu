@@ -136,11 +136,14 @@ npm run test:e2e:hr-team-recommendations
 # P10E：投标人匿名合规预览（隔离 8010/5174、路由桩；仅 bidder 专用端点）
 npm run test:e2e:bidder-compliance-preview
 
+# P10G：投标人项目级合规统计（隔离 8010/5174、路由桩；仅 bidder 最小项目投影）
+npm run test:e2e:bidder-project-compliance
+
 # P8B：解析策略接线（真实本机 API/任务；禁止服务端 MinerU/Docling）
 npm run test:e2e:parse-strategy
 ```
 
-当前基线：后端串行全量 **364 passed**（1 条既有 Starlette/httpx 弃用警告，含 P10F 严格角色与快照隔离测试）；前端 `lint` / `build` 通过（仅既有大包体积提示）及全量 E2E **73 passed**。其中 P10F `test:e2e:hr-team-recommendations` **4 passed**、P8B `test:e2e:parse-strategy` **6 passed**、P10E `test:e2e:bidder-compliance-preview` **8 passed**、P10D `test:e2e:hr-credential-cards` **9 passed**、P10C `finance-cost-draft` **4 passed**、P10B `finance-role` **7 passed**、P10A `auth-rbac` **11 passed**、P9C `semantic-index` **9 passed**、知识卡片 `cards` **1 passed**。P10F 完整契约见 `docs/p10f-hr-team-recommendation-contract.md`：仅 strict `hr` 维护当前空间技术标项目的最小团队快照，strict `bid_writer` 才能按需读取项目展示投影，`AUTH_MODE=disabled` 与仅 `is_owner` 均不放行；其余角色契约保持原边界。
+当前基线：后端串行全量 **378 passed**（1 条既有 Starlette/httpx 弃用警告，含 P10G 严格投标人项目隔离测试）；前端 `lint` / `build` 通过（仅既有大包体积提示）及全量 E2E **83 passed**。其中 P10G `test:e2e:bidder-project-compliance` **10 passed**、P10F `test:e2e:hr-team-recommendations` **4 passed**、P8B `test:e2e:parse-strategy` **6 passed**、P10E `test:e2e:bidder-compliance-preview` **8 passed**、P10D `test:e2e:hr-credential-cards` **9 passed**、P10C `finance-cost-draft` **4 passed**、P10B `finance-role` **7 passed**、P10A `auth-rbac` **11 passed**、P9C `semantic-index` **9 passed**、知识卡片 `cards` **1 passed**。P10G 完整契约见 `docs/p10g-bidder-project-compliance-contract.md`：仅 strict `bidder` 先读取当前空间技术标 `id/name` 选择器、再按需读取单项目五项统计；`AUTH_MODE=disabled` 与仅 `is_owner` 不放行，详情不返回项目字段或矩阵原文。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须串行运行。
 
 ## 6. 已接 API 一览
 
@@ -167,6 +170,8 @@ npm run test:e2e:parse-strategy
 | GET | `/api/hr/team-recommendations`（仅 strict `hr`；推荐摘要；`no-store`） |
 | GET/PUT | `/api/hr/team-recommendations/{projectId}`（仅 strict `hr`；详情/有序快照写入，PUT 需 CSRF） |
 | GET | `/api/bidder/compliance-preview`（仅 strict `bidder`；当前空间技术标响应矩阵匿名汇总；`no-store`） |
+| GET | `/api/bidder/project-compliance/projects`（仅 strict `bidder`；当前空间技术标 `id/name` 选择器；`no-store`） |
+| GET | `/api/bidder/project-compliance/{projectId}`（仅 strict `bidder`；单项目五项统计投影；跨空间/商务标/不存在统一 404；`no-store`） |
 | GET/POST | `/api/projects` |
 | GET/PATCH/DELETE | `/api/projects/{id}` |
 | GET | `/api/projects/{projectId}/team-recommendation`（仅 strict `bid_writer`；当前空间技术标的最小展示投影；`no-store`） |
@@ -227,7 +232,15 @@ npm run test:e2e:parse-strategy
 4. `owner` 的隐式绕过、`bid_writer`、`finance`、`hr` 与 disabled 均没有投标人入口；直达 `/bidder` 只显示受限页，且不应发投标人预览 API 请求。
 5. 浏览器不得写入 `localStorage` 或 `sessionStorage`；除认证、健康检查和本接口外，不能请求项目、编辑态、设置、文件、财务、人力或外网端点。完整边界见 `docs/p10e-bidder-anonymous-compliance-preview-contract.md`。
 
-## 6.4 P8B 解析策略接线
+## 6.4 P10G 投标人项目级合规统计
+
+1. 以严格 `bidder` 登录，打开 `/bidder/project-compliance`；初始只请求 `GET /api/bidder/project-compliance/projects`，选择器只显示当前空间技术标名称，不能请求 P10E 聚合、项目详情或编辑态。
+2. 选择项目后才请求 `GET /api/bidder/project-compliance/{projectId}`；页面只显示总条目、已覆盖、未覆盖、已豁免和覆盖率。空矩阵为 `200 empty` 与全零统计，不显示项目字段、矩阵行、章节、源文、人员或财务。
+3. 切换项目时旧统计须立即消失，延迟响应不得污染新选择；错误固定中文且不回显 ID、路径、后端 detail 或敏感标记。
+4. `disabled`、仅所有者、`bid_writer`、`finance`、`hr` 直达该路由均为受限页且不发 P10G API；当前成员角色本身为 `bidder` 的所有者按角色正常通过。
+5. 不得写入浏览器存储或 URL 查询参数；不得请求 `/projects*`、`/editor-state`、`/hr/*`、`/finance/*`、文件、设置、P10E 聚合或外网。完整边界见 `docs/p10g-bidder-project-compliance-contract.md`。
+
+## 6.5 P8B 解析策略接线
 
 1. 设置页保存 `light`、`local` 或 `ask` 后，技术标和商务标解析动作都重新请求 `GET /api/settings/parse-strategy`；响应只能有 `parseStrategy` 且带 `Cache-Control: no-store`，不得回显完整设置或 Key。
 2. `light` 创建既有 `parse` 任务，任务 payload 固定 `engine=lightweight`；成功后继续按既有路径刷新解析预览或商务编辑态。
@@ -315,7 +328,7 @@ npm run test:e2e:parse-strategy
 
 ## 14. 仍未接（后续）
 
-Celery、真 MinerU 安装包、P9B 以外的外部标讯数据源、P9C 的其他模型/GPU/在线 embedding/真实用户语料评测与自动模型更新、P10C 以外的财务税务/审批/导出/预算/回款/版本与审计查看、P10F 以外的人力人员业绩/附件与证件校验、投标人项目级预览/版本/结果跟踪与其他合规数据域、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
+Celery、真 MinerU 安装包、P9B 以外的外部标讯数据源、P9C 的其他模型/GPU/在线 embedding/真实用户语料评测与自动模型更新、P10C 以外的财务税务/审批/导出/预算/回款/版本与审计查看、P10F 以外的人力人员业绩/附件与证件校验、P10G 以外的投标人矩阵明细/版本/结果跟踪与其他合规数据域、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
 
 **响应矩阵相关（已接 vs 未扩）：** 多端冲突的版本写保护、409 与双浏览器上下文 E2E 主路径已接；「刷新来源」保留人工映射 E2E 已接；**智能建议人工确认后应用** E2E 已接；**来源超过 80 分页** 已推送（`1289c92`）；**字段级三方合并** MVP + E2E 已推送（`2c7b3e0`，`response-matrix-field-merge.spec.ts`）。仍未接：Word 失效引用在浏览器层的扩展（导出逻辑以后端单测为准）；包 9 交付增强。
 
