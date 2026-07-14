@@ -1,8 +1,11 @@
 """
-模块：P10D/P10F 人力路由
-用途：严格 hr 的资质卡列表/详情/创建/更新（无删除）；P10F 团队推荐快照读写。
+模块：P10D/P10F/P10H 人力路由
+用途：严格 hr 的资质卡列表/详情/创建/更新（无删除）；P10F 团队推荐快照读写；
+  P10H 人员业绩卡列表/详情/创建/更新（无删除）。
 对接：/api/hr/credential-cards*；/api/hr/team-recommendations*；
-  deps.require_hr；hr_credential_service；hr_team_recommendation_service。
+  /api/hr/performance-cards*；
+  deps.require_hr；hr_credential_service；hr_team_recommendation_service；
+  hr_performance_service。
 二次开发：禁止放宽角色；响应 Cache-Control:no-store；写操作依赖既有 CSRF；
   创建/更新须手工安全解析请求体，禁止默认 422 回显证件号/电话等原始输入。
 """
@@ -23,6 +26,11 @@ from app.api.schemas import (
     HrCredentialCardListOut,
     HrCredentialCardSummaryOut,
     HrCredentialCardUpdate,
+    HrPerformanceCardCreate,
+    HrPerformanceCardDetailOut,
+    HrPerformanceCardListOut,
+    HrPerformanceCardSummaryOut,
+    HrPerformanceCardUpdate,
     HrTeamMemberSnapshotOut,
     HrTeamProjectSelectorItemOut,
     HrTeamProjectSelectorListOut,
@@ -32,12 +40,22 @@ from app.api.schemas import (
     HrTeamRecommendationSummaryOut,
 )
 from app.core.database import get_db
-from app.services import hr_credential_service, hr_team_recommendation_service
+from app.services import (
+    hr_credential_service,
+    hr_performance_service,
+    hr_team_recommendation_service,
+)
 from app.services.hr_credential_service import (
     CODE_NOT_FOUND,
     MSG_NOT_FOUND,
     HrCredentialNotFoundError,
     HrCredentialValidationError,
+)
+from app.services.hr_performance_service import (
+    CODE_NOT_FOUND as PERF_CODE_NOT_FOUND,
+    MSG_NOT_FOUND as PERF_MSG_NOT_FOUND,
+    HrPerformanceNotFoundError,
+    HrPerformanceValidationError,
 )
 from app.services.hr_team_recommendation_service import (
     CODE_INVALID as TEAM_CODE_INVALID,
@@ -65,6 +83,12 @@ _HR_REQUEST_INVALID_DETAIL = {
 _TEAM_REQUEST_INVALID_DETAIL = {
     "code": TEAM_CODE_INVALID,
     "message": TEAM_MSG_INVALID,
+}
+_PERF_CODE_INVALID = "invalid_hr_performance"
+_PERF_MSG_INVALID = "人员业绩卡参数不合法"
+_PERF_REQUEST_INVALID_DETAIL = {
+    "code": _PERF_CODE_INVALID,
+    "message": _PERF_MSG_INVALID,
 }
 
 
@@ -347,6 +371,184 @@ def _to_team_detail(item: dict) -> HrTeamRecommendationDetailOut:
         members=[_to_team_member(m) for m in item.get("members") or []],
         updated_at=item["updated_at"],
     )
+
+
+def _to_performance_summary(item: dict) -> HrPerformanceCardSummaryOut:
+    return HrPerformanceCardSummaryOut(
+        id=item["id"],
+        person_name=item["person_name"],
+        project_name=item["project_name"],
+        project_role=item.get("project_role") or "",
+        completed_year=item.get("completed_year"),
+        is_active=bool(item["is_active"]),
+        created_at=item["created_at"],
+        updated_at=item["updated_at"],
+    )
+
+
+def _to_performance_detail(item: dict) -> HrPerformanceCardDetailOut:
+    return HrPerformanceCardDetailOut(
+        id=item["id"],
+        person_name=item["person_name"],
+        project_name=item["project_name"],
+        project_role=item.get("project_role") or "",
+        completed_year=item.get("completed_year"),
+        performance_summary=item.get("performance_summary") or "",
+        remark=item.get("remark") or "",
+        is_active=bool(item["is_active"]),
+        created_at=item["created_at"],
+        updated_at=item["updated_at"],
+    )
+
+
+def _http_performance_not_found() -> HTTPException:
+    """用途：固定 404，不回显请求 cardId。"""
+    return HTTPException(
+        status_code=404,
+        detail={"code": PERF_CODE_NOT_FOUND, "message": PERF_MSG_NOT_FOUND},
+    )
+
+
+def _http_performance_invalid() -> HTTPException:
+    return HTTPException(
+        status_code=422,
+        detail=dict(_PERF_REQUEST_INVALID_DETAIL),
+    )
+
+
+@router.get("/performance-cards", response_model=HrPerformanceCardListOut)
+def list_performance_cards(
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    workspace_id: Annotated[str, Depends(require_hr)],
+) -> HrPerformanceCardListOut:
+    """
+    用途：严格 hr 查看当前工作空间人员业绩卡摘要列表。
+    对接：GET /api/hr/performance-cards；require_hr；hr_performance_service.list_cards。
+    二次开发：列表不含 performanceSummary/remark；Cache-Control:no-store。
+    """
+    _no_store(response)
+    items = hr_performance_service.list_cards(db, workspace_id)
+    return HrPerformanceCardListOut(
+        items=[_to_performance_summary(x) for x in items]
+    )
+
+
+@router.get(
+    "/performance-cards/{card_id}",
+    response_model=HrPerformanceCardDetailOut,
+)
+def get_performance_card(
+    card_id: str,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    workspace_id: Annotated[str, Depends(require_hr)],
+) -> HrPerformanceCardDetailOut:
+    """
+    用途：严格 hr 查看单卡详情（含 performanceSummary 与 remark）。
+    对接：GET /api/hr/performance-cards/{cardId}；require_hr；get_card。
+    二次开发：跨空间/不存在统一 404 hr_performance_not_found；响应不回显 id。
+    """
+    _no_store(response)
+    try:
+        item = hr_performance_service.get_card(db, workspace_id, card_id)
+    except HrPerformanceNotFoundError:
+        raise _http_performance_not_found() from None
+    return _to_performance_detail(item)
+
+
+@router.post(
+    "/performance-cards",
+    response_model=HrPerformanceCardDetailOut,
+    status_code=201,
+)
+async def create_performance_card(
+    request: Request,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    workspace_id: Annotated[str, Depends(require_hr)],
+) -> HrPerformanceCardDetailOut:
+    """
+    用途：新建人员业绩卡；CSRF 由中间件校验；请求体安全解析不回显。
+    对接：POST /api/hr/performance-cards；require_hr；create_card。
+    二次开发：手工 JSON + extra=forbid；固定 422 invalid_hr_performance。
+    """
+    _no_store(response)
+    body = _parse_hr_model(
+        HrPerformanceCardCreate,
+        await _read_json_object(
+            request, invalid_detail=_PERF_REQUEST_INVALID_DETAIL
+        ),
+        invalid_detail=_PERF_REQUEST_INVALID_DETAIL,
+    )
+    actor = _actor_user_id(request)
+    try:
+        item = hr_performance_service.create_card(
+            db,
+            workspace_id=workspace_id,
+            actor_user_id=actor,
+            person_name=body.person_name,
+            project_name=body.project_name,
+            project_role=body.project_role,
+            completed_year=body.completed_year,
+            performance_summary=body.performance_summary,
+            remark=body.remark,
+            is_active=body.is_active,
+        )
+    except HrPerformanceValidationError:
+        raise _http_performance_invalid() from None
+    return _to_performance_detail(item)
+
+
+@router.patch(
+    "/performance-cards/{card_id}",
+    response_model=HrPerformanceCardDetailOut,
+)
+async def update_performance_card(
+    card_id: str,
+    request: Request,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    workspace_id: Annotated[str, Depends(require_hr)],
+) -> HrPerformanceCardDetailOut:
+    """
+    用途：部分更新业绩卡或启停；空补丁拒绝；请求体安全解析不回显。
+    对接：PATCH /api/hr/performance-cards/{cardId}；require_hr；update_card。
+    二次开发：completedYear 显式 null 可清空；固定 404/422 不回显输入。
+    """
+    _no_store(response)
+    body = _parse_hr_model(
+        HrPerformanceCardUpdate,
+        await _read_json_object(
+            request, invalid_detail=_PERF_REQUEST_INVALID_DETAIL
+        ),
+        invalid_detail=_PERF_REQUEST_INVALID_DETAIL,
+    )
+    actor = _actor_user_id(request)
+    raw = body.model_dump(exclude_unset=True)
+    kwargs: dict = {
+        "person_name": raw.get("person_name"),
+        "project_name": raw.get("project_name"),
+        "project_role": raw.get("project_role"),
+        "performance_summary": raw.get("performance_summary"),
+        "remark": raw.get("remark"),
+        "is_active": raw.get("is_active"),
+    }
+    if "completed_year" in raw:
+        kwargs["completed_year"] = raw["completed_year"]
+    try:
+        item = hr_performance_service.update_card(
+            db,
+            workspace_id=workspace_id,
+            card_id=card_id,
+            actor_user_id=actor,
+            **kwargs,
+        )
+    except HrPerformanceNotFoundError:
+        raise _http_performance_not_found() from None
+    except HrPerformanceValidationError:
+        raise _http_performance_invalid() from None
+    return _to_performance_detail(item)
 
 
 @router.get(

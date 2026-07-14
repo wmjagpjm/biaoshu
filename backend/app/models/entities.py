@@ -1199,6 +1199,45 @@ class HrTeamRecommendationMemberRow(Base):
     valid_until: Mapped[date | None] = mapped_column(Date, nullable=True)
 
 
+class HrPerformanceCardRow(Base):
+    """
+    模块：P10H 人员业绩素材卡
+    用途：由 strict hr 在当前工作空间手工登记最小人员项目业绩；不做物理删除。
+    对接：hr_performance_service；/api/hr/performance-cards*。
+    二次开发：禁止证件号/联系方式/附件/金额/简历全文/外链字段；客户端不得写 id/workspace/user/时间戳。
+    """
+
+    __tablename__ = "hr_performance_cards"
+    __table_args__ = (
+        CheckConstraint(
+            "completed_year IS NULL OR (completed_year >= 1900 AND completed_year <= 2100)",
+            name="ck_hr_performance_cards_completed_year",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    person_name: Mapped[str] = mapped_column(String(80), nullable=False)
+    project_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    project_role: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    completed_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    performance_summary: Mapped[str] = mapped_column(Text, nullable=False)
+    remark: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_by_user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
 class ProjectTaskRow(Base):
     """
     用途：本机日用任务（解析/分析/大纲/正文/导出）状态。

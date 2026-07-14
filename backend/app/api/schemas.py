@@ -1479,6 +1479,135 @@ class BidWriterTeamRecommendationOut(BaseModel):
     )
 
 
+# ---------- P10H 人员业绩素材卡 ----------
+
+
+class HrPerformanceCardSummaryOut(BaseModel):
+    """
+    模块：人员业绩卡摘要响应
+    用途：列表白名单字段；不含 performanceSummary 与 remark。
+    对接：GET /api/hr/performance-cards。
+    二次开发：字段集合为契约白名单，禁止附加证件/联系方式/附件/金额。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    person_name: str = Field(serialization_alias="personName")
+    project_name: str = Field(serialization_alias="projectName")
+    project_role: str = Field(default="", serialization_alias="projectRole")
+    completed_year: int | None = Field(
+        default=None, serialization_alias="completedYear"
+    )
+    is_active: bool = Field(serialization_alias="isActive")
+    created_at: datetime = Field(serialization_alias="createdAt")
+    updated_at: datetime = Field(serialization_alias="updatedAt")
+
+
+class HrPerformanceCardDetailOut(HrPerformanceCardSummaryOut):
+    """
+    模块：人员业绩卡详情响应
+    用途：在摘要上追加 performanceSummary 与 remark。
+    对接：GET/POST/PATCH /api/hr/performance-cards*。
+    二次开发：仍不得返回 createdBy/workspace/证件号等越界字段。
+    """
+
+    performance_summary: str = Field(serialization_alias="performanceSummary")
+    remark: str = ""
+
+
+class HrPerformanceCardListOut(BaseModel):
+    """
+    模块：人员业绩卡列表响应
+    用途：包装 items 数组。
+    对接：GET /api/hr/performance-cards。
+    二次开发：仅摘要投影，禁止混入详情字段。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    items: list[HrPerformanceCardSummaryOut]
+
+
+class HrPerformanceCardCreate(BaseModel):
+    """
+    模块：新建人员业绩卡请求
+    用途：校验显示名、项目名、可选角色/年份与必填业绩摘要；拒绝额外敏感键。
+    对接：POST /api/hr/performance-cards。
+    二次开发：extra=forbid；projectRole 可省略默认空串但显式 null 须 422；
+      completedYear 用 StrictInt(1900-2100) 且唯一允许 null；isActive 用 StrictBool。
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    person_name: str = Field(alias="personName", min_length=1, max_length=80)
+    project_name: str = Field(alias="projectName", min_length=1, max_length=120)
+    # 可省略默认 ""；类型为 str（非 Optional）使显式 null 直接 422
+    project_role: str = Field(default="", alias="projectRole", max_length=80)
+    completed_year: StrictInt | None = Field(
+        default=None, alias="completedYear", ge=1900, le=2100
+    )
+    performance_summary: str = Field(
+        alias="performanceSummary", min_length=1, max_length=1000
+    )
+    remark: str = Field(default="", max_length=500)
+    # StrictBool：仅 JSON true/false；"false"/0/1 均 422
+    is_active: StrictBool = Field(default=True, alias="isActive")
+
+
+class HrPerformanceCardUpdate(BaseModel):
+    """
+    模块：更新人员业绩卡请求
+    用途：至少一个可修改字段；服务端再做归属与边界校验。
+    对接：PATCH /api/hr/performance-cards/{cardId}。
+    二次开发：extra=forbid；省略表示不修改；除 completedYear 外显式 null 须 422；
+      completedYear 显式 null 用于清空；禁止改 id/workspace/user/时间戳。
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    person_name: str | None = Field(
+        default=None, alias="personName", min_length=1, max_length=80
+    )
+    project_name: str | None = Field(
+        default=None, alias="projectName", min_length=1, max_length=120
+    )
+    project_role: str | None = Field(
+        default=None, alias="projectRole", max_length=80
+    )
+    completed_year: StrictInt | None = Field(
+        default=None, alias="completedYear", ge=1900, le=2100
+    )
+    performance_summary: str | None = Field(
+        default=None,
+        alias="performanceSummary",
+        min_length=1,
+        max_length=1000,
+    )
+    remark: str | None = Field(default=None, max_length=500)
+    # StrictBool：仅 JSON true/false；"false"/0/1 均 422
+    is_active: StrictBool | None = Field(default=None, alias="isActive")
+
+    @field_validator(
+        "person_name",
+        "project_name",
+        "project_role",
+        "performance_summary",
+        "remark",
+        "is_active",
+        mode="before",
+    )
+    @classmethod
+    def reject_explicit_null(cls, value: object) -> object:
+        """
+        用途：省略字段表示不修改；显式 null 一律拒绝（completedYear 不在此列）。
+        二次开发：未出现的键不会触发本校验器；禁止把 null 静默当「不改」。
+        """
+        if value is None:
+            raise ValueError("字段不允许显式 null")
+        return value
+
+
 # ---------- P10E 投标人匿名合规预览 ----------
 
 

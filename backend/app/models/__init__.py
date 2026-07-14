@@ -15,6 +15,7 @@ from app.models.entities import (
     BidWatchPlanRow,
     FinanceCostEntryRow,
     HrCredentialCardRow,
+    HrPerformanceCardRow,
     HrTeamRecommendationMemberRow,
     HrTeamRecommendationRow,
     KbChunkRow,
@@ -65,6 +66,7 @@ __all__ = [
     "AuthAuditEventRow",
     "FinanceCostEntryRow",
     "HrCredentialCardRow",
+    "HrPerformanceCardRow",
     "HrTeamRecommendationRow",
     "HrTeamRecommendationMemberRow",
 ]
