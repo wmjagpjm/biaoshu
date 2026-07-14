@@ -19,6 +19,7 @@ import { TemplateEditorPage } from "../features/export-format/pages/TemplateEdit
 import { SettingsPage } from "../features/settings/pages/SettingsPage";
 import { LoginPage } from "../features/auth/pages/LoginPage";
 import { FinanceQuotePage } from "../features/finance/pages/FinanceQuotePage";
+import { FinanceCostChangeEventsPage } from "../features/finance-cost-change-events/pages/FinanceCostChangeEventsPage";
 import { HrCredentialCardsPage } from "../features/hr/pages/HrCredentialCardsPage";
 import { HrTeamRecommendationsPage } from "../features/hr-team-recommendation/pages/HrTeamRecommendationsPage";
 import { HrPerformanceCardsPage } from "../features/hr-performance/pages/HrPerformanceCardsPage";
@@ -35,9 +36,9 @@ import "../features/auth/pages/LoginPage.css";
 /**
  * 模块：前端路由
  * 用途：对齐 C 端模块地图；按认证模式门禁业务壳；非 bid_writer 重定向受限页；
- *       严格 finance 可进 /finance 只读报价页；严格 hr 可进 /hr 人员资质、
- *       /hr/team-recommendations 团队推荐、/hr/performance-cards 人员业绩与
- *       /hr/credential-expiry 到期提示页；
+ *       严格 finance 可进 /finance 只读报价页与 /finance/cost-changes 个人成本变更记录页；
+ *       严格 hr 可进 /hr 人员资质、/hr/team-recommendations 团队推荐、
+ *       /hr/performance-cards 人员业绩与 /hr/credential-expiry 到期提示页；
  *       严格 bidder 可进 /bidder 匿名合规预览与 /bidder/project-compliance 项目级合规统计页。
  * 对接：AuthProvider；页面均挂 AppShell（登录页除外）。
  * 二次开发：导航隐藏不替代后端鉴权；disabled 保持既有业务路径但不开放财务/人力/投标人入口。
@@ -124,14 +125,14 @@ function RequireOwner({ children }: { children: ReactNode }) {
 }
 
 /**
- * 用途：要求严格 finance 才渲染财务报价页。
+ * 用途：要求严格 finance 才渲染财务报价页 / 个人成本变更记录页。
  * 约束：disabled / 其他角色不渲染业务页、不重定向到 /create，只显示受限说明。
  */
 function RequireFinance({ children }: { children: ReactNode }) {
   const { canAccessFinance } = useAuthSession();
   if (!canAccessFinance) {
     return (
-      <RestrictedAccessPage reason="仅财务角色可查看财务报价只读页。个人版兼容模式与所有者、标书制作者、人力、投标人均不可通过本入口访问。" />
+      <RestrictedAccessPage reason="仅财务角色可查看财务报价只读页与我的成本记录。个人版兼容模式与所有者、标书制作者、人力、投标人均不可通过本入口访问。" />
     );
   }
   return <>{children}</>;
@@ -369,6 +370,14 @@ function AuthGate() {
           element={
             <RequireFinance>
               <FinanceQuotePage />
+            </RequireFinance>
+          }
+        />
+        <Route
+          path="finance/cost-changes"
+          element={
+            <RequireFinance>
+              <FinanceCostChangeEventsPage />
             </RequireFinance>
           }
         />

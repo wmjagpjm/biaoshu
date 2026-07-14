@@ -1,0 +1,119 @@
+/**
+ * 模块：P10J 财务个人成本变更记录页样式
+ * 用途：限制声明 + 列表布局；前缀 fcc- 隔离样式。
+ * 对接：FinanceCostChangeEventsPage。
+ * 二次开发：勿引入无关视觉改动到既有财务报价/业务页。
+ */
+
+.fcc-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.fcc-layout .page-header p {
+  max-width: 52rem;
+}
+
+.fcc-disclaimer {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid #e0e7ff;
+  background: #eef2ff;
+  color: #312e81;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.fcc-alert {
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  color: #991b1b;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.fcc-panel {
+  background: var(--surface-card, #fff);
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: var(--radius-lg, 12px);
+  padding: 16px;
+  min-height: 160px;
+}
+
+.fcc-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.fcc-panel__title {
+  margin: 0;
+  font-size: var(--fs-md, 1rem);
+  font-weight: 600;
+  color: var(--text-primary, #111827);
+}
+
+.fcc-panel__hint {
+  margin: 0 0 14px;
+  font-size: 12px;
+  color: var(--text-tertiary, #9ca3af);
+  line-height: 1.5;
+}
+
+.fcc-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fcc-item {
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: var(--radius-md, 8px);
+  padding: 12px 14px;
+  background: #fff;
+}
+
+.fcc-item__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin-bottom: 8px;
+}
+
+.fcc-item__action {
+  font-weight: 600;
+  color: var(--text-primary, #111827);
+}
+
+.fcc-item__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  font-size: 12px;
+  color: var(--text-secondary, #6b7280);
+}
+
+.fcc-item__meta strong {
+  color: var(--text-primary, #111827);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  word-break: break-all;
+}
+
+.fcc-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}

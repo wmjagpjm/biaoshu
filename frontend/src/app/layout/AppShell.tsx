@@ -20,6 +20,7 @@ import {
   Sparkles,
   Award,
   ClockAlert,
+  History,
   Users,
   X,
 } from "lucide-react";
@@ -40,7 +41,8 @@ import "./AppShell.css";
  * 用途：固定侧栏导航，主区浅色渐变 + 大圆角内容；展示用户/角色/空间与退出。
  * 对接：checkApiHealth → GET /api/health；useAuthSession
  * 二次开发：导航隐藏不替代后端鉴权；禁止展示 Cookie/CSRF/API Key；
- *           财务入口仅严格 finance 可见；人力入口（人员资质/团队推荐/人员业绩/到期提示）仅严格 hr 可见；
+ *           财务入口（财务报价/我的成本记录）仅严格 finance 可见；
+ *           人力入口（人员资质/团队推荐/人员业绩/到期提示）仅严格 hr 可见；
  *           投标人入口（合规预览/项目合规）仅严格 bidder 可见；不得改动遗留 Sidebar 组件路径。
  */
 
@@ -144,13 +146,19 @@ const systemNav: NavItem[] = [
   },
 ];
 
-/** P10B：财务只读入口，独立于业务/系统导航，避免与制作者权限耦合 */
+/** P10B/P10J：财务只读入口，独立于业务/系统导航，避免与制作者权限耦合 */
 const financeNav: NavItem[] = [
   {
     to: "/finance",
     label: "财务报价",
     icon: <Calculator size={18} />,
-    matchPrefix: "/finance",
+    financeOnly: true,
+  },
+  {
+    to: "/finance/cost-changes",
+    label: "我的成本记录",
+    icon: <History size={18} />,
+    matchPrefix: "/finance/cost-changes",
     financeOnly: true,
   },
 ];
@@ -211,6 +219,10 @@ function isNavActive(pathname: string, item: NavItem): boolean {
     return (
       pathname.startsWith("/projects") || pathname.startsWith("/technical-plan")
     );
+  }
+  // 财务报价仅精确匹配 /finance，避免与 /finance/cost-changes 激活态冲突
+  if (item.to === "/finance") {
+    return pathname === "/finance";
   }
   // 人员资质仅精确匹配 /hr，避免与团队推荐/人员业绩/到期提示激活态冲突
   if (item.to === "/hr") {
