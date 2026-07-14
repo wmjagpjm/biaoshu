@@ -1,6 +1,6 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-14（P11A 核心项目真实数据收口已完成）
+> **交接日期**：2026-07-14（P11A 已完成；P11B 商务标编辑态真实数据收口计划已冻结）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
@@ -18,8 +18,8 @@
 工作分支只能是 collab/grok-code-codex-review，禁止直接操作 main；先执行 git status -sb，并核对 HEAD 与 origin/collab/grok-code-codex-review 一致且工作区干净。
 完整阅读 docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/plans/2026-07-13-package-9-delivery-enhancement-plan.md、docs/integration-checklist.md。
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
-当前进度：P9D、M3-A 至 M3-D、P8B、P8C、P9A、P9B、P9C、P10A 至 P10K 及 P11A 均已完成各自计划内的实现、独立自动化验收、中文文档闭环与协作分支推送。P11A 契约见 `docs/p11a-core-project-data-truth-contract.md`，计划与审查记录见 `docs/plans/2026-07-14-p11a-core-project-data-truth-plan.md`。
-下一步：先对 §5 的仍未实现主线重新做只读审计，只冻结一个新的最小包；候选包括真实 MinerU/Docling 外置部署治理、P9C 固定模型运行时门、Word `structure`/整章布局、合法外部标讯来源和 editor-state 本地备份收口。不得重复实现 P11A 或搭车扩展后端、角色权限、通用版本库。
+当前进度：P9D、M3-A 至 M3-D、P8B、P8C、P9A、P9B、P9C、P10A 至 P10K 及 P11A 均已完成。后续只读审计已冻结 P11B 商务标编辑态真实数据收口契约 `docs/p11b-business-editor-state-truth-contract.md` 与计划 `docs/plans/2026-07-14-p11b-business-editor-state-truth-plan.md`。
+下一步：先确认 P11B 计划提交已与远端一致，再按 §3.1 后台静默派发 Grok，仅在四文件白名单内完成纯前端实现与自测；Codex 独立审查并串行运行 lint、build、P11B/P11A/解析策略/导出图片告警及全量 E2E。不得搭车修改技术标 editor-state、商务 AI 反馈历史、后端或其他主线。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -385,6 +385,7 @@ frontend/src/features/
 | 优先级 | 项 | 现状 |
 |--------|----|------|
 | 核心项目 | 项目列表/详情/创建真值 | P11A 已完成并推送（计划=`70a2dc7`、前端=`b0a86e4`）：技术标/商务标生产入口只认 `/api/projects*`，不再以 mock、`biaoshu.projects.v1` 或本地假 ID 伪装成功；editor-state 本地备份仍属后续独立审计 |
+| 商务标 | editor-state 真值 | P11B 已冻结契约与四文件纯前端白名单，等待实现；目标是移除 workspace localStorage/演示回退、固定加载/保存错误并补 A→B 迟到隔离，AI 反馈 history 本地键保持非目标 |
 | 导出 | `structure` / `min_heading_left_enabled` | P9A 已实现：叶子标题左侧强调线（`c1ff160`）；整章布局与 `structure` 仍不做，详见 `docs/plans/2026-07-13-p9a-word-layout-plan.md` |
 | 业务 | 其他外部标讯数据源 | P9B 已完成唯一的国能 e 招单站受控追踪；其他网站/API/RSS、定时同步和浏览器外网请求仍未接，须另立计划 |
 | 技术标 | 通用版本、响应矩阵与解析增强 | M3-D 已交付服务端原子确认和最近 20 批一次性漂移安全恢复；响应矩阵已完成来源分页、字段级三方合并和冲突保护；包 8/P8B 已接轻量/本地回传策略。仍未接：所有 editor-state 的通用版本库、任意历史浏览/回滚、多人协作、真实 MinerU/Docling 部署与其他交付增强 |
@@ -403,7 +404,7 @@ frontend/src/features/
 
 1. 阶段 4 **功能包 8** MVP=`6db1586` 与后续 **P8B 解析策略接线**（计划=`f662674`、后端=`0994cc8`、前端=`80d2579`）均已验收并推送；真实 MinerU/Docling 外置生产部署仍须独立安全与部署契约。
 2. 阶段 4 **P9A/P9B/P9C/P9D** 与阶段 5 **P10A/P10B/P10C/P10D/P10F/P10E/P10G/P10H/P10I/P10J/P10K** 均已实现、独立验收并文档闭环。P9C 的真实模型门仍是运行时前置：固定依赖和模型缓存就绪后，用户显式构建索引，再运行固定预检；未通过前继续关键词降级。
-3. P8C、P10K、M3-D 与 P11A 均已完成。下一步重新审计剩余主线，只冻结一个可独立验收的最小包，再按 §3.1 派发 Grok；真实解析器部署、模型门、Word 布局、外部标讯来源、editor-state 本地备份、知识库降级、角色权限均不得相互搭车。
+3. P8C、P10K、M3-D 与 P11A 均已完成；后续只读审计已选定 P11B。先提交并推送 `docs/p11b-business-editor-state-truth-contract.md` 与 `docs/plans/2026-07-14-p11b-business-editor-state-truth-plan.md`，再按 §3.1 派发 Grok；严格限制四个前端文件，技术标 editor-state、商务 AI 反馈历史、后端和其他候选包不得搭车。
 
 资源同步后续只可由管理员配置新的签名发布方，绝不可放开浏览器 URL 或外网抓取。图片管线已冻结项目内资源引用协议，后续扩展不得放开外链或客户端路径。SSE 的多工作空间鉴权、事件游标和项目级总线不在当前范围。
 
@@ -461,6 +462,7 @@ frontend/src/features/
 
 - **用户长期目标（必须完整保留）**：持续完成 biaoshu 标书制作者剩余主线任务，按既定路线图完成独立规划、受限实现审查、独立验收、中文文档闭环与协作分支推送；不直接操作 `main`。
 - **P11A 已完成并推送**：计划=`70a2dc7`、前端=`b0a86e4`。服务端 `/api/projects*` 已成为技术标/商务标项目列表、详情、创建及查重/废标选择器的唯一真值；旧 `biaoshu.projects.v1` 被忽略且原值不变，失败不再生成本地项目或复活演示项目。
+- **当前执行包 P11B**：只读审计已完成，`docs/p11b-business-editor-state-truth-contract.md` 与 `docs/plans/2026-07-14-p11b-business-editor-state-truth-plan.md` 已冻结；商务 workspace 将只认既有 editor-state GET/PUT，旧 workspace 键忽略保值，AI 反馈 history 仍为非目标。计划提交推送后方可派发 Grok，且只准改四个前端白名单文件。
 - 当前分支仍为 `collab/grok-code-codex-review`；M3-D 计划=`d326c7d`、后端=`6a5f61f`、前端=`b89a387` 已推送，P10K、P8C、P10J、P9D、M3-C、P10I、P10H、P10G、P10F、P10E 与 P8B 基线保持已推送，本文档闭环提交位于其后。新会话第一步必须用 `git status -sb`、`git rev-parse HEAD`、`git rev-parse origin/collab/grok-code-codex-review` 重新核验，不可只信本文静态 SHA。
 - 阶段 3 **已完成并推送**：M3-A 只读融合建议、M3-B 差异预览与浏览器确认、M3-C 会话内单批撤销、M3-D 服务端原子确认与最近 20 批持久恢复。
 - 阶段 4 **包 5** 已推送：`460097a` 智能建议人工确认 E2E。
@@ -496,4 +498,4 @@ frontend/src/features/
 - 新任务分工不变：Grok 只负责限定实现与自测，未经 Codex 审查确认不得提交；Codex 负责计划、范围冻结、差异审查、独立测试、验收、中文提交、文档闭环和 GitHub 状态核验。每一包仍按“计划提交 → 实现提交 → 文档闭环提交 → 推送协作分支”执行，禁止合包。
 - GitHub 若出现连接重置，可在当前 PowerShell 进程临时配置 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY=http://127.0.0.1:7890` 与 `NO_PROXY=localhost,127.0.0.1` 后重试；不得把代理或凭据写入仓库。
 
-**换会话可直接：核验分支、P11A 计划/前端/本文档闭环提交与远端一致且工作区干净 → 读本文 §0～§3.1、§5、§6、§11、P11A 契约/计划及路线图 → 对仍未实现主线做只读审计并冻结一个新最小包 → 再按 §3.1 后台隐藏启动 Grok。禁止重复实现 P11A/M3-D、扩大既有包，或让 Grok commit/push。**
+**换会话可直接：核验分支、HEAD/远端与工作区 → 读本文 §0～§3.1、§5、§6、§11、P11B 契约/计划及路线图 → 确认 P11B 计划提交已推送 → 按 §3.1 后台隐藏启动 Grok 完成四文件纯前端实现。禁止重新规划已冻结的 P11B、扩大白名单、重复实现 P11A/M3-D，或让 Grok commit/push。**
