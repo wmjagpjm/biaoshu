@@ -1,5 +1,12 @@
-import { useState } from "react";
-import { Link } from "react-router-dom";
+/**
+ * 模块：本地解析插件说明 + Markdown 回传表单
+ * 用途：MinerU 本机解析后回写项目 parsedMarkdown；支持 query 预填项目 ID。
+ * 对接：POST /api/projects/{id}/parse-callback；P8B local 跳转 `/local-parser?projectId=`。
+ * 二次开发：query 仅预填，绝不自动提交回调；禁止自动启动 MinerU/Docling。
+ */
+
+import { useEffect, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { Check, Download, KeyRound, Plug, Send } from "lucide-react";
 import { apiFetch, getApiBase } from "../../../shared/lib/api";
 
@@ -23,17 +30,26 @@ const steps = [
 ];
 
 /**
- * 模块：本地解析插件说明 + Markdown 回传表单
- * 用途：MinerU 本机解析后回写项目 parsedMarkdown，降低服务器解析压力。
- * 对接：POST /api/projects/{id}/parse-callback
+ * 模块：LocalParserPage
+ * 用途：本地回传入口；从 projectId 查询参数预填表单。
+ * 对接：技术标/商务标 local 策略导航；parse-callback API。
+ * 二次开发：参数缺失或空白时保持手输；禁止 onMount 自动回传。
  */
 export function LocalParserPage() {
+  const [searchParams] = useSearchParams();
   const [projectId, setProjectId] = useState("");
   const [markdown, setMarkdown] = useState("");
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
+
+  useEffect(() => {
+    const fromQuery = (searchParams.get("projectId") || "").trim();
+    if (fromQuery) {
+      setProjectId(fromQuery);
+    }
+  }, [searchParams]);
 
   const base = getApiBase();
   const curlSample = `curl -X POST "${base}/projects/PROJ_ID/parse-callback" ^

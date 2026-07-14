@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { Link, Navigate, useParams } from "react-router-dom";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import {
   CheckCircle2,
   Download,
@@ -15,6 +15,11 @@ import { AiFeedbackPanel } from "../../../shared/components/AiFeedbackPanel/AiFe
 import { LoadingBlock } from "../../../shared/components/LoadingBlock/LoadingBlock";
 import type { Project } from "../../../shared/types/workspace";
 import { SaveAsTemplateDialog } from "../../bid-templates/components/SaveAsTemplateDialog";
+import {
+  ParseStrategyChoiceDialog,
+  type ParseStrategyChoice,
+} from "../../parse-strategy/components/ParseStrategyChoiceDialog";
+import { useWorkspaceParseStrategy } from "../../parse-strategy/hooks/useWorkspaceParseStrategy";
 import { ChapterEditor } from "../components/ChapterEditor";
 import { ContentFuseDialog } from "../components/ContentFuseDialog";
 import { FactsEditor } from "../components/FactsEditor";
@@ -109,10 +114,12 @@ const STEP_IDS: TechnicalPlanStepId[] = [
  * 用途：六步流水线 + 异步任务 + 反馈修订 + 知识库引用展示。
  *   - 取消任务、大纲 revise「应用到大纲树」、生成后展示 kbCitations
  *   - 响应矩阵智能建议：外层来源页 × 内层候选批串行、本地累计、禁止自动写 editor-state
+ *   - 文档解析入口按工作空间 parseStrategy 决策 light/local/ask（P8B）
  * 对接：
  *   - useProjectPipeline / useTechnicalPlanEditors / useProjectGuidance
+ *   - useWorkspaceParseStrategy / ParseStrategyChoiceDialog
  *   - editor-state、POST .../tasks（response_match payload.sourceBatchIndex + candidateBatchIndex）、POST .../revise
- * 二次开发：勿在此堆业务；任务与持久化进 hooks；分批合并用 mergeResponseMatrixSuggestions；禁止字段级合并。
+ * 二次开发：勿在此堆业务；任务与持久化进 hooks；分批合并用 mergeResponseMatrixSuggestions；禁止字段级合并；轻量路径必须 engine=lightweight。
  */
 
 type MatrixMatchProgress = {
@@ -179,12 +186,14 @@ function formatMatchProgressLabel(progress: MatrixMatchProgress): string {
 
 export function TechnicalPlanWorkspace() {
   const { projectId = "", step } = useParams<{ projectId: string; step?: string }>();
+  const navigate = useNavigate();
   const [project, setProject] = useState<Project | null | undefined>(undefined);
   const resolvedId = project?.id ?? projectId ?? "missing";
   const { guidance, history, updateGuidance, submitRevise } =
     useProjectGuidance(resolvedId);
   const editors = useTechnicalPlanEditors(resolvedId);
   const pipeline = useProjectPipeline(resolvedId);
+  const parseStrategy = useWorkspaceParseStrategy();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [revisePreview, setRevisePreview] = useState<string | null>(null);
   const [revisePreviewStep, setRevisePreviewStep] = useState<TechnicalPlanStepId | null>(
@@ -202,8 +211,94 @@ export function TechnicalPlanWorkspace() {
   const [saveTemplateTip, setSaveTemplateTip] = useState("");
   /** 阶段3 M3-A：模板/卡片只读融合建议对话框 */
   const [contentFuseOpen, setContentFuseOpen] = useState(false);
+  /** P8B：ask 策略一次性选择框 */
+  const [parseChoiceOpen, setParseChoiceOpen] = useState(false);
   /** 代次：项目切换、重入智能建议或取消后，丢弃迟到的串行批结果 */
   const matchSessionRef = useRef(0);
+
+  /**
+   * 模块：runLightweightParse
+   * 用途：以 engine=lightweight 创建 parse 任务并刷新编辑态。
+   * 对接：pipeline.runTask；editors.reloadFromApi。
+   * 二次开发：禁止传入 local/ask/mineru 等引擎名。
+   */
+  const runLightweightParse = useCallback(async () => {
+    try {
+      const t = await pipeline.runTask("parse", { engine: "lightweight" });
+      if (t.status === "success") {
+        await editors.reloadFromApi();
+        setTaskTip("解析完成，请查看右侧预览");
+      }
+    } catch {
+      /* error 已在 pipeline */
+    }
+  }, [pipeline, editors]);
+
+  /**
+   * 模块：goLocalParser
+   * 用途：跳转本地回传页并携带编码后的项目 ID。
+   * 对接：/local-parser?projectId=；不创建任务。
+   * 二次开发：项目 ID 为空时不得导航。
+   */
+  const goLocalParser = useCallback(() => {
+    const pid = (project?.id || projectId || "").trim();
+    if (!pid) return;
+    navigate(`/local-parser?projectId=${encodeURIComponent(pid)}`);
+  }, [navigate, project?.id, projectId]);
+
+  /**
+   * 模块：handleDocumentParse
+   * 用途：点击解析时 refresh 策略并决策 light/local/ask。
+   * 对接：useWorkspaceParseStrategy；ParseStrategyChoiceDialog。
+   * 二次开发：读取失败/取消/繁忙均不得创建任务；不得静默降级为 light。
+   */
+  const handleDocumentParse = useCallback(async () => {
+    if (pipeline.busy || parseStrategy.loading) return;
+    const pid = (project?.id || projectId || "").trim();
+    if (!pid) return;
+    setTaskTip("正在读取解析策略");
+    const result = await parseStrategy.refresh();
+    if (!result.ok) {
+      setTaskTip(result.error);
+      return;
+    }
+    if (result.strategy === "light") {
+      await runLightweightParse();
+      return;
+    }
+    if (result.strategy === "local") {
+      setTaskTip("");
+      goLocalParser();
+      return;
+    }
+    setTaskTip("");
+    setParseChoiceOpen(true);
+  }, [
+    pipeline.busy,
+    parseStrategy,
+    project?.id,
+    projectId,
+    runLightweightParse,
+    goLocalParser,
+  ]);
+
+  /**
+   * 模块：onParseChoice
+   * 用途：处理 ask 选择框的一次选择。
+   * 对接：runLightweightParse / goLocalParser。
+   * 二次开发：不得回写工作空间 parseStrategy。
+   */
+  const onParseChoice = useCallback(
+    (choice: ParseStrategyChoice) => {
+      setParseChoiceOpen(false);
+      if (choice === "light") {
+        void runLightweightParse();
+        return;
+      }
+      goLocalParser();
+    },
+    [runLightweightParse, goLocalParser],
+  );
 
   useEffect(() => {
     if (projectId) {
@@ -237,6 +332,7 @@ export function TechnicalPlanWorkspace() {
     setMatrixSuggestions([]);
     setMatchProgress(null);
     setContentFuseOpen(false);
+    setParseChoiceOpen(false);
   }, [projectId]);
 
   if (project === undefined) {
@@ -542,6 +638,12 @@ export function TechnicalPlanWorkspace() {
         }}
       />
 
+      <ParseStrategyChoiceDialog
+        open={parseChoiceOpen}
+        onChoose={onParseChoice}
+        onCancel={() => setParseChoiceOpen(false)}
+      />
+
       {(pipeline.error || taskTip) && (
         <div
           className={`tp-source-banner ${pipeline.error ? "is-local" : "is-api"}`}
@@ -659,7 +761,10 @@ export function TechnicalPlanWorkspace() {
             <Info size={16} />
             <span>
               上传后点「轻量解析」写入后端。扫描件请用
-              <Link to="/local-parser" style={{ margin: "0 4px", textDecoration: "underline" }}>
+              <Link
+                to={`/local-parser?projectId=${encodeURIComponent(project.id)}`}
+                style={{ margin: "0 4px", textDecoration: "underline" }}
+              >
                 本地 MinerU
               </Link>
               。设置页需配置可用模型 Key（分析/生成步骤需要）。
@@ -704,22 +809,20 @@ export function TechnicalPlanWorkspace() {
                   type="button"
                   className="btn btn-soft"
                   style={{ marginLeft: 8 }}
-                  disabled={pipeline.busy || pipeline.files.length === 0}
+                  disabled={
+                    pipeline.busy ||
+                    parseStrategy.loading ||
+                    pipeline.files.length === 0
+                  }
                   onClick={() => {
-                    void (async () => {
-                      try {
-                        const t = await pipeline.runTask("parse");
-                        if (t.status === "success") {
-                          await editors.reloadFromApi();
-                          setTaskTip("解析完成，请查看右侧预览");
-                        }
-                      } catch {
-                        /* */
-                      }
-                    })();
+                    void handleDocumentParse();
                   }}
                 >
-                  {pipeline.busy ? "处理中…" : "轻量解析"}
+                  {parseStrategy.loading
+                    ? "正在读取解析策略"
+                    : pipeline.busy
+                      ? "处理中…"
+                      : "轻量解析"}
                 </button>
               </div>
               <div style={{ marginTop: 14, display: "flex", gap: 8, flexWrap: "wrap" }}>

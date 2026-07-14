@@ -1,12 +1,12 @@
 /**
  * 模块：商务标分步工作区
  * 用途：六步流水线；上传/解析/biz_* 生成/导出接 project/task/editor-state。
- * 对接：useProjectPipeline、useBusinessBidWorkspace、GET project
- * 二次开发：勿大改步骤信息架构；新任务类型扩在 pipeline TaskType。
+ * 对接：useProjectPipeline、useBusinessBidWorkspace、GET project、useWorkspaceParseStrategy
+ * 二次开发：勿大改步骤信息架构；新任务类型扩在 pipeline TaskType；解析入口统一 handleParse。
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, Navigate, useParams } from "react-router-dom";
+import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import {
   CheckCircle2,
   Download,
@@ -19,6 +19,11 @@ import {
 import { AiFeedbackPanel } from "../../../shared/components/AiFeedbackPanel/AiFeedbackPanel";
 import { getApiBase } from "../../../shared/lib/api";
 import type { Project } from "../../../shared/types/workspace";
+import {
+  ParseStrategyChoiceDialog,
+  type ParseStrategyChoice,
+} from "../../parse-strategy/components/ParseStrategyChoiceDialog";
+import { useWorkspaceParseStrategy } from "../../parse-strategy/hooks/useWorkspaceParseStrategy";
 import { useProjectPipeline } from "../../technical-plan/hooks/useProjectPipeline";
 import {
   getProjectAsync,
@@ -66,10 +71,14 @@ export function BusinessBidWorkspace() {
     projectId: string;
     step?: string;
   }>();
+  const navigate = useNavigate();
 
   const [project, setProject] = useState<Project | null>(null);
   const [projectLoading, setProjectLoading] = useState(true);
+  const [strategyTip, setStrategyTip] = useState("");
+  const [parseChoiceOpen, setParseChoiceOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const parseStrategy = useWorkspaceParseStrategy();
 
   const {
     workspace,
@@ -164,14 +173,95 @@ export function BusinessBidWorkspace() {
     [pipeline, projectId, refreshFromApi],
   );
 
+  /**
+   * 模块：runLightweightBizParse
+   * 用途：商务标轻量 parse，payload 固定 engine=lightweight。
+   * 对接：runBizTask("parse")。
+   * 二次开发：禁止传入 local/ask 等非生产引擎名。
+   */
+  const runLightweightBizParse = useCallback(async () => {
+    setStrategyTip("");
+    await runBizTask("parse", { engine: "lightweight" });
+  }, [runBizTask]);
+
+  /**
+   * 模块：goLocalParser
+   * 用途：跳转本地回传页；不创建 parse 任务。
+   * 对接：/local-parser?projectId=。
+   * 二次开发：项目 ID 为空时不得导航。
+   */
+  const goLocalParser = useCallback(() => {
+    const pid = (projectId || "").trim();
+    if (!pid) return;
+    setStrategyTip("");
+    navigate(`/local-parser?projectId=${encodeURIComponent(pid)}`);
+  }, [navigate, projectId]);
+
+  /**
+   * 模块：handleParse
+   * 用途：统一解析决策（上传后自动、整段重解析、反馈 regenerate）。
+   * 对接：useWorkspaceParseStrategy；ParseStrategyChoiceDialog。
+   * 二次开发：local/ask 不得自动创建任务；读取失败固定中文且不建任务。
+   */
+  const handleParse = useCallback(async () => {
+    if (pipeline.busy || parseStrategy.loading) return;
+    const pid = (projectId || "").trim();
+    if (!pid) return;
+    setStrategyTip("正在读取解析策略");
+    const result = await parseStrategy.refresh();
+    if (!result.ok) {
+      setStrategyTip(result.error);
+      return;
+    }
+    if (result.strategy === "light") {
+      await runLightweightBizParse();
+      return;
+    }
+    if (result.strategy === "local") {
+      goLocalParser();
+      return;
+    }
+    setStrategyTip("");
+    setParseChoiceOpen(true);
+  }, [
+    pipeline.busy,
+    parseStrategy,
+    projectId,
+    runLightweightBizParse,
+    goLocalParser,
+  ]);
+
+  /**
+   * 模块：onParseChoice
+   * 用途：处理 ask 一次性选择。
+   * 对接：runLightweightBizParse / goLocalParser。
+   * 二次开发：不得回写工作空间默认策略。
+   */
+  const onParseChoice = useCallback(
+    (choice: ParseStrategyChoice) => {
+      setParseChoiceOpen(false);
+      if (choice === "light") {
+        void runLightweightBizParse();
+        return;
+      }
+      goLocalParser();
+    },
+    [runLightweightBizParse, goLocalParser],
+  );
+
   const onPickFile = useCallback(
     async (file: File | null) => {
       if (!file) return;
       await pipeline.uploadFile(file);
-      await runBizTask("parse");
+      await handleParse();
     },
-    [pipeline, runBizTask],
+    [pipeline, handleParse],
   );
+
+  useEffect(() => {
+    setParseChoiceOpen(false);
+    setStrategyTip("");
+  }, [projectId]);
 
   const onRevise = useCallback(
     (
@@ -265,12 +355,23 @@ export function BusinessBidWorkspace() {
         </div>
       </header>
 
-      {(busy || lastTask || pipeline.error) && (
+      {(busy || lastTask || pipeline.error || strategyTip) && (
         <div className="bb-hint" style={{ marginBottom: 12 }}>
           <Info size={16} />
           <div style={{ flex: 1 }}>
             {pipeline.error && (
               <div style={{ color: "var(--danger)" }}>{pipeline.error}</div>
+            )}
+            {strategyTip && (
+              <div
+                style={{
+                  color: strategyTip.includes("无法读取")
+                    ? "var(--danger)"
+                    : undefined,
+                }}
+              >
+                {strategyTip}
+              </div>
             )}
             {lastTask && (
               <div>
@@ -293,6 +394,12 @@ export function BusinessBidWorkspace() {
         </div>
       )}
 
+      <ParseStrategyChoiceDialog
+        open={parseChoiceOpen}
+        onChoose={onParseChoice}
+        onCancel={() => setParseChoiceOpen(false)}
+      />
+
       <BusinessStepStepper
         projectId={project.id}
         active={active}
@@ -306,7 +413,7 @@ export function BusinessBidWorkspace() {
             <span>
               识别资格条件、付款/保证金、有效期等商务条款。复杂扫描件可走
               <Link
-                to="/local-parser"
+                to={`/local-parser?projectId=${encodeURIComponent(projectId)}`}
                 style={{ margin: "0 4px", textDecoration: "underline" }}
               >
                 本地 MinerU 插件
@@ -321,7 +428,7 @@ export function BusinessBidWorkspace() {
                   <Upload size={22} />
                 </div>
                 <h3>上传招标文件</h3>
-                <p>支持 PDF / DOCX；上传后自动 parse。</p>
+                <p>支持 PDF / DOCX；上传后按工作空间解析策略处理。</p>
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -371,10 +478,17 @@ export function BusinessBidWorkspace() {
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm"
-                  disabled={busy || pipeline.files.length === 0}
-                  onClick={() => void runBizTask("parse")}
+                  disabled={
+                    busy ||
+                    parseStrategy.loading ||
+                    pipeline.files.length === 0
+                  }
+                  onClick={() => void handleParse()}
                 >
-                  <RefreshCw size={14} /> 整段重解析
+                  <RefreshCw size={14} />{" "}
+                  {parseStrategy.loading
+                    ? "正在读取解析策略"
+                    : "整段重解析"}
                 </button>
               </div>
               <textarea
@@ -406,7 +520,7 @@ export function BusinessBidWorkspace() {
                 targetLabel,
               )
             }
-            onRegenerate={() => void runBizTask("parse")}
+            onRegenerate={() => void handleParse()}
           />
 
           {nextPath && (

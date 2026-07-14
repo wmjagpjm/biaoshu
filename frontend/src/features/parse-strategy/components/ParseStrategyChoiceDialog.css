@@ -1,0 +1,43 @@
+/**
+ * 模块：解析方式选择框样式
+ * 用途：ask 策略一次性模态的遮罩与布局。
+ * 对接：ParseStrategyChoiceDialog.tsx。
+ * 二次开发：保持 aria 与按钮顺序稳定，供 E2E 定位。
+ */
+
+.parse-strategy-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.parse-strategy-dialog {
+  width: min(440px, 100%);
+  padding: 1.15rem 1.25rem;
+  border-radius: 12px;
+  background: var(--surface, #fff);
+  box-shadow: 0 18px 50px rgba(15, 23, 42, 0.18);
+}
+
+.parse-strategy-dialog h2 {
+  margin: 0 0 0.35rem;
+  font-size: 1.1rem;
+}
+
+.parse-strategy-dialog p {
+  margin: 0 0 0.9rem;
+  color: var(--text-secondary, #64748b);
+  font-size: var(--fs-sm, 0.875rem);
+  line-height: 1.55;
+}
+
+.parse-strategy-dialog__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
