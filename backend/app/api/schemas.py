@@ -565,6 +565,19 @@ class WorkspaceSettingsUpdate(BaseModel):
     export_format: dict | None = Field(default=None, alias="exportFormat")
 
 
+class ParseStrategyOut(BaseModel):
+    """
+    模块：解析策略脱敏响应
+    用途：仅序列化 parseStrategy，供技术标/商务标入口读取默认策略。
+    对接：GET /api/settings/parse-strategy；P8B 契约字段白名单。
+    二次开发：禁止追加 apiKey、provider、model、embedding、workspaceId 等任何设置字段。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    parse_strategy: str = Field(serialization_alias="parseStrategy")
+
+
 # ---------- LLM / revise ----------
 
 

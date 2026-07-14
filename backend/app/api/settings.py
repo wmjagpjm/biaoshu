@@ -1,18 +1,18 @@
 """
 模块：工作空间设置路由
-用途：读写模型配置 + 默认导出模板。
-对接：GET|PUT /api/settings；required 模式仅工作空间所有者（require_owner）。
-二次开发：禁止向非所有者回显 apiKey；disabled 模式由 require_owner 退化为个人版兼容。
+用途：读写模型配置 + 默认导出模板；提供解析策略脱敏只读接口。
+对接：GET|PUT /api/settings（require_owner）；GET /api/settings/parse-strategy（get_workspace_id）。
+二次开发：禁止向非所有者回显 apiKey；parse-strategy 仅返回策略枚举且 Cache-Control:no-store。
 """
 
 import json
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_owner
-from app.api.schemas import WorkspaceSettingsOut, WorkspaceSettingsUpdate
+from app.api.deps import get_workspace_id, require_owner
+from app.api.schemas import ParseStrategyOut, WorkspaceSettingsOut, WorkspaceSettingsUpdate
 from app.core.database import get_db
 from app.services import settings_service
 
@@ -39,12 +39,39 @@ def _to_out(row) -> WorkspaceSettingsOut:
     )
 
 
+def _no_store(response: Response) -> None:
+    """用途：解析策略响应固定禁止缓存。"""
+    response.headers["Cache-Control"] = "no-store"
+
+
+@router.get("/parse-strategy", response_model=ParseStrategyOut)
+def get_parse_strategy(
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    workspace_id: Annotated[str, Depends(get_workspace_id)],
+) -> ParseStrategyOut:
+    """
+    模块：解析策略脱敏读取
+    用途：返回当前工作空间 parseStrategy；无设置行时默认 light 且不建行。
+    对接：前端策略决策 Hook；settings_service.get_parse_strategy；deps.get_workspace_id。
+    二次开发：仅 GET；固定 Cache-Control:no-store；禁止复用完整 WorkspaceSettingsOut 或返回 Key。
+    """
+    _no_store(response)
+    strategy = settings_service.get_parse_strategy(db, workspace_id)
+    return ParseStrategyOut(parse_strategy=strategy)
+
+
 @router.get("", response_model=WorkspaceSettingsOut)
 def get_settings(
     db: Annotated[Session, Depends(get_db)],
     workspace_id: Annotated[str, Depends(require_owner)],
 ) -> WorkspaceSettingsOut:
-    """用途：读取工作空间设置；required 模式仅所有者。"""
+    """
+    模块：完整设置读取
+    用途：读取工作空间设置；required 模式仅所有者。
+    对接：设置页；require_owner。
+    二次开发：不得改为 get_workspace_id；与 parse-strategy 权限语义分离。
+    """
     row = settings_service.get_or_create_settings(db, workspace_id)
     return _to_out(row)
 
@@ -55,6 +82,12 @@ def put_settings(
     db: Annotated[Session, Depends(get_db)],
     workspace_id: Annotated[str, Depends(require_owner)],
 ) -> WorkspaceSettingsOut:
+    """
+    模块：完整设置写入
+    用途：部分更新工作空间设置；required 模式仅所有者。
+    对接：设置页；require_owner。
+    二次开发：所有者限制与序列化语义不得因 parse-strategy 而放宽。
+    """
     dumped = body.model_dump(by_alias=False, exclude_unset=True)
     kwargs: dict = {}
     for key in (

@@ -1,7 +1,8 @@
 """
 模块：工作空间设置服务
-用途：读写 LLM 配置 + 默认导出模板 JSON。
-对接：GET|PUT /api/settings；export_service 读 export_format_json
+用途：读写 LLM 配置 + 默认导出模板 JSON；提供解析策略只读查询。
+对接：GET|PUT /api/settings；GET /api/settings/parse-strategy；export_service 读 export_format_json
+二次开发：parse-strategy 只读不得建行；完整设置读写仍走 get_or_create_settings。
 """
 
 from __future__ import annotations
@@ -39,6 +40,22 @@ def get_or_create_settings(db: Session, workspace_id: str) -> WorkspaceSettingsR
     db.commit()
     db.refresh(row)
     return row
+
+
+def get_parse_strategy(db: Session, workspace_id: str) -> str:
+    """
+    模块：解析策略只读查询
+    用途：返回工作空间已保存的 parseStrategy；无设置行时返回 DEFAULT_PARSE。
+    对接：GET /api/settings/parse-strategy；不得调用 get_or_create_settings，不得 commit。
+    二次开发：仅返回 light|local|ask 之一；非法存量值回退 light；禁止附带 Key/模型等字段。
+    """
+    row = db.get(WorkspaceSettingsRow, workspace_id)
+    if row is None:
+        return DEFAULT_PARSE
+    value = (row.parse_strategy or "").strip()
+    if value not in ALLOWED_PARSE:
+        return DEFAULT_PARSE
+    return value
 
 
 def get_export_format(db: Session, workspace_id: str) -> dict | None:
