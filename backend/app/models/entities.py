@@ -1366,3 +1366,56 @@ class ProjectTaskRow(Base):
         nullable=False,
         default=utc_now,
     )
+
+
+class ContentFuseApplicationBatchRow(Base):
+    """
+    模块：M3-D 融合写入持久恢复批次
+    用途：记录 content_fuse 原子确认后的有限恢复快照（每项目最近 20 批）。
+    对接：content_fuse_application_service；/api/projects/{id}/content-fuse-applications*。
+    二次开发：
+      - 字段集合固定；snapshot_json 仅服务端生成，禁止客户端投稿
+      - state 仅 active|consumed；禁止扩为通用版本库或正文浏览 API
+      - task_id 仅服务端追溯，列表接口不得返回
+    """
+
+    __tablename__ = "content_fuse_application_batches"
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('active', 'consumed')",
+            name="ck_content_fuse_application_batches_state",
+        ),
+        Index(
+            "ix_cfab_workspace_project_created",
+            "workspace_id",
+            "project_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # 同项目成功 content_fuse 任务 ID；仅追溯，不向列表返回
+    task_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        index=True,
+    )
+    consumed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )

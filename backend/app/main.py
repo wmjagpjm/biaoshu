@@ -23,6 +23,7 @@ from app.api import (
     bidder as bidder_api,
     cards as cards_api,
     compliance as compliance_api,
+    content_fuse_applications as content_fuse_applications_api,
     export as export_api,
     files,
     finance as finance_api,
@@ -52,6 +53,7 @@ from app.models import (  # noqa: F401
     BidSourceSyncRunRow,
     BidTemplateRow,
     BidWatchPlanRow,
+    ContentFuseApplicationBatchRow,
     FinanceCostEntryRow,
     FinanceProjectCostChangeEventRow,
     HrCredentialCardRow,
@@ -138,6 +140,7 @@ def create_app() -> FastAPI:
     app.include_router(hr_api.router, prefix="/api")
     app.include_router(bidder_api.router, prefix="/api")
     app.include_router(projects.router, prefix="/api")
+    app.include_router(content_fuse_applications_api.router, prefix="/api")
     app.include_router(settings_api.router, prefix="/api")
     app.include_router(llm.router, prefix="/api")
     app.include_router(revise.router, prefix="/api")

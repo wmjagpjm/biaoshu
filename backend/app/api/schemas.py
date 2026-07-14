@@ -1824,3 +1824,115 @@ class HrCredentialExpiryOut(BaseModel):
     attention_items: list[HrCredentialExpiryAttentionItemOut] = Field(
         serialization_alias="attentionItems"
     )
+
+
+# ---------- M3-D 融合写入持久恢复批次 ----------
+
+
+class ContentFuseApplicationCreate(BaseModel):
+    """
+    模块：M3-D 原子确认请求
+    用途：仅接受 camelCase 的 taskId 与 suggestionIds；拒绝客户端正文/base/action 等伪造键。
+    对接：POST /api/projects/{projectId}/content-fuse-applications。
+    二次开发：
+      - extra=forbid；禁止 populate_by_name，snake_case 必须 422；
+      - 建议正文必须仅来自服务端成功 content_fuse 任务结果。
+    """
+
+    # 故意不设 populate_by_name：只接受 JSON 键 taskId / suggestionIds
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str = Field(alias="taskId", min_length=1, max_length=64)
+    suggestion_ids: list[str] = Field(alias="suggestionIds")
+
+    @field_validator("task_id")
+    @classmethod
+    def _task_id_nonblank(cls, value: str) -> str:
+        text = (value or "").strip()
+        if not text:
+            raise ValueError("taskId 不能为空")
+        return text
+
+    @field_validator("suggestion_ids")
+    @classmethod
+    def _suggestion_ids_shape(cls, value: list[str]) -> list[str]:
+        if not isinstance(value, list) or not value:
+            raise ValueError("suggestionIds 须为 1–5 个非空字符串")
+        if len(value) > 5:
+            raise ValueError("suggestionIds 最多 5 个")
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            if type(item) is not str:
+                raise ValueError("suggestionIds 每项必须是字符串")
+            sid = item.strip()
+            if not sid:
+                raise ValueError("suggestionIds 含空 ID")
+            if len(sid) > 64:
+                raise ValueError("suggestionIds 单项过长")
+            if sid in seen:
+                raise ValueError("suggestionIds 不可重复")
+            seen.add(sid)
+            out.append(sid)
+        return out
+
+
+class ContentFuseApplicationCreateOut(BaseModel):
+    """
+    模块：M3-D 原子确认成功响应
+    用途：仅返回 batchId/appliedChapterCount/createdAt。
+    对接：POST /api/projects/{projectId}/content-fuse-applications。
+    二次开发：禁止回显 taskId、正文、快照或冲突章节细节。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    batch_id: str = Field(serialization_alias="batchId")
+    applied_chapter_count: int = Field(serialization_alias="appliedChapterCount")
+    created_at: datetime = Field(serialization_alias="createdAt")
+
+
+class ContentFuseApplicationListItemOut(BaseModel):
+    """
+    模块：M3-D 批次列表项
+    用途：最小投影 batchId/chapterCount/state/createdAt/consumedAt。
+    对接：GET /api/projects/{projectId}/content-fuse-applications。
+    二次开发：禁止返回 task/suggestion/chapter/正文/标题。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    batch_id: str = Field(serialization_alias="batchId")
+    chapter_count: int = Field(serialization_alias="chapterCount")
+    state: Literal["active", "consumed"]
+    created_at: datetime = Field(serialization_alias="createdAt")
+    consumed_at: datetime | None = Field(
+        default=None, serialization_alias="consumedAt"
+    )
+
+
+class ContentFuseApplicationListOut(BaseModel):
+    """
+    模块：M3-D 批次列表响应
+    用途：固定最近 20 条包装为 items。
+    对接：GET /api/projects/{projectId}/content-fuse-applications。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    items: list[ContentFuseApplicationListItemOut]
+
+
+class ContentFuseApplicationConsumeOut(BaseModel):
+    """
+    模块：M3-D 一次性恢复响应
+    用途：仅 restoredChapterCount/skippedChapterCount/consumedAt。
+    对接：POST .../content-fuse-applications/{batchId}/consume。
+    二次开发：禁止回显正文、快照、路径或批次详情。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    restored_chapter_count: int = Field(serialization_alias="restoredChapterCount")
+    skipped_chapter_count: int = Field(serialization_alias="skippedChapterCount")
+    consumed_at: datetime = Field(serialization_alias="consumedAt")
