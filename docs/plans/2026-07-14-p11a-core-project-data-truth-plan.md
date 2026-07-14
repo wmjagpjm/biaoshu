@@ -7,7 +7,7 @@
 
 # P11A 核心项目真实数据收口实施计划
 
-> **状态**：计划已冻结，等待前端受限实现。
+> **状态**：已完成、独立验收并推送。计划=`70a2dc7`，前端=`b0a86e4`。
 > **工作分支**：`collab/grok-code-codex-review`。
 > **验收起点**：后端串行全量 487 passed；前端 lint/build 通过、单 worker 串行全量 E2E 145 passed。
 > **执行顺序**：计划提交并推送 → Grok 前端实现/自测 → Codex 审查/返修/独立验收 → 中文文档闭环。
@@ -75,3 +75,11 @@ git diff --check
 ```
 
 所有 Playwright 命令必须 Chromium headless、单 worker、逐条串行。所有 PowerShell 与 Grok 子进程后台静默运行，不弹终端、浏览器或前台应用。
+
+## 6. 实施、审查与验收记录
+
+1. 计划提交 `70a2dc7` 冻结契约、十文件白名单、错误/存储/网络边界和串行命令后推送协作分支。
+2. Grok 通过任务 `msg_485bd9ca1a7d4e4e9b1ffaa94423145b` 完成十文件首版，不执行 git add/commit/push。生产实现移除 mock/localStorage 项目 CRUD 与环境开关语义，页面收敛真实列表/空态/失败态和三条创建失败路径。
+3. Codex 首轮审查确认生产实现方向正确，但否决“只断言 v1 单键值”的存储测试假绿；通过任务 `msg_993109293d344f0caec8e227d9792bbd` 仅允许修改 `core-project-data-truth.spec.ts`，补齐项目元数据键族、完整失败快照、成功 pending 精确键值及 editor-state 精确允许项。
+4. 返修回执 `msg_945df663cd8341cc86d74c17cb516fb0` 经独立复核通过；Codex 运行 lint/build、P11A 10、认证 11、解析策略 6、模板 1 以及全量 155，均为 Chromium headless、1 worker、串行；`git diff --check` 通过。
+5. 前端实现由 Codex 提交为 `b0a86e4` 并推送；验收确认消息为 `msg_442349b0341a4dfeacc169c2a0df18e2`。本包未改后端、共享 API、editor-state hooks、mock fixture、知识库、角色权限、依赖或 Playwright 配置。

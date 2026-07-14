@@ -162,9 +162,12 @@ npm run test:e2e:local-parser-callback-ticket
 
 # P9D：技术标/商务标导出图片失效引用浏览器提示（真实本机 export + 受控边界桩）
 npm run test:e2e:export-image-warnings
+
+# P11A：核心项目列表/详情/创建服务端单一真值（路由桩 + mock/localStorage 假成功与存储边界反假绿）
+npm run test:e2e:core-project-data-truth
 ```
 
-当前基线：后端串行全量 **487 passed**（1 条既有 Starlette/httpx 弃用警告）；M3-D 专项 **34 passed**、M3-A/editor-state/响应矩阵/认证受影响回归 **71 passed**。前端 `lint` / `build` 通过（仅既有大包体积提示），M3-D 持久恢复 **5 passed**、原子确认 **6 passed**、M3-A **1 passed**、认证/RBAC **11 passed**，单 worker 串行全量 E2E **145 passed**。P10K、P8C、P9D 及其他既有专项继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
+当前基线：后端串行全量 **487 passed**（1 条既有 Starlette/httpx 弃用警告）；M3-D 专项 **34 passed**、M3-A/editor-state/响应矩阵/认证受影响回归 **71 passed**。前端 `lint` / `build` 通过（仅既有大包体积提示），P11A **10 passed**、认证/RBAC **11 passed**、解析策略 **6 passed**、模板复用 **1 passed**，单 worker 串行全量 E2E **155 passed**。M3-D、P10K、P8C、P9D 及其他既有专项继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
 
 ## 6. 已接 API 一览
 
@@ -334,6 +337,15 @@ npm run test:e2e:export-image-warnings
 4. 点击恢复必须二次确认。完整未漂移时恢复全部；手工改变一章的标题/正文/状态时只恢复其他章；全部漂移时恢复 0 章。三种结果都只允许一次 consume，并变为「已消费」、不再显示恢复按钮。
 5. consume 成功后唯一 editor-state GET 失败时显示「恢复已完成，但刷新失败，请关闭后重新打开」，服务端批次已 consumed 且不得二次 consume。项目 A→B、关闭后迟到列表/create/consume 均不得重开对话框、刷新错误项目、显示旧消息或追加 editor/list GET。
 6. 浏览器业务请求须符合 method+精确路径白名单；主动未知 `/api`、伪项目路径和外网探针必须被可观测阻断。M3-D 不新增 localStorage 键，sessionStorage/IndexedDB/Cookie 精确空，剪贴板读写为 0，页面/console/存储不含秘密串或项目/task/suggestion/batch ID。完整边界见 `docs/m3d-content-fuse-persistent-recovery-contract.md`。
+
+## 6.13 P11A 核心项目真实数据收口
+
+1. 后端返回真实技术标/商务标项目时，列表只显示对应 `kind` 的服务端项目；返回 `200 []` 时显示真实空态，不得补 `mockProjects`、`mockBusinessProjects` 或旧 localStorage 项目。
+2. 预置旧 `biaoshu.projects.v1` 后刷新列表、触发列表 500、直达演示 ID，旧项目都不得出现；旧键和值必须保持精确不变，不得新增 v2/cache/其他项目元数据键，也不得上传旧值。
+3. 技术标新建页、创建方案页、商务标入口各自模拟 POST 失败：按钮在途禁用，页面保持原 URL/表单/列表，显示固定「项目创建失败，请稍后重试」，不得生成 `proj_*`、导航假工作区或写 pending。再次点击只能新增一次真实 POST。
+4. 创建成功只使用 POST 响应的真实 projectId 导航；创建方案有文件时，`biaoshu.pendingProjectFiles` 只能在成功后写入，键集和值精确为真实 projectId 与页面文件名。技术标/商务标 editor-state 既有本地备份属于本包非目标，但不得被当成项目列表/详情真值。
+5. 商务标详情 404/失败显示「未找到项目」而不是复活演示卡；技术标详情可回真实列表。查重/废标项目列表失败时选择器为空、固定中文且无未处理 Promise。
+6. P11A E2E 主动阻断未知 `/api`、`/api/projects` 前缀未知端点与外网；应用层 console error/warning 精确空，local/session/IndexedDB/Cookie/clipboard 按场景精确收敛。完整契约见 `docs/p11a-core-project-data-truth-contract.md`，计划=`70a2dc7`，前端=`b0a86e4`。
 
 ## 7. 本机日用主链路（目标 A 加强版）
 
