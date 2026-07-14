@@ -1,8 +1,10 @@
 """
-模块：P10B/P10C 财务路由
-用途：P10B 两个只读报价 GET；P10C 成本草案读与受控写。
-对接：/api/finance/*；deps.require_finance；finance_service；finance_cost_service。
-二次开发：禁止放宽角色；P10B 只读语义不得附加成本字段；写操作依赖既有 CSRF。
+模块：P10B/P10C/P10J 财务路由
+用途：P10B 两个只读报价 GET；P10C 成本草案读与受控写；P10J 本人成本变更记录只读。
+对接：/api/finance/*；deps.require_finance；finance_service；finance_cost_service；
+  finance_cost_change_event_service。
+二次开发：禁止放宽角色；P10B 只读语义不得附加成本字段；写操作依赖既有 CSRF；
+  P10J 不得扩展为全员/项目审计或返回金额正文。
 """
 
 from typing import Annotated
@@ -15,6 +17,8 @@ from app.api.schemas import (
     FinanceBusinessBidDetailOut,
     FinanceBusinessBidListOut,
     FinanceBusinessBidSummaryOut,
+    FinanceCostChangeEventOut,
+    FinanceCostChangeEventsOut,
     FinanceCostDraftOut,
     FinanceCostEntryCreate,
     FinanceCostEntryOut,
@@ -22,7 +26,7 @@ from app.api.schemas import (
     FinanceQuoteRowOut,
 )
 from app.core.database import get_db
-from app.services import finance_cost_service, finance_service
+from app.services import finance_cost_change_event_service, finance_cost_service, finance_service
 from app.services.finance_cost_service import FinanceCostValidationError
 from app.services.project_service import ProjectNotFoundError
 
@@ -135,6 +139,43 @@ def _http_invalid() -> HTTPException:
             "code": _CODE_INVALID,
             "message": _MSG_INVALID,
         },
+    )
+
+
+@router.get(
+    "/cost-change-events",
+    response_model=FinanceCostChangeEventsOut,
+)
+def list_cost_change_events(
+    request: Request,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    workspace_id: Annotated[str, Depends(require_finance)],
+) -> FinanceCostChangeEventsOut:
+    """
+    用途：严格 finance 读取本人当前空间最近 50 条成功成本变更固定投影。
+    对接：GET /api/finance/cost-change-events；finance_cost_change_event_service。
+    二次开发：
+      - actor 仅来自已验证 request.state，禁止客户端 user/workspace/limit
+      - 响应仅 items[].action|entryId|occurredAt；固定 no-store
+      - 不得返回金额、项目、备注、其他用户或完整审计
+    """
+    _no_store(response)
+    actor = _actor_user_id(request)
+    payload = finance_cost_change_event_service.list_personal_cost_change_events(
+        db,
+        workspace_id=workspace_id,
+        actor_user_id=actor,
+    )
+    return FinanceCostChangeEventsOut(
+        items=[
+            FinanceCostChangeEventOut(
+                action=item["action"],
+                entry_id=item["entry_id"],
+                occurred_at=item["occurred_at"],
+            )
+            for item in payload.get("items") or []
+        ]
     )
 
 

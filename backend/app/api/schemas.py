@@ -1219,6 +1219,40 @@ class FinanceCostEntryUpdate(BaseModel):
     remark: str | None = Field(default=None, max_length=500)
 
 
+# ---------- P10J 财务个人成本变更记录 ----------
+
+
+FinanceCostChangeAction = Literal["create", "update", "delete"]
+
+
+class FinanceCostChangeEventOut(BaseModel):
+    """
+    模块：财务个人成本变更单条响应
+    用途：固定投影动作、条目 ID 与发生时间；不含审计 ID/内部 action/金额。
+    对接：GET /api/finance/cost-change-events → items[]。
+    二次开发：字段集合为契约白名单，禁止附加项目/备注/操作者/工作空间。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    action: FinanceCostChangeAction
+    entry_id: str = Field(serialization_alias="entryId")
+    occurred_at: datetime = Field(serialization_alias="occurredAt")
+
+
+class FinanceCostChangeEventsOut(BaseModel):
+    """
+    模块：财务个人成本变更列表响应
+    用途：包装 items 数组；顶层仅此键。
+    对接：GET /api/finance/cost-change-events。
+    二次开发：禁止分页游标、total、limit 或任何额外顶层字段。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    items: list[FinanceCostChangeEventOut]
+
+
 # ---------- P10D 人员资质素材卡 ----------
 
 
