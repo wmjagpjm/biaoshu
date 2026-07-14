@@ -12,6 +12,10 @@ import {
   Upload,
 } from "lucide-react";
 import { AiFeedbackPanel } from "../../../shared/components/AiFeedbackPanel/AiFeedbackPanel";
+import {
+  ExportImageWarnings,
+  normalizeExportImageWarnings,
+} from "../../../shared/components/ExportImageWarnings";
 import { LoadingBlock } from "../../../shared/components/LoadingBlock/LoadingBlock";
 import type { Project } from "../../../shared/types/workspace";
 import { SaveAsTemplateDialog } from "../../bid-templates/components/SaveAsTemplateDialog";
@@ -216,8 +220,29 @@ export function TechnicalPlanWorkspace() {
   const [contentFuseOpen, setContentFuseOpen] = useState(false);
   /** P8B：ask 策略一次性选择框 */
   const [parseChoiceOpen, setParseChoiceOpen] = useState(false);
+  /**
+   * P9D：导出图片告警与产生它的 projectId 绑定（仅内存）。
+   * 渲染时 projectId 不匹配则同步视为空，避免切换首帧泄漏旧告警。
+   */
+  const [exportImageWarningState, setExportImageWarningState] = useState<{
+    projectId: string;
+    warnings: string[];
+  } | null>(null);
+  /** P9D：导出告警代次；项目切换或新导出启动时递增，丢弃迟到 setState */
+  const exportImageWarningGenRef = useRef(0);
   /** 代次：项目切换、重入智能建议或取消后，丢弃迟到的串行批结果 */
   const matchSessionRef = useRef(0);
+
+  useEffect(() => {
+    // 递增代次使飞行中的旧导出闭包无法再写入告警；下载语义保持既有行为
+    exportImageWarningGenRef.current += 1;
+    setExportImageWarningState(null);
+  }, [projectId]);
+
+  const exportImageWarnings =
+    exportImageWarningState?.projectId === projectId
+      ? exportImageWarningState.warnings
+      : [];
 
   /**
    * 模块：runLightweightParse
@@ -1531,9 +1556,24 @@ export function TechnicalPlanWorkspace() {
               onClick={() => {
                 void (async () => {
                   try {
+                    // 捕获启动时项目与代次；成功返回后仅当前代次可写告警
+                    const startedProjectId = projectId;
+                    const gen = ++exportImageWarningGenRef.current;
+                    // 每次导出开始前清空旧告警，避免短暂展示上一轮结果
+                    setExportImageWarningState(null);
                     const t = await pipeline.runTask("export");
                     if (t.status === "success") {
                       setTaskTip("Word 已生成，正在下载…");
+                      // 契约：成功且代次仍匹配时先写告警，再始终继续既有下载；
+                      // 旧任务迟到仍下载但不写告警，避免污染新项目页面
+                      if (exportImageWarningGenRef.current === gen) {
+                        setExportImageWarningState({
+                          projectId: startedProjectId,
+                          warnings: normalizeExportImageWarnings(
+                            t.result?.imageWarnings,
+                          ),
+                        });
+                      }
                       pipeline.downloadExport(t);
                     }
                   } catch {
@@ -1546,6 +1586,7 @@ export function TechnicalPlanWorkspace() {
               {pipeline.busy ? "导出中…" : "生成并下载 Word"}
             </button>
           </div>
+          <ExportImageWarnings warnings={exportImageWarnings} />
         </section>
       )}
     </div>
