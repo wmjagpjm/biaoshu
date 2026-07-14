@@ -1,8 +1,8 @@
 /**
- * 模块：P10B/P10C 财务报价与成本草案页样式
- * 用途：列表 + 明细双栏；成本草案/毛利快照区块；前缀 fq- 隔离样式。
+ * 模块：P10B/P10C/P10K 财务报价、成本草案与项目成本记录页样式
+ * 用途：列表 + 明细双栏；成本草案/毛利快照；显式项目成本记录区；前缀 fq- 隔离样式。
  * 对接：FinanceQuotePage。
- * 二次开发：勿引入无关视觉改动到既有业务页。
+ * 二次开发：勿引入无关视觉改动到既有业务页；P10K 区仅样式，不承载业务状态。
  */
 
 .fq-layout {
@@ -382,4 +382,108 @@
 
 .fq-cost-confirm p {
   margin: 0 0 10px;
+}
+
+/* ---------- P10K 项目成本记录 ---------- */
+
+.fq-p10k {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border, #e5e7eb);
+}
+
+.fq-p10k__head {
+  margin-bottom: 10px;
+}
+
+.fq-p10k__title {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary, #111827);
+}
+
+.fq-p10k__subtitle {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary, #6b7280);
+}
+
+.fq-p10k__disclaimer {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid #fde68a;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.fq-p10k__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.fq-p10k__actions .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fq-p10k-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fq-p10k-item {
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: var(--radius-md, 8px);
+  padding: 12px 14px;
+  background: #fff;
+}
+
+.fq-p10k-item__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin-bottom: 8px;
+}
+
+.fq-p10k-item__action {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, #111827);
+}
+
+.fq-p10k-item__actor {
+  font-size: 12px;
+  color: var(--text-secondary, #6b7280);
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface, #f9fafb);
+  border: 1px solid var(--rule-color, #f3f4f6);
+}
+
+.fq-p10k-item__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: 12px;
+  color: var(--text-secondary, #6b7280);
+}
+
+.fq-p10k-item__meta strong {
+  color: var(--text-body, #374151);
+  font-weight: 600;
 }

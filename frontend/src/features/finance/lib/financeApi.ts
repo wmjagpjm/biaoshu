@@ -1,8 +1,8 @@
 /**
- * 模块：P10B/P10C 财务报价与成本草案 API 封装
+ * 模块：P10B/P10C/P10K 财务报价、成本草案与项目成本变更记录 API 封装
  * 用途：仅调用财务专用端点；金额元→分用字符串拆分，禁止浮点乘法。
- * 对接：apiFetch；GET/POST/PATCH/DELETE /finance/business-bids*；Hook 与页面。
- * 二次开发：禁止回退到 /projects、/editor-state、/settings、/files 或外部地址。
+ * 对接：apiFetch；GET/POST/PATCH/DELETE /finance/business-bids*；项目 cost-change-events。
+ * 二次开发：禁止回退到 /projects、/editor-state、/settings、/files、P10J /finance/cost-change-events 或外部地址。
  */
 
 import { apiFetch } from "../../../shared/lib/api";
@@ -14,6 +14,8 @@ import type {
   FinanceCostEntry,
   FinanceCostEntryCreateBody,
   FinanceCostEntryUpdateBody,
+  FinanceProjectCostChangeEventItem,
+  FinanceProjectCostChangeEventsResponse,
 } from "../types";
 
 /** 分金额合法闭区间（与后端一致）。 */
@@ -108,6 +110,37 @@ export async function deleteFinanceCostEntry(
   await apiFetch<void>(`/finance/business-bids/${pid}/cost-entries/${eid}`, {
     method: "DELETE",
   });
+}
+
+/**
+ * 模块：normalizeProjectCostChangeItems
+ * 用途：将响应 items 安全收敛为数组；非数组或缺失时返回空数组。
+ * 对接：fetchFinanceProjectCostChangeEvents。
+ * 二次开发：禁止在此补全金额、成员身份或反查成本正文。
+ */
+function normalizeProjectCostChangeItems(
+  raw: unknown,
+): FinanceProjectCostChangeEventItem[] {
+  if (!Array.isArray(raw)) return [];
+  return raw as FinanceProjectCostChangeEventItem[];
+}
+
+/**
+ * 模块：fetchFinanceProjectCostChangeEvents
+ * 用途：显式读取选定商务标项目最近 50 条成功成本变更（P10K）；路径段须 encodeURIComponent。
+ * 对接：GET /finance/business-bids/{projectId}/cost-change-events。
+ * 二次开发：禁止调用 P10J /finance/cost-change-events；禁止附加 query/limit；结果仅存组件实例内存。
+ */
+export async function fetchFinanceProjectCostChangeEvents(
+  projectId: string,
+): Promise<FinanceProjectCostChangeEventsResponse> {
+  const id = encodeURIComponent(projectId);
+  const data = await apiFetch<FinanceProjectCostChangeEventsResponse>(
+    `/finance/business-bids/${id}/cost-change-events`,
+  );
+  return {
+    items: normalizeProjectCostChangeItems(data?.items),
+  };
 }
 
 /**

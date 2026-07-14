@@ -1,20 +1,22 @@
 /**
- * 模块：P10B/P10C 财务报价与成本草案页
- * 用途：只读报价列表/明细 + 选定商务标下的成本草案与毛利快照（非审批/非会计结论）。
- * 对接：useFinanceQuotes；useFinanceCostDraft；仅 /finance/business-bids* 与 cost 端点。
- * 二次开发：禁止调用通用项目/编辑器/设置；禁止浏览器持久化成本；金额分→元仅整数格式化。
+ * 模块：P10B/P10C/P10K 财务报价、成本草案与项目成本变更记录页
+ * 用途：只读报价列表/明细 + 成本草案/毛利快照 + 显式项目成本记录（非审批/非完整审计）。
+ * 对接：useFinanceQuotes；useFinanceCostDraft；fetchFinanceProjectCostChangeEvents。
+ * 二次开发：禁止调用通用项目/编辑器/设置/P10J；禁止浏览器持久化；P10K 不得自动首屏请求。
  */
 
-import { useEffect, useState } from "react";
-import { Calculator, RefreshCw } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { AlertTriangle, Calculator, History, RefreshCw } from "lucide-react";
 import { EmptyState } from "../../../shared/components/EmptyState/EmptyState";
 import { LoadingBlock } from "../../../shared/components/LoadingBlock/LoadingBlock";
+import type { ApiError } from "../../../shared/lib/api";
 import {
   useFinanceCostDraft,
   type CostFormInput,
 } from "../hooks/useFinanceCostDraft";
 import { useFinanceQuotes } from "../hooks/useFinanceQuotes";
 import {
+  fetchFinanceProjectCostChangeEvents,
   formatFenAsYuan,
   formatMarginBasisPoints,
 } from "../lib/financeApi";
@@ -22,6 +24,9 @@ import type {
   FinanceBusinessBidSummary,
   FinanceCostCategory,
   FinanceCostEntry,
+  FinanceProjectCostChangeAction,
+  FinanceProjectCostActorScope,
+  FinanceProjectCostChangeEventItem,
   FinanceQuoteRow,
 } from "../types";
 import "./FinanceQuotePage.css";
@@ -42,12 +47,105 @@ const CATEGORY_LABELS: Record<FinanceCostCategory, string> = {
   other: "其他",
 };
 
+/** P10K 动作固定中文；未知枚举不得原样输出。 */
+const PROJECT_COST_ACTION_LABELS: Record<
+  FinanceProjectCostChangeAction,
+  string
+> = {
+  create: "新增成本条目",
+  update: "修改成本条目",
+  delete: "删除成本条目",
+};
+
+/** P10K actorScope 固定中文；未知枚举不得原样输出。 */
+const PROJECT_COST_ACTOR_LABELS: Record<FinanceProjectCostActorScope, string> =
+  {
+    self: "本人",
+    other: "其他财务成员",
+  };
+
+/** P10K 限制声明（契约冻结语义）。 */
+export const FINANCE_PROJECT_COST_CHANGE_DISCLAIMER =
+  "仅记录 P10K 上线后的成功操作，不含金额、内容、成员身份、失败尝试或旧历史；没有记录不等于没有发生，也不是完整审计。";
+
+/** P10K 失败固定文案；不得拼接后端 detail/路径/项目 ID。 */
+const PROJECT_COST_EVENTS_ERROR_MESSAGE = "项目成本记录加载失败，请稍后重试";
+
 const EMPTY_FORM: CostFormInput = {
   category: "material",
   name: "",
   amountYuanText: "",
   remark: "",
 };
+
+/**
+ * 模块：projectCostActionLabel
+ * 用途：动作码转固定中文；未知值显示「—」。
+ * 对接：项目成本记录列表。
+ * 二次开发：禁止原样输出 create/update/delete 以外的内部码。
+ */
+function projectCostActionLabel(action: string): string {
+  if (action in PROJECT_COST_ACTION_LABELS) {
+    return PROJECT_COST_ACTION_LABELS[action as FinanceProjectCostChangeAction];
+  }
+  return "—";
+}
+
+/**
+ * 模块：projectCostActorLabel
+ * 用途：actorScope 转「本人/其他财务成员」；未知值显示「—」。
+ * 对接：项目成本记录列表。
+ * 二次开发：禁止回显 userId/username/显示名。
+ */
+function projectCostActorLabel(scope: string): string {
+  if (scope in PROJECT_COST_ACTOR_LABELS) {
+    return PROJECT_COST_ACTOR_LABELS[scope as FinanceProjectCostActorScope];
+  }
+  return "—";
+}
+
+/**
+ * 模块：formatProjectCostOccurredAt
+ * 用途：服务端 occurredAt 安全中文时间展示；非法时间固定「时间未知」。
+ * 对接：项目成本记录时间列。
+ * 二次开发：不得用本地时间重排业务顺序。
+ */
+function formatProjectCostOccurredAt(value: string | null | undefined): string {
+  if (value == null) return "时间未知";
+  const raw = String(value).trim();
+  if (!raw) return "时间未知";
+  const ms = Date.parse(raw);
+  if (!Number.isFinite(ms)) return "时间未知";
+  try {
+    return new Intl.DateTimeFormat("zh-CN", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).format(new Date(ms));
+  } catch {
+    return "时间未知";
+  }
+}
+
+/**
+ * 模块：toProjectCostSafeError
+ * 用途：任意接口异常映射为固定中文，不透传 detail/路径/项目 ID。
+ * 对接：ProjectCostChangeEventsPanel。
+ * 二次开发：禁止回显 ApiError.message 或后端 code。
+ */
+function toProjectCostSafeError(err: unknown): string {
+  const status =
+    err && typeof err === "object" && "status" in err
+      ? (err as ApiError).status
+      : 0;
+  if (status === 0) return "无法连接后端，项目成本记录暂时不可用";
+  if (status === 403) return "当前账号无权查看项目成本记录";
+  return PROJECT_COST_EVENTS_ERROR_MESSAGE;
+}
 
 /**
  * 用途：项目状态码转中文，避免向用户泄露英文内部状态。
@@ -620,7 +718,175 @@ function CostDraftPanel({ projectId }: { projectId: string }) {
 }
 
 /**
- * 用途：财务角色报价主页面（含成本草案）。
+ * 模块：ProjectCostChangeEventsPanel
+ * 用途：选定商务标下的显式项目成本记录区；初始零 GET，点击后读一次、刷新再一次。
+ * 对接：fetchFinanceProjectCostChangeEvents；仅挂载于 detail.projectId===selectedId。
+ * 二次开发：禁止模块全局缓存、URL 参数、存储、轮询、P10J、写操作后自动刷新。
+ */
+function ProjectCostChangeEventsPanel({ projectId }: { projectId: string }) {
+  const [opened, setOpened] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [items, setItems] = useState<
+    FinanceProjectCostChangeEventItem[] | null
+  >(null);
+  /** 项目切换代次：迟到响应不得写入新项目。 */
+  const generationRef = useRef(0);
+
+  // 切项目：立即收起并清空（组件可能被复用，依赖 projectId）
+  useEffect(() => {
+    generationRef.current += 1;
+    setOpened(false);
+    setLoading(false);
+    setError(null);
+    setItems(null);
+  }, [projectId]);
+
+  const loadEvents = async () => {
+    const gen = generationRef.current;
+    const boundProjectId = projectId;
+    setOpened(true);
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetchFinanceProjectCostChangeEvents(boundProjectId);
+      if (generationRef.current !== gen) return;
+      setItems(Array.isArray(res.items) ? res.items : []);
+      setError(null);
+    } catch (err) {
+      if (generationRef.current !== gen) return;
+      setItems(null);
+      setError(toProjectCostSafeError(err));
+    } finally {
+      if (generationRef.current === gen) {
+        setLoading(false);
+      }
+    }
+  };
+
+  return (
+    <section
+      className="fq-p10k"
+      aria-label="项目成本记录"
+      data-testid="finance-p10k-panel"
+      data-project-id={projectId}
+    >
+      <div className="fq-p10k__head">
+        <h3 className="fq-p10k__title">项目成本记录</h3>
+        <p className="fq-p10k__subtitle">
+          仅在用户显式查看时读取本项目上线后成功的成本变更；不是完整财务审计。
+        </p>
+      </div>
+
+      <p className="fq-p10k__disclaimer" data-testid="finance-p10k-disclaimer">
+        <AlertTriangle
+          size={14}
+          style={{ verticalAlign: "-2px", marginRight: 6 }}
+        />
+        {FINANCE_PROJECT_COST_CHANGE_DISCLAIMER}
+      </p>
+
+      <div className="fq-p10k__actions">
+        {!opened ? (
+          <button
+            type="button"
+            className="btn"
+            data-testid="finance-p10k-open"
+            disabled={loading}
+            onClick={() => void loadEvents()}
+          >
+            <History size={14} />
+            查看项目记录
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="btn btn-soft"
+            data-testid="finance-p10k-reload"
+            disabled={loading}
+            onClick={() => void loadEvents()}
+          >
+            <RefreshCw size={14} />
+            {loading ? "刷新中…" : "刷新"}
+          </button>
+        )}
+      </div>
+
+      {error ? (
+        <div
+          className="fq-alert"
+          role="alert"
+          data-testid="finance-p10k-error"
+        >
+          {error}
+        </div>
+      ) : null}
+
+      {loading ? (
+        <LoadingBlock label="正在加载项目成本记录…" />
+      ) : opened && items ? (
+        items.length === 0 ? (
+          <div
+            className="fq-placeholder"
+            data-testid="finance-p10k-empty"
+          >
+            <strong>暂无项目成本记录</strong>
+            <span>
+              仅记录 P10K 上线后成功操作，无旧历史回填；没有记录不等于没有发生。
+            </span>
+          </div>
+        ) : (
+          <ul className="fq-p10k-list" data-testid="finance-p10k-list">
+            {items.map((item, index) => (
+              <li
+                key={`${item.entryId}-${item.occurredAt}-${item.actorScope}-${index}`}
+                className="fq-p10k-item"
+                data-testid="finance-p10k-item"
+                data-action={
+                  item.action in PROJECT_COST_ACTION_LABELS
+                    ? item.action
+                    : undefined
+                }
+              >
+                <div className="fq-p10k-item__head">
+                  <span
+                    className="fq-p10k-item__action"
+                    data-testid="finance-p10k-item-action"
+                  >
+                    {projectCostActionLabel(item.action)}
+                  </span>
+                  <span
+                    className="fq-p10k-item__actor"
+                    data-testid="finance-p10k-item-actor"
+                  >
+                    {projectCostActorLabel(item.actorScope)}
+                  </span>
+                </div>
+                <div className="fq-p10k-item__meta">
+                  <span>
+                    条目编号{" "}
+                    <strong data-testid="finance-p10k-item-entry-id">
+                      {textOrDash(item.entryId)}
+                    </strong>
+                  </span>
+                  <span>
+                    发生时间{" "}
+                    <strong data-testid="finance-p10k-item-time">
+                      {formatProjectCostOccurredAt(item.occurredAt)}
+                    </strong>
+                  </span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )
+      ) : null}
+    </section>
+  );
+}
+
+/**
+ * 用途：财务角色报价主页面（含成本草案与显式项目成本记录）。
  */
 export function FinanceQuotePage() {
   const {
@@ -780,9 +1046,12 @@ export function FinanceQuotePage() {
                 </p>
               </div>
 
-              {/* 仅当明细与当前选中项目一致时挂载，避免切换瞬间用旧明细发起新项目成本请求 */}
+              {/* 仅当明细与当前选中项目一致时挂载，避免切换瞬间用旧明细发起新项目成本/P10K 请求 */}
               {detail.projectId === selectedId ? (
-                <CostDraftPanel projectId={detail.projectId} />
+                <>
+                  <CostDraftPanel projectId={detail.projectId} />
+                  <ProjectCostChangeEventsPanel projectId={detail.projectId} />
+                </>
               ) : null}
             </div>
           ) : null}

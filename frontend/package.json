@@ -20,6 +20,7 @@
     "test:e2e:finance-role": "playwright test e2e/finance-role.spec.ts",
     "test:e2e:finance-cost-draft": "playwright test e2e/finance-cost-draft.spec.ts",
     "test:e2e:finance-cost-change-events": "playwright test e2e/finance-cost-change-events.spec.ts",
+    "test:e2e:finance-project-cost-change-events": "playwright test e2e/finance-project-cost-change-events.spec.ts",
     "test:e2e:hr-credential-cards": "playwright test e2e/hr-credential-cards.spec.ts",
     "test:e2e:hr-team-recommendations": "playwright test e2e/hr-team-recommendations.spec.ts",
     "test:e2e:hr-performance-cards": "playwright test e2e/hr-performance-cards.spec.ts",
