@@ -1,8 +1,9 @@
 /**
- * 模块：模板/卡片融合建议 M3-B E2E
- * 用途：差异预览、勾选确认写入、base 漂移/删除跳过、关闭不写、刷新保持。
+ * 模块：模板/卡片融合建议 M3-B/M3-C E2E
+ * 用途：差异预览、勾选确认写入、base 漂移/删除跳过；M3-C 最近批次一次性撤销与漂移跳过。
  * 对接：Playwright chromium；后端 8010 / 前端 5174；content_fuse + replaceChapterBody。
- * 二次开发：禁止真实云 Key；本文件内起本地 mock chat completions；勿改业务 API。
+ * 二次开发：禁止真实云 Key；本文件内起本地 mock chat completions；勿改业务 API；
+ *       撤销仅走编辑器内存与既有 PUT，禁止新增网络端点或浏览器存储。
  */
 import {
   expect,
@@ -233,10 +234,33 @@ async function seedFuseApplyFixtures(
     : [{ id: "node_a", title: TITLE_A, children: [] }];
   const chapters = two
     ? [
-        { id: CHAP_A, title: TITLE_A, body: BODY_A },
-        { id: CHAP_B, title: TITLE_B, body: BODY_B },
+        {
+          id: CHAP_A,
+          title: TITLE_A,
+          body: BODY_A,
+          status: "pending",
+          wordCount: 0,
+          preview: "",
+        },
+        {
+          id: CHAP_B,
+          title: TITLE_B,
+          body: BODY_B,
+          status: "pending",
+          wordCount: 0,
+          preview: "",
+        },
       ]
-    : [{ id: CHAP_A, title: TITLE_A, body: BODY_A }];
+    : [
+        {
+          id: CHAP_A,
+          title: TITLE_A,
+          body: BODY_A,
+          status: "pending",
+          wordCount: 0,
+          preview: "",
+        },
+      ];
 
   const target = await request.post(`${API}/projects`, {
     data: { name: "E2E 融合写入目标项目", kind: "technical", industry: "政务" },
@@ -273,6 +297,7 @@ type EditorStateChapter = {
   id?: string;
   title?: string;
   body?: string;
+  status?: string;
 };
 
 type EditorStateSnapshot = {
@@ -353,6 +378,11 @@ async function forceSetChapterBody(page: Page, body: string) {
     area.dispatchEvent(new Event("input", { bubbles: true }));
     area.dispatchEvent(new Event("change", { bubbles: true }));
   }, body);
+}
+
+/** 用途：侧栏章节状态徽章文案（待生成/待审等）。 */
+function chapterNavItem(page: Page, title: string) {
+  return page.locator(".tp-content-nav-item").filter({ hasText: title }).first();
 }
 
 async function generateSuggestions(
@@ -624,6 +654,176 @@ test.describe("模板卡片融合确认写入 M3-B", () => {
       await expect(page.getByLabel(`正文：${TITLE_A}`)).not.toHaveValue(
         PROPOSED_A,
       );
+    } finally {
+      await mock.close();
+    }
+  });
+
+  test("M3-C：多章写入后撤销恢复正文与原状态，刷新保持", async ({
+    page,
+    request,
+  }) => {
+    const mock = await startMockLlmServer();
+    try {
+      const { projectId, templateTitle, cardTitle } =
+        await seedFuseApplyFixtures(request, mock.baseUrl, {
+          twoChapters: true,
+        });
+
+      await openContentStep(page, projectId);
+      await expect(chapterNavItem(page, TITLE_A)).toContainText("待生成");
+      await expect(chapterNavItem(page, TITLE_B)).toContainText("待生成");
+
+      const dialog = await generateSuggestions(page, templateTitle, cardTitle, [
+        TITLE_A,
+        TITLE_B,
+      ]);
+      await dialog.getByLabel(`勾选写入建议 ${TITLE_A}`).check();
+      await dialog.getByLabel(`勾选写入建议 ${TITLE_B}`).check();
+      await dialog.getByRole("button", { name: "确认写入所选" }).click();
+      await expect(
+        dialog.getByTestId("content-fuse-apply-summary"),
+      ).toContainText(/已写入 2 条/);
+
+      await expect(chapterNavItem(page, TITLE_A)).toContainText("待审");
+      await expect(chapterNavItem(page, TITLE_B)).toContainText("待审");
+
+      const undoBtn = dialog.getByRole("button", { name: "撤销本次写入" });
+      await expect(undoBtn).toBeVisible();
+      await undoBtn.click();
+      await expect(
+        dialog.getByTestId("content-fuse-undo-summary"),
+      ).toContainText("已撤销 2 章，跳过 0 章");
+      await expect(undoBtn).toBeHidden();
+
+      await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+      await selectChapterByTitle(page, TITLE_A);
+      await expect(page.getByLabel(`正文：${TITLE_A}`)).toHaveValue(BODY_A);
+      await selectChapterByTitle(page, TITLE_B);
+      await expect(page.getByLabel(`正文：${TITLE_B}`)).toHaveValue(BODY_B);
+      await expect(chapterNavItem(page, TITLE_A)).toContainText("待生成");
+      await expect(chapterNavItem(page, TITLE_B)).toContainText("待生成");
+
+      await waitForEditorState(request, projectId, (state) => {
+        const a = findChapter(state, CHAP_A);
+        const b = findChapter(state, CHAP_B);
+        return (
+          a?.body === BODY_A &&
+          b?.body === BODY_B &&
+          a?.status === "pending" &&
+          b?.status === "pending"
+        );
+      });
+      await page.reload();
+      await expect(
+        page.getByRole("heading", { name: "E2E 融合写入目标项目" }),
+      ).toBeVisible({ timeout: 20_000 });
+      await selectChapterByTitle(page, TITLE_A);
+      await expect(page.getByLabel(`正文：${TITLE_A}`)).toHaveValue(BODY_A, {
+        timeout: 15_000,
+      });
+      await selectChapterByTitle(page, TITLE_B);
+      await expect(page.getByLabel(`正文：${TITLE_B}`)).toHaveValue(BODY_B);
+      await expect(chapterNavItem(page, TITLE_A)).toContainText("待生成");
+      await expect(chapterNavItem(page, TITLE_B)).toContainText("待生成");
+    } finally {
+      await mock.close();
+    }
+  });
+
+  test("M3-C：写入后手工改一章，撤销仅恢复未漂移章并消费快照", async ({
+    page,
+    request,
+  }) => {
+    const mock = await startMockLlmServer();
+    try {
+      const { projectId, templateTitle, cardTitle } =
+        await seedFuseApplyFixtures(request, mock.baseUrl, {
+          twoChapters: true,
+        });
+
+      await openContentStep(page, projectId);
+      const dialog = await generateSuggestions(page, templateTitle, cardTitle, [
+        TITLE_A,
+        TITLE_B,
+      ]);
+      await dialog.getByLabel(`勾选写入建议 ${TITLE_A}`).check();
+      await dialog.getByLabel(`勾选写入建议 ${TITLE_B}`).check();
+      await dialog.getByRole("button", { name: "确认写入所选" }).click();
+      await expect(
+        dialog.getByTestId("content-fuse-apply-summary"),
+      ).toContainText(/已写入 2 条/);
+
+      const driftedBody = `${PROPOSED_A}·手工漂移`;
+      await selectChapterByTitle(page, TITLE_A, true);
+      await forceSetChapterBody(page, driftedBody);
+
+      const undoBtn = dialog.getByRole("button", { name: "撤销本次写入" });
+      await expect(undoBtn).toBeVisible();
+      await undoBtn.click();
+      await expect(
+        dialog.getByTestId("content-fuse-undo-summary"),
+      ).toContainText("已撤销 1 章，跳过 1 章");
+      await expect(undoBtn).toBeHidden();
+
+      await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+      await selectChapterByTitle(page, TITLE_A);
+      await expect(page.getByLabel(`正文：${TITLE_A}`)).toHaveValue(driftedBody);
+      await selectChapterByTitle(page, TITLE_B);
+      await expect(page.getByLabel(`正文：${TITLE_B}`)).toHaveValue(BODY_B);
+      await expect(chapterNavItem(page, TITLE_B)).toContainText("待生成");
+
+      await waitForEditorState(request, projectId, (state) => {
+        const a = findChapter(state, CHAP_A);
+        const b = findChapter(state, CHAP_B);
+        return a?.body === driftedBody && b?.body === BODY_B;
+      });
+      await page.reload();
+      await expect(
+        page.getByRole("heading", { name: "E2E 融合写入目标项目" }),
+      ).toBeVisible({ timeout: 20_000 });
+      await selectChapterByTitle(page, TITLE_A);
+      await expect(page.getByLabel(`正文：${TITLE_A}`)).toHaveValue(
+        driftedBody,
+        { timeout: 15_000 },
+      );
+      await selectChapterByTitle(page, TITLE_B);
+      await expect(page.getByLabel(`正文：${TITLE_B}`)).toHaveValue(BODY_B);
+    } finally {
+      await mock.close();
+    }
+  });
+
+  test("M3-C：关闭对话框再打开无撤销入口", async ({ page, request }) => {
+    const mock = await startMockLlmServer();
+    try {
+      const { projectId, templateTitle, cardTitle } =
+        await seedFuseApplyFixtures(request, mock.baseUrl, {
+          twoChapters: true,
+        });
+
+      await openContentStep(page, projectId);
+      const dialog = await generateSuggestions(page, templateTitle, cardTitle, [
+        TITLE_A,
+      ]);
+      await dialog.getByLabel(`勾选写入建议 ${TITLE_A}`).check();
+      await dialog.getByRole("button", { name: "确认写入所选" }).click();
+      await expect(
+        dialog.getByTestId("content-fuse-apply-summary"),
+      ).toContainText(/已写入 1 条/);
+      await expect(
+        dialog.getByRole("button", { name: "撤销本次写入" }),
+      ).toBeVisible();
+
+      await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+      await expect(dialog).toBeHidden();
+
+      await page.getByRole("button", { name: "模板卡片融合建议" }).click();
+      const reopened = page.getByRole("dialog", { name: "模板卡片融合建议" });
+      await expect(reopened).toBeVisible();
+      await expect(
+        reopened.getByRole("button", { name: "撤销本次写入" }),
+      ).toHaveCount(0);
     } finally {
       await mock.close();
     }

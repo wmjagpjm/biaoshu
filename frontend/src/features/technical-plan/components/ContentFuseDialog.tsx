@@ -1,10 +1,11 @@
 /**
- * 模块：模板/卡片融合建议对话框（阶段3 M3-A/M3-B）
+ * 模块：模板/卡片融合建议对话框（阶段3 M3-A/M3-B/M3-C）
  * 用途：多选模板与 active 文本卡片、目标章节，发起 content_fuse 只读建议；
- *      M3-B 双栏差异预览、checkbox 与逐项确认写入本地 chapters。
+ *      M3-B 双栏差异预览与确认写入；M3-C 最近成功批次一次性、漂移安全撤销。
  * 对接：useProjectPipeline.runTask("content_fuse")；editors.replaceChapterBody；
  *      /api/templates；/api/cards；TechnicalPlanWorkspace 编写步入口。
- * 二次开发：未确认/关闭/取消/base 漂移不得写章节；无专用 PUT/undo；禁止改矩阵/大纲。
+ * 二次开发：未确认/关闭/取消/base 漂移不得写章节；撤销快照仅 Dialog 实例内存且一次消费；
+ *       禁止新增 API/存储/历史栈；禁止改矩阵/大纲。
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -38,10 +39,15 @@ export type ContentFuseDialogProps = {
   onRun: (payload: Record<string, unknown>) => Promise<PipelineTask>;
   onCancelTask: () => Promise<PipelineTask | null>;
   /**
-   * 用途：M3-B 确认写入时逐条调用既有 replaceChapterBody；无专用 PUT。
+   * 用途：M3-B 确认写入 / M3-C 撤销恢复时调用既有 replaceChapterBody；无专用 PUT。
    * 对接：useTechnicalPlanEditors.replaceChapterBody。
+   * 二次开发：第三参数仅撤销时传入原 status；写入路径保持两参数。
    */
-  onReplaceChapterBody: (chapterId: string, body: string) => void;
+  onReplaceChapterBody: (
+    chapterId: string,
+    body: string,
+    originalStatus?: ChapterContent["status"],
+  ) => void;
 };
 
 const TEXT_TYPES = new Set(["document", "qualification", "performance"]);
@@ -50,6 +56,25 @@ type ApplyOutcome = {
   suggestionId: string;
   status: "applied" | "skipped";
   reason?: string;
+};
+
+/**
+ * 用途：最近一次成功确认写入批次的最小章节快照（仅 Dialog 实例内存）。
+ * 对接：handleConfirmApply 建立；handleUndoBatch 校验后恢复。
+ * 二次开发：禁止持久化；不得保存模板/卡片/模型原文或密钥类字段。
+ */
+type BatchUndoChapterSnapshot = {
+  chapterId: string;
+  title: string;
+  beforeBody: string;
+  beforeStatus: ChapterContent["status"];
+  afterBody: string;
+  afterStatus: ChapterContent["status"];
+  suggestionIds: string[];
+};
+
+type BatchUndoSnapshot = {
+  chapters: BatchUndoChapterSnapshot[];
 };
 
 function toggleId(
@@ -96,7 +121,7 @@ function canSelectSuggestion(
 }
 
 /**
- * 用途：M3-A/M3-B 融合入口 UI；建议可差异预览与确认写入。
+ * 用途：M3-A/M3-B/M3-C 融合入口 UI；建议预览、确认写入与最近批次撤销。
  */
 export function ContentFuseDialog({
   open,
@@ -122,6 +147,10 @@ export function ContentFuseDialog({
   const [appliedIds, setAppliedIds] = useState<string[]>([]);
   const [applyOutcomes, setApplyOutcomes] = useState<ApplyOutcome[]>([]);
   const [applyMessage, setApplyMessage] = useState<string | null>(null);
+  const [undoMessage, setUndoMessage] = useState<string | null>(null);
+  const [undoSnapshot, setUndoSnapshot] = useState<BatchUndoSnapshot | null>(
+    null,
+  );
   const sessionRef = useRef(0);
 
   const appliedSet = useMemo(() => new Set(appliedIds), [appliedIds]);
@@ -140,6 +169,8 @@ export function ContentFuseDialog({
     setAppliedIds([]);
     setApplyOutcomes([]);
     setApplyMessage(null);
+    setUndoMessage(null);
+    setUndoSnapshot(null);
     setLoadingSources(true);
     let cancelled = false;
     void Promise.all([
@@ -211,6 +242,8 @@ export function ContentFuseDialog({
     setAppliedIds([]);
     setApplyOutcomes([]);
     setApplyMessage(null);
+    setUndoMessage(null);
+    setUndoSnapshot(null);
     try {
       const task = await onRun(payload);
       if (session !== sessionRef.current) return;
@@ -256,13 +289,15 @@ export function ContentFuseDialog({
   );
 
   /**
-   * 用途：确认写入所选；点击瞬间再校验 base；部分成功允许。
+   * 用途：确认写入所选；点击瞬间再校验 base；部分成功允许；至少一条成功则建撤销快照。
    * 对接：onReplaceChapterBody → debounce PUT editor-state（既有路径）。
+   * 二次开发：多建议同章保留最早 before 与最终 after；无成功写入不得建快照。
    */
   const handleConfirmApply = useCallback(() => {
     if (!result) return;
     const outcomes: ApplyOutcome[] = [];
     const newlyApplied: string[] = [];
+    const batchMap = new Map<string, BatchUndoChapterSnapshot>();
     let appliedCount = 0;
     let skippedCount = 0;
 
@@ -308,9 +343,10 @@ export function ContentFuseDialog({
         skippedCount += 1;
         continue;
       }
+      const beforeBody = chapter?.body || "";
       const nextBody = buildAppliedChapterBody(
         suggestion.action,
-        chapter?.body || "",
+        beforeBody,
         suggestion.proposedMarkdown,
       );
       if (nextBody == null) {
@@ -322,7 +358,28 @@ export function ContentFuseDialog({
         skippedCount += 1;
         continue;
       }
+      const beforeStatus: ChapterContent["status"] =
+        chapter?.status ?? "pending";
+      const afterStatus: ChapterContent["status"] = nextBody.trim()
+        ? "needs_review"
+        : beforeStatus;
       onReplaceChapterBody(suggestion.targetChapterId, nextBody);
+      const existing = batchMap.get(suggestion.targetChapterId);
+      if (existing) {
+        existing.afterBody = nextBody;
+        existing.afterStatus = afterStatus;
+        existing.suggestionIds.push(suggestion.suggestionId);
+      } else {
+        batchMap.set(suggestion.targetChapterId, {
+          chapterId: suggestion.targetChapterId,
+          title: chapter?.title ?? "",
+          beforeBody,
+          beforeStatus,
+          afterBody: nextBody,
+          afterStatus,
+          suggestionIds: [suggestion.suggestionId],
+        });
+      }
       outcomes.push({ suggestionId, status: "applied" });
       newlyApplied.push(suggestion.suggestionId);
       appliedCount += 1;
@@ -331,13 +388,13 @@ export function ContentFuseDialog({
     if (newlyApplied.length) {
       setAppliedIds((prev) => [...new Set([...prev, ...newlyApplied])]);
       setSelectedIds((prev) => prev.filter((id) => !newlyApplied.includes(id)));
+      setUndoSnapshot({ chapters: [...batchMap.values()] });
+      setUndoMessage(null);
     }
     setApplyOutcomes(outcomes);
     setApplyMessage(
       `已写入 ${appliedCount} 条，跳过 ${skippedCount} 条` +
-        (appliedCount > 0
-          ? "（已沿用编辑器自动保存；无专用撤销，可手工改回）"
-          : ""),
+        (appliedCount > 0 ? "（已沿用编辑器自动保存）" : ""),
     );
   }, [
     result,
@@ -346,6 +403,44 @@ export function ContentFuseDialog({
     chapters,
     onReplaceChapterBody,
   ]);
+
+  /**
+   * 用途：撤销最近成功批次；仅标题/正文/状态均等于 after 的章恢复 before。
+   * 对接：onReplaceChapterBody(id, beforeBody, beforeStatus)。
+   * 二次开发：点击后无条件消费快照；仅移除成功恢复章的已写入建议 ID；漂移章保留已写入标记。
+   */
+  const handleUndoBatch = useCallback(() => {
+    if (!undoSnapshot) return;
+    let restored = 0;
+    let skipped = 0;
+    const restoredSuggestionIds: string[] = [];
+
+    for (const snap of undoSnapshot.chapters) {
+      const current = findChapter(chapters, snap.chapterId);
+      const bodyMatch = (current?.body || "") === snap.afterBody;
+      const titleMatch = (current?.title ?? "") === snap.title;
+      const statusMatch = (current?.status ?? "pending") === snap.afterStatus;
+      if (current && titleMatch && bodyMatch && statusMatch) {
+        onReplaceChapterBody(
+          snap.chapterId,
+          snap.beforeBody,
+          snap.beforeStatus,
+        );
+        restored += 1;
+        restoredSuggestionIds.push(...snap.suggestionIds);
+      } else {
+        skipped += 1;
+      }
+    }
+
+    setUndoSnapshot(null);
+    if (restoredSuggestionIds.length) {
+      const drop = new Set(restoredSuggestionIds);
+      setAppliedIds((prev) => prev.filter((id) => !drop.has(id)));
+    }
+    setUndoMessage(`已撤销 ${restored} 章，跳过 ${skipped} 章`);
+    setApplyMessage(null);
+  }, [undoSnapshot, chapters, onReplaceChapterBody]);
 
   const selectedSelectableCount = useMemo(() => {
     if (!result) return 0;
@@ -378,7 +473,7 @@ export function ContentFuseDialog({
               模板/卡片融合建议
             </strong>
             <p className="content-fuse-dialog__sub">
-              M3-B：生成建议后可双栏预览并勾选确认写入；未确认关闭不会改章节。无专用撤销，由手工编辑恢复。
+              M3-B/M3-C：生成建议后可双栏预览并勾选确认写入；未确认关闭不会改章节。最近一次成功写入可在本对话框内一次性撤销（漂移章跳过）。
             </p>
           </div>
           <button
@@ -418,6 +513,16 @@ export function ContentFuseDialog({
               data-testid="content-fuse-apply-summary"
             >
               {applyMessage}
+            </p>
+          )}
+          {undoMessage && (
+            <p
+              className="content-fuse-dialog__msg"
+              role="status"
+              aria-live="polite"
+              data-testid="content-fuse-undo-summary"
+            >
+              {undoMessage}
             </p>
           )}
 
@@ -723,6 +828,18 @@ export function ContentFuseDialog({
               {selectedSelectableCount > 0
                 ? `（${selectedSelectableCount}）`
                 : ""}
+            </button>
+          )}
+          {undoSnapshot && (
+            <button
+              type="button"
+              className="btn btn-soft btn-sm"
+              disabled={busy}
+              aria-label="撤销本次写入"
+              data-testid="content-fuse-undo-batch"
+              onClick={handleUndoBatch}
+            >
+              撤销本次写入
             </button>
           )}
           <button

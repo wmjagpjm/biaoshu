@@ -975,22 +975,40 @@ export function useTechnicalPlanEditors(projectId: string) {
     isCurrentEditorSession,
   ]);
 
-  const replaceChapterBody = useCallback((id: string, body: string) => {
-    setState((prev) => ({
-      ...prev,
-      chapters: prev.chapters.map((c) =>
-        c.id === id
-          ? {
-              ...c,
-              body,
-              preview: derivePreview(body),
-              wordCount: countBodyWords(body),
-              status: body.trim() ? "needs_review" : c.status,
-            }
-          : c,
-      ),
-    }));
-  }, []);
+  /**
+   * 用途：替换单章正文并重新派生 preview/wordCount；可选恢复原 status。
+   * 对接：修订预览、M3-B 确认写入、M3-C 批次撤销。
+   * 二次开发：第三参数仅允许明确的 ChapterContent.status；未传时保持既有
+   *       「有正文 → needs_review」行为；禁止写入标题/ID 或其他字段。
+   */
+  const replaceChapterBody = useCallback(
+    (
+      id: string,
+      body: string,
+      originalStatus?: ChapterContent["status"],
+    ) => {
+      setState((prev) => ({
+        ...prev,
+        chapters: prev.chapters.map((c) =>
+          c.id === id
+            ? {
+                ...c,
+                body,
+                preview: derivePreview(body),
+                wordCount: countBodyWords(body),
+                status:
+                  originalStatus !== undefined
+                    ? originalStatus
+                    : body.trim()
+                      ? "needs_review"
+                      : c.status,
+              }
+            : c,
+        ),
+      }));
+    },
+    [],
+  );
 
   const patchOutlineNode = useCallback(
     (
