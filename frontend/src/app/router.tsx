@@ -20,6 +20,7 @@ import { SettingsPage } from "../features/settings/pages/SettingsPage";
 import { LoginPage } from "../features/auth/pages/LoginPage";
 import { FinanceQuotePage } from "../features/finance/pages/FinanceQuotePage";
 import { HrCredentialCardsPage } from "../features/hr/pages/HrCredentialCardsPage";
+import { BidderCompliancePreviewPage } from "../features/bidder/pages/BidderCompliancePreviewPage";
 import {
   authRoleLabel,
   useAuthSession,
@@ -28,11 +29,12 @@ import type { ReactNode } from "react";
 import "../features/auth/pages/LoginPage.css";
 
 /**
- * 前端路由
+ * 模块：前端路由
  * 用途：对齐 C 端模块地图；按认证模式门禁业务壳；非 bid_writer 重定向受限页；
- *       严格 finance 可进 /finance 只读报价页；严格 hr 可进 /hr 人员资质页。
+ *       严格 finance 可进 /finance 只读报价页；严格 hr 可进 /hr 人员资质页；
+ *       严格 bidder 可进 /bidder 匿名合规预览页。
  * 对接：AuthProvider；页面均挂 AppShell（登录页除外）。
- * 二次开发：导航隐藏不替代后端鉴权；disabled 保持既有业务路径但不开放财务/人力入口。
+ * 二次开发：导航隐藏不替代后端鉴权；disabled 保持既有业务路径但不开放财务/人力/投标人入口。
  */
 
 /** 用途：加载中占位（握手未完成）。 */
@@ -75,7 +77,7 @@ function AuthHandshakeErrorPage() {
 }
 
 /**
- * 用途：受限角色说明页（非财务访问 /finance、非人力访问 /hr，或 finance/hr/bidder 访问业务页等）。
+ * 用途：受限角色说明页（非财务访问 /finance、非人力访问 /hr、非投标人访问 /bidder，或 finance/hr/bidder 访问业务页等）。
  */
 function RestrictedAccessPage({ reason }: { reason?: string }) {
   const { activeMembership, me } = useAuthSession();
@@ -88,7 +90,7 @@ function RestrictedAccessPage({ reason }: { reason?: string }) {
           {reason ??
             `账号「${me?.user.username ?? "未知"}」在本工作空间的角色为「${authRoleLabel(
               role,
-            )}」。P10A 阶段仅标书制作者可使用既有业务功能；P10B 起严格财务角色可进入「财务报价」只读页；P10D 起严格人力角色可进入「人员资质」页。权限以服务端校验为准，本页仅作体验分流。`}
+            )}」。P10A 阶段仅标书制作者可使用既有业务功能；P10B 起严格财务角色可进入「财务报价」只读页；P10D 起严格人力角色可进入「人员资质」页；P10E 起严格投标人角色可进入「合规预览」页。权限以服务端校验为准，本页仅作体验分流。`}
         </p>
       </div>
     </div>
@@ -138,6 +140,20 @@ function RequireHr({ children }: { children: ReactNode }) {
   if (!canAccessHr) {
     return (
       <RestrictedAccessPage reason="仅人力角色可管理本空间人员资质素材卡。个人版兼容模式与所有者、标书制作者、财务、投标人均不可通过本入口访问。" />
+    );
+  }
+  return <>{children}</>;
+}
+
+/**
+ * 用途：要求严格 bidder 才渲染匿名合规预览页。
+ * 约束：disabled / 其他角色不渲染预览页、不发预览请求，只显示受限说明。
+ */
+function RequireBidder({ children }: { children: ReactNode }) {
+  const { canAccessBidder } = useAuthSession();
+  if (!canAccessBidder) {
+    return (
+      <RestrictedAccessPage reason="仅投标人角色可查看匿名合规预览。个人版兼容模式与所有者、标书制作者、财务、人力均不可通过本入口访问。" />
     );
   }
   return <>{children}</>;
@@ -356,6 +372,14 @@ function AuthGate() {
             <RequireHr>
               <HrCredentialCardsPage />
             </RequireHr>
+          }
+        />
+        <Route
+          path="bidder"
+          element={
+            <RequireBidder>
+              <BidderCompliancePreviewPage />
+            </RequireBidder>
           }
         />
         <Route path="restricted" element={<RestrictedAccessPage />} />

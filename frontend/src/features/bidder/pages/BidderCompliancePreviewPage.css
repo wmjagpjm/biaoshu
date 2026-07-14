@@ -1,0 +1,110 @@
+/**
+ * 模块：P10E 投标人匿名合规预览页样式
+ * 用途：汇总卡与状态区布局；前缀 bc- 隔离样式。
+ * 对接：BidderCompliancePreviewPage。
+ * 二次开发：勿引入无关视觉改动到既有业务页。
+ */
+
+.bc-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.bc-layout .page-header p {
+  max-width: 52rem;
+}
+
+.bc-disclaimer {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid #e0e7ff;
+  background: #eef2ff;
+  color: #312e81;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.bc-alert {
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  color: #991b1b;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.bc-panel {
+  background: var(--surface-card, #fff);
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: var(--radius-lg, 12px);
+  padding: 16px;
+  min-height: 180px;
+}
+
+.bc-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.bc-panel__title {
+  margin: 0;
+  font-size: var(--fs-md, 1rem);
+  font-weight: 600;
+  color: var(--text-primary, #111827);
+}
+
+.bc-panel__hint {
+  margin: 0 0 14px;
+  font-size: 12px;
+  color: var(--text-tertiary, #9ca3af);
+  line-height: 1.5;
+}
+
+.bc-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.bc-stat {
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: var(--radius-md, 8px);
+  padding: 12px 14px;
+  background: var(--surface-muted, #f9fafb);
+}
+
+.bc-stat__label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary, #6b7280);
+  margin-bottom: 6px;
+}
+
+.bc-stat__value {
+  display: block;
+  font-size: 1.35rem;
+  font-weight: 650;
+  color: var(--text-primary, #111827);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.bc-stat--coverage .bc-stat__value {
+  font-size: 1.15rem;
+}
+
+.bc-empty {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--text-secondary, #6b7280);
+  line-height: 1.5;
+}

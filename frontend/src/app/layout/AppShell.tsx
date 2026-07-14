@@ -16,6 +16,7 @@ import {
   Newspaper,
   Plug,
   Settings,
+  ShieldCheck,
   Sparkles,
   X,
 } from "lucide-react";
@@ -37,7 +38,7 @@ import "./AppShell.css";
  * 对接：checkApiHealth → GET /api/health；useAuthSession
  * 二次开发：导航隐藏不替代后端鉴权；禁止展示 Cookie/CSRF/API Key；
  *           财务入口仅严格 finance 可见；人力入口仅严格 hr 可见；
- *           不得改动遗留 Sidebar 组件路径。
+ *           投标人入口仅严格 bidder 可见；不得改动遗留 Sidebar 组件路径。
  */
 
 type NavItem = {
@@ -53,6 +54,8 @@ type NavItem = {
   financeOnly?: boolean;
   /** 仅严格 hr 可见（P10D 人员资质） */
   hrOnly?: boolean;
+  /** 仅严格 bidder 可见（P10E 合规预览） */
+  bidderOnly?: boolean;
 };
 
 const mainNav: NavItem[] = [
@@ -160,6 +163,17 @@ const hrNav: NavItem[] = [
   },
 ];
 
+/** P10E：投标人匿名合规预览入口，独立「投标人」分组；仅严格 bidder 可见 */
+const bidderNav: NavItem[] = [
+  {
+    to: "/bidder",
+    label: "合规预览",
+    icon: <ShieldCheck size={18} />,
+    matchPrefix: "/bidder",
+    bidderOnly: true,
+  },
+];
+
 function isNavActive(pathname: string, item: NavItem): boolean {
   if (item.to === "/create") {
     return pathname === "/" || pathname.startsWith("/create");
@@ -211,6 +225,7 @@ export function AppShell() {
     canAccessSettings,
     canAccessFinance,
     canAccessHr,
+    canAccessBidder,
     logout,
   } = useAuthSession();
 
@@ -225,6 +240,7 @@ export function AppShell() {
     if (item.ownerOnly && !canAccessSettings) return false;
     if (item.financeOnly && !canAccessFinance) return false;
     if (item.hrOnly && !canAccessHr) return false;
+    if (item.bidderOnly && !canAccessBidder) return false;
     return true;
   });
   const visibleSystem = systemNav.filter((item) => {
@@ -232,12 +248,16 @@ export function AppShell() {
     if (item.ownerOnly && !canAccessSettings) return false;
     if (item.financeOnly && !canAccessFinance) return false;
     if (item.hrOnly && !canAccessHr) return false;
+    if (item.bidderOnly && !canAccessBidder) return false;
     return true;
   });
   const visibleFinance = financeNav.filter(
     (item) => !item.financeOnly || canAccessFinance,
   );
   const visibleHr = hrNav.filter((item) => !item.hrOnly || canAccessHr);
+  const visibleBidder = bidderNav.filter(
+    (item) => !item.bidderOnly || canAccessBidder,
+  );
 
   useEffect(() => {
     setMobileOpen(false);
@@ -356,15 +376,29 @@ export function AppShell() {
               ))}
             </>
           )}
+          {visibleBidder.length > 0 && (
+            <>
+              <div className="side-nav__section">投标人</div>
+              {visibleBidder.map((item) => (
+                <SideLink
+                  key={item.to}
+                  item={item}
+                  onNavigate={() => setMobileOpen(false)}
+                />
+              ))}
+            </>
+          )}
           {!canAccessBusiness &&
             !canAccessFinance &&
             !canAccessHr &&
+            !canAccessBidder &&
             phase === "authenticated" && (
               <div className="side-nav__section">说明</div>
             )}
           {!canAccessBusiness &&
             !canAccessFinance &&
             !canAccessHr &&
+            !canAccessBidder &&
             phase === "authenticated" && (
               <NavLink
                 to="/restricted"

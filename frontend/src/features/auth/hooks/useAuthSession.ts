@@ -57,6 +57,12 @@ type AuthContextValue = {
    * disabled / 握手失败 / 未认证 / 其他角色一律 false。
    */
   canAccessHr: boolean;
+  /**
+   * 是否可进入投标人匿名合规预览入口。
+   * 仅 phase=authenticated 且当前空间角色严格为 bidder 时为 true；
+   * disabled / 握手失败 / 未认证 / owner / bid_writer / finance / hr 一律 false。
+   */
+  canAccessBidder: boolean;
   errorMessage: string | null;
   refresh: () => Promise<void>;
   login: (username: string, password: string) => Promise<void>;
@@ -243,6 +249,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // P10D：严格 hr；disabled 与 owner/bid_writer/finance/bidder 均不开放
   const canAccessHr =
     phase === "authenticated" && activeMembership?.role === "hr";
+  // P10E：严格 bidder；disabled 与 owner/bid_writer/finance/hr 均不开放
+  const canAccessBidder =
+    phase === "authenticated" && activeMembership?.role === "bidder";
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -255,6 +264,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       canAccessSettings,
       canAccessFinance,
       canAccessHr,
+      canAccessBidder,
       errorMessage,
       refresh,
       login,
@@ -270,6 +280,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       canAccessSettings,
       canAccessFinance,
       canAccessHr,
+      canAccessBidder,
       errorMessage,
       refresh,
       login,
