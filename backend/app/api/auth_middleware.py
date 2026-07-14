@@ -21,12 +21,19 @@ from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.services import auth_service
 
-# 公开路径：无需会话（精确匹配）
+# 公开路径：无需会话（精确匹配，所有方法）
 _PUBLIC_EXACT = frozenset(
     {
         "/api/health",
         "/api/auth/bootstrap-status",
         "/api/auth/login",
+    }
+)
+
+# 仅 POST + 精确路径公开（P8C 一次性回传；不得并入 _PUBLIC_EXACT）
+_PUBLIC_POST_EXACT = frozenset(
+    {
+        "/api/local-parser/callback",
     }
 )
 
@@ -58,6 +65,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if request.method == "OPTIONS":
             return await call_next(request)
         if path in _PUBLIC_EXACT:
+            return await call_next(request)
+        # 仅放行精确 POST 回调；GET/PUT/子路径仍走会话闸门
+        if request.method == "POST" and path in _PUBLIC_POST_EXACT:
             return await call_next(request)
 
         db = SessionLocal()

@@ -61,6 +61,7 @@ from app.models import (  # noqa: F401
     KbDocumentRow,
     KbFolderRow,
     KnowledgeCardRow,
+    LocalParserCallbackTicketRow,
     LocalUserRow,
     Project,
     ProjectEditorStateRow,
@@ -143,6 +144,7 @@ def create_app() -> FastAPI:
     app.include_router(tasks.router, prefix="/api")
     app.include_router(export_api.router, prefix="/api")
     app.include_router(parse_callback.router, prefix="/api")
+    app.include_router(parse_callback.public_router, prefix="/api")
     app.include_router(knowledge_api.router, prefix="/api")
     app.include_router(cards_api.router, prefix="/api")
     app.include_router(compliance_api.router, prefix="/api")

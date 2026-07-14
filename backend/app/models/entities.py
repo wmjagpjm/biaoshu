@@ -1238,6 +1238,49 @@ class HrPerformanceCardRow(Base):
     )
 
 
+class LocalParserCallbackTicketRow(Base):
+    """
+    模块：P8C 本地解析一次性回传票据
+    用途：仅存 SHA-256 摘要与绑定元数据，支撑 required 模式下短期单项目单次回调。
+    对接：local_parser_ticket_service；POST 签发与 /api/local-parser/callback。
+    二次开发：禁止 raw_ticket/markdown/filename/IP/User-Agent 等字段；摘要唯一；外键级联删除。
+    """
+
+    __tablename__ = "local_parser_callback_tickets"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    ticket_digest: Mapped[str] = mapped_column(
+        String(64), nullable=False, unique=True, index=True
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    issued_by_user_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("local_users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    consumed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
 class ProjectTaskRow(Base):
     """
     用途：本机日用任务（解析/分析/大纲/正文/导出）状态。
