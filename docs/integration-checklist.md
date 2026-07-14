@@ -148,6 +148,9 @@ npm run test:e2e:hr-credential-expiry
 # P10J：财务个人成本变更记录（隔离 8010/5174、路由桩；仅本人当前空间成功事件）
 npm run test:e2e:finance-cost-change-events
 
+# P10K：财务项目成本变更记录（隔离 8010/5174、路由桩；显式读取上线后项目事件）
+npm run test:e2e:finance-project-cost-change-events
+
 # P8B：解析策略接线（真实本机 API/任务；禁止服务端 MinerU/Docling）
 npm run test:e2e:parse-strategy
 
@@ -158,7 +161,7 @@ npm run test:e2e:local-parser-callback-ticket
 npm run test:e2e:export-image-warnings
 ```
 
-当前基线：后端串行全量 **432 passed**（1 条既有 Starlette/httpx 弃用警告，新增 P8C strict bid_writer 签发、流式正文上限、原子消费与同事务回滚）；P8C 定向 **10 passed**、解析/鉴权回归 **51 passed**、P9D 后端图片专项 **14 passed**。前端 `lint` / `build` 通过（仅既有大包体积提示）及第二次单 worker 串行全量 E2E **131 passed**。其中 P8C `test:e2e:local-parser-callback-ticket` **9 passed**、P8B `test:e2e:parse-strategy` **6 passed**、P10J `test:e2e:finance-cost-change-events` **12 passed**、P9D `test:e2e:export-image-warnings` **4 passed**、M3-B/M3-C `test:e2e:fuse-apply` **6 passed**、M3-A `test:e2e:fuse` **1 passed**、P10I `test:e2e:hr-credential-expiry` **10 passed**、P10H `test:e2e:hr-performance-cards` **10 passed**、P10G `test:e2e:bidder-project-compliance` **10 passed**、P10F `test:e2e:hr-team-recommendations` **4 passed**、P10E `test:e2e:bidder-compliance-preview` **8 passed**、P10D HR E2E **9 passed**、P10C 成本 E2E **4 passed**、P10B 财务 E2E **7 passed**、P10A 认证 E2E **11 passed**、P9C 语义索引 E2E **9 passed**、知识卡片 E2E **1 passed**。第一次 131 项全量中既有矩阵分页用例出现一次初始化时序波动（130 passed），该用例单独复跑通过，完整第二轮 131/131 全绿后才验收。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须串行运行。
+当前基线：后端串行全量 **453 passed**（1 条既有 Starlette/httpx 弃用警告）；P10K 定向 **21 passed**、P10C/P10J/财务角色/认证回归 **79 passed**。前端 `lint` / `build` 通过（仅既有大包体积提示），单 worker 串行全量 E2E **140 passed**；其中 P10K `test:e2e:finance-project-cost-change-events` **9 passed**、P10C **4 passed**、P10B **7 passed**。P8C 定向 **10 passed**、解析/鉴权回归 **51 passed**、P9D 后端图片专项 **14 passed**及原有前端专项基线继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
 
 ## 6. 已接 API 一览
 
@@ -178,6 +181,7 @@ npm run test:e2e:export-image-warnings
 | POST | `/api/finance/business-bids/{projectId}/cost-entries`（仅 strict `finance` + CSRF；正整数分成本条目） |
 | PATCH/DELETE | `/api/finance/business-bids/{projectId}/cost-entries/{entryId}`（仅 strict `finance` + CSRF；跨项目统一 404） |
 | GET | `/api/finance/cost-change-events`（仅 strict `finance`；本人当前空间最近 50 条成功成本变更；`no-store`） |
+| GET | `/api/finance/business-bids/{projectId}/cost-change-events`（仅 strict `finance`；当前空间商务标上线后最近 50 条项目事件；`no-store`） |
 | GET | `/api/hr/credential-cards`（仅 strict `hr`；当前空间摘要；不含备注；`no-store`） |
 | GET | `/api/hr/credential-cards/{cardId}`（仅 strict `hr`；跨空间/不存在统一 `404 hr_credential_not_found`；`no-store`） |
 | POST | `/api/hr/credential-cards`（仅 strict `hr` + CSRF；字段白名单与严格 JSON 布尔） |
@@ -284,7 +288,15 @@ npm run test:e2e:export-image-warnings
 3. 页面须声明“只记录当前账户在当前工作空间成功的成本条目新增、修改、删除；不是完整财务审计，不能还原项目、金额、内容、变更前后值或失败尝试”。空数组和非数组均为空态，错误固定中文且不得回显后端 detail、路径或敏感标记。
 4. 不得请求报价、成本草案、项目、编辑态、设置、文件、人力、投标人、未知 API 或外网；不得写入 `localStorage`、`sessionStorage` 或 URL 参数。完整边界见 `docs/p10j-finance-personal-cost-change-events-contract.md`。
 
-## 6.8 P8B 解析策略接线
+## 6.8 P10K 财务项目成本变更记录
+
+1. 以严格 `finance` 登录并打开既有 `/finance`；选中且加载完成一个商务标项目后，成本草案下出现“项目成本记录”，但挂载和切项目都不得自动请求 P10K GET。
+2. 点击“查看项目记录”后精确请求一次 `GET /api/finance/business-bids/{编码后的项目 ID}/cost-change-events`，刷新后累计两次。页面只显示固定动作、完整 `entryId`、`本人/其他财务成员` 和安全时间。
+3. 打开记录后通过既有 P10C 新增成本条目，P10K 请求数必须保持不变；只有手动刷新才看到新事件。项目切换须立即关闭并清空旧记录，迟到响应不得覆盖新项目。
+4. 页面须声明只记录 P10K 上线后的成功操作，不含旧历史、金额、内容、成员身份、失败尝试或完整审计。错误固定中文，不回显后端 detail、路径、项目 ID 或原始异常。
+5. 不得请求 P10J、通用项目/editor-state/settings/files、其他角色、未知 API 或外网；不得写入 local/session storage、IndexedDB、Cookie、剪贴板或控制台。完整边界见 `docs/p10k-finance-project-cost-change-events-contract.md`。
+
+## 6.9 P8B 解析策略接线
 
 1. 设置页保存 `light`、`local` 或 `ask` 后，技术标和商务标解析动作都重新请求 `GET /api/settings/parse-strategy`；响应只能有 `parseStrategy` 且带 `Cache-Control: no-store`，不得回显完整设置或 Key。
 2. `light` 创建既有 `parse` 任务，任务 payload 固定 `engine=lightweight`；成功后继续按既有路径刷新解析预览或商务编辑态。
@@ -292,7 +304,7 @@ npm run test:e2e:export-image-warnings
 4. `ask` 每次显示一次性选择框；取消不建任务、不回写默认策略。商务标上传、整段重解析和反馈重生成均按同一规则处理。
 5. 策略读取失败只显示「暂时无法读取解析策略，请稍后重试」，不得回显后端详情或静默降级；浏览器不得使用 `localStorage`/`sessionStorage` 持久化或决定策略。
 
-## 6.9 P8C 本地解析一次性回传票据
+## 6.10 P8C 本地解析一次性回传票据
 
 1. required 模式以 strict `bid_writer` 打开 `/local-parser?projectId=<当前项目>`；挂载、改项目 ID 和刷新均不得自动签发。只有显式点击“生成一次性回传票据”才发送一次无 body、带既有 CSRF 的签发 POST。
 2. 页面只在当前组件内存显示票据、固定 `/api/local-parser/callback`、`X-Local-Parse-Ticket` 和当前站点绝对 `curl.exe`；刷新后立即丢失。不得使用响应 callbackPath 构造 URL，不得写 localStorage、sessionStorage、IndexedDB、URL、控制台或剪贴板。
@@ -300,7 +312,7 @@ npm run test:e2e:export-image-warnings
 4. disabled 显示“无需一次性票据”并保留旧 `X-Local-Token` + Markdown 手工表单；finance/hr/bidder/仅 owner 非制作者不挂载页面且零签发。页面不自动调用公共 callback，不启动 MinerU/Docling，不请求外网。
 5. 完整契约见 `docs/p8c-local-parser-one-time-callback-ticket-contract.md`；后端=`af39ff8`，前端=`1cf5576`。
 
-## 6.10 M3-C 融合写入最近批次单次撤销
+## 6.11 M3-C 融合写入最近批次单次撤销
 
 1. 进入技术标编写步，打开「模板/卡片融合」，生成建议并勾选至少两个目标章确认写入；对话框出现“撤销本次写入”，章节正文变为建议内容、状态变为待审。
 2. 未做其他编辑时点击撤销，应显示“已撤销 2 章，跳过 0 章”；按钮立即消失，原正文和原状态恢复，等待防抖保存后刷新仍保持。
@@ -388,7 +400,7 @@ npm run test:e2e:export-image-warnings
 
 ## 14. 仍未接（后续）
 
-Celery、真 MinerU/Docling 安装包与外部进程部署治理、P9B 以外的外部标讯数据源、P9C 的其他模型/GPU/在线 embedding/真实用户语料评测与自动模型更新、M3-C 以外的持久化融合历史/通用撤销/多角色协作、P10J 以外的财务税务/审批/导出/预算/回款/版本与全员/项目/失败尝试审计、P10I 以外的人力附件与真实证件核验、P10G 以外的投标人矩阵明细/版本/结果跟踪与其他合规数据域、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
+Celery、真 MinerU/Docling 安装包与外部进程部署治理、P9B 以外的外部标讯数据源、P9C 的其他模型/GPU/在线 embedding/真实用户语料评测与自动模型更新、M3-C 以外的持久化融合历史/通用撤销/多角色协作、P10K 以外的财务税务/审批/导出/预算/回款/版本与失败尝试/完整身份审计、P10I 以外的人力附件与真实证件核验、P10G 以外的投标人矩阵明细/版本/结果跟踪与其他合规数据域、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
 
 **响应矩阵相关（已接 vs 未扩）：** 多端冲突的版本写保护、409 与双浏览器上下文 E2E 主路径已接；「刷新来源」保留人工映射 E2E 已接；**智能建议人工确认后应用** E2E 已接；**来源超过 80 分页** 已推送（`1289c92`）；**字段级三方合并** MVP + E2E 已推送（`2c7b3e0`，`response-matrix-field-merge.spec.ts`）。仍未接：Word 失效引用在浏览器层的扩展（导出逻辑以后端单测为准）；包 9 交付增强。
 
