@@ -109,8 +109,11 @@ npm run test:e2e:cards
 # 阶段3 M3-A：模板/卡片只读融合建议 E2E（本地 mock LLM，不写章节）
 npm run test:e2e:fuse
 
-# 阶段3 M3-B/M3-C：差异预览、确认写入、base 漂移跳过、最近批次一次性撤销 E2E
+# 阶段3 M3-B/M3-D：差异预览、服务端原子确认、base 漂移跳过与失败语义 E2E
 npm run test:e2e:fuse-apply
+
+# 阶段3 M3-D：跨刷新最近 20 批、完整/部分/零恢复、一次消费与迟到隔离 E2E
+npm run test:e2e:fuse-persistent-recovery
 
 # P9B：国能 e 招计划追踪（隔离 8010/5174、biaoshu-e2e.db、MockTransport；禁止真实外网）
 npm run test:e2e:opportunity-watch
@@ -161,7 +164,7 @@ npm run test:e2e:local-parser-callback-ticket
 npm run test:e2e:export-image-warnings
 ```
 
-当前基线：后端串行全量 **453 passed**（1 条既有 Starlette/httpx 弃用警告）；P10K 定向 **21 passed**、P10C/P10J/财务角色/认证回归 **79 passed**。前端 `lint` / `build` 通过（仅既有大包体积提示），单 worker 串行全量 E2E **140 passed**；其中 P10K `test:e2e:finance-project-cost-change-events` **9 passed**、P10C **4 passed**、P10B **7 passed**。P8C 定向 **10 passed**、解析/鉴权回归 **51 passed**、P9D 后端图片专项 **14 passed**及原有前端专项基线继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
+当前基线：后端串行全量 **487 passed**（1 条既有 Starlette/httpx 弃用警告）；M3-D 专项 **34 passed**、M3-A/editor-state/响应矩阵/认证受影响回归 **71 passed**。前端 `lint` / `build` 通过（仅既有大包体积提示），M3-D 持久恢复 **5 passed**、原子确认 **6 passed**、M3-A **1 passed**、认证/RBAC **11 passed**，单 worker 串行全量 E2E **145 passed**。P10K、P8C、P9D 及其他既有专项继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
 
 ## 6. 已接 API 一览
 
@@ -202,6 +205,9 @@ npm run test:e2e:export-image-warnings
 | GET | `/api/projects/{projectId}/team-recommendation`（仅 strict `bid_writer`；当前空间技术标的最小展示投影；`no-store`） |
 | GET | `/api/projects/{id}/tasks/{taskId}/events`（SSE） |
 | GET/PUT | `/api/projects/{id}/editor-state`（含 responseMatrix） |
+| POST | `/api/projects/{id}/content-fuse-applications`（M3-D；只接 taskId/suggestionIds；章节与恢复快照原子写入；`no-store`） |
+| GET | `/api/projects/{id}/content-fuse-applications`（M3-D；最近 20 批最小投影；`no-store`） |
+| POST | `/api/projects/{id}/content-fuse-applications/{batchId}/consume`（M3-D；未漂移章节一次性恢复并消费；`no-store`） |
 | GET/POST | `/api/projects/{id}/files`（仅招标源文件） |
 | GET/POST | `/api/projects/{id}/images`（仅项目正文图片） |
 | GET | `/api/projects/{id}/images/{fileId}`（受控预览） |
@@ -320,6 +326,15 @@ npm run test:e2e:export-image-warnings
 4. 关闭对话框再打开不得出现旧撤销按钮；生成新建议清空旧快照，下一成功批次只替换最近批次。无成功写入、全跳过或已消费快照不得建立/复活撤销入口。
 5. 撤销不发新业务 API，只沿用 editor-state PUT；不得写 `localStorage`、`sessionStorage`、IndexedDB、URL 或模块全局缓存，不得影响响应矩阵、大纲、分析、其他项目或其他用户。完整边界见 `docs/m3c-content-fuse-undo-contract.md`。
 
+## 6.12 M3-D 融合写入持久恢复批次
+
+1. 进入技术标编写步，打开「模板/卡片融合」，生成建议后默认不勾选。勾选 1–5 条且同目标章最多一条，点击确认只发送一次 `POST /content-fuse-applications`，body 键和值精确为真实 `taskId/suggestionIds`；确认前和在途不得新增 editor-state PUT。
+2. 服务端成功后前端只执行一次真实 editor-state GET，随后读取批次列表。若该唯一 GET 失败，应显示「融合已写入，但刷新失败，请关闭后重新打开」，服务端批次已存在且同一对话框不能二次 create；业务 POST 409/500 则显示「融合确认失败，请刷新后重试」，正文和批次均不变化。
+3. 关闭再打开对话框，最近批次仍显示时间、章数和「可恢复」，并固定声明「最多保留最近 20 批，不是完整版本历史」；页面不得展示任务、批次、建议、章节或来源 ID，不得请求历史正文、模板/卡片详情或外网。
+4. 点击恢复必须二次确认。完整未漂移时恢复全部；手工改变一章的标题/正文/状态时只恢复其他章；全部漂移时恢复 0 章。三种结果都只允许一次 consume，并变为「已消费」、不再显示恢复按钮。
+5. consume 成功后唯一 editor-state GET 失败时显示「恢复已完成，但刷新失败，请关闭后重新打开」，服务端批次已 consumed 且不得二次 consume。项目 A→B、关闭后迟到列表/create/consume 均不得重开对话框、刷新错误项目、显示旧消息或追加 editor/list GET。
+6. 浏览器业务请求须符合 method+精确路径白名单；主动未知 `/api`、伪项目路径和外网探针必须被可观测阻断。M3-D 不新增 localStorage 键，sessionStorage/IndexedDB/Cookie 精确空，剪贴板读写为 0，页面/console/存储不含秘密串或项目/task/suggestion/batch ID。完整边界见 `docs/m3d-content-fuse-persistent-recovery-contract.md`。
+
 ## 7. 本机日用主链路（目标 A 加强版）
 
 | 步骤 | 操作 |
@@ -400,7 +415,7 @@ npm run test:e2e:export-image-warnings
 
 ## 14. 仍未接（后续）
 
-Celery、真 MinerU/Docling 安装包与外部进程部署治理、P9B 以外的外部标讯数据源、P9C 的其他模型/GPU/在线 embedding/真实用户语料评测与自动模型更新、M3-C 以外的持久化融合历史/通用撤销/多角色协作、P10K 以外的财务税务/审批/导出/预算/回款/版本与失败尝试/完整身份审计、P10I 以外的人力附件与真实证件核验、P10G 以外的投标人矩阵明细/版本/结果跟踪与其他合规数据域、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
+Celery、真 MinerU/Docling 安装包与外部进程部署治理、P9B 以外的外部标讯数据源、P9C 的其他模型/GPU/在线 embedding/真实用户语料评测与自动模型更新、M3-D 以外的通用版本历史/任意历史浏览回滚/多人协作、P10K 以外的财务税务/审批/导出/预算/回款/版本与失败尝试/完整身份审计、P10I 以外的人力附件与真实证件核验、P10G 以外的投标人矩阵明细/版本/结果跟踪与其他合规数据域、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
 
 **响应矩阵相关（已接 vs 未扩）：** 多端冲突的版本写保护、409 与双浏览器上下文 E2E 主路径已接；「刷新来源」保留人工映射 E2E 已接；**智能建议人工确认后应用** E2E 已接；**来源超过 80 分页** 已推送（`1289c92`）；**字段级三方合并** MVP + E2E 已推送（`2c7b3e0`，`response-matrix-field-merge.spec.ts`）。仍未接：Word 失效引用在浏览器层的扩展（导出逻辑以后端单测为准）；包 9 交付增强。
 
