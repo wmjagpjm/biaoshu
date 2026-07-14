@@ -7,7 +7,7 @@
 
 # P9D 导出图片失效引用浏览器提示契约
 
-> **状态**：计划已冻结，等待 Grok 在白名单内实现并由 Codex 独立审查、验收、提交与推送。  
+> **交付状态**：已按本契约完成并推送。计划=`4925a51`，实现=`e5adad7`；后端项目图片专项 14 passed、P9D E2E 4 passed、前端单 worker 全量 110 passed，lint/build 通过。
 > **工作分支**：`collab/grok-code-codex-review`。
 
 ## 1. 审计结论与方案选择
@@ -55,3 +55,11 @@ P9D 不新增路由、角色、鉴权、CSRF、API、任务类型、表、迁移
 5. 测试不得访问外网，不使用固定 sleep，Playwright 仍单 worker 串行。
 
 回归必须通过前端 lint/build、P9D 定向 E2E 和全量单 worker E2E。后端无代码差异，已有项目图片定向测试作为后端权威契约回归。
+
+## 6. 实施审查与独立验收记录（2026-07-14）
+
+Grok 首版任务为 `msg_13cbc3253cc447aaa46c71aadad29aa4`，首轮审查发现项目切换后旧导出告警可能短暂泄漏并被迟到响应重新写入；返修任务 `msg_5f2dbede8a2d4cd4bbc23638232e2926` 已把告警状态与 `projectId` 绑定，并用页面实例代次阻止旧任务写入，同时补项目 A 挂起、软切项目 B 的 E2E。Codex 第二轮又发现测试只等到 `route.fulfill`、没有证明页面异步续体已执行，且当前代次的调用顺序先下载后写告警；最终返修任务为 `msg_4f51ae7bcc814eb2b33d9ada373642d8`。
+
+最终返修把当前代次顺序固定为先写告警、再继续下载；迟到测试释放 A 后等待 `window.open` 桩记录 A 的本机下载 URL，再断言 B 无 A 告警，从而证明断言发生在页面成功续体执行之后。共享归一化函数只在导出行最窄关闭同文件组件导出 lint 规则，最终 lint 为零错误、零警告。
+
+Codex 独立审查确认只有五个白名单文件发生实现变化，没有新增 API、后端、网络函数、浏览器存储、计时器、模块全局缓存、HTML 注入或外链。独立验收结果：`tests/test_project_images.py` 14 passed（1 条既有 Starlette/httpx 弃用警告）、P9D E2E 4 passed、lint/build 通过（仅既有大分块提示）、单 worker 全量 E2E 110 passed。Grok 未提交或推送；Codex 发送验收回执 `msg_6501bcc367fa4a26ab09cae11a4774fd` 后完成中文实现提交 `e5adad7` 并推送协作分支。

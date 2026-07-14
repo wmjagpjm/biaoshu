@@ -81,7 +81,7 @@ cd C:\Users\Administrator\biaoshu\backend
 7. **导出模板**启用「标题段落边框与分级底色」和「最小标题左栏」→ 预览仅三级叶子标题显示加粗左边线 → 设为默认后导出 Word，技术标/商务标的 Markdown 叶子标题及大纲叶节点左边框加粗；概述、正文容器、章节标题和父标题保持普通边框，文档无整章页框
 8. **技术标**上传 Markdown 后点「轻量解析」→ 最近任务由 `pending/running` 更新到 `success`，预览写入解析结果
 9. **商务标**上传文件后运行 `parse`，或配置用户自备 Key 后运行一个 `biz_*` 任务 → 状态可更新并成功回填
-10. **正文生成**页点击图片图标上传 PNG/JPEG/GIF → 当前光标位置写入 `biaoshu-image://file_...`；导出 Word 后有图片与可选题注；手工删掉该图片后再次导出，应出现“图片引用无效”而非请求外网
+10. **正文生成**页点击图片图标上传 PNG/JPEG/GIF → 当前光标位置写入 `biaoshu-image://file_...`；导出 Word 后有图片与可选题注；手工删掉该图片后再次导出，技术标导出页应显示有限纯文本“图片引用无效”告警且仍继续下载，Word 内也有降级段落，不得请求外网；商务标含同类 Markdown 引用时行为一致
 11. 临时阻断单任务 `/events` 请求后重新发起任务 → 页面先查询一次任务，再以约 2 秒间隔查询至终态；不得无限重连 SSE
 12. **停掉后端** → 状态变红；列表提示本地兜底，不白屏
 
@@ -147,9 +147,12 @@ npm run test:e2e:hr-credential-expiry
 
 # P8B：解析策略接线（真实本机 API/任务；禁止服务端 MinerU/Docling）
 npm run test:e2e:parse-strategy
+
+# P9D：技术标/商务标导出图片失效引用浏览器提示（真实本机 export + 受控边界桩）
+npm run test:e2e:export-image-warnings
 ```
 
-当前基线：后端串行全量 **406 passed**（1 条既有 Starlette/httpx 弃用警告，含 P10I 严格人力角色、最小 SQL 投影、UTC 日期边界和固定审计测试）；前端 `lint` / `build` 通过（仅既有大包体积提示）及单 worker 串行全量 E2E **106 passed**。其中 M3-B/M3-C `test:e2e:fuse-apply` **6 passed**、M3-A `test:e2e:fuse` **1 passed**、P10I `test:e2e:hr-credential-expiry` **10 passed**、P10H `test:e2e:hr-performance-cards` **10 passed**、P10G `test:e2e:bidder-project-compliance` **10 passed**、P10F `test:e2e:hr-team-recommendations` **4 passed**、P8B `test:e2e:parse-strategy` **6 passed**、P10E `test:e2e:bidder-compliance-preview` **8 passed**、P10D `test:e2e:hr-credential-cards` **9 passed**、P10C `finance-cost-draft` **4 passed**、P10B `finance-role` **7 passed**、P10A `auth-rbac` **11 passed**、P9C `semantic-index` **9 passed**、知识卡片 `cards` **1 passed**。M3-C 完整契约见 `docs/m3c-content-fuse-undo-contract.md`：只在当前融合对话框内撤销最近一次成功写入批次，漂移章不覆盖，不做持久化历史。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须串行运行。
+当前基线：后端串行全量 **406 passed**（1 条既有 Starlette/httpx 弃用警告，含 P10I 严格人力角色、最小 SQL 投影、UTC 日期边界和固定审计测试）；P9D 后端图片专项 **14 passed**（同一条既有警告）；前端 `lint` / `build` 通过（仅既有大包体积提示）及单 worker 串行全量 E2E **110 passed**。其中 P9D `test:e2e:export-image-warnings` **4 passed**、M3-B/M3-C `test:e2e:fuse-apply` **6 passed**、M3-A `test:e2e:fuse` **1 passed**、P10I `test:e2e:hr-credential-expiry` **10 passed**、P10H `test:e2e:hr-performance-cards` **10 passed**、P10G `test:e2e:bidder-project-compliance` **10 passed**、P10F `test:e2e:hr-team-recommendations` **4 passed**、P8B `test:e2e:parse-strategy` **6 passed**、P10E `test:e2e:bidder-compliance-preview` **8 passed**、P10D `test:e2e:hr-credential-cards` **9 passed**、P10C `finance-cost-draft` **4 passed**、P10B `finance-role` **7 passed**、P10A `auth-rbac` **11 passed**、P9C `semantic-index` **9 passed**、知识卡片 `cards` **1 passed**。P9D 完整契约见 `docs/p9d-export-image-warning-contract.md`：后端仍是图片合法性唯一判定方，浏览器只显示有限纯文本告警且不阻断下载，项目切换通过绑定和代次隔离迟到结果。M3-C 仍只在当前融合对话框内撤销最近一次成功写入批次，不做持久化历史。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须串行运行。
 
 ## 6. 已接 API 一览
 
