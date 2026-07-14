@@ -58,7 +58,7 @@ P10H 仅为当前工作空间的严格 `hr` 成员提供最小人员业绩素材
 
 ## 5. 审计、前端与验收边界
 
-成功创建与更新分别记录 `hr_performance_create`、`hr_performance_update`，审计 target 仅为 `hpc_*` 卡片 ID；不得记录姓名、项目名、角色、年份、业绩摘要、备注、请求体、工作空间或操作者。
+成功创建与更新分别记录 `hr_performance_create`、`hr_performance_update`，审计 target 仅为 `hpc_*` 卡片 ID。允许既有审计基础设施从已验证会话写入操作者与工作空间标识，但 action、target、result 及其他扩展字段不得记录姓名、项目名、角色、年份、业绩摘要、备注、请求体或任意业务字段值；客户端不得提供或覆盖审计身份。
 
 前端新增严格 HR 可见的独立路由 `/hr/performance-cards` 与「人员业绩」入口，复用既有 `RequireHr`；页面只在 React 内存保存列表与详情，所有错误为固定中文脱敏文案。非 HR、disabled 或仅所有者直达该路由时仅显示受限页且不得发出 P10H 接口请求。
 

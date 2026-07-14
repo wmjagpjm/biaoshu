@@ -7,9 +7,10 @@
 
 # P10H 人员业绩素材卡实施计划
 
-> **状态**：规划已冻结，尚未派发实现。<br>
+> **状态**：已完成实现、Codex 独立审查验收与协作分支推送。<br>
 > **工作分支**：`collab/grok-code-codex-review`。<br>
-> **前置基线**：后端串行全量 378 passed；前端全量 E2E 83 passed；P10D E2E 9 passed；P10F E2E 4 passed。所有 Playwright 命令共用 SQLite 重置库，必须串行运行。
+> **提交链**：计划=`7694843`，后端=`6c76d80`，前端=`4eb8a14`。<br>
+> **完成基线**：后端 P10H 定向 14 passed、串行全量 392 passed（1 条既有 Starlette/httpx 弃用警告）；前端 lint/build 通过、P10H E2E 10 passed、单 worker 串行全量 E2E 93 passed。所有 Playwright 命令共用 SQLite 重置库，必须串行运行。
 
 ## 1. 背景、目标与独立性
 
@@ -50,7 +51,7 @@ P10D 的 `performance` 只是资质类别，不足以记录人员参与项目的
 | 权限 | 仅 required 模式精确 `hr`；`owner` 不隐式绕过；未登录 401，disabled/非 HR 403，非成员空间 403 |
 | 资源隔离 | 跨空间、不存在、伪造 ID 统一 `404 hr_performance_not_found`，不回显 ID |
 | 缓存与存储 | 全部成功响应 `Cache-Control: no-store`；仅 React 内存；禁止 URL 参数和浏览器存储 |
-| 审计 | 创建/更新仅记录 `hr_performance_create` / `hr_performance_update` 与 `hpc_*` target；不记录业务字段、操作者或空间 |
+| 审计 | 创建/更新仅使用 `hr_performance_create` / `hr_performance_update` 与 `hpc_*` target；既有基础设施可记录已验证的操作者/空间标识，但 action、target、result 与扩展字段不记录业务值 |
 
 ## 5. 允许改动文件
 
@@ -107,7 +108,7 @@ P10D 的 `performance` 只是资质类别，不足以记录人员参与项目的
 ## 7. Codex 审查与独立验收
 
 1. 审查 Grok 每个任务的 diff 是否严格在白名单内，重点检查 P10D/P10F 未被扩权、响应不泄露摘要/备注、ID 不回显、审计不含业务数据。
-2. 后端实现通过审查后，才允许 Grok 形成单一中文实现提交；前端同理，禁止合包。
+2. 后端实现通过审查后，由 Codex 形成单一中文实现提交；前端同理，禁止合包，Grok 不得 commit/push。
 3. 前端完成后，Codex 串行执行下列验证，并核对工作区与远端分支：
 
 ```powershell
@@ -134,3 +135,11 @@ Playwright 命令必须逐条等待完成后再启动下一条，禁止并行。
 ## 8. 文档闭环
 
 实现验收通过后，Codex 更新：本计划的验收记录、P10H 契约、`docs/plans/2026-07-12-bid-writer-roadmap.md`、`docs/integration-checklist.md` 与 `docs/HANDOFF-next.md`。HANDOFF 必须保留代码注释规范与注释齐备表；新路径须更新表中状态。计划、后端、前端和文档闭环维持独立中文提交并推送到协作分支。
+
+## 9. 实施与验收记录
+
+- Grok 后端受限实现严格落在 7 个白名单文件内；首次审查发现更新模型可显式传入非空字段的 `null`，以及鉴权测试断言过宽，已通过第二个受限修复任务收紧后再验收。
+- Codex 独立执行 P10H 后端定向测试 **14 passed**，随后串行执行后端全量 **392 passed**；仅保留 1 条既有 Starlette/httpx 弃用警告。后端提交为 `6c76d80`。
+- Grok 前端受限实现严格落在 9 个白名单文件内；页面初始只取摘要，点选才取详情，写后重读列表与当前详情，快速 A→B 的迟到响应由请求序号与卡片 ID 双重隔离。
+- Codex 独立执行 `npm run lint`、`npm run build`、P10H E2E **10 passed**，再以单 worker 串行执行全量 E2E **93 passed**；仅保留既有大 chunk 提示。前端提交为 `4eb8a14`。
+- 两个实现提交均由 Codex 完成中文提交并推送 `collab/grok-code-codex-review`；Grok 仅通过消息箱提交 `review_request`，未 commit/push。

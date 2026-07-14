@@ -139,11 +139,14 @@ npm run test:e2e:bidder-compliance-preview
 # P10G：投标人项目级合规统计（隔离 8010/5174、路由桩；仅 bidder 最小项目投影）
 npm run test:e2e:bidder-project-compliance
 
+# P10H：人力人员业绩素材卡（隔离 8010/5174、路由桩；仅 HR 专用端点）
+npm run test:e2e:hr-performance-cards
+
 # P8B：解析策略接线（真实本机 API/任务；禁止服务端 MinerU/Docling）
 npm run test:e2e:parse-strategy
 ```
 
-当前基线：后端串行全量 **378 passed**（1 条既有 Starlette/httpx 弃用警告，含 P10G 严格投标人项目隔离测试）；前端 `lint` / `build` 通过（仅既有大包体积提示）及全量 E2E **83 passed**。其中 P10G `test:e2e:bidder-project-compliance` **10 passed**、P10F `test:e2e:hr-team-recommendations` **4 passed**、P8B `test:e2e:parse-strategy` **6 passed**、P10E `test:e2e:bidder-compliance-preview` **8 passed**、P10D `test:e2e:hr-credential-cards` **9 passed**、P10C `finance-cost-draft` **4 passed**、P10B `finance-role` **7 passed**、P10A `auth-rbac` **11 passed**、P9C `semantic-index` **9 passed**、知识卡片 `cards` **1 passed**。P10G 完整契约见 `docs/p10g-bidder-project-compliance-contract.md`：仅 strict `bidder` 先读取当前空间技术标 `id/name` 选择器、再按需读取单项目五项统计；`AUTH_MODE=disabled` 与仅 `is_owner` 不放行，详情不返回项目字段或矩阵原文。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须串行运行。
+当前基线：后端串行全量 **392 passed**（1 条既有 Starlette/httpx 弃用警告，含 P10H 严格人力角色、工作空间、投影和输入测试）；前端 `lint` / `build` 通过（仅既有大包体积提示）及单 worker 串行全量 E2E **93 passed**。其中 P10H `test:e2e:hr-performance-cards` **10 passed**、P10G `test:e2e:bidder-project-compliance` **10 passed**、P10F `test:e2e:hr-team-recommendations` **4 passed**、P8B `test:e2e:parse-strategy` **6 passed**、P10E `test:e2e:bidder-compliance-preview` **8 passed**、P10D `test:e2e:hr-credential-cards` **9 passed**、P10C `finance-cost-draft` **4 passed**、P10B `finance-role` **7 passed**、P10A `auth-rbac` **11 passed**、P9C `semantic-index` **9 passed**、知识卡片 `cards` **1 passed**。P10H 完整契约见 `docs/p10h-hr-performance-cards-contract.md`：仅 strict `hr` 手工维护当前空间业绩卡，列表不含业绩摘要/备注，点选才读取详情，写后强制重读。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须串行运行。
 
 ## 6. 已接 API 一览
 
@@ -169,6 +172,8 @@ npm run test:e2e:parse-strategy
 | GET | `/api/hr/team-recommendations/projects`（仅 strict `hr`；当前空间技术标 `id/name` 选择器；`no-store`） |
 | GET | `/api/hr/team-recommendations`（仅 strict `hr`；推荐摘要；`no-store`） |
 | GET/PUT | `/api/hr/team-recommendations/{projectId}`（仅 strict `hr`；详情/有序快照写入，PUT 需 CSRF） |
+| GET/POST | `/api/hr/performance-cards`（仅 strict `hr`；摘要列表/创建，POST 需 CSRF；`no-store`） |
+| GET/PATCH | `/api/hr/performance-cards/{cardId}`（仅 strict `hr`；按需详情/编辑启停，PATCH 需 CSRF；跨空间/不存在统一 404） |
 | GET | `/api/bidder/compliance-preview`（仅 strict `bidder`；当前空间技术标响应矩阵匿名汇总；`no-store`） |
 | GET | `/api/bidder/project-compliance/projects`（仅 strict `bidder`；当前空间技术标 `id/name` 选择器；`no-store`） |
 | GET | `/api/bidder/project-compliance/{projectId}`（仅 strict `bidder`；单项目五项统计投影；跨空间/商务标/不存在统一 404；`no-store`） |
@@ -240,7 +245,15 @@ npm run test:e2e:parse-strategy
 4. `disabled`、仅所有者、`bid_writer`、`finance`、`hr` 直达该路由均为受限页且不发 P10G API；当前成员角色本身为 `bidder` 的所有者按角色正常通过。
 5. 不得写入浏览器存储或 URL 查询参数；不得请求 `/projects*`、`/editor-state`、`/hr/*`、`/finance/*`、文件、设置、P10E 聚合或外网。完整边界见 `docs/p10g-bidder-project-compliance-contract.md`。
 
-## 6.5 P8B 解析策略接线
+## 6.5 P10H 人员业绩素材卡
+
+1. 以严格 `hr` 登录，打开 `/hr/performance-cards`；侧栏「人力 / 人员业绩」激活且「人员资质」不误激活，非 HR、disabled 与仅所有者均无入口，直达只显示受限页且零 P10H API。
+2. 初始只请求 `GET /api/hr/performance-cards`，列表只显示人员、项目、角色、年份、状态和时间，不得含 `performanceSummary` 或 `remark`；点选后才请求单卡详情。
+3. 新建、编辑与启停须携带内存 CSRF；成功后必须重新读取列表和当前详情，不使用乐观更新。完成年份仅允许空值或 1900–2100 整数，非法输入在前端预检后不得发写请求。
+4. 快速点选 A→B 时，A 的迟到详情不得覆盖 B；错误只显示固定中文，不得回显后端 detail、路径 ID、输入内容或敏感标记。
+5. 不得请求 P10D/P10F、项目、编辑态、文件、财务、投标人或外网接口，不得写入 `localStorage`、`sessionStorage` 或 URL 参数；无 DELETE、附件、导出、项目关联、自动匹配或团队写入。
+
+## 6.6 P8B 解析策略接线
 
 1. 设置页保存 `light`、`local` 或 `ask` 后，技术标和商务标解析动作都重新请求 `GET /api/settings/parse-strategy`；响应只能有 `parseStrategy` 且带 `Cache-Control: no-store`，不得回显完整设置或 Key。
 2. `light` 创建既有 `parse` 任务，任务 payload 固定 `engine=lightweight`；成功后继续按既有路径刷新解析预览或商务编辑态。
@@ -328,7 +341,7 @@ npm run test:e2e:parse-strategy
 
 ## 14. 仍未接（后续）
 
-Celery、真 MinerU 安装包、P9B 以外的外部标讯数据源、P9C 的其他模型/GPU/在线 embedding/真实用户语料评测与自动模型更新、P10C 以外的财务税务/审批/导出/预算/回款/版本与审计查看、P10F 以外的人力人员业绩/附件与证件校验、P10G 以外的投标人矩阵明细/版本/结果跟踪与其他合规数据域、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
+Celery、真 MinerU 安装包、P9B 以外的外部标讯数据源、P9C 的其他模型/GPU/在线 embedding/真实用户语料评测与自动模型更新、P10C 以外的财务税务/审批/导出/预算/回款/版本与审计查看、P10H 以外的人力附件与证件校验、P10G 以外的投标人矩阵明细/版本/结果跟踪与其他合规数据域、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
 
 **响应矩阵相关（已接 vs 未扩）：** 多端冲突的版本写保护、409 与双浏览器上下文 E2E 主路径已接；「刷新来源」保留人工映射 E2E 已接；**智能建议人工确认后应用** E2E 已接；**来源超过 80 分页** 已推送（`1289c92`）；**字段级三方合并** MVP + E2E 已推送（`2c7b3e0`，`response-matrix-field-merge.spec.ts`）。仍未接：Word 失效引用在浏览器层的扩展（导出逻辑以后端单测为准）；包 9 交付增强。
 
