@@ -129,9 +129,12 @@ npm run test:e2e:finance-cost-draft
 
 # P10D：人力人员资质素材卡（隔离 8010/5174、路由桩；仅 HR 专用端点）
 npm run test:e2e:hr-credential-cards
+
+# P10E：投标人匿名合规预览（隔离 8010/5174、路由桩；仅 bidder 专用端点）
+npm run test:e2e:bidder-compliance-preview
 ```
 
-当前基线：后端串行全量 **326 passed**（1 条既有 Starlette/httpx 弃用警告，含 P10D 严格布尔与 HR 隔离测试）；前端 `lint` / `build` 通过（仅既有大包体积提示）及全量 E2E **55 passed**。其中 P10D `test:e2e:hr-credential-cards` **9 passed**、P10C `finance-cost-draft` **4 passed**、P10B `finance-role` **7 passed**、P10A `auth-rbac` **11 passed**、P9C `semantic-index` **9 passed**、知识卡片 `cards` **1 passed**。P10D 仅向 strict `hr` 开放当前工作空间的最小人员资质素材卡，`AUTH_MODE=disabled` 不开放；完整契约见 `docs/p10a-local-identity-rbac-contract.md`、`docs/p10b-finance-business-quote-contract.md`、`docs/p10c-finance-cost-draft-contract.md` 与 `docs/p10d-hr-credential-cards-contract.md`。
+当前基线：后端串行全量 **335 passed**（1 条既有 Starlette/httpx 弃用警告，含 P10E 严格投标人隔离测试）；前端 `lint` / `build` 通过（仅既有大包体积提示）及全量 E2E **63 passed**。其中 P10E `test:e2e:bidder-compliance-preview` **8 passed**、P10D `test:e2e:hr-credential-cards` **9 passed**、P10C `finance-cost-draft` **4 passed**、P10B `finance-role` **7 passed**、P10A `auth-rbac` **11 passed**、P9C `semantic-index` **9 passed**、知识卡片 `cards` **1 passed**。P10E 仅向 strict `bidder` 开放工作空间级匿名响应矩阵汇总，`AUTH_MODE=disabled` 不开放；完整契约见 `docs/p10a-local-identity-rbac-contract.md`、`docs/p10b-finance-business-quote-contract.md`、`docs/p10c-finance-cost-draft-contract.md`、`docs/p10d-hr-credential-cards-contract.md` 与 `docs/p10e-bidder-anonymous-compliance-preview-contract.md`。
 
 ## 6. 已接 API 一览
 
@@ -154,6 +157,7 @@ npm run test:e2e:hr-credential-cards
 | GET | `/api/hr/credential-cards/{cardId}`（仅 strict `hr`；跨空间/不存在统一 `404 hr_credential_not_found`；`no-store`） |
 | POST | `/api/hr/credential-cards`（仅 strict `hr` + CSRF；字段白名单与严格 JSON 布尔） |
 | PATCH | `/api/hr/credential-cards/{cardId}`（仅 strict `hr` + CSRF；更新/启停；无 DELETE） |
+| GET | `/api/bidder/compliance-preview`（仅 strict `bidder`；当前空间技术标响应矩阵匿名汇总；`no-store`） |
 | GET/POST | `/api/projects` |
 | GET/PATCH/DELETE | `/api/projects/{id}` |
 | GET | `/api/projects/{id}/tasks/{taskId}/events`（SSE） |
@@ -195,6 +199,14 @@ npm run test:e2e:hr-credential-cards
 3. 新建、编辑和启停必须携带内存 CSRF；每次成功后均重新 GET 列表与当前详情，不使用乐观更新或浏览器存储。
 4. `owner` 的隐式绕过、`bid_writer`、`finance`、`bidder` 与 disabled 均没有人力入口；直达 `/hr` 只显示受限页，且不应发 HR API 请求。
 5. 不得出现证件号、手机号、住址、附件、URL、创建人或工作空间字段；无 DELETE、导出、项目关联、团队推荐或跨空间搜索。
+
+## 6.2 P10E 投标人匿名合规预览
+
+1. 以严格 `bidder` 登录，打开 `/bidder`；侧栏仅显示「投标人 / 合规预览」，不得显示标书制作者、财务或人力入口。
+2. 页面仅请求 `GET /api/bidder/compliance-preview`，并只展示总条目、已覆盖、未覆盖、已豁免和服务端给出的覆盖率基点；`empty` 时覆盖率显示「暂无可计算覆盖率」。
+3. 响应和页面不得出现项目数量、项目 ID/名称、工作空间 ID、人员、原文、`sourceKey`、章节/大纲、备注、文件、报价或成本；页面须声明不是评审结论或投标结果。
+4. `owner` 的隐式绕过、`bid_writer`、`finance`、`hr` 与 disabled 均没有投标人入口；直达 `/bidder` 只显示受限页，且不应发投标人预览 API 请求。
+5. 浏览器不得写入 `localStorage` 或 `sessionStorage`；除认证、健康检查和本接口外，不能请求项目、编辑态、设置、文件、财务、人力或外网端点。完整边界见 `docs/p10e-bidder-anonymous-compliance-preview-contract.md`。
 
 ## 7. 本机日用主链路（目标 A 加强版）
 
@@ -276,7 +288,7 @@ npm run test:e2e:hr-credential-cards
 
 ## 14. 仍未接（后续）
 
-Celery、真 MinerU 安装包、P9B 以外的外部标讯数据源、P9C 的其他模型/GPU/在线 embedding/真实用户语料评测与自动模型更新、P10C 以外的财务税务/审批/导出/预算/回款/版本与审计查看、P10D 以外的人力团队推荐/人员业绩/附件与证件校验、投标人匿名预览/版本/合规数据域、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
+Celery、真 MinerU 安装包、P9B 以外的外部标讯数据源、P9C 的其他模型/GPU/在线 embedding/真实用户语料评测与自动模型更新、P10C 以外的财务税务/审批/导出/预算/回款/版本与审计查看、P10D 以外的人力团队推荐/人员业绩/附件与证件校验、投标人项目级预览/版本/结果跟踪与其他合规数据域、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
 
 **响应矩阵相关（已接 vs 未扩）：** 多端冲突的版本写保护、409 与双浏览器上下文 E2E 主路径已接；「刷新来源」保留人工映射 E2E 已接；**智能建议人工确认后应用** E2E 已接；**来源超过 80 分页** 已推送（`1289c92`）；**字段级三方合并** MVP + E2E 已推送（`2c7b3e0`，`response-matrix-field-merge.spec.ts`）。仍未接：Word 失效引用在浏览器层的扩展（导出逻辑以后端单测为准）；包 9 交付增强。
 

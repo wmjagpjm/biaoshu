@@ -1,13 +1,13 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-14（P9A/P9B/P9C、P10A、P10B、P10C 与 **P10D 人员资质素材卡**已完成；提交以本分支 HEAD 为准）
+> **交接日期**：2026-07-14（P9A/P9B/P9C、P10A/P10B/P10C、P10D 人员资质素材卡与 **P10E 投标人匿名合规预览**已完成；提交以本分支 HEAD 为准）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
-> **协作分支已推送功能基线**：P10D 后端=`d8f7cbd`、前端=`71f065a`；P10C 后端=`6f30084`、前端=`737c7db`；P9C 最新代码为 `585e502`（合成评测与本地预检），前序为后端=`cc0d217`、前端=`a0bd84b`、运行时降级=`71c503c`；P9B 前序为解析=`45d7214`、数据域=`1c46e41`、Excel=`6491363`、同步=`229f1d7`、人工接受=`000b403`、界面=`a7cfcb8`。更早的审计基线为 `a1ba88a`，其下含 P9A、包 5 至包 8 和阶段 3。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
+> **协作分支已推送功能基线**：P10E 计划=`26f7e40`、后端=`1b6ccf3`、前端=`37cf835`；P10D 后端=`d8f7cbd`、前端=`71f065a`；P10C 后端=`6f30084`、前端=`737c7db`；P9C 最新代码为 `585e502`（合成评测与本地预检），前序为后端=`cc0d217`、前端=`a0bd84b`、运行时降级=`71c503c`；P9B 前序为解析=`45d7214`、数据域=`1c46e41`、Excel=`6491363`、同步=`229f1d7`、人工接受=`000b403`、界面=`a7cfcb8`。更早的审计基线为 `a1ba88a`，其下含 P9A、包 5 至包 8 和阶段 3。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **本地状态**：P10A 已完成并推送：本机 scrypt 身份、HttpOnly 会话、成员/所有者保护、默认拒绝角色、设置 owner 收口、认证模式握手、前端会话门禁与刷新后 CSRF 续发。P10B/P10C 已完成 strict `finance` 的报价白名单、人工成本与毛利快照。P10D 已完成 strict `hr` 的最小人员资质素材卡：列表摘要按需详情、创建/编辑/启停、严格 JSON 布尔、审计脱敏与无物理删除；不含证件号、联系方式、附件、团队推荐或项目关联。P9C 的真实模型缓存仍未准备；预检受控返回 `model_unavailable`，因此搜索保持关键词降级，不能声称真实语义效果已验证。
-> **验收基线**：后端串行全量 **326 passed**（1 条既有 Starlette/httpx 弃用警告）；前端全量 E2E **55 passed**；P10D HR E2E **9 passed**、P10C 成本 E2E **4 passed**、P10B 财务 E2E **7 passed**、P10A 认证 E2E **11 passed**、P9C 语义索引 E2E **9 passed**、知识卡片 E2E **1 passed**；`frontend npm run lint` / `build` 通过（仅既有大包体积提示）；`git diff --check`。
+> **本地状态**：P10A 已完成并推送：本机 scrypt 身份、HttpOnly 会话、成员/所有者保护、默认拒绝角色、设置 owner 收口、认证模式握手、前端会话门禁与刷新后 CSRF 续发。P10B/P10C 已完成 strict `finance` 的报价白名单、人工成本与毛利快照。P10D 已完成 strict `hr` 的最小人员资质素材卡。P10E 已完成 strict `bidder` 的匿名合规汇总：仅聚合当前空间技术标的收敛响应矩阵计数与覆盖率基点，不返回项目、原文、人员或财务数据；只读审计、`no-store`、disabled 与所有者隐式绕过均拒绝。P9C 的真实模型缓存仍未准备；预检受控返回 `model_unavailable`，因此搜索保持关键词降级，不能声称真实语义效果已验证。
+> **验收基线**：后端串行全量 **335 passed**（1 条既有 Starlette/httpx 弃用警告）；前端全量 E2E **63 passed**；P10E E2E **8 passed**、P10D HR E2E **9 passed**、P10C 成本 E2E **4 passed**、P10B 财务 E2E **7 passed**、P10A 认证 E2E **11 passed**、P9C 语义索引 E2E **9 passed**、知识卡片 E2E **1 passed**；`frontend npm run lint` / `build` 通过（仅既有大包体积提示）；`git diff --check`。
 
 ---
 
@@ -18,8 +18,8 @@
 工作分支只能是 collab/grok-code-codex-review，禁止直接操作 main；先执行 git status -sb，并核对 HEAD 与 origin/collab/grok-code-codex-review 一致且工作区干净。
 完整阅读 docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/plans/2026-07-13-package-9-delivery-enhancement-plan.md、docs/integration-checklist.md。
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
-当前进度：P9A、P9B、P9C、P10A、P10B、P10C 与 P10D 均已完成各自计划内的实现、独立自动化验收、中文文档闭环与协作分支推送。P10A 固定契约见 `docs/p10a-local-identity-rbac-contract.md`，P10B 见 `docs/p10b-finance-business-quote-contract.md`，P10C 见 `docs/p10c-finance-cost-draft-contract.md`，P10D 见 `docs/p10d-hr-credential-cards-contract.md`。P9C 仍仅允许纯离线 BAAI/bge-small-zh-v1.5、512 维、CPU、版本并存和可见关键词降级；正文/查询不得出域。
-下一步：优先为投标人受限匿名合规预览冻结 P10E 独立契约，或选择其他路线图项；无论选择何项，都必须先冻结数据来源、响应投影、审计和权限矩阵，不能按前端路径猜测授权，也不得把 P10C/P10D 路径扩为通用系统。除各自已交付的 strict `finance` 与 strict `hr` 能力外，`finance`、`hr`、`bidder` 继续默认拒绝既有标书业务。真实模型缓存或依赖尚未准备时，也不得安装、下载或伪造 P9C 指标；只有用户在受控运行时显式构建并通过固定预检后，才记录语义索引已就绪。
+当前进度：P9A、P9B、P9C、P10A、P10B、P10C、P10D 与 P10E 均已完成各自计划内的实现、独立自动化验收、中文文档闭环与协作分支推送。P10A 固定契约见 `docs/p10a-local-identity-rbac-contract.md`，P10B 见 `docs/p10b-finance-business-quote-contract.md`，P10C 见 `docs/p10c-finance-cost-draft-contract.md`，P10D 见 `docs/p10d-hr-credential-cards-contract.md`，P10E 见 `docs/p10e-bidder-anonymous-compliance-preview-contract.md`。P9C 仍仅允许纯离线 BAAI/bge-small-zh-v1.5、512 维、CPU、版本并存和可见关键词降级；正文/查询不得出域。
+下一步：选择其余路线图项时，必须先冻结数据来源、响应投影、审计和权限矩阵，不能按前端路径猜测授权，也不得把 P10C/P10D/P10E 路径扩为通用系统。除 P10B/P10C strict `finance`、P10D strict `hr` 与 P10E 唯一匿名汇总 GET 外，`finance`、`hr`、`bidder` 继续默认拒绝既有标书业务。真实模型缓存或依赖尚未准备时，也不得安装、下载或伪造 P9C 指标；只有用户在受控运行时显式构建并通过固定预检后，才记录语义索引已就绪。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -128,6 +128,7 @@
 | 本地标讯库与国能追踪 | `services/opportunity_service.py`、`api/opportunities.py`、`services/opportunity_watch_service.py`、`api/opportunity_watch.py` | **齐** | 本地 CRUD、服务端状态、跨 workspace 404、离线 CSV/JSON；P9B 另含固定来源、内存 Excel、人工接受和不存敏感网络数据 |
 | 资源中心 | `services/resource_service.py`、`resource_sync_service.py`、`api/resources.py` | **齐** | 全局系统只读资源、workspace 用户资源、服务端原子浏览量、签名清单受控同步与来源审计 |
 | 中标内容模板 | `services/template_service.py`、`api/templates.py`、`models/entities.py`（BidTemplateRow） | **齐** | workspace 快照沉淀/列表摘要/详情快照/删除/从模板新建；源项目 SET NULL；空大纲与超大快照 400 |
+| 投标人匿名合规 P10E | `api/deps.py`（require_bidder）、`api/bidder.py`、`services/bidder_compliance_preview_service.py`、`api/schemas.py`、`tests/test_bidder_compliance_preview.py` | **齐** | strict `bidder` 只读聚合当前空间技术标收敛矩阵；匿名五计数、`no-store`、无表/无任务、审计 target 固定；`AUTH_MODE=disabled` 与所有者不放行 |
 | 实体 | `models/entities.py` | **部分** | 类 docstring 齐；文件顶视历史版本；KnowledgeCardRow / BidTemplateRow 已补语义 |
 | 测试 | `backend/tests/*.py` | **齐/部分** | 含 `test_content_fuse`、`test_knowledge_cards`、`test_bid_templates` 及标题边框/SSE/标讯/资源/响应矩阵等 |
 
@@ -144,6 +145,7 @@
 | 商务标 | `business-bid/pages/*`、`hooks/useBusinessBidWorkspace.ts` | **齐** | 空态/API |
 | 财务报价/成本 P10B/P10C | `services/finance_service.py`、`finance_cost_service.py`、`api/finance.py`；前端 `features/finance/*`、`e2e/finance-*.spec.ts` | **齐** | strict `finance` 当前空间报价白名单、人工成本草案和毛利快照；整数分、审计脱敏、无税务/审批/导出；`npm run test:e2e:finance-role` / `finance-cost-draft` |
 | 人员资质 P10D | `models/entities.py`（HrCredentialCardRow）、`api/deps.py`（require_hr）、`services/hr_credential_service.py`、`api/hr.py`；前端 `features/hr/*`、`e2e/hr-credential-cards.spec.ts` | **齐** | strict `hr` 当前空间最小资质卡；摘要不含备注、按需详情、CSRF、StrictBool、审计脱敏、无删除/附件/推荐；`npm run test:e2e:hr-credential-cards` |
+| 投标人匿名合规 P10E | `features/bidder/*`、`useAuthSession.canAccessBidder`、`router.tsx`、`AppShell.tsx`、`e2e/bidder-compliance-preview.spec.ts` | **齐** | strict `bidder` 仅 `/bidder`；只请求匿名汇总 GET、无存储、固定错误脱敏、无项目/财务/人力 API；`npm run test:e2e:bidder-compliance-preview` |
 | 知识库/卡片 | `knowledge-base/**`（useKnowledgeCards、cardsApi、KnowledgeBasePage）、`ChapterEditor`/`InsertCardDialog`；E2E `e2e/knowledge-cards.spec.ts` | **齐** | 图片 Tab 后端化；章节插入卡片；`npm run test:e2e:cards` |
 | 查重 | `duplicate-check/pages`、`types.ts` | **齐** | 已接 API |
 | 废标 | `rejection-check/pages`、`types.ts` | **齐** | 已接 API |
@@ -212,7 +214,7 @@ $env:NO_PROXY = 'localhost,127.0.0.1'
 4. **等待 review_request，不信口头结论**：读取 `.agent-collaboration/messages/grok-to-codex.jsonl` 或 `Read-AgentMailbox.ps1`；要求其报告精确文件列表、失败先测证据、最终测试、`git diff --check`、风险与未做项。Grok 超时后子进程可能仍继续；先用 `Get-Process grok` 和消息箱确认，不重复下发相同任务。
 5. **Codex 独立验收并唯一负责 Git**：核对差异仅在白名单，复跑定向与受影响回归，再按风险决定是否要求返修。仅 Codex 可 `git add`、中文 `git commit` 和带本机代理的 `git push origin collab/grok-code-codex-review`。每个完成包至少分为计划、后端/前端实现、文档闭环提交；不得向 `main` 推送或 force push。
 
-P10D 的实际协作按此方式完成：Grok 首版后端 → Codex 发现 `isActive` 会接受字符串/数字并返修为 `StrictBool` → Grok 前端 → Codex 收紧 E2E 为初始不预取详情、每次写后重读、`hcc_*` 前缀；随后 Codex 独立运行后端全量 326 项及前端全量 55 项并推送。下一包必须延续相同的“规划—单任务实现—独立审查—返修—验收—文档”闭环。
+P10D 的实际协作按此方式完成：Grok 首版后端 → Codex 发现 `isActive` 会接受字符串/数字并返修为 `StrictBool` → Grok 前端 → Codex 收紧 E2E 为初始不预取详情、每次写后重读、`hcc_*` 前缀。P10E 继续该模式：先冻结匿名投影，再由 Grok 先后完成后端和前端白名单任务；Codex 收紧公开 API 四字段注释、required 未登录固定 `401 auth_required`，并独立运行后端全量 335 项及前端全量 63 项后推送。下一包必须延续相同的“规划—单任务实现—独立审查—返修—验收—文档”闭环。
 
 **注意**：旧 SQLite 缺列时 `ensure_schema_columns()` 会 ALTER（含 `embedding_json`、`kind`、`business_json`、`response_matrix_json` 等）。异常可删 `backend/data/*.db` 重建。
 
@@ -283,21 +285,27 @@ P10C 已实现并推送：同一 `/finance` 门禁下，严格财务成员可通
 
 P10D 已实现并推送：后端 `d8f7cbd` 与前端 `71f065a`。`/api/hr/credential-cards*` 仅向 `AUTH_MODE=required` 的 strict `hr` 当前空间成员开放；required 未登录保持全局 `401 auth_required`，disabled、非 HR 与所有者隐式绕过均为 `403`。列表只返回摘要，选中后才读取详情；创建、编辑、启停走既有 CSRF 并强制重读服务端列表与详情。服务端拒绝额外敏感字段和非 JSON 布尔，审计只记录动作和卡片 ID；浏览器不持久化数据。无删除、附件、联系方式、证件号、项目关联、团队推荐、导出或跨空间搜索。完整契约见 `docs/p10d-hr-credential-cards-contract.md`。
 
-### 4.10 路径索引
+### 4.10 P10E 投标人匿名合规预览
+
+P10E 已完成并推送：计划=`26f7e40`，后端=`1b6ccf3`，前端=`37cf835`。`GET /api/bidder/compliance-preview` 只向 `AUTH_MODE=required` 的 strict `bidder` 当前空间成员开放；required 未登录由全局中间件固定 `401 auth_required`，disabled、所有者隐式绕过、`bid_writer`、`finance` 与 `hr` 为 `403 role_forbidden`，非成员空间保持 `403 workspace_forbidden`。服务端只读取 `kind=technical` 项目的既有收敛 `responseMatrix`，仅返回 `dataState` 与总量、覆盖、未覆盖、豁免、覆盖率基点五项汇总；不返回项目数量/ID/名称、工作空间、人员、原文、章节、大纲、备注、文件或财务字段。每次成功读取仅审计固定 action 与 `anonymous_aggregate` target，响应固定 `Cache-Control: no-store`。
+
+前端 `/bidder` 仅 strict `bidder` 可挂载，独立「投标人 / 合规预览」导航下只请求该 GET，并只在 React 内存保存结果；空态不计算覆盖率，失败固定中文脱敏。E2E 覆盖匿名字段、空态、错误脱敏、disabled/所有者/其他角色不请求、网络白名单和浏览器存储。无项目级预览、详情、导出、写入、版本、结果跟踪或规则执行。完整契约见 `docs/p10e-bidder-anonymous-compliance-preview-contract.md`。
+
+### 4.11 路径索引
 
 ```text
 backend/app/
-  api/compliance.py finance.py hr.py knowledge.py tasks.py projects.py settings.py opportunities.py resources.py templates.py
+  api/compliance.py finance.py hr.py bidder.py knowledge.py tasks.py projects.py settings.py opportunities.py resources.py templates.py
   services/
     task_service.py parse_engines.py business_task_service.py knowledge_service.py
     embedding_service.py duplicate_service.py rejection_service.py
     export_service.py revise_service.py editor_state_service.py
-    file_service.py finance_service.py hr_credential_service.py opportunity_service.py resource_service.py resource_sync_service.py
+    file_service.py finance_service.py hr_credential_service.py bidder_compliance_preview_service.py opportunity_service.py resource_service.py resource_sync_service.py
     template_service.py text_similarity.py
 
 frontend/src/features/
   technical-plan/  business-bid/  knowledge-base/  bid-templates/
-  duplicate-check/  rejection-check/  settings/  bid-opportunity/  resources/  finance/  hr/
+  duplicate-check/  rejection-check/  settings/  bid-opportunity/  resources/  finance/  hr/  bidder/
 ```
 
 ---
@@ -312,7 +320,7 @@ frontend/src/features/
 | 资产 | 卡片化知识/多模板融合 | 阶段 1 模板 + 阶段 2 卡片库（`53e012f`）；阶段 3 已完成并推送：M3-A=`5d37dba`，M3-B=`e2e5d04` |
 | RAG | 真语义大模型 embedding 调优 | 有本地+可选 API，可继续增强 |
 | 财务 | 税务、审批、导出、预算、回款、版本与财务查看审计 | P10B/P10C 已完成报价只读、人工成本草案与毛利快照；其余数据源、精度和权限必须另立契约，禁止从报价推算 |
-| 团队角色 | 人力团队推荐/人员业绩、投标人预览/版本/合规 | P10D 已交付人力最小资质卡；团队推荐、业绩、附件、证件校验和投标人数据域仍未定义 |
+| 团队角色 | 人力团队推荐/人员业绩、投标人项目级预览/版本/结果跟踪 | P10D 已交付人力最小资质卡；P10E 已交付匿名矩阵汇总；团队推荐、业绩、附件、证件校验及其他投标人数据域仍需独立契约 |
 | 库 | Alembic | 仅 create_all + ALTER |
 | 生产 | HTTPS/Key 加密/PG/Docker | 本机身份和成员 RBAC 已有；生产部署能力未做 |
 
@@ -323,8 +331,8 @@ frontend/src/features/
 ## 6. 建议下一会话方向
 
 1. 阶段 4 **功能包 8** MVP 已验收并推送（`6db1586`）；真实 MinerU/Docling 外置部署与 `parseStrategy` 接线另开 task。
-2. 阶段 4 **P9A/P9B/P9C** 与阶段 5 **P10A/P10B/P10C/P10D** 均已实现、独立验收并文档闭环。P9C 的真实模型门仍是运行时前置：固定依赖和模型缓存就绪后，用户显式构建索引，再运行固定预检；未通过前继续关键词降级。
-3. 下一包优先考虑 P10E 投标人受限匿名合规预览；必须先冻结匿名投影、数据来源、审计与权限契约。财务税务/审批/导出、人员团队推荐/业绩/附件或任何投标人版本能力也必须独立计划，禁止借用 P10C/P10D 路径扩大权限。M3-B 后遗留的写入历史/回滚仍为可选项。
+2. 阶段 4 **P9A/P9B/P9C** 与阶段 5 **P10A/P10B/P10C/P10D/P10E** 均已实现、独立验收并文档闭环。P9C 的真实模型门仍是运行时前置：固定依赖和模型缓存就绪后，用户显式构建索引，再运行固定预检；未通过前继续关键词降级。
+3. 下一包可从财务税务/审批/导出、人员团队推荐/业绩/附件、投标人项目级预览/版本/结果跟踪或解析策略接线中选择；任何一项都必须先独立冻结数据、权限、审计和保留契约，禁止借用 P10C/P10D/P10E 路径扩大权限。M3-B 后遗留的写入历史/回滚仍为可选项。
 
 资源同步后续只可由管理员配置新的签名发布方，绝不可放开浏览器 URL 或外网抓取。图片管线已冻结项目内资源引用协议，后续扩展不得放开外链或客户端路径。SSE 的多工作空间鉴权、事件游标和项目级总线不在当前范围。
 
@@ -381,7 +389,7 @@ frontend/src/features/
 ## 11. 当前会话状态（2026-07-14）
 
 - **用户长期目标（必须完整保留）**：持续完成 biaoshu 标书制作者剩余主线任务，按既定路线图完成独立规划、受限实现审查、独立验收、中文文档闭环与协作分支推送；不直接操作 `main`。
-- 当前分支仍为 `collab/grok-code-codex-review`；P10D 后端=`d8f7cbd`、前端=`71f065a` 已推送，本交接文档提交将位于其后。新会话第一步必须用 `git status -sb`、`git rev-parse HEAD`、`git rev-parse origin/collab/grok-code-codex-review` 重新核验，不可只信本文静态 SHA。
+- 当前分支仍为 `collab/grok-code-codex-review`；P10E 计划=`26f7e40`、后端=`1b6ccf3`、前端=`37cf835` 已推送，本交接文档提交将位于其后。新会话第一步必须用 `git status -sb`、`git rev-parse HEAD`、`git rev-parse origin/collab/grok-code-codex-review` 重新核验，不可只信本文静态 SHA。
 - 阶段 3 **已完成并推送**：M3-A 只读融合建议；M3-B 差异预览 + 勾选确认写入（SHA=`e2e5d04`）。
 - 阶段 4 **包 5** 已推送：`460097a` 智能建议人工确认 E2E。
 - 阶段 4 **包 6** 已推送：`1289c92` 实现响应矩阵源分页调用。
@@ -396,9 +404,10 @@ frontend/src/features/
 - **P10B 财务报价交付**：计划=`5d99888`，后端=`bc0517c`，前端=`ef1e369`。严格财务角色只能读取当前空间商务标报价白名单投影；无会话在 required 下保持中间件 `401 auth_required`，已登录非财务与 disabled 为 `403 role_forbidden`；技术标、跨空间和不存在项目统一 404。完整契约见 `docs/p10b-finance-business-quote-contract.md`。
 - **P10C 财务成本草案交付**：计划=`b662e85`，后端=`6f30084`，前端=`737c7db`。strict `finance` 可维护当前空间商务标人工成本条目，并以整数分读取报价、成本、毛利和毛利基点；金额输入服务端 `StrictInt` 拒绝浮点/字符串/布尔；成功写入仅审计动作和条目 ID；前端不持久化敏感数据，项目切换明细未就绪前不挂载成本面板。无税务、审批、导出、预算、回款、版本或审计查看。完整契约见 `docs/p10c-finance-cost-draft-contract.md`。
 - **P10D 人员资质素材卡交付**：计划=`6555998`，后端=`d8f7cbd`，前端=`71f065a`。strict `hr` 仅可管理当前空间的最小人员资质卡；`require_hr` 不因所有者身份隐式放行，列表不返回备注，详情/写入才返回备注，创建/更新需 CSRF，`isActive` 仅接受 JSON `true/false`，跨空间/不存在统一 404，审计只写 action 与 `hcc_*` ID。前端 `/hr` 仅 HR 有入口，选中才取详情，每次创建/编辑/启停后重读列表和详情，不持久化卡片；无删除、附件、联系方式、证件号、项目关联、团队推荐、导出或跨空间搜索。完整契约见 `docs/p10d-hr-credential-cards-contract.md`。
-- **已验证基线**：后端串行全量 326 passed（1 条既有 Starlette/httpx 弃用警告）；前端全量 E2E 55 passed；P10D HR E2E 9 passed、P10C 成本 E2E 4 passed、P10B 财务 E2E 7 passed、P10A 认证 E2E 11 passed、P9C 语义索引 E2E 9 passed、知识卡片 E2E 1 passed；前端 lint/build 通过（仅既有大 chunk 警告）；`git diff --check` 通过；P9A WPS `12.1.0.26895` 实际打开技术标/商务标通过。
-- **未实现主线与下一包**：P10E 尚未创建计划或代码，建议从投标人受限匿名合规预览开始，但必须先只读审计、冻结匿名字段投影、严格 `bidder` 权限、跨空间 404、no-store、审计边界和前端网络白名单。不得提前实施。其他明确未实现项为人力人员业绩/团队推荐/附件/证件校验，财务税务/审批/导出/预算/回款/版本，投标人版本/结果跟踪，以及 P9C 真模型运行时门和生产部署治理；详见本文 §5、§6 和路线图。
+- **P10E 投标人匿名合规预览交付**：计划=`26f7e40`，后端=`1b6ccf3`，前端=`37cf835`。`require_bidder` 只允许 required 模式当前空间精确 `bidder`；唯一 `GET /api/bidder/compliance-preview` 使用收敛技术标响应矩阵，返回 `dataState` 与匿名五计数，固定 `no-store`。项目数量/ID/名称、工作空间、原文、来源、章节、大纲、备注、人员与财务字段均不出域；成功读审计只记录 `bidder_compliance_preview_read` 与 `anonymous_aggregate`。前端 `/bidder` 仅投标人可挂载，唯一本机业务请求为该 GET，错误固定中文脱敏且不写浏览器存储。P10E E2E 覆盖匿名投影、空态、错误、角色拒绝、网络白名单和存储边界；无写入、项目级预览、版本或结果跟踪。完整契约见 `docs/p10e-bidder-anonymous-compliance-preview-contract.md`。
+- **已验证基线**：后端串行全量 335 passed（1 条既有 Starlette/httpx 弃用警告）；前端全量 E2E 63 passed；P10E E2E 8 passed、P10D HR E2E 9 passed、P10C 成本 E2E 4 passed、P10B 财务 E2E 7 passed、P10A 认证 E2E 11 passed、P9C 语义索引 E2E 9 passed、知识卡片 E2E 1 passed；前端 lint/build 通过（仅既有大 chunk 警告）；`git diff --check` 通过；P9A WPS `12.1.0.26895` 实际打开技术标/商务标通过。
+- **未实现主线与下一包**：其他明确未实现项为人力人员业绩/团队推荐/附件/证件校验，财务税务/审批/导出/预算/回款/版本，投标人项目级预览/版本/结果跟踪与其他合规数据域，以及 P9C 真模型运行时门和生产部署治理；详见本文 §5、§6 和路线图。任何一项都必须先完成独立的只读审计、数据投影、严格角色、跨空间、缓存、审计和前端网络边界契约，不得扩大 P10C/P10D/P10E 的已交付范围。
 - 新任务分工不变：Grok 只负责限定实现与自测，未经 Codex 审查确认不得提交；Codex 负责计划、范围冻结、差异审查、独立测试、验收、中文提交、文档闭环和 GitHub 状态核验。每一包仍按“计划提交 → 实现提交 → 文档闭环提交 → 推送协作分支”执行，禁止合包。
 - GitHub 若出现连接重置，可在当前 PowerShell 进程临时配置 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY=http://127.0.0.1:7890` 与 `NO_PROXY=localhost,127.0.0.1` 后重试；不得把代理或凭据写入仓库。
 
-**换会话可直接：核验分支与 HEAD → 读本文 §0～§3.1、§5、§6、§11 及 P10D 契约 → 先为 P10E 做只读审计和独立计划 → 再按 §3.1 向 Grok 下发单一受限实现任务。**
+**换会话可直接：核验分支与 HEAD → 读本文 §0～§3.1、§5、§6、§11 及 P10E 契约 → 为下一项未完成主线做只读审计和独立计划 → 再按 §3.1 向 Grok 下发单一受限实现任务。**
