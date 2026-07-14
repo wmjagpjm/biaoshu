@@ -7,9 +7,10 @@
 
 # P10I 人员资质到期提示实施计划
 
-> **状态**：独立契约与实施边界已冻结，等待受限实现。<br>
+> **状态**：后端、前端均已完成受限实现、Codex 独立审查与全量验收，等待本文档闭环提交。<br>
 > **工作分支**：`collab/grok-code-codex-review`。<br>
-> **前置基线**：P10H 文档闭环=`8678eac`；后端串行全量 392 passed；前端 lint/build 与单 worker 串行全量 E2E 93 passed。Playwright 共用 SQLite 重置库，必须串行。
+> **提交链**：计划=`ddc1807`；后端=`d5201e9`；前端=`49daa16`。<br>
+> **验收基线**：P10I 后端定向 14 passed、后端串行全量 406 passed；前端 lint/build 通过、P10I E2E 10 passed、单 worker 串行全量 E2E 103 passed。Playwright 共用 SQLite 重置库，必须串行。
 
 ## 1. 决策
 
@@ -95,3 +96,11 @@ npm run test:e2e
 ```
 
 所有 Playwright 命令必须等待前一个完成，禁止并行。所有 PowerShell 与 Grok 子进程后台静默运行，不启动可见窗口、浏览器或前台应用。
+
+## 6. 实施审查与独立验收记录
+
+1. 后端首版虽满足 90 天分类主路径，但服务查询使用整实体，连同 `remark`、创建人和时间戳一起装载；关注项模型也曾允许不应出现在列表的 `valid`，分类器暴露了可变窗口。Codex 限定返修后，SQL 只投影 7 个必要列，关注项状态收紧为三类，窗口固定在服务内部，并补充真实 SQL 投影、Pydantic 拒绝与函数签名测试。
+2. Codex 独立运行 `tests/test_hr_credential_expiry.py`，结果 14 passed；随后运行后端串行全量，结果 406 passed，仅保留 1 条既有 Starlette/httpx 弃用警告。
+3. 前端首版为掩盖 React Strict Mode 的重复读取，把 E2E 从“严格 1 次 GET”弱化为“至少 1 次”，且跨功能跳转触发了 P10D 请求、未完整断言禁止请求。Codex 拒绝该处理后，限定返修为组件实例级共享在途 Promise：首次挂载严格 1 次 GET，手动刷新后累计严格 2 次，不使用模块全局缓存；同时移除跨功能请求并补齐停用卡空态。
+4. Codex 独立运行 `npm run lint`、`npm run build`、`npm run test:e2e:hr-credential-expiry` 与 `npm run test:e2e`；结果依次通过、通过（仅既有大分块提示）、10 passed、单 worker 串行 103 passed。网络白名单、严格角色门禁、服务端日期直出、零浏览器持久化与固定中文错误均通过。
+5. Grok 只负责白名单实现和返修，未提交或推送；Codex 完成差异审查、独立验收、中文提交与协作分支推送。P10I 不交付证件真伪、证件号、附件、OCR、外网权威核验、审批、导出、自动修复或向其他角色投影。
