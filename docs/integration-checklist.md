@@ -109,7 +109,7 @@ npm run test:e2e:cards
 # 阶段3 M3-A：模板/卡片只读融合建议 E2E（本地 mock LLM，不写章节）
 npm run test:e2e:fuse
 
-# 阶段3 M3-B：差异预览 + 勾选确认写入 / base 漂移跳过 E2E
+# 阶段3 M3-B/M3-C：差异预览、确认写入、base 漂移跳过、最近批次一次性撤销 E2E
 npm run test:e2e:fuse-apply
 
 # P9B：国能 e 招计划追踪（隔离 8010/5174、biaoshu-e2e.db、MockTransport；禁止真实外网）
@@ -149,7 +149,7 @@ npm run test:e2e:hr-credential-expiry
 npm run test:e2e:parse-strategy
 ```
 
-当前基线：后端串行全量 **406 passed**（1 条既有 Starlette/httpx 弃用警告，含 P10I 严格人力角色、最小 SQL 投影、UTC 日期边界和固定审计测试）；前端 `lint` / `build` 通过（仅既有大包体积提示）及单 worker 串行全量 E2E **103 passed**。其中 P10I `test:e2e:hr-credential-expiry` **10 passed**、P10H `test:e2e:hr-performance-cards` **10 passed**、P10G `test:e2e:bidder-project-compliance` **10 passed**、P10F `test:e2e:hr-team-recommendations` **4 passed**、P8B `test:e2e:parse-strategy` **6 passed**、P10E `test:e2e:bidder-compliance-preview` **8 passed**、P10D `test:e2e:hr-credential-cards` **9 passed**、P10C `finance-cost-draft` **4 passed**、P10B `finance-role` **7 passed**、P10A `auth-rbac` **11 passed**、P9C `semantic-index` **9 passed**、知识卡片 `cards` **1 passed**。P10I 完整契约见 `docs/p10i-hr-credential-expiry-contract.md`：仅 strict `hr` 读取服务端固定 90 天日期提示，首次挂载严格 1 次 GET，不读取备注、不在浏览器重算或持久化。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须串行运行。
+当前基线：后端串行全量 **406 passed**（1 条既有 Starlette/httpx 弃用警告，含 P10I 严格人力角色、最小 SQL 投影、UTC 日期边界和固定审计测试）；前端 `lint` / `build` 通过（仅既有大包体积提示）及单 worker 串行全量 E2E **106 passed**。其中 M3-B/M3-C `test:e2e:fuse-apply` **6 passed**、M3-A `test:e2e:fuse` **1 passed**、P10I `test:e2e:hr-credential-expiry` **10 passed**、P10H `test:e2e:hr-performance-cards` **10 passed**、P10G `test:e2e:bidder-project-compliance` **10 passed**、P10F `test:e2e:hr-team-recommendations` **4 passed**、P8B `test:e2e:parse-strategy` **6 passed**、P10E `test:e2e:bidder-compliance-preview` **8 passed**、P10D `test:e2e:hr-credential-cards` **9 passed**、P10C `finance-cost-draft` **4 passed**、P10B `finance-role` **7 passed**、P10A `auth-rbac` **11 passed**、P9C `semantic-index` **9 passed**、知识卡片 `cards` **1 passed**。M3-C 完整契约见 `docs/m3c-content-fuse-undo-contract.md`：只在当前融合对话框内撤销最近一次成功写入批次，漂移章不覆盖，不做持久化历史。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须串行运行。
 
 ## 6. 已接 API 一览
 
@@ -273,6 +273,14 @@ npm run test:e2e:parse-strategy
 4. `ask` 每次显示一次性选择框；取消不建任务、不回写默认策略。商务标上传、整段重解析和反馈重生成均按同一规则处理。
 5. 策略读取失败只显示「暂时无法读取解析策略，请稍后重试」，不得回显后端详情或静默降级；浏览器不得使用 `localStorage`/`sessionStorage` 持久化或决定策略。
 
+## 6.8 M3-C 融合写入最近批次单次撤销
+
+1. 进入技术标编写步，打开「模板/卡片融合」，生成建议并勾选至少两个目标章确认写入；对话框出现“撤销本次写入”，章节正文变为建议内容、状态变为待审。
+2. 未做其他编辑时点击撤销，应显示“已撤销 2 章，跳过 0 章”；按钮立即消失，原正文和原状态恢复，等待防抖保存后刷新仍保持。
+3. 再次写入后，在遮罩下手工修改其中一章正文，再点击撤销；只恢复未漂移章，手工章保持现值，汇总显示恢复/跳过各自数量。标题或状态漂移同样不得覆盖。
+4. 关闭对话框再打开不得出现旧撤销按钮；生成新建议清空旧快照，下一成功批次只替换最近批次。无成功写入、全跳过或已消费快照不得建立/复活撤销入口。
+5. 撤销不发新业务 API，只沿用 editor-state PUT；不得写 `localStorage`、`sessionStorage`、IndexedDB、URL 或模块全局缓存，不得影响响应矩阵、大纲、分析、其他项目或其他用户。完整边界见 `docs/m3c-content-fuse-undo-contract.md`。
+
 ## 7. 本机日用主链路（目标 A 加强版）
 
 | 步骤 | 操作 |
@@ -353,7 +361,7 @@ npm run test:e2e:parse-strategy
 
 ## 14. 仍未接（后续）
 
-Celery、真 MinerU 安装包、P9B 以外的外部标讯数据源、P9C 的其他模型/GPU/在线 embedding/真实用户语料评测与自动模型更新、P10C 以外的财务税务/审批/导出/预算/回款/版本与审计查看、P10I 以外的人力附件与真实证件核验、P10G 以外的投标人矩阵明细/版本/结果跟踪与其他合规数据域、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
+Celery、真 MinerU 安装包、P9B 以外的外部标讯数据源、P9C 的其他模型/GPU/在线 embedding/真实用户语料评测与自动模型更新、M3-C 以外的持久化融合历史/通用撤销/多角色协作、P10C 以外的财务税务/审批/导出/预算/回款/版本与审计查看、P10I 以外的人力附件与真实证件核验、P10G 以外的投标人矩阵明细/版本/结果跟踪与其他合规数据域、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
 
 **响应矩阵相关（已接 vs 未扩）：** 多端冲突的版本写保护、409 与双浏览器上下文 E2E 主路径已接；「刷新来源」保留人工映射 E2E 已接；**智能建议人工确认后应用** E2E 已接；**来源超过 80 分页** 已推送（`1289c92`）；**字段级三方合并** MVP + E2E 已推送（`2c7b3e0`，`response-matrix-field-merge.spec.ts`）。仍未接：Word 失效引用在浏览器层的扩展（导出逻辑以后端单测为准）；包 9 交付增强。
 

@@ -1,13 +1,13 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-14（P8B 解析策略接线、P9A/P9B/P9C、P10A/P10B/P10C、P10D 人员资质素材卡、P10F 人力项目团队推荐快照、P10E 投标人匿名合规预览、P10G 投标人项目级合规统计、P10H 人员业绩素材卡与 **P10I 人员资质到期提示**已完成；提交以本分支 HEAD 为准）
+> **交接日期**：2026-07-14（M3-C 融合写入单批撤销、P8B 解析策略接线、P9A/P9B/P9C、P10A 至 P10I 均已完成；提交以本分支 HEAD 为准）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
-> **协作分支已推送功能基线**：P10I 计划=`ddc1807`、后端=`d5201e9`、前端=`49daa16`；P10H 计划=`7694843`、后端=`6c76d80`、前端=`4eb8a14`；P8B 计划=`f662674`、后端=`0994cc8`、前端=`80d2579`；P10F 计划=`12e067f`、后端=`3dc600a`、前端=`254f8c7`；P10E 计划=`26f7e40`、后端=`1b6ccf3`、前端=`37cf835`；P10G 计划=`26b43ea`、后端=`c3cf8b4`、前端=`d5656cc`；P10D 后端=`d8f7cbd`、前端=`71f065a`；P10C 后端=`6f30084`、前端=`737c7db`；P9C 最新代码为 `585e502`（合成评测与本地预检），前序为后端=`cc0d217`、前端=`a0bd84b`、运行时降级=`71c503c`；P9B 前序为解析=`45d7214`、数据域=`1c46e41`、Excel=`6491363`、同步=`229f1d7`、人工接受=`000b403`、界面=`a7cfcb8`。更早的审计基线为 `a1ba88a`，其下含 P9A、包 5 至包 8 和阶段 3。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
+> **协作分支已推送功能基线**：M3-C 计划=`c63310f`、实现=`b8ff605`；P10I 计划=`ddc1807`、后端=`d5201e9`、前端=`49daa16`；P10H 计划=`7694843`、后端=`6c76d80`、前端=`4eb8a14`；P8B 计划=`f662674`、后端=`0994cc8`、前端=`80d2579`；P10F 计划=`12e067f`、后端=`3dc600a`、前端=`254f8c7`；P10E 计划=`26f7e40`、后端=`1b6ccf3`、前端=`37cf835`；P10G 计划=`26b43ea`、后端=`c3cf8b4`、前端=`d5656cc`；P10D 后端=`d8f7cbd`、前端=`71f065a`；P10C 后端=`6f30084`、前端=`737c7db`；P9C 最新代码为 `585e502`（合成评测与本地预检）。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **本地状态**：P10I 已完成并保持严格 HR、服务端固定日期、只读最小投影边界。下一包 M3-C「融合写入最近批次单次撤销」已冻结纯前端契约与 3 文件白名单：只在当前融合对话框实例内恢复未漂移章节，不做后端历史、通用撤销栈或浏览器持久化。
-> **验收基线**：后端 P10I 定向 **14 passed**、串行全量 **406 passed**（1 条既有 Starlette/httpx 弃用警告）；前端 P10I E2E **10 passed**、单 worker 串行全量 E2E **103 passed**；P10H E2E **10 passed**、P10G E2E **10 passed**、P10F E2E **4 passed**、P8B E2E **6 passed**、P10E E2E **8 passed**、P10D HR E2E **9 passed**、P10C 成本 E2E **4 passed**、P10B 财务 E2E **7 passed**、P10A 认证 E2E **11 passed**、P9C 语义索引 E2E **9 passed**、知识卡片 E2E **1 passed**；`frontend npm run lint` / `build` 通过（仅既有大包体积提示）；`git diff --check`。**所有 Playwright E2E 共用 SQLite 重置库，必须逐条串行运行，禁止并行。**
+> **本地状态**：M3-C 已完成：当前融合对话框可一次性撤销最近成功批次，只恢复标题/正文/状态均未漂移的章节；不做后端历史、通用撤销栈或浏览器持久化。P10I 与既有各包保持原边界。
+> **验收基线**：后端 P10I 定向 **14 passed**、串行全量 **406 passed**（1 条既有 Starlette/httpx 弃用警告）；前端 M3-B/M3-C E2E **6 passed**、M3-A E2E **1 passed**、单 worker 串行全量 E2E **106 passed**；P10I E2E **10 passed**、P10H E2E **10 passed**、P10G E2E **10 passed**、P10F E2E **4 passed**、P8B E2E **6 passed**、P10E E2E **8 passed**、P10D HR E2E **9 passed**、P10C 成本 E2E **4 passed**、P10B 财务 E2E **7 passed**、P10A 认证 E2E **11 passed**、P9C 语义索引 E2E **9 passed**、知识卡片 E2E **1 passed**；`frontend npm run lint` / `build` 通过（仅既有大包体积提示）；`git diff --check`。**所有 Playwright E2E 共用 SQLite 重置库，必须逐条串行运行，禁止并行。**
 
 ---
 
@@ -18,8 +18,8 @@
 工作分支只能是 collab/grok-code-codex-review，禁止直接操作 main；先执行 git status -sb，并核对 HEAD 与 origin/collab/grok-code-codex-review 一致且工作区干净。
 完整阅读 docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/plans/2026-07-13-package-9-delivery-enhancement-plan.md、docs/integration-checklist.md。
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
-当前进度：P8B、P9A、P9B、P9C、P10A、P10B、P10C、P10D、P10F、P10E、P10G、P10H 与 P10I 均已完成各自计划内的实现、独立自动化验收、中文文档闭环与协作分支推送。P10I 固定契约见 `docs/p10i-hr-credential-expiry-contract.md`，实施与验收记录见 `docs/plans/2026-07-14-p10i-hr-credential-expiry-plan.md`；其他契约路径见本文对应功能节。P9C 仍仅允许纯离线 BAAI/bge-small-zh-v1.5、512 维、CPU、版本并存和可见关键词降级；正文/查询不得出域。
-下一步：按 `docs/m3c-content-fuse-undo-contract.md` 与 `docs/plans/2026-07-14-m3c-content-fuse-undo-plan.md`，向 Grok 下发 3 文件纯前端单一任务；Codex 审查正文/状态恢复、漂移跳过、一次性快照与原 M3-B 回归后独立验收。不得扩为后端版本历史、跨页面撤销栈或任意编辑回滚。
+当前进度：M3-C、P8B、P9A、P9B、P9C、P10A、P10B、P10C、P10D、P10F、P10E、P10G、P10H 与 P10I 均已完成各自计划内的实现、独立自动化验收、中文文档闭环与协作分支推送。M3-C 契约见 `docs/m3c-content-fuse-undo-contract.md`，实施与验收记录见 `docs/plans/2026-07-14-m3c-content-fuse-undo-plan.md`；其他契约路径见本文对应功能节。P9C 仍仅允许纯离线 BAAI/bge-small-zh-v1.5、512 维、CPU、版本并存和可见关键词降级；正文/查询不得出域。
+下一步：先只读审计剩余主线，选择现有合法数据与既有权限足以支撑的最小能力，再冻结独立契约与白名单。M3-C 不扩为后端版本历史、跨页面撤销栈或任意编辑回滚。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -140,8 +140,8 @@
 | 功能域 | 关键路径 | 文件顶注释 | 说明 |
 |--------|----------|------------|------|
 | 技术标工作区 | `technical-plan/pages/TechnicalPlanWorkspace.tsx` | **齐** | ResponseMatrixPanel；串行 `response_match`；编写步 M3-A/M3-B 融合入口；P8B `light/local/ask` 解析决策 |
-| 模板/卡片融合 UI | `technical-plan/components/ContentFuseDialog.tsx`、`lib/contentFuse.ts`；E2E `e2e/content-fuse-suggest.spec.ts`、`content-fuse-apply.spec.ts` | **齐** | M3-A 只读建议；M3-B 双栏预览/勾选确认写入/base 漂移跳过；`test:e2e:fuse` / `fuse-apply` |
-| 技术标 hooks | `useProjectPipeline` / `useTechnicalPlanEditors` / `useProjectGuidance` | **齐** | SSE、项目切换隔离、取消终态保护、正文图片上传、responseMatrix；TaskType 含 content_fuse |
+| 模板/卡片融合 UI | `technical-plan/components/ContentFuseDialog.tsx`、`lib/contentFuse.ts`；E2E `e2e/content-fuse-suggest.spec.ts`、`content-fuse-apply.spec.ts` | **齐** | M3-A 只读建议；M3-B 双栏预览/确认写入/base 漂移跳过；M3-C 最近批次一次性撤销、标题/正文/状态漂移保护；`test:e2e:fuse` / `fuse-apply` |
+| 技术标 hooks | `useProjectPipeline` / `useTechnicalPlanEditors` / `useProjectGuidance` | **齐** | SSE、项目切换隔离、取消终态保护、正文图片上传、responseMatrix；`replaceChapterBody` 支持 M3-C 显式恢复原状态并派生摘要/字数；TaskType 含 content_fuse |
 | 响应矩阵 | `technical-plan/lib/responseMatrix.ts`、`hooks/useTechnicalPlanEditors.ts`、`components/ResponseMatrixPanel.tsx`、`pages/TechnicalPlanWorkspace.tsx`；E2E conflict/refresh/suggest-apply/source-pagination/field-merge | **齐** | sourceKey 合并、跨批建议择优、409 字段级三方合并预览、仅矩阵 PUT、双 context E2E |
 | projectStore | `technical-plan/lib/projectStore.ts` | **齐** | kind 过滤 |
 | outlineTree | `technical-plan/lib/outlineTree.ts` | **齐** | markdownToOutline |
@@ -227,6 +227,8 @@ Start-Process -FilePath 'C:\Users\Administrator\.grok\bin\grok.exe' -ArgumentLis
 P10D 至 P10G 的实际协作按上述模式完成。P10H 延续该闭环：Codex 先否决把 P10D `performance` 枚举直接当作具体项目业绩，冻结独立 `hr_performance_cards` 契约；Grok 后端首版后，Codex 发现更新模型可显式传入非空字段 `null` 且鉴权断言过宽，遂下发仅限 Schema/测试的返修；修复后独立验收后端定向 14 项与全量 392 项。前端再单独实现，Codex 审查初始摘要、按需详情、写后双重重读、迟到响应隔离、严格门禁和网络/存储白名单，独立通过 lint/build、P10H E2E 10 项及单 worker 串行全量 93 项。
 
 P10I 同样完成两轮受限审查。后端首版整实体加载了契约禁止读取的备注/创建人/时间戳，关注项模型还允许 `valid` 且分类器暴露可变窗口；Codex 限定返修为 7 个必要 SQL 列、三类关注状态和内部固定 90 天，并补真实 SQL 投影与模型拒绝测试，独立通过定向 14 项和全量 406 项。前端首版用“至少 1 次 GET”掩盖 Strict Mode 重复读取，并跨功能触发 P10D；Codex 拒绝后，返修为组件实例级共享在途 Promise、首次严格 1 次 GET、刷新累计 2 次，移除跨功能请求并补齐停用卡空态，独立通过 lint/build、P10I E2E 10 项及单 worker 串行全量 103 项。下一包必须延续相同的“规划—单任务实现—独立审查—返修—验收—文档”闭环。
+
+M3-C 从 M3-B 明确后遗留中选取最近批次即时撤销，Codex 先比较对话框内单批撤销、页面级临时撤销和后端版本历史，冻结最小方案。Grok 严格 3 文件先写失败 E2E，再实现按章最早 before/最终 after 快照与原状态恢复。Codex 独立代码/安全审查确认快照不持久化、点击时重读并校验标题/正文/状态、漂移章不覆盖且无新增 API；定向 M3-B/M3-C 6 项、M3-A 1 项、P10H 10 项及 lint/build 均通过。首轮全量 103/106 的 3 项失败均为纯白页应用未启动，相关定向通过；完整单 worker 重跑 106/106 后才验收提交。下一包继续沿用“规划—单任务实现—独立审查—验收—文档”闭环。
 
 **注意**：旧 SQLite 缺列时 `ensure_schema_columns()` 会 ALTER（含 `embedding_json`、`kind`、`business_json`、`response_matrix_json` 等）。异常可删 `backend/data/*.db` 重建。
 
@@ -325,7 +327,13 @@ P10I 已完成并推送：计划=`ddc1807`，后端=`d5201e9`，前端=`49daa16`
 
 前端 `/hr/credential-expiry` 复用严格 `RequireHr`，直接展示服务端日期、窗口、六项计数与三类关注项，不用浏览器时间重算。React Strict Mode 下使用组件实例级在途 Promise 共享首次请求，不跨用户/会话缓存：初次严格 1 次 GET，手动刷新后累计严格 2 次。页面固定声明不验证真实性，不展示 `cardId`，不请求 P10D/P10F/P10H、项目、文件、财务、投标人、未知 API 或外网，不写浏览器存储或 URL 参数。完整契约见 `docs/p10i-hr-credential-expiry-contract.md`，实施与验收记录见 `docs/plans/2026-07-14-p10i-hr-credential-expiry-plan.md`。
 
-### 4.15 路径索引
+### 4.15 M3-C 融合写入最近批次单次撤销
+
+M3-C 已完成并推送：计划=`c63310f`，实现=`b8ff605`。它不改变 `content_fuse` 后端任务、模型输出或 editor-state API；只在 `ContentFuseDialog` 当前实例内，为最近一次至少成功写入一条建议的确认批次保存最小快照。多建议同章保留最早写入前正文/状态和最终写入后正文/状态；下一成功批次覆盖，生成新建议、关闭、刷新或切项目后不保留。
+
+点击“撤销本次写入”时逐章重读当前状态，只有章节仍存在且标题、正文、状态均精确等于写入后快照才恢复写入前正文与原状态；漂移章跳过且不覆盖。恢复继续通过 `replaceChapterBody` 派生预览与字数，并走既有串行防抖 PUT；快照无论全部、部分或零项恢复均一次消费。无新 API、表、依赖、浏览器存储、模块全局缓存、历史栈或通用撤销。完整契约见 `docs/m3c-content-fuse-undo-contract.md`，实施与验收记录见 `docs/plans/2026-07-14-m3c-content-fuse-undo-plan.md`。
+
+### 4.16 路径索引
 
 ```text
 backend/app/
@@ -350,7 +358,7 @@ frontend/src/features/
 |--------|----|------|
 | 导出 | `structure` / `min_heading_left_enabled` | P9A 已实现：叶子标题左侧强调线（`c1ff160`）；整章布局与 `structure` 仍不做，详见 `docs/plans/2026-07-13-p9a-word-layout-plan.md` |
 | 业务 | 其他外部标讯数据源 | P9B 已完成唯一的国能 e 招单站受控追踪；其他网站/API/RSS、定时同步和浏览器外网请求仍未接，须另立计划 |
-| 技术标 | 融合回滚、响应矩阵与解析增强 | M3-C 最近批次单次撤销已冻结纯前端计划、尚未实现；响应矩阵已完成来源分页、字段级三方合并和冲突保护；包 8/P8B 已接轻量/本地回传策略。仍未接：持久化融合历史、真实 MinerU/Docling 部署与其他交付增强 |
+| 技术标 | 融合历史、响应矩阵与解析增强 | M3-C 最近批次单次撤销已交付；响应矩阵已完成来源分页、字段级三方合并和冲突保护；包 8/P8B 已接轻量/本地回传策略。仍未接：持久化融合历史/通用撤销、多角色协作、真实 MinerU/Docling 部署与其他交付增强 |
 | 资产 | 卡片化知识/多模板融合 | 阶段 1 模板 + 阶段 2 卡片库（`53e012f`）；阶段 3 已完成并推送：M3-A=`5d37dba`，M3-B=`e2e5d04` |
 | RAG | 真语义大模型 embedding 调优 | 有本地+可选 API，可继续增强 |
 | 财务 | 税务、审批、导出、预算、回款、版本与财务查看审计 | P10B/P10C 已完成报价只读、人工成本草案与毛利快照；其余数据源、精度和权限必须另立契约，禁止从报价推算 |
@@ -366,7 +374,7 @@ frontend/src/features/
 
 1. 阶段 4 **功能包 8** MVP=`6db1586` 与后续 **P8B 解析策略接线**（计划=`f662674`、后端=`0994cc8`、前端=`80d2579`）均已验收并推送；真实 MinerU/Docling 外置生产部署仍须独立安全与部署契约。
 2. 阶段 4 **P9A/P9B/P9C** 与阶段 5 **P10A/P10B/P10C/P10D/P10F/P10E/P10G/P10H/P10I** 均已实现、独立验收并文档闭环。P9C 的真实模型门仍是运行时前置：固定依赖和模型缓存就绪后，用户显式构建索引，再运行固定预检；未通过前继续关键词降级。
-3. 下一包 M3-C 已冻结：只在融合对话框内撤销最近一次成功确认写入，按章节正文、标题、状态做点击时漂移校验，恢复仍走既有串行防抖 PUT。关闭/刷新/切项目不保留；无后端历史、浏览器存储或通用撤销。真实证件核验、附件、投标人明细、财务扩展与解析器部署仍须另立契约。
+3. M3-C 已完成：只在融合对话框内撤销最近一次成功确认写入，按章节正文、标题、状态做点击时漂移校验，恢复仍走既有串行防抖 PUT。下一包尚未冻结；先只读审计剩余主线，真实证件核验、附件、投标人明细、财务扩展与解析器部署仍须另立契约。
 
 资源同步后续只可由管理员配置新的签名发布方，绝不可放开浏览器 URL 或外网抓取。图片管线已冻结项目内资源引用协议，后续扩展不得放开外链或客户端路径。SSE 的多工作空间鉴权、事件游标和项目级总线不在当前范围。
 
@@ -423,7 +431,7 @@ frontend/src/features/
 ## 11. 当前会话状态（2026-07-14）
 
 - **用户长期目标（必须完整保留）**：持续完成 biaoshu 标书制作者剩余主线任务，按既定路线图完成独立规划、受限实现审查、独立验收、中文文档闭环与协作分支推送；不直接操作 `main`。
-- 当前分支仍为 `collab/grok-code-codex-review`；P10I 计划=`ddc1807`、后端=`d5201e9`、前端=`49daa16` 已推送，P10H、P10G、P10F、P10E 与 P8B 基线保持已推送，本交接文档提交将位于其后。新会话第一步必须用 `git status -sb`、`git rev-parse HEAD`、`git rev-parse origin/collab/grok-code-codex-review` 重新核验，不可只信本文静态 SHA。
+- 当前分支仍为 `collab/grok-code-codex-review`；M3-C 计划=`c63310f`、实现=`b8ff605` 已推送，P10I、P10H、P10G、P10F、P10E 与 P8B 基线保持已推送，本交接文档提交将位于其后。新会话第一步必须用 `git status -sb`、`git rev-parse HEAD`、`git rev-parse origin/collab/grok-code-codex-review` 重新核验，不可只信本文静态 SHA。
 - 阶段 3 **已完成并推送**：M3-A 只读融合建议；M3-B 差异预览 + 勾选确认写入（SHA=`e2e5d04`）。
 - 阶段 4 **包 5** 已推送：`460097a` 智能建议人工确认 E2E。
 - 阶段 4 **包 6** 已推送：`1289c92` 实现响应矩阵源分页调用。
@@ -443,9 +451,10 @@ frontend/src/features/
 - **P10G 投标人项目级合规统计交付**：计划=`26b43ea`，后端=`c3cf8b4`，前端=`d5656cc`。`require_bidder` 只允许 required 模式当前空间精确 `bidder`；选择器 `GET /api/bidder/project-compliance/projects` 仅返回技术标 `id/name`，不审计；详情 `GET /api/bidder/project-compliance/{projectId}` 仅返回 `dataState` 与五项汇总。disabled、仅所有者、其他角色均拒绝；真实 `member.role=bidder` 的所有者按实际角色通过。跨空间/不存在/商务标固定 `404 bidder_project_compliance_not_found`，不反射路径项目 ID；成功响应 `no-store`，详情审计固定 action/target 且不记录项目标识、计数或矩阵。前端先取选择器再按用户选择取详情，不回退 P10E、不写 URL/浏览器存储，项目切换不会展示旧结果。P10G 不含项目详情、矩阵原文、人员、财务、写入、导出、版本、结果跟踪或规则执行；完整契约见 `docs/p10g-bidder-project-compliance-contract.md`。
 - **P10H 人员业绩素材卡交付**：计划=`7694843`，后端=`6c76d80`，前端=`4eb8a14`。`require_hr` 只允许 required 模式当前空间精确 `hr`；摘要列表不含 `performanceSummary`/`remark`，详情按需读取，创建/编辑/启停走 CSRF 且写后强制重读。严格年份、布尔、额外键、空补丁与显式非法 `null` 均有固定 422；跨空间/不存在/伪造 ID 固定 404，不反射 ID。成功响应 `no-store`，审计固定 action/`hpc_*` target 且不记录业务值。前端无 P10D/P10F 回退、无浏览器存储/URL 参数，迟到响应不覆盖新卡。无删除、附件、证件校验、联系方式、合同金额、项目关联、团队组装、审批、导出或 Word 写入；完整契约见 `docs/p10h-hr-performance-cards-contract.md`。
 - **P10I 人员资质到期提示交付**：计划=`ddc1807`，后端=`d5201e9`，前端=`49daa16`。唯一 GET 仅向 required 模式当前空间精确 `hr` 开放；服务端 UTC 日期和固定 90 天窗口、必要 SQL 列、有效卡只计数、停用卡只排除、固定 `no-store` 与脱敏审计。前端服务端日期直出，Strict Mode 首次严格单次 GET，刷新后累计两次，无模块全局缓存、P10D/P10F/P10H 回退、浏览器存储或 URL 参数。只做人工日期提示，不是真实证件核验；完整契约见 `docs/p10i-hr-credential-expiry-contract.md`。
-- **已验证基线**：后端 P10I 定向 14 passed、串行全量 406 passed（1 条既有 Starlette/httpx 弃用警告）；前端 P10I E2E 10 passed、单 worker 串行全量 E2E 103 passed；P10H E2E 10 passed、P10G E2E 10 passed、P10F E2E 4 passed、P8B 解析策略 E2E 6 passed、P10E E2E 8 passed、P10D HR E2E 9 passed、P10C 成本 E2E 4 passed、P10B 财务 E2E 7 passed、P10A 认证 E2E 11 passed、P9C 语义索引 E2E 9 passed、知识卡片 E2E 1 passed；前端 lint/build 通过（仅既有大 chunk 警告）；`git diff --check` 通过；P9A WPS `12.1.0.26895` 实际打开技术标/商务标通过。**E2E 共用 SQLite 重置库，所有 Playwright 命令必须串行；此前一次并行竞争已被停止并由串行全量结果覆盖。**
-- **未实现主线与下一包**：M3-C 融合写入最近批次单次撤销已完成只读审计、契约与纯前端实施拆分，尚未实现；只恢复当前对话框内未漂移章节，不是持久化历史或通用撤销。其他未实现项包括人力附件/真实证件核验、财务税务/审批/导出/预算/回款/版本、投标人矩阵明细/版本/结果跟踪、P9C 真模型运行时门和生产部署治理。不得扩大既有角色与生产路径。
+- **M3-C 融合写入单批撤销交付**：计划=`c63310f`，实现=`b8ff605`。当前融合对话框只保存最近成功批次的最小内存快照；撤销点击时精确校验章节存在性、标题、正文和状态，未漂移才恢复正文与原状态，漂移章跳过。快照一次消费、关闭即失效；无新 API、后端、存储、历史栈或通用撤销。完整契约见 `docs/m3c-content-fuse-undo-contract.md`。
+- **已验证基线**：后端 P10I 定向 14 passed、串行全量 406 passed（1 条既有 Starlette/httpx 弃用警告）；前端 M3-B/M3-C E2E 6 passed、M3-A E2E 1 passed、单 worker 串行全量 E2E 106 passed；P10I E2E 10 passed、P10H E2E 10 passed、P10G E2E 10 passed、P10F E2E 4 passed、P8B 解析策略 E2E 6 passed、P10E E2E 8 passed、P10D HR E2E 9 passed、P10C 成本 E2E 4 passed、P10B 财务 E2E 7 passed、P10A 认证 E2E 11 passed、P9C 语义索引 E2E 9 passed、知识卡片 E2E 1 passed；前端 lint/build 通过（仅既有大 chunk 警告）；`git diff --check` 通过；P9A WPS `12.1.0.26895` 实际打开技术标/商务标通过。**首轮全量 103/106 的 3 个纯白页环境失败已由相关定向通过和完整重跑 106/106 覆盖；E2E 共用 SQLite 重置库，所有 Playwright 命令必须串行。**
+- **未实现主线与下一包**：M3-C 已完成；下一包尚未冻结，须先只读审计并选择现有合法数据与既有权限可支撑的最小能力。其他未实现项包括持久化融合历史/通用撤销/多角色协作、人力附件/真实证件核验、财务税务/审批/导出/预算/回款/版本、投标人矩阵明细/版本/结果跟踪、P9C 真模型运行时门和生产部署治理。不得扩大既有角色与生产路径。
 - 新任务分工不变：Grok 只负责限定实现与自测，未经 Codex 审查确认不得提交；Codex 负责计划、范围冻结、差异审查、独立测试、验收、中文提交、文档闭环和 GitHub 状态核验。每一包仍按“计划提交 → 实现提交 → 文档闭环提交 → 推送协作分支”执行，禁止合包。
 - GitHub 若出现连接重置，可在当前 PowerShell 进程临时配置 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY=http://127.0.0.1:7890` 与 `NO_PROXY=localhost,127.0.0.1` 后重试；不得把代理或凭据写入仓库。
 
-**换会话可直接：核验分支与 HEAD → 读本文 §0～§3.1、§5、§6、§11、M3-C 契约与实施计划 → 按 §3.1 以后台隐藏进程向 Grok 下发 M3-C 纯前端单一受限实现任务。**
+**换会话可直接：核验分支与 HEAD → 读本文 §0～§3.1、§5、§6、§11 及 M3-C/P10I 验收记录 → 只读审计剩余主线并冻结下一最小能力 → 按 §3.1 以后台隐藏进程向 Grok 下发单一受限实现任务。**
