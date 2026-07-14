@@ -10,6 +10,7 @@ import {
   FileType,
   FileWarning,
   FolderKanban,
+  IdCard,
   Library,
   Menu,
   Newspaper,
@@ -35,7 +36,8 @@ import "./AppShell.css";
  * 用途：固定侧栏导航，主区浅色渐变 + 大圆角内容；展示用户/角色/空间与退出。
  * 对接：checkApiHealth → GET /api/health；useAuthSession
  * 二次开发：导航隐藏不替代后端鉴权；禁止展示 Cookie/CSRF/API Key；
- *           财务入口仅严格 finance 可见，不向其他角色扩展。
+ *           财务入口仅严格 finance 可见；人力入口仅严格 hr 可见；
+ *           不得改动遗留 Sidebar 组件路径。
  */
 
 type NavItem = {
@@ -49,6 +51,8 @@ type NavItem = {
   ownerOnly?: boolean;
   /** 仅严格 finance 可见（P10B 财务报价） */
   financeOnly?: boolean;
+  /** 仅严格 hr 可见（P10D 人员资质） */
+  hrOnly?: boolean;
 };
 
 const mainNav: NavItem[] = [
@@ -145,6 +149,17 @@ const financeNav: NavItem[] = [
   },
 ];
 
+/** P10D：人力人员资质入口，独立「人力」分组；仅严格 hr 可见 */
+const hrNav: NavItem[] = [
+  {
+    to: "/hr",
+    label: "人员资质",
+    icon: <IdCard size={18} />,
+    matchPrefix: "/hr",
+    hrOnly: true,
+  },
+];
+
 function isNavActive(pathname: string, item: NavItem): boolean {
   if (item.to === "/create") {
     return pathname === "/" || pathname.startsWith("/create");
@@ -195,6 +210,7 @@ export function AppShell() {
     canAccessBusiness,
     canAccessSettings,
     canAccessFinance,
+    canAccessHr,
     logout,
   } = useAuthSession();
 
@@ -208,17 +224,20 @@ export function AppShell() {
     if (item.business && !canAccessBusiness) return false;
     if (item.ownerOnly && !canAccessSettings) return false;
     if (item.financeOnly && !canAccessFinance) return false;
+    if (item.hrOnly && !canAccessHr) return false;
     return true;
   });
   const visibleSystem = systemNav.filter((item) => {
     if (item.business && !canAccessBusiness) return false;
     if (item.ownerOnly && !canAccessSettings) return false;
     if (item.financeOnly && !canAccessFinance) return false;
+    if (item.hrOnly && !canAccessHr) return false;
     return true;
   });
   const visibleFinance = financeNav.filter(
     (item) => !item.financeOnly || canAccessFinance,
   );
+  const visibleHr = hrNav.filter((item) => !item.hrOnly || canAccessHr);
 
   useEffect(() => {
     setMobileOpen(false);
@@ -325,13 +344,27 @@ export function AppShell() {
               ))}
             </>
           )}
+          {visibleHr.length > 0 && (
+            <>
+              <div className="side-nav__section">人力</div>
+              {visibleHr.map((item) => (
+                <SideLink
+                  key={item.to}
+                  item={item}
+                  onNavigate={() => setMobileOpen(false)}
+                />
+              ))}
+            </>
+          )}
           {!canAccessBusiness &&
             !canAccessFinance &&
+            !canAccessHr &&
             phase === "authenticated" && (
               <div className="side-nav__section">说明</div>
             )}
           {!canAccessBusiness &&
             !canAccessFinance &&
+            !canAccessHr &&
             phase === "authenticated" && (
               <NavLink
                 to="/restricted"

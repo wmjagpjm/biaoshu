@@ -51,6 +51,12 @@ type AuthContextValue = {
    * disabled / 握手失败 / 未认证 / 其他角色一律 false。
    */
   canAccessFinance: boolean;
+  /**
+   * 是否可进入人力人员资质素材卡入口。
+   * 仅 phase=authenticated 且当前空间角色严格为 hr 时为 true；
+   * disabled / 握手失败 / 未认证 / 其他角色一律 false。
+   */
+  canAccessHr: boolean;
   errorMessage: string | null;
   refresh: () => Promise<void>;
   login: (username: string, password: string) => Promise<void>;
@@ -234,6 +240,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // P10B：严格 finance；个人兼容（disabled）与所有者/制作者均不隐式放开
   const canAccessFinance =
     phase === "authenticated" && activeMembership?.role === "finance";
+  // P10D：严格 hr；disabled 与 owner/bid_writer/finance/bidder 均不开放
+  const canAccessHr =
+    phase === "authenticated" && activeMembership?.role === "hr";
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -245,6 +254,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       canAccessBusiness,
       canAccessSettings,
       canAccessFinance,
+      canAccessHr,
       errorMessage,
       refresh,
       login,
@@ -259,6 +269,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       canAccessBusiness,
       canAccessSettings,
       canAccessFinance,
+      canAccessHr,
       errorMessage,
       refresh,
       login,
