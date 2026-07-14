@@ -1,13 +1,14 @@
 """
-模块：P10D/P10F/P10H 人力路由
+模块：P10D/P10F/P10H/P10I 人力路由
 用途：严格 hr 的资质卡列表/详情/创建/更新（无删除）；P10F 团队推荐快照读写；
-  P10H 人员业绩卡列表/详情/创建/更新（无删除）。
+  P10H 人员业绩卡列表/详情/创建/更新（无删除）；P10I 资质到期只读摘要。
 对接：/api/hr/credential-cards*；/api/hr/team-recommendations*；
-  /api/hr/performance-cards*；
+  /api/hr/performance-cards*；/api/hr/credential-expiry；
   deps.require_hr；hr_credential_service；hr_team_recommendation_service；
-  hr_performance_service。
+  hr_performance_service；hr_credential_expiry_service。
 二次开发：禁止放宽角色；响应 Cache-Control:no-store；写操作依赖既有 CSRF；
-  创建/更新须手工安全解析请求体，禁止默认 422 回显证件号/电话等原始输入。
+  创建/更新须手工安全解析请求体，禁止默认 422 回显证件号/电话等原始输入；
+  P10I 禁止客户端 asOf/window，禁止写接口。
 """
 
 from __future__ import annotations
@@ -26,6 +27,8 @@ from app.api.schemas import (
     HrCredentialCardListOut,
     HrCredentialCardSummaryOut,
     HrCredentialCardUpdate,
+    HrCredentialExpiryAttentionItemOut,
+    HrCredentialExpiryOut,
     HrPerformanceCardCreate,
     HrPerformanceCardDetailOut,
     HrPerformanceCardListOut,
@@ -41,6 +44,7 @@ from app.api.schemas import (
 )
 from app.core.database import get_db
 from app.services import (
+    hr_credential_expiry_service,
     hr_credential_service,
     hr_performance_service,
     hr_team_recommendation_service,
@@ -203,6 +207,53 @@ def _http_invalid() -> HTTPException:
     return HTTPException(
         status_code=422,
         detail={"code": _CODE_INVALID, "message": _MSG_INVALID},
+    )
+
+
+@router.get("/credential-expiry", response_model=HrCredentialExpiryOut)
+def get_credential_expiry(
+    request: Request,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    workspace_id: Annotated[str, Depends(require_hr)],
+) -> HrCredentialExpiryOut:
+    """
+    用途：严格 hr 读取当前空间人员资质到期提示（只读，无查询参数）。
+    对接：GET /api/hr/credential-expiry；require_hr；hr_credential_expiry_service。
+    二次开发：
+      - 禁止 asOf/window/query/body；asOf 由服务端 UTC 自然日决定
+      - Cache-Control:no-store；审计 target 固定 credential_expiry
+      - 不读取 remark；不写卡片；不访问 P10F/P10H/外网
+    """
+    _no_store(response)
+    actor = _actor_user_id(request)
+    raw = hr_credential_expiry_service.get_credential_expiry(
+        db,
+        workspace_id=workspace_id,
+        actor_user_id=actor,
+    )
+    return HrCredentialExpiryOut(
+        as_of_date=raw["as_of_date"],
+        window_days=raw["window_days"],
+        active_total_count=raw["active_total_count"],
+        expired_count=raw["expired_count"],
+        expiring_soon_count=raw["expiring_soon_count"],
+        valid_count=raw["valid_count"],
+        missing_expiry_count=raw["missing_expiry_count"],
+        inactive_excluded_count=raw["inactive_excluded_count"],
+        attention_items=[
+            HrCredentialExpiryAttentionItemOut(
+                card_id=item["card_id"],
+                person_name=item["person_name"],
+                category=item["category"],
+                credential_name=item["credential_name"],
+                level=item.get("level") or "",
+                valid_until=item.get("valid_until"),
+                state=item["state"],
+                days_remaining=item.get("days_remaining"),
+            )
+            for item in raw.get("attention_items") or []
+        ],
     )
 
 

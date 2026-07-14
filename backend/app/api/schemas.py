@@ -1689,3 +1689,67 @@ class BidderProjectComplianceDetailOut(BaseModel):
 
     data_state: BidderComplianceDataState = Field(serialization_alias="dataState")
     summary: BidderComplianceSummaryOut
+
+
+# ---------- P10I 人员资质到期提示 ----------
+
+
+# 内部分类可含 valid（仅计数）；关注列表输出禁止 valid
+HrCredentialExpiryState = Literal[
+    "expired", "expiring_soon", "valid", "missing_expiry"
+]
+HrCredentialExpiryAttentionState = Literal[
+    "expired", "expiring_soon", "missing_expiry"
+]
+
+
+class HrCredentialExpiryAttentionItemOut(BaseModel):
+    """
+    模块：人员资质到期关注项
+    用途：仅投影契约白名单字段；不含 remark、时间戳、工作空间、创建人。
+    对接：GET /api/hr/credential-expiry 的 attentionItems。
+    二次开发：
+      - 字段集合固定；禁止附加证件号/附件/路径/外链或未列字段
+      - state 仅 expired/expiring_soon/missing_expiry，拒绝 valid
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    card_id: str = Field(serialization_alias="cardId")
+    person_name: str = Field(serialization_alias="personName")
+    category: HrCredentialCategory
+    credential_name: str = Field(serialization_alias="credentialName")
+    level: str = ""
+    valid_until: date | None = Field(
+        default=None, serialization_alias="validUntil"
+    )
+    state: HrCredentialExpiryAttentionState
+    days_remaining: int | None = Field(
+        default=None, serialization_alias="daysRemaining"
+    )
+
+
+class HrCredentialExpiryOut(BaseModel):
+    """
+    模块：人员资质到期提示响应
+    用途：服务端 UTC 日期、固定 90 天窗口、固定计数与关注列表。
+    对接：GET /api/hr/credential-expiry。
+    二次开发：禁止接收客户端 asOf/window；valid 只计数不进 attentionItems；
+      停用卡只计入 inactiveExcludedCount。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    as_of_date: date = Field(serialization_alias="asOfDate")
+    window_days: int = Field(serialization_alias="windowDays")
+    active_total_count: int = Field(serialization_alias="activeTotalCount")
+    expired_count: int = Field(serialization_alias="expiredCount")
+    expiring_soon_count: int = Field(serialization_alias="expiringSoonCount")
+    valid_count: int = Field(serialization_alias="validCount")
+    missing_expiry_count: int = Field(serialization_alias="missingExpiryCount")
+    inactive_excluded_count: int = Field(
+        serialization_alias="inactiveExcludedCount"
+    )
+    attention_items: list[HrCredentialExpiryAttentionItemOut] = Field(
+        serialization_alias="attentionItems"
+    )
