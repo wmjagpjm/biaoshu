@@ -21,6 +21,7 @@ import { LoginPage } from "../features/auth/pages/LoginPage";
 import { FinanceQuotePage } from "../features/finance/pages/FinanceQuotePage";
 import { HrCredentialCardsPage } from "../features/hr/pages/HrCredentialCardsPage";
 import { HrTeamRecommendationsPage } from "../features/hr-team-recommendation/pages/HrTeamRecommendationsPage";
+import { HrPerformanceCardsPage } from "../features/hr-performance/pages/HrPerformanceCardsPage";
 import { BidderCompliancePreviewPage } from "../features/bidder/pages/BidderCompliancePreviewPage";
 import { BidderProjectCompliancePage } from "../features/bidder-project-compliance/pages/BidderProjectCompliancePage";
 import {
@@ -33,9 +34,9 @@ import "../features/auth/pages/LoginPage.css";
 /**
  * 模块：前端路由
  * 用途：对齐 C 端模块地图；按认证模式门禁业务壳；非 bid_writer 重定向受限页；
- *       严格 finance 可进 /finance 只读报价页；严格 hr 可进 /hr 人员资质与
- *       /hr/team-recommendations 团队推荐页；严格 bidder 可进 /bidder 匿名合规预览
- *       与 /bidder/project-compliance 项目级合规统计页。
+ *       严格 finance 可进 /finance 只读报价页；严格 hr 可进 /hr 人员资质、
+ *       /hr/team-recommendations 团队推荐与 /hr/performance-cards 人员业绩页；
+ *       严格 bidder 可进 /bidder 匿名合规预览与 /bidder/project-compliance 项目级合规统计页。
  * 对接：AuthProvider；页面均挂 AppShell（登录页除外）。
  * 二次开发：导航隐藏不替代后端鉴权；disabled 保持既有业务路径但不开放财务/人力/投标人入口。
  */
@@ -135,14 +136,14 @@ function RequireFinance({ children }: { children: ReactNode }) {
 }
 
 /**
- * 用途：要求严格 hr 才渲染人员资质/团队推荐页。
+ * 用途：要求严格 hr 才渲染人员资质/团队推荐/人员业绩页。
  * 约束：disabled / 其他角色不渲染 HR 页、不发 HR 请求，只显示受限说明。
  */
 function RequireHr({ children }: { children: ReactNode }) {
   const { canAccessHr } = useAuthSession();
   if (!canAccessHr) {
     return (
-      <RestrictedAccessPage reason="仅人力角色可管理本空间人员资质与团队推荐。个人版兼容模式与所有者、标书制作者、财务、投标人均不可通过本入口访问。" />
+      <RestrictedAccessPage reason="仅人力角色可管理本空间人员资质、团队推荐与人员业绩。个人版兼容模式与所有者、标书制作者、财务、投标人均不可通过本入口访问。" />
     );
   }
   return <>{children}</>;
@@ -382,6 +383,14 @@ function AuthGate() {
           element={
             <RequireHr>
               <HrTeamRecommendationsPage />
+            </RequireHr>
+          }
+        />
+        <Route
+          path="hr/performance-cards"
+          element={
+            <RequireHr>
+              <HrPerformanceCardsPage />
             </RequireHr>
           }
         />
