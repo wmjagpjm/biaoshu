@@ -1,13 +1,13 @@
 <!--
 模块：P10J 财务个人成本变更记录契约
 用途：冻结严格财务角色读取本人在当前工作空间成功成本变更记录的数据、权限、审计与前端边界。
-对接：docs/plans/2026-07-14-p10j-finance-personal-cost-change-events-plan.md；P10C finance_cost_* 审计事件；后续 /api/finance/cost-change-events。
+对接：docs/plans/2026-07-14-p10j-finance-personal-cost-change-events-plan.md；P10C finance_cost_* 审计事件；/api/finance/cost-change-events。
 二次开发：本包不是完整财务审计；不得推断项目、金额、名称、备注、变更前后值、失败尝试或其他用户活动。
 -->
 
 # P10J 财务个人成本变更记录契约
 
-> **状态**：计划已冻结，等待 Grok 按后端、前端两个白名单任务依次实现，并由 Codex 独立审查、验收、提交与推送。
+> **状态**：已完成、独立验收并推送。计划=`701c946`，后端=`4e662d6`，前端=`fce6cb6`。
 > **工作分支**：`collab/grok-code-codex-review`。
 
 ## 1. 审计结论与方案选择
@@ -72,3 +72,11 @@ P10C 已在成功新增、修改、删除成本条目时写入 `auth_audit_event
 ## 6. 验收底线
 
 后端至少覆盖本人/同空间其他财务成员/同用户其他空间/其他 action/result/非法 target 的隔离，固定 50 条与稳定倒序，三字段 SQL 投影，响应字段白名单、空态、`no-store`、读取审计脱敏，以及 required/disabled/所有者/各角色/非成员矩阵。前端至少覆盖严格财务入口、首次/刷新请求次数、动作映射、限制声明、空态、固定错误、网络白名单、零浏览器存储，以及非财务/所有者/disabled 直达零 P10J 请求。
+
+## 7. 交付与独立验收记录
+
+- 后端按四文件白名单交付。Codex 两轮返修先后修复 SQL `LIKE` 下划线通配导致非法 target 占用上限，以及空后缀、首尾空白在 `LIMIT 50` 后才过滤的问题；最终字面 `fce_` 前缀、非空后缀和无首尾空白均在 SQL 上限前过滤，并保留 Python 防御校验。
+- 后端独立验收：P10J 定向 **16 passed**；P10B/P10C/认证受影响回归 **63 passed**；串行全量 **422 passed**，仅 1 条既有 Starlette/httpx 弃用警告。
+- 前端按九文件白名单交付。Codex 返修 E2E 的外网边界：Google 字体本地空响应收口，其他非本机请求先记录再中止，并用不真实出网的探针证明外链可观测。
+- 前端独立验收：P10J E2E **12 passed**、P10I 定向复测 **10 passed**、lint 零错误零警告、build 通过；第二轮单 worker 串行全量 E2E **122 passed**。首轮唯一失败是既有 P10I 页面整页纯白启动抖动，P10J 12 项在该轮也全部通过，定向复测和完整重跑均已排除功能回归。
+- 协作消息：后端最终回执=`msg_345732f9d78543ebb2ebb2ee5c77119f`；前端最终回执=`msg_1120ac97e76346e7bc2b2fb6266e50be`。Grok 未提交或推送，Git 始终由 Codex 负责。
