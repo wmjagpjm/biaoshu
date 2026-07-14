@@ -27,6 +27,7 @@
     "test:e2e:bidder-compliance-preview": "playwright test e2e/bidder-compliance-preview.spec.ts",
     "test:e2e:bidder-project-compliance": "playwright test e2e/bidder-project-compliance.spec.ts",
     "test:e2e:parse-strategy": "playwright test e2e/parse-strategy-wiring.spec.ts",
+    "test:e2e:local-parser-callback-ticket": "playwright test e2e/local-parser-callback-ticket.spec.ts",
     "test:e2e:export-image-warnings": "playwright test e2e/export-image-warnings.spec.ts"
   },
   "dependencies": {
