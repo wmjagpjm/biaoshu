@@ -15,6 +15,7 @@ import { AiFeedbackPanel } from "../../../shared/components/AiFeedbackPanel/AiFe
 import { LoadingBlock } from "../../../shared/components/LoadingBlock/LoadingBlock";
 import type { Project } from "../../../shared/types/workspace";
 import { SaveAsTemplateDialog } from "../../bid-templates/components/SaveAsTemplateDialog";
+import { BidWriterTeamRecommendationPanel } from "../../hr-team-recommendation/components/BidWriterTeamRecommendationPanel";
 import {
   ParseStrategyChoiceDialog,
   type ParseStrategyChoice,
@@ -115,9 +116,11 @@ const STEP_IDS: TechnicalPlanStepId[] = [
  *   - 取消任务、大纲 revise「应用到大纲树」、生成后展示 kbCitations
  *   - 响应矩阵智能建议：外层来源页 × 内层候选批串行、本地累计、禁止自动写 editor-state
  *   - 文档解析入口按工作空间 parseStrategy 决策 light/local/ask（P8B）
+ *   - 严格 bid_writer 可按需查看人力团队推荐投影（P10F，disabled 不展示）
  * 对接：
  *   - useProjectPipeline / useTechnicalPlanEditors / useProjectGuidance
  *   - useWorkspaceParseStrategy / ParseStrategyChoiceDialog
+ *   - BidWriterTeamRecommendationPanel
  *   - editor-state、POST .../tasks（response_match payload.sourceBatchIndex + candidateBatchIndex）、POST .../revise
  * 二次开发：勿在此堆业务；任务与持久化进 hooks；分批合并用 mergeResponseMatrixSuggestions；禁止字段级合并；轻量路径必须 engine=lightweight。
  */
@@ -625,6 +628,8 @@ export function TechnicalPlanWorkspace() {
           {saveTemplateTip}
         </div>
       )}
+
+      <BidWriterTeamRecommendationPanel projectId={project.id} />
 
       <SaveAsTemplateDialog
         open={saveTemplateOpen}

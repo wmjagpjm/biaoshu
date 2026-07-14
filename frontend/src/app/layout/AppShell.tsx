@@ -18,6 +18,7 @@ import {
   Settings,
   ShieldCheck,
   Sparkles,
+  Users,
   X,
 } from "lucide-react";
 import { useSiteBackground } from "../../shared/hooks/useSiteBackground";
@@ -37,7 +38,7 @@ import "./AppShell.css";
  * 用途：固定侧栏导航，主区浅色渐变 + 大圆角内容；展示用户/角色/空间与退出。
  * 对接：checkApiHealth → GET /api/health；useAuthSession
  * 二次开发：导航隐藏不替代后端鉴权；禁止展示 Cookie/CSRF/API Key；
- *           财务入口仅严格 finance 可见；人力入口仅严格 hr 可见；
+ *           财务入口仅严格 finance 可见；人力入口（人员资质/团队推荐）仅严格 hr 可见；
  *           投标人入口仅严格 bidder 可见；不得改动遗留 Sidebar 组件路径。
  */
 
@@ -152,13 +153,19 @@ const financeNav: NavItem[] = [
   },
 ];
 
-/** P10D：人力人员资质入口，独立「人力」分组；仅严格 hr 可见 */
+/** P10D/P10F：人力入口，独立「人力」分组；仅严格 hr 可见 */
 const hrNav: NavItem[] = [
   {
     to: "/hr",
     label: "人员资质",
     icon: <IdCard size={18} />,
-    matchPrefix: "/hr",
+    hrOnly: true,
+  },
+  {
+    to: "/hr/team-recommendations",
+    label: "团队推荐",
+    icon: <Users size={18} />,
+    matchPrefix: "/hr/team-recommendations",
     hrOnly: true,
   },
 ];
@@ -182,6 +189,10 @@ function isNavActive(pathname: string, item: NavItem): boolean {
     return (
       pathname.startsWith("/projects") || pathname.startsWith("/technical-plan")
     );
+  }
+  // 人员资质仅精确匹配 /hr，避免与 /hr/team-recommendations 激活态冲突
+  if (item.to === "/hr") {
+    return pathname === "/hr";
   }
   if (item.matchPrefix) {
     return pathname === item.to || pathname.startsWith(item.matchPrefix);

@@ -1,0 +1,77 @@
+/**
+ * 模块：P10F 标书制作者团队推荐只读面板样式
+ * 用途：按需展开的最小投影展示。
+ * 对接：BidWriterTeamRecommendationPanel。
+ * 二次开发：勿改技术标主布局全局样式。
+ */
+
+.bw-team {
+  margin: 12px 0 16px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 12px;
+  background: var(--surface-card, #fff);
+  padding: 12px 14px;
+}
+
+.bw-team__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.bw-team__title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.bw-team__hint {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-tertiary, #9ca3af);
+}
+
+.bw-team__body {
+  margin-top: 10px;
+}
+
+.bw-team__alert {
+  border-radius: 8px;
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  color: #991b1b;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.bw-team__empty {
+  font-size: 13px;
+  color: var(--text-secondary, #6b7280);
+}
+
+.bw-team__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bw-team__item {
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.bw-team__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary, #6b7280);
+  margin-top: 2px;
+}
