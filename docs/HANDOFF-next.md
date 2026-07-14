@@ -1,12 +1,12 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-14（P10K 财务项目成本变更记录已完成）
+> **交接日期**：2026-07-14（P10K 已完成；M3-D 融合写入持久恢复批次已冻结）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
 > **协作分支已推送功能基线**：P10K 计划=`2e53007`、后端=`1eaa75e`、前端=`dbf301c`；P8C 计划=`cabe99d`、后端=`af39ff8`、前端=`1cf5576`；P10J 计划=`701c946`、后端=`4e662d6`、前端=`fce6cb6`；P9D 计划=`4925a51`、实现=`e5adad7`；M3-C 计划=`c63310f`、实现=`b8ff605`；P10I 计划=`ddc1807`、后端=`d5201e9`、前端=`49daa16`；P10H 计划=`7694843`、后端=`6c76d80`、前端=`4eb8a14`；P8B 计划=`f662674`、后端=`0994cc8`、前端=`80d2579`；P10F 计划=`12e067f`、后端=`3dc600a`、前端=`254f8c7`；P10E 计划=`26f7e40`、后端=`1b6ccf3`、前端=`37cf835`；P10G 计划=`26b43ea`、后端=`c3cf8b4`、前端=`d5656cc`。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **本地状态**：P10K 计划、后端和前端均已推送；本文为其中文文档闭环，提交后须再次核对远端与工作区。
+> **本地状态**：P10K 文档闭环=`476a47f` 已推送且工作区基线干净；M3-D 契约与计划正在形成独立提交，代码尚未派发。
 > **验收基线**：后端 P10K 定向 **21 passed**、受影响回归 **79 passed**、串行全量 **453 passed**（1 条既有 Starlette/httpx 弃用警告）；前端 P10K E2E **9 passed**、P10C **4 passed**、P10B **7 passed**、单 worker 串行全量 E2E **140 passed**；`frontend npm run lint` 零问题，`build` 通过（仅既有大包体积提示）。**所有 Playwright E2E 共用 SQLite 重置库，必须逐条串行运行，禁止并行。**
 
 ---
@@ -18,8 +18,8 @@
 工作分支只能是 collab/grok-code-codex-review，禁止直接操作 main；先执行 git status -sb，并核对 HEAD 与 origin/collab/grok-code-codex-review 一致且工作区干净。
 完整阅读 docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/plans/2026-07-13-package-9-delivery-enhancement-plan.md、docs/integration-checklist.md。
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
-当前进度：P9D、M3-C、P8B、P8C、P9A、P9B、P9C、P10A 至 P10K 均已完成各自计划内的实现、独立自动化验收、中文文档闭环与协作分支推送。P10K 契约见 `docs/p10k-finance-project-cost-change-events-contract.md`，计划见 `docs/plans/2026-07-14-p10k-finance-project-cost-change-events-plan.md`。
-下一步：先对本文“其余未实现主线”做只读证据审计，选出依赖最少、数据边界最小、可独立验收的下一包，再单独冻结契约和文件白名单。未冻结前不得派发代码或搭车扩展完整审计、外部运行时、附件核验、第三方来源或生产部署。
+当前进度：P9D、M3-C、P8B、P8C、P9A、P9B、P9C、P10A 至 P10K 均已完成各自计划内的实现、独立自动化验收、中文文档闭环与协作分支推送。剩余主线只读审计已选定 M3-D“融合写入持久恢复批次”，契约见 `docs/m3d-content-fuse-persistent-recovery-contract.md`，计划见 `docs/plans/2026-07-14-m3d-content-fuse-persistent-recovery-plan.md`。
+下一步：核验 M3-D 计划提交已推送后，按 §3.1 后台隐藏启动 Grok，只派发后端精确七文件；Codex 独立验收提交后才可派发前端精确七文件。禁止客户端正文成为权威、前端补记伪历史、合包或提前改前端。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -393,7 +393,7 @@ frontend/src/features/
 
 1. 阶段 4 **功能包 8** MVP=`6db1586` 与后续 **P8B 解析策略接线**（计划=`f662674`、后端=`0994cc8`、前端=`80d2579`）均已验收并推送；真实 MinerU/Docling 外置生产部署仍须独立安全与部署契约。
 2. 阶段 4 **P9A/P9B/P9C/P9D** 与阶段 5 **P10A/P10B/P10C/P10D/P10F/P10E/P10G/P10H/P10I/P10J/P10K** 均已实现、独立验收并文档闭环。P9C 的真实模型门仍是运行时前置：固定依赖和模型缓存就绪后，用户显式构建索引，再运行固定预检；未通过前继续关键词降级。
-3. P8C 与 P10K 均已完成。下一步只读审计其余未实现主线，按依赖、敏感数据边界和独立验收成本选择下一最小包；未冻结契约前不派发代码。
+3. P8C 与 P10K 均已完成。剩余主线只读审计已冻结 M3-D：服务端从成功 `content_fuse` 任务取权威建议，在锁内原子写章节与最近 20 批恢复快照；恢复仅覆盖未漂移章节且一次消费。必须先验收后端七文件，再派发前端七文件。
 
 资源同步后续只可由管理员配置新的签名发布方，绝不可放开浏览器 URL 或外网抓取。图片管线已冻结项目内资源引用协议，后续扩展不得放开外链或客户端路径。SSE 的多工作空间鉴权、事件游标和项目级总线不在当前范围。
 
@@ -478,8 +478,9 @@ frontend/src/features/
 - **P10J 已完成**：契约=`docs/p10j-finance-personal-cost-change-events-contract.md`，计划=`docs/plans/2026-07-14-p10j-finance-personal-cost-change-events-plan.md`。两轮后端审查和一轮前端测试网络审查均闭环。
 - **P8C 已完成**：契约=`docs/p8c-local-parser-one-time-callback-ticket-contract.md`，计划=`docs/plans/2026-07-14-p8c-local-parser-one-time-callback-ticket-plan.md`。两轮后端审查和三轮前端反假绿审查均闭环；它只补 required 模式回传授权，不交付 MinerU/Docling 运行时。
 - **P10K 已完成**：计划=`2e53007`、后端=`1eaa75e`、前端=`dbf301c`。最小 `finance_project_cost_change_events` 只记录本包上线后 P10C 成功变更并与业务/审计同事务；项目 GET 只回 action/entryId/actorScope/occurredAt，前端只在 `/finance` 显式点击后读取。后端全量 453、前端全量 140 均通过。
+- **M3-D 已冻结、尚未实现**：服务端原子确认成功 `content_fuse` 任务中的用户选择，只保留每项目最近 20 批；一次性恢复时仅覆盖 title/body/status 仍精确等于 after 的章节。契约=`docs/m3d-content-fuse-persistent-recovery-contract.md`，计划=`docs/plans/2026-07-14-m3d-content-fuse-persistent-recovery-plan.md`。
 - **其余未实现主线**：持久化融合历史/通用撤销/多角色协作；真实 MinerU/Docling 外置部署与生产治理；P9C 固定模型运行时门和后续真实语义调优；Word `structure`/整章布局；除国能 e 招外的合法外部标讯来源；人力附件/真实证件核验；财务税务/审批/导出/预算/回款/版本、失败尝试与完整身份审计；投标人矩阵明细/版本/结果跟踪；Alembic、PostgreSQL、HTTPS、Key 加密、Docker 和公网 SaaS 能力。任何一项都须另立契约，不得扩大既有角色与生产路径。
 - 新任务分工不变：Grok 只负责限定实现与自测，未经 Codex 审查确认不得提交；Codex 负责计划、范围冻结、差异审查、独立测试、验收、中文提交、文档闭环和 GitHub 状态核验。每一包仍按“计划提交 → 实现提交 → 文档闭环提交 → 推送协作分支”执行，禁止合包。
 - GitHub 若出现连接重置，可在当前 PowerShell 进程临时配置 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY=http://127.0.0.1:7890` 与 `NO_PROXY=localhost,127.0.0.1` 后重试；不得把代理或凭据写入仓库。
 
-**换会话可直接：核验分支与 P10K 三个交付提交已和远端一致且工作区干净 → 读本文 §0～§3.1、§5、§6、§11 及路线图“其余未实现主线” → 先做只读证据审计并冻结下一最小包，再按 §3.1 后台隐藏启动 Grok。禁止未立契约先写代码、并包或扩大敏感数据边界。**
+**换会话可直接：核验分支、P10K 三个交付提交与 M3-D 计划提交已和远端一致且工作区干净 → 读本文 §0～§3.1、§5、§6、§11 及 M3-D 契约/计划 → 按 §3.1 后台隐藏启动 Grok，只派发 M3-D 后端七文件 → 等 review_request 后由 Codex 独立审查验收。禁止提前派发前端、信任客户端正文或扩成通用版本库。**
