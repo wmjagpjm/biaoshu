@@ -1,13 +1,13 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-14（P9A/P9B/P9C、P10A 与 **P10B 财务报价只读能力**已完成；提交以本分支 HEAD 为准）
+> **交接日期**：2026-07-14（P9A/P9B/P9C、P10A、P10B 与 **P10C 财务成本草案/毛利快照**已完成；提交以本分支 HEAD 为准）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
-> **协作分支已推送功能基线**：P9C 最新代码提交为 `585e502`（合成评测与本地预检），前序为后端=`cc0d217`、前端=`a0bd84b`、运行时降级=`71c503c`；P9B 前序为解析=`45d7214`、数据域=`1c46e41`、Excel=`6491363`、同步=`229f1d7`、人工接受=`000b403`、界面=`a7cfcb8`。更早的审计基线为 `a1ba88a`，其下含 P9A、包 5 至包 8 和阶段 3。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
+> **协作分支已推送功能基线**：P10C 后端=`6f30084`、前端=`737c7db`；P9C 最新代码为 `585e502`（合成评测与本地预检），前序为后端=`cc0d217`、前端=`a0bd84b`、运行时降级=`71c503c`；P9B 前序为解析=`45d7214`、数据域=`1c46e41`、Excel=`6491363`、同步=`229f1d7`、人工接受=`000b403`、界面=`a7cfcb8`。更早的审计基线为 `a1ba88a`，其下含 P9A、包 5 至包 8 和阶段 3。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **本地状态**：P10A 已完成并推送：本机 scrypt 身份、HttpOnly 会话、成员/所有者保护、默认拒绝角色、设置 owner 收口、认证模式握手、前端会话门禁与刷新后 CSRF 续发。P10B 已完成：strict `finance` 只能查看当前工作空间商务标报价白名单投影，默认业务仍拒绝，财务无写入/导出/成本利润能力。P9C 的真实模型缓存仍未准备；预检受控返回 `model_unavailable`，因此搜索保持关键词降级，不能声称真实语义效果已验证。
-> **验收基线**：后端全量 **299 passed**（按串行分组，1 条既有 Starlette/httpx 弃用警告）；P10A 认证 E2E **11 passed**、P10B 财务 E2E **7 passed**、P9C 语义索引 E2E **9 passed**、知识卡片 E2E **1 passed**；`frontend npm run lint` / `build`；`git diff --check`。
+> **本地状态**：P10A 已完成并推送：本机 scrypt 身份、HttpOnly 会话、成员/所有者保护、默认拒绝角色、设置 owner 收口、认证模式握手、前端会话门禁与刷新后 CSRF 续发。P10B 已完成：strict `finance` 只能查看当前工作空间商务标报价白名单投影。P10C 已完成：严格财务成员可维护人工成本条目并查看分精度毛利快照；成本不写回报价、审计不含正文、默认业务仍拒绝。P9C 的真实模型缓存仍未准备；预检受控返回 `model_unavailable`，因此搜索保持关键词降级，不能声称真实语义效果已验证。
+> **验收基线**：后端全量 **314 passed**（按串行分组，1 条既有 Starlette/httpx 弃用警告）；P10C 成本 E2E **4 passed**、P10B 财务 E2E **7 passed**、P10A 认证 E2E **11 passed**、P9C 语义索引 E2E **9 passed**、知识卡片 E2E **1 passed**；`frontend npm run lint` / `build`；`git diff --check`。
 
 ---
 
@@ -18,8 +18,8 @@
 工作分支只能是 collab/grok-code-codex-review，禁止直接操作 main；先执行 git status -sb，并核对 HEAD 与 origin/collab/grok-code-codex-review 一致且工作区干净。
 完整阅读 docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/plans/2026-07-13-package-9-delivery-enhancement-plan.md、docs/integration-checklist.md。
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
-当前进度：P9A、P9B、P9C、P10A 与 P10B 均已完成各自计划内的实现、独立自动化验收、中文文档闭环与协作分支推送。P10A 固定契约见 `docs/p10a-local-identity-rbac-contract.md`，P10B 固定契约见 `docs/p10b-finance-business-quote-contract.md`。P9C 仍仅允许纯离线 BAAI/bge-small-zh-v1.5、512 维、CPU、版本并存和可见关键词降级；正文/查询不得出域。
-下一步：P10C 必须先独立定义成本、利润、税率、审批、导出或人力/投标人中的一个数据域及其权限矩阵，不能按前端路径猜测授权，也不得把 P10B 只读报价接口扩成写接口。除 P10B strict `finance` 报价读取外，P10A 的 `finance`、`hr`、`bidder` 继续默认拒绝既有业务。真实模型缓存或依赖尚未准备时，也不得安装、下载或伪造 P9C 指标；只有用户在受控运行时显式构建并通过固定预检后，才记录语义索引已就绪。
+当前进度：P9A、P9B、P9C、P10A、P10B 与 P10C 均已完成各自计划内的实现、独立自动化验收、中文文档闭环与协作分支推送。P10A 固定契约见 `docs/p10a-local-identity-rbac-contract.md`，P10B 见 `docs/p10b-finance-business-quote-contract.md`，P10C 见 `docs/p10c-finance-cost-draft-contract.md`。P9C 仍仅允许纯离线 BAAI/bge-small-zh-v1.5、512 维、CPU、版本并存和可见关键词降级；正文/查询不得出域。
+下一步：如扩展财务税务/审批/导出、人员资质/团队推荐或投标人匿名预览/版本/合规，必须先独立冻结数据来源、精度、审计与权限矩阵，不能按前端路径猜测授权，也不得把 P10C 路径扩为通用财务系统。除 P10B/P10C strict `finance` 能力外，P10A 的 `finance`、`hr`、`bidder` 继续默认拒绝既有业务。真实模型缓存或依赖尚未准备时，也不得安装、下载或伪造 P9C 指标；只有用户在受控运行时显式构建并通过固定预检后，才记录语义索引已就绪。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -142,7 +142,7 @@
 | projectStore | `technical-plan/lib/projectStore.ts` | **齐** | kind 过滤 |
 | outlineTree | `technical-plan/lib/outlineTree.ts` | **齐** | markdownToOutline |
 | 商务标 | `business-bid/pages/*`、`hooks/useBusinessBidWorkspace.ts` | **齐** | 空态/API |
-| 财务报价 P10B | `services/finance_service.py`、`api/finance.py`；前端 `features/finance/*`、`e2e/finance-role.spec.ts` | **齐** | strict `finance` 当前空间商务标报价只读投影；无成本利润推算、无写入；`npm run test:e2e:finance-role` |
+| 财务报价/成本 P10B/P10C | `services/finance_service.py`、`finance_cost_service.py`、`api/finance.py`；前端 `features/finance/*`、`e2e/finance-*.spec.ts` | **齐** | strict `finance` 当前空间报价白名单、人工成本草案和毛利快照；整数分、审计脱敏、无税务/审批/导出；`npm run test:e2e:finance-role` / `finance-cost-draft` |
 | 知识库/卡片 | `knowledge-base/**`（useKnowledgeCards、cardsApi、KnowledgeBasePage）、`ChapterEditor`/`InsertCardDialog`；E2E `e2e/knowledge-cards.spec.ts` | **齐** | 图片 Tab 后端化；章节插入卡片；`npm run test:e2e:cards` |
 | 查重 | `duplicate-check/pages`、`types.ts` | **齐** | 已接 API |
 | 废标 | `rejection-check/pages`、`types.ts` | **齐** | 已接 API |
@@ -180,7 +180,7 @@
 cd C:\Users\Administrator\biaoshu\backend
 .\.venv\Scripts\activate
 .\.venv\Scripts\python -m pytest -q
-# 期望：127 passed
+# 当前完整串行基线：314 passed（1 条既有 Starlette/httpx 弃用警告）
 
 cd ..\frontend
 npm run lint
@@ -252,11 +252,11 @@ npm run test:e2e:matrix
 
 **未做**：商务模板、多模板融合/差异、从 docx 反解析（卡片库 MVP 见阶段 2）。
 
-### 4.8 P10B 财务商务标报价只读
+### 4.8 P10B/P10C 财务报价、成本草案与毛利快照
 
 P10B 已实现并推送：后端 `GET /api/finance/business-bids` 与 `GET /api/finance/business-bids/{projectId}` 仅在 `AUTH_MODE=required` 且当前成员角色严格为 `finance` 时开放。接口只投影当前工作空间 `kind=business` 项目的项目摘要、报价分项和备注，响应 `Cache-Control: no-store`；技术标、跨空间和不存在项目统一 `404 project_not_found`。金额只接受有限数值，异常值为 `null` 且不计入合计。
 
-前端 `/finance` 仅显示给严格财务角色，列表/明细只调用上述两个专用 GET；不调用通用项目、editor-state、设置或文件接口，不把业务数据、Cookie 或 CSRF 写入浏览器存储。分项展示编号、名称、单位、数量、单价、金额、备注；没有成本/利润推算、写入、导出、审批或审计查看事件。所有者和标书制作者不会因身份自动获得财务入口。完整契约见 `docs/p10b-finance-business-quote-contract.md`。
+P10C 已实现并推送：同一 `/finance` 门禁下，严格财务成员可通过独立 `cost-draft` / `cost-entries` 端点维护人工成本条目，并看到基于当前报价的毛利快照。金额仅为人民币整数分，前端元输入按字符串转换；写入走既有 CSRF，成功后重新读取服务端草案，审计只写动作与条目 ID。它不新增税务、审批、导出、预算、回款或版本历史。前端不调用通用项目、editor-state、设置或文件接口，不把业务数据、Cookie 或 CSRF 写入浏览器存储；项目切换在对应报价明细就绪前不挂载成本面板。完整契约见 `docs/p10b-finance-business-quote-contract.md` 与 `docs/p10c-finance-cost-draft-contract.md`。
 
 ### 4.9 路径索引
 
@@ -286,7 +286,7 @@ frontend/src/features/
 | 技术标 | 响应矩阵增强 | v1 已做手工映射、持久化、Word 导出联动、待确认智能建议（**来源 80 分页 + 候选章/大纲分批 + 前端嵌套串行累计**）、`responseMatrixVersion` DB 写锁乐观锁、前端串行保存、双浏览器 409、刷新来源、智能建议人工确认与**来源分页** E2E；**字段级三方合并 MVP**（包 7 已推送 `2c7b3e0`）。**包 8** 可插拔解析调度 MVP 已验收并推送（`6db1586`：默认 lightweight + 测试 fake；MinerU 仅外置 callback；Docling 未接；`parseStrategy` 未接线）。仍未接：包 9 交付增强相关扩展 |
 | 资产 | 卡片化知识/多模板融合 | 阶段 1 模板 + 阶段 2 卡片库（`53e012f`）；阶段 3 已完成并推送：M3-A=`5d37dba`，M3-B=`e2e5d04` |
 | RAG | 真语义大模型 embedding 调优 | 有本地+可选 API，可继续增强 |
-| 财务 | 成本、利润、税务、审批、导出与财务查看审计 | P10B 只完成报价只读投影；这些数据源、精度和权限必须另立 P10C 契约，禁止从报价推算 |
+| 财务 | 税务、审批、导出、预算、回款、版本与财务查看审计 | P10B/P10C 已完成报价只读、人工成本草案与毛利快照；其余数据源、精度和权限必须另立契约，禁止从报价推算 |
 | 团队角色 | 人力团队推荐、投标人预览/版本/合规 | P10A 角色存在但除 P10B finance 外仍默认拒绝；各自数据域与脱敏规则未定义 |
 | 库 | Alembic | 仅 create_all + ALTER |
 | 生产 | HTTPS/Key 加密/PG/Docker | 本机身份和成员 RBAC 已有；生产部署能力未做 |
@@ -298,8 +298,8 @@ frontend/src/features/
 ## 6. 建议下一会话方向
 
 1. 阶段 4 **功能包 8** MVP 已验收并推送（`6db1586`）；真实 MinerU/Docling 外置部署与 `parseStrategy` 接线另开 task。
-2. 阶段 4 **P9A/P9B/P9C** 与阶段 5 **P10A/P10B** 均已实现、独立验收并文档闭环。P9C 的真实模型门仍是运行时前置：固定依赖和模型缓存就绪后，用户显式构建索引，再运行固定预检；未通过前继续关键词降级。
-3. P10C 先独立选择并冻结一个领域：财务成本/利润/审批、人员资质/团队推荐，或投标人匿名预览/版本/合规；禁止借用 P10B 只读报价路径扩大权限。M3-B 后遗留的写入历史/回滚仍为可选项。
+2. 阶段 4 **P9A/P9B/P9C** 与阶段 5 **P10A/P10B/P10C** 均已实现、独立验收并文档闭环。P9C 的真实模型门仍是运行时前置：固定依赖和模型缓存就绪后，用户显式构建索引，再运行固定预检；未通过前继续关键词降级。
+3. P10D 若选择财务税务/审批/导出、人员资质/团队推荐，或投标人匿名预览/版本/合规，必须先冻结独立数据契约；禁止借用 P10C 成本路径扩大权限。M3-B 后遗留的写入历史/回滚仍为可选项。
 
 资源同步后续只可由管理员配置新的签名发布方，绝不可放开浏览器 URL 或外网抓取。图片管线已冻结项目内资源引用协议，后续扩展不得放开外链或客户端路径。SSE 的多工作空间鉴权、事件游标和项目级总线不在当前范围。
 
@@ -356,7 +356,7 @@ frontend/src/features/
 ## 11. 当前会话状态（2026-07-14）
 
 - **用户长期目标（必须完整保留）**：持续完成 biaoshu 标书制作者剩余主线任务，按既定路线图完成独立规划、受限实现审查、独立验收、中文文档闭环与协作分支推送；不直接操作 `main`。
-- 当前分支仍为 `collab/grok-code-codex-review`；P9B 最新实现 SHA=`a7cfcb8`，本交接文档提交位于其后。新会话第一步必须用 `git status -sb`、`git rev-parse HEAD`、`git rev-parse origin/collab/grok-code-codex-review` 重新核验，不可只信本文静态 SHA。
+- 当前分支仍为 `collab/grok-code-codex-review`；P10C 前端实现 SHA=`737c7db`，本交接文档提交将位于其后。新会话第一步必须用 `git status -sb`、`git rev-parse HEAD`、`git rev-parse origin/collab/grok-code-codex-review` 重新核验，不可只信本文静态 SHA。
 - 阶段 3 **已完成并推送**：M3-A 只读融合建议；M3-B 差异预览 + 勾选确认写入（SHA=`e2e5d04`）。
 - 阶段 4 **包 5** 已推送：`460097a` 智能建议人工确认 E2E。
 - 阶段 4 **包 6** 已推送：`1289c92` 实现响应矩阵源分页调用。
@@ -368,8 +368,9 @@ frontend/src/features/
 - **P9B 最终验收**：Codex 独立运行后端全量 230 passed（固定 `PYTHONHASHSEED=0`，仅 1 条既有弃用警告）、前端 lint/build、P9B E2E 1 passed 和 `git diff --check`；并对用户给定公告执行只读核验，正文北京时间截止时间为 `2026-07-29 09:00:00`。无真实数据库写入、无浏览器外网同步。
 - **P9C 交付与真实模型门**：P9C 已按纯离线 BAAI/bge-small-zh-v1.5（512 维、CPU）、版本并存与可见关键词降级完成 `cc0d217`、`a0bd84b`、`71c503c`、`585e502` 四个实现提交。正文/查询不得出域，旧 API embeddingModel 与旧哈希均不参与知识库语义检索。固定评测集有 20 条完全合成查询，评测文件的版本、模型、维度和阈值均为硬校验；预检无下载/路径/跳过磁盘参数。本机无模型缓存时，Codex 实测返回 `model_unavailable`/退出码 2；这不是缺陷，未通过真实预检前不得称语义索引就绪。完整契约见 `docs/p9c-offline-semantic-index-contract.md`。
 - **P10A 身份/RBAC 交付**：实现提交为 `a025627`（身份会话）、`c60a2d2`（成员管理和权限收口）、`64d32e0`（前端会话、认证模式握手和 CSRF 续发）；两份实施修订文档为 `1a442c0`、`3716e4f`。`required` 使用 HttpOnly 不透明会话、scrypt、成员工作空间校验、最后所有者保护和设置 owner 收口；前端不会持久化口令/Cookie/CSRF，硬刷新用受会话保护的 `/api/auth/csrf` 安全续发。P10B 以独立严格 `finance` 依赖补充报价只读能力，没有放宽 P10A 的默认业务拒绝。
-- **P10B 财务报价交付**：计划=`5d99888`，后端=`bc0517c`，前端=`ef1e369`。严格财务角色只能读取当前空间商务标报价白名单投影；无会话在 required 下保持中间件 `401 auth_required`，已登录非财务与 disabled 为 `403 role_forbidden`；技术标、跨空间和不存在项目统一 404；前端只请求两条专用 GET。完整契约见 `docs/p10b-finance-business-quote-contract.md`。
-- **已验证基线**：后端全量 299 passed（按串行分组，1 条既有弃用警告）；P10A 认证 E2E 11 passed、P10B 财务 E2E 7 passed、P9C 语义索引 E2E 9 passed、知识卡片 E2E 1 passed；前端 lint/build 通过（仅既有大 chunk 警告）；`git diff --check` 通过；P9A WPS `12.1.0.26895` 实际打开技术标/商务标通过。
+- **P10B 财务报价交付**：计划=`5d99888`，后端=`bc0517c`，前端=`ef1e369`。严格财务角色只能读取当前空间商务标报价白名单投影；无会话在 required 下保持中间件 `401 auth_required`，已登录非财务与 disabled 为 `403 role_forbidden`；技术标、跨空间和不存在项目统一 404。完整契约见 `docs/p10b-finance-business-quote-contract.md`。
+- **P10C 财务成本草案交付**：计划=`b662e85`，后端=`6f30084`，前端=`737c7db`。strict `finance` 可维护当前空间商务标人工成本条目，并以整数分读取报价、成本、毛利和毛利基点；金额输入服务端 `StrictInt` 拒绝浮点/字符串/布尔；成功写入仅审计动作和条目 ID；前端不持久化敏感数据，项目切换明细未就绪前不挂载成本面板。无税务、审批、导出、预算、回款、版本或审计查看。完整契约见 `docs/p10c-finance-cost-draft-contract.md`。
+- **已验证基线**：后端全量 314 passed（按串行分组，1 条既有弃用警告）；P10C 成本 E2E 4 passed、P10B 财务 E2E 7 passed、P10A 认证 E2E 11 passed、P9C 语义索引 E2E 9 passed、知识卡片 E2E 1 passed；前端 lint/build 通过（仅既有大 chunk 警告）；`git diff --check` 通过；P9A WPS `12.1.0.26895` 实际打开技术标/商务标通过。
 - 新任务分工不变：Grok 只负责限定实现与自测，未经 Codex 审查确认不得提交；Codex 负责计划、范围冻结、差异审查、独立测试、验收、中文提交、文档闭环和 GitHub 状态核验。每一包仍按“计划提交 → 实现提交 → 文档闭环提交 → 推送协作分支”执行，禁止合包。
 - GitHub 若出现连接重置，可在当前 PowerShell 进程临时配置 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY=http://127.0.0.1:7890` 与 `NO_PROXY=localhost,127.0.0.1` 后重试；不得把代理或凭据写入仓库。
 
