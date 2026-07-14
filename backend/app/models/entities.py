@@ -1112,6 +1112,93 @@ class HrCredentialCardRow(Base):
     )
 
 
+class HrTeamRecommendationRow(Base):
+    """
+    模块：P10F 人力项目团队推荐主表
+    用途：每个工作空间技术标项目至多一份人工维护的团队推荐快照（不含成员明细）。
+    对接：hr_team_recommendation_service；/api/hr/team-recommendations*。
+    二次开发：禁止客户端写入 id/workspace/project/操作者/时间戳；空成员不清物理删除本行。
+    """
+
+    __tablename__ = "hr_team_recommendations"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "project_id",
+            name="uq_hr_team_recommendations_ws_project",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    created_by_user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    updated_by_user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
+class HrTeamRecommendationMemberRow(Base):
+    """
+    模块：P10F 团队推荐成员快照行
+    用途：保存推荐时的 P10D 摘要字段与顺序；不含 remark。
+    对接：hr_team_recommendation_service；HR 详情与 bid_writer 投影。
+    二次开发：source_card_id 仅供 HR 预选；标书制作者投影禁止返回该字段。
+    """
+
+    __tablename__ = "hr_team_recommendation_members"
+    __table_args__ = (
+        CheckConstraint(
+            "category IN ('professional', 'safety', 'performance', 'other')",
+            name="ck_hr_team_recommendation_members_category",
+        ),
+        CheckConstraint(
+            "display_order >= 1 AND display_order <= 30",
+            name="ck_hr_team_recommendation_members_display_order",
+        ),
+        UniqueConstraint(
+            "recommendation_id",
+            "display_order",
+            name="uq_hr_team_recommendation_members_rec_order",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    recommendation_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("hr_team_recommendations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    source_card_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    display_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    person_name: Mapped[str] = mapped_column(String(80), nullable=False)
+    category: Mapped[str] = mapped_column(String(32), nullable=False)
+    credential_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    level: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    valid_until: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+
 class ProjectTaskRow(Base):
     """
     用途：本机日用任务（解析/分析/大纲/正文/导出）状态。

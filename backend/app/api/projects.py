@@ -11,11 +11,13 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_workspace_id
+from app.api.deps import get_workspace_id, require_strict_bid_writer
 from app.api.schemas import (
+    BidWriterTeamMemberOut,
+    BidWriterTeamRecommendationOut,
     EditorStateOut,
     EditorStateUpdate,
     ProjectCreate,
@@ -23,7 +25,7 @@ from app.api.schemas import (
     ProjectUpdate,
 )
 from app.core.database import get_db
-from app.services import editor_state_service, project_service
+from app.services import editor_state_service, hr_team_recommendation_service, project_service
 from app.services.project_service import ProjectNotFoundError
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -142,6 +144,56 @@ def delete_project(
     except ProjectNotFoundError:
         raise HTTPException(status_code=404, detail="项目不存在") from None
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get(
+    "/{project_id}/team-recommendation",
+    response_model=BidWriterTeamRecommendationOut,
+)
+def get_project_team_recommendation(
+    project_id: str,
+    request: Request,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    workspace_id: Annotated[str, Depends(require_strict_bid_writer)],
+) -> BidWriterTeamRecommendationOut:
+    """
+    用途：严格 bid_writer 按需读取单项目团队推荐最小展示投影。
+    对接：GET /api/projects/{projectId}/team-recommendation；require_strict_bid_writer；get_bid_writer_projection。
+    二次开发：
+      - 角色须精确 match bid_writer；is_owner 不能替代 member.role；
+        若 owner 同时 member.role 精确为 bid_writer 则允许（角色匹配），
+        disabled 与非 bid_writer 均拒绝（含 owner 隐式绕过）
+      - 无记录/已清空返回 200 empty，不得 404；跨空间/非技术标映射既有项目 404
+      - 禁止返回 htr id、sourceCardId、remark、操作者、项目字段；Cache-Control: no-store
+    """
+    response.headers["Cache-Control"] = "no-store"
+    principal = getattr(request.state, "auth_principal", None)
+    actor = getattr(principal, "user_id", None) if principal is not None else None
+    try:
+        data = hr_team_recommendation_service.get_bid_writer_projection(
+            db,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            actor_user_id=str(actor) if actor else None,
+        )
+    except ProjectNotFoundError:
+        raise HTTPException(status_code=404, detail="项目不存在") from None
+    return BidWriterTeamRecommendationOut(
+        data_state=data["data_state"],
+        members=[
+            BidWriterTeamMemberOut(
+                order=m["order"],
+                person_name=m["person_name"],
+                category=m["category"],
+                credential_name=m["credential_name"],
+                level=m.get("level") or "",
+                valid_until=m.get("valid_until"),
+            )
+            for m in data.get("members") or []
+        ],
+        updated_at=data.get("updated_at"),
+    )
 
 
 @router.get("/{project_id}/editor-state", response_model=EditorStateOut)

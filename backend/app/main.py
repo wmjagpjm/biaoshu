@@ -54,6 +54,8 @@ from app.models import (  # noqa: F401
     BidWatchPlanRow,
     FinanceCostEntryRow,
     HrCredentialCardRow,
+    HrTeamRecommendationMemberRow,
+    HrTeamRecommendationRow,
     KbChunkRow,
     KbDocumentRow,
     KbFolderRow,

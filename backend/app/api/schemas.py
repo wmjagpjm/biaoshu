@@ -10,9 +10,9 @@
 """
 
 from datetime import date, datetime
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_validator
 
 
 # 与前端 ProjectStatus 字面量一致
@@ -1319,6 +1319,164 @@ class HrCredentialCardUpdate(BaseModel):
     remark: str | None = Field(default=None, max_length=500)
     # StrictBool：仅 JSON true/false；"false"/0/1 均 422
     is_active: StrictBool | None = Field(default=None, alias="isActive")
+
+
+# ---------- P10F 人力项目团队推荐快照 ----------
+
+
+class HrTeamProjectSelectorItemOut(BaseModel):
+    """
+    模块：HR 技术标项目选择器项
+    用途：仅暴露 id 与 name，供团队推荐绑定项目。
+    对接：GET /api/hr/team-recommendations/projects。
+    二次开发：禁止附加行业/状态/步骤/正文/文件等字段。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    name: str
+
+
+class HrTeamProjectSelectorListOut(BaseModel):
+    """
+    模块：HR 技术标项目选择器列表
+    用途：包装 items。
+    对接：GET /api/hr/team-recommendations/projects。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    items: list[HrTeamProjectSelectorItemOut]
+
+
+class HrTeamRecommendationSummaryOut(BaseModel):
+    """
+    模块：团队推荐摘要
+    用途：HR 列表展示项目维度的成员数与更新时间。
+    对接：GET /api/hr/team-recommendations。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    project_id: str = Field(serialization_alias="projectId")
+    project_name: str = Field(serialization_alias="projectName")
+    member_count: int = Field(serialization_alias="memberCount")
+    updated_at: datetime = Field(serialization_alias="updatedAt")
+
+
+class HrTeamRecommendationSummaryListOut(BaseModel):
+    """
+    模块：团队推荐摘要列表
+    用途：包装 items。
+    对接：GET /api/hr/team-recommendations。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    items: list[HrTeamRecommendationSummaryOut]
+
+
+class HrTeamMemberSnapshotOut(BaseModel):
+    """
+    模块：HR 团队推荐成员快照
+    用途：编辑详情中的有序成员；含 sourceCardId 供预选，不含 remark。
+    对接：GET/PUT /api/hr/team-recommendations/{projectId}。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    order: int
+    person_name: str = Field(serialization_alias="personName")
+    category: HrCredentialCategory
+    credential_name: str = Field(serialization_alias="credentialName")
+    level: str = ""
+    valid_until: date | None = Field(default=None, serialization_alias="validUntil")
+    source_card_id: str = Field(serialization_alias="sourceCardId")
+
+
+class HrTeamRecommendationDetailOut(BaseModel):
+    """
+    模块：HR 团队推荐编辑详情
+    用途：当前技术标项目的快照成员列表。
+    对接：GET/PUT /api/hr/team-recommendations/{projectId}。
+    二次开发：不得返回操作者、workspace、remark 或完整项目字段。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    project_id: str = Field(serialization_alias="projectId")
+    project_name: str = Field(serialization_alias="projectName")
+    members: list[HrTeamMemberSnapshotOut]
+    updated_at: datetime = Field(serialization_alias="updatedAt")
+
+
+class HrTeamRecommendationPut(BaseModel):
+    """
+    模块：保存团队推荐请求
+    用途：仅接受有序 memberCardIds；extra=forbid。
+    对接：PUT /api/hr/team-recommendations/{projectId}。
+    二次开发：非字符串/空值/重复/长度由校验拒绝；有效卡校验在服务层完成。
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    member_card_ids: list[Any] = Field(alias="memberCardIds")
+
+    @field_validator("member_card_ids")
+    @classmethod
+    def _validate_member_card_ids(cls, value: Any) -> list[str]:
+        """用途：严格校验有序卡 ID 列表；禁止类型强制与重复。"""
+        if not isinstance(value, list):
+            raise ValueError("invalid_member_card_ids")
+        if len(value) > 30:
+            raise ValueError("invalid_member_card_ids")
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            if type(item) is not str:
+                raise ValueError("invalid_member_card_ids")
+            if item == "":
+                raise ValueError("invalid_member_card_ids")
+            if item in seen:
+                raise ValueError("invalid_member_card_ids")
+            seen.add(item)
+            out.append(item)
+        return out
+
+
+class BidWriterTeamMemberOut(BaseModel):
+    """
+    模块：标书制作者团队推荐成员投影
+    用途：最小展示字段；无来源卡 ID。
+    对接：GET /api/projects/{projectId}/team-recommendation。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    order: int
+    person_name: str = Field(serialization_alias="personName")
+    category: HrCredentialCategory
+    credential_name: str = Field(serialization_alias="credentialName")
+    level: str = ""
+    valid_until: date | None = Field(default=None, serialization_alias="validUntil")
+
+
+class BidWriterTeamRecommendationOut(BaseModel):
+    """
+    模块：标书制作者单项目团队推荐投影
+    用途：empty/ready 固定结构；empty 时 updatedAt 为 null。
+    对接：GET /api/projects/{projectId}/team-recommendation。
+    二次开发：禁止返回 htr id、sourceCardId、remark、操作者或项目字段。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    data_state: Literal["empty", "ready"] = Field(serialization_alias="dataState")
+    members: list[BidWriterTeamMemberOut]
+    updated_at: datetime | None = Field(
+        default=None, serialization_alias="updatedAt"
+    )
 
 
 # ---------- P10E 投标人匿名合规预览 ----------

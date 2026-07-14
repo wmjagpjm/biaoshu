@@ -1,7 +1,8 @@
 """
-模块：P10D 人员资质素材卡路由
-用途：严格 hr 的资质卡列表/详情/创建/更新（无删除）。
-对接：/api/hr/credential-cards*；deps.require_hr；hr_credential_service。
+模块：P10D/P10F 人力路由
+用途：严格 hr 的资质卡列表/详情/创建/更新（无删除）；P10F 团队推荐快照读写。
+对接：/api/hr/credential-cards*；/api/hr/team-recommendations*；
+  deps.require_hr；hr_credential_service；hr_team_recommendation_service。
 二次开发：禁止放宽角色；响应 Cache-Control:no-store；写操作依赖既有 CSRF；
   创建/更新须手工安全解析请求体，禁止默认 422 回显证件号/电话等原始输入。
 """
@@ -22,14 +23,32 @@ from app.api.schemas import (
     HrCredentialCardListOut,
     HrCredentialCardSummaryOut,
     HrCredentialCardUpdate,
+    HrTeamMemberSnapshotOut,
+    HrTeamProjectSelectorItemOut,
+    HrTeamProjectSelectorListOut,
+    HrTeamRecommendationDetailOut,
+    HrTeamRecommendationPut,
+    HrTeamRecommendationSummaryListOut,
+    HrTeamRecommendationSummaryOut,
 )
 from app.core.database import get_db
-from app.services import hr_credential_service
+from app.services import hr_credential_service, hr_team_recommendation_service
 from app.services.hr_credential_service import (
     CODE_NOT_FOUND,
     MSG_NOT_FOUND,
     HrCredentialNotFoundError,
     HrCredentialValidationError,
+)
+from app.services.hr_team_recommendation_service import (
+    CODE_INVALID as TEAM_CODE_INVALID,
+    CODE_PROJECT_NOT_FOUND as TEAM_CODE_PROJECT_NOT_FOUND,
+    CODE_RECOMMENDATION_NOT_FOUND as TEAM_CODE_REC_NOT_FOUND,
+    MSG_INVALID as TEAM_MSG_INVALID,
+    MSG_PROJECT_NOT_FOUND as TEAM_MSG_PROJECT_NOT_FOUND,
+    MSG_RECOMMENDATION_NOT_FOUND as TEAM_MSG_REC_NOT_FOUND,
+    HrTeamProjectNotFoundError,
+    HrTeamRecommendationNotFoundError,
+    HrTeamRecommendationValidationError,
 )
 
 router = APIRouter(prefix="/hr", tags=["hr"])
@@ -43,6 +62,10 @@ _HR_REQUEST_INVALID_DETAIL = {
     "code": _CODE_INVALID,
     "message": _MSG_INVALID,
 }
+_TEAM_REQUEST_INVALID_DETAIL = {
+    "code": TEAM_CODE_INVALID,
+    "message": TEAM_MSG_INVALID,
+}
 
 
 def _no_store(response: Response) -> None:
@@ -50,37 +73,53 @@ def _no_store(response: Response) -> None:
     response.headers["Cache-Control"] = "no-store"
 
 
-def _raise_request_invalid() -> NoReturn:
+def _raise_request_invalid(
+    *,
+    detail: dict[str, str] | None = None,
+) -> NoReturn:
     """用途：HR 写路由专用；校验失败返回固定中文，绝不回显原始请求值。"""
-    raise HTTPException(status_code=422, detail=dict(_HR_REQUEST_INVALID_DETAIL)) from None
+    raise HTTPException(
+        status_code=422,
+        detail=dict(detail or _HR_REQUEST_INVALID_DETAIL),
+    ) from None
 
 
-async def _read_json_object(request: Request) -> dict[str, Any]:
+async def _read_json_object(
+    request: Request,
+    *,
+    invalid_detail: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """
     用途：读取 JSON 对象；非对象/非法 JSON 一律固定错误。
     二次开发：禁止把解析异常信息或 body 片段写入 detail。
     """
+    detail = invalid_detail or _HR_REQUEST_INVALID_DETAIL
     try:
         raw = await request.body()
     except Exception:
-        _raise_request_invalid()
+        _raise_request_invalid(detail=detail)
     if not raw:
-        _raise_request_invalid()
+        _raise_request_invalid(detail=detail)
     try:
         data = json.loads(raw)
     except (json.JSONDecodeError, UnicodeDecodeError, ValueError, TypeError):
-        _raise_request_invalid()
+        _raise_request_invalid(detail=detail)
     if not isinstance(data, dict):
-        _raise_request_invalid()
+        _raise_request_invalid(detail=detail)
     return data
 
 
-def _parse_hr_model(model_cls: type[TModel], data: dict[str, Any]) -> TModel:
+def _parse_hr_model(
+    model_cls: type[TModel],
+    data: dict[str, Any],
+    *,
+    invalid_detail: dict[str, str] | None = None,
+) -> TModel:
     """用途：将 JSON 对象校验为 HR 模型；失败时固定脱敏，不暴露 loc/input。"""
     try:
         return model_cls.model_validate(data)
     except ValidationError:
-        _raise_request_invalid()
+        _raise_request_invalid(detail=invalid_detail)
 
 
 def _actor_user_id(request: Request) -> str:
@@ -260,3 +299,182 @@ async def update_credential_card(
     except HrCredentialValidationError:
         raise _http_invalid() from None
     return _to_detail(item)
+
+
+def _http_team_project_not_found() -> HTTPException:
+    return HTTPException(
+        status_code=404,
+        detail={
+            "code": TEAM_CODE_PROJECT_NOT_FOUND,
+            "message": TEAM_MSG_PROJECT_NOT_FOUND,
+        },
+    )
+
+
+def _http_team_rec_not_found() -> HTTPException:
+    return HTTPException(
+        status_code=404,
+        detail={
+            "code": TEAM_CODE_REC_NOT_FOUND,
+            "message": TEAM_MSG_REC_NOT_FOUND,
+        },
+    )
+
+
+def _http_team_invalid() -> HTTPException:
+    return HTTPException(
+        status_code=422,
+        detail=dict(_TEAM_REQUEST_INVALID_DETAIL),
+    )
+
+
+def _to_team_member(item: dict) -> HrTeamMemberSnapshotOut:
+    return HrTeamMemberSnapshotOut(
+        order=item["order"],
+        person_name=item["person_name"],
+        category=item["category"],
+        credential_name=item["credential_name"],
+        level=item.get("level") or "",
+        valid_until=item.get("valid_until"),
+        source_card_id=item["source_card_id"],
+    )
+
+
+def _to_team_detail(item: dict) -> HrTeamRecommendationDetailOut:
+    return HrTeamRecommendationDetailOut(
+        project_id=item["project_id"],
+        project_name=item["project_name"],
+        members=[_to_team_member(m) for m in item.get("members") or []],
+        updated_at=item["updated_at"],
+    )
+
+
+@router.get(
+    "/team-recommendations/projects",
+    response_model=HrTeamProjectSelectorListOut,
+)
+def list_team_recommendation_projects(
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    workspace_id: Annotated[str, Depends(require_hr)],
+) -> HrTeamProjectSelectorListOut:
+    """
+    用途：严格 hr 获取本空间技术标项目选择器（仅 id/name）。
+    对接：GET /api/hr/team-recommendations/projects；require_hr；hr_team_recommendation_service。
+    二次开发：
+      - 禁止调用或放宽 /api/projects*；字段白名单固定 id/name
+      - Cache-Control: no-store；不得扩权给非 strict hr
+    """
+    _no_store(response)
+    items = hr_team_recommendation_service.list_technical_projects_for_selector(
+        db, workspace_id
+    )
+    return HrTeamProjectSelectorListOut(
+        items=[HrTeamProjectSelectorItemOut(id=x["id"], name=x["name"]) for x in items]
+    )
+
+
+@router.get(
+    "/team-recommendations",
+    response_model=HrTeamRecommendationSummaryListOut,
+)
+def list_team_recommendations(
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    workspace_id: Annotated[str, Depends(require_hr)],
+) -> HrTeamRecommendationSummaryListOut:
+    """
+    用途：严格 hr 查看当前空间团队推荐摘要列表。
+    对接：GET /api/hr/team-recommendations；require_hr；list_recommendation_summaries。
+    二次开发：
+      - 仅摘要投影；禁止返回成员明细、remark、sourceCardId
+      - Cache-Control: no-store；禁止扩为通用项目列表或跨空间查询
+    """
+    _no_store(response)
+    items = hr_team_recommendation_service.list_recommendation_summaries(
+        db, workspace_id
+    )
+    return HrTeamRecommendationSummaryListOut(
+        items=[
+            HrTeamRecommendationSummaryOut(
+                project_id=x["project_id"],
+                project_name=x["project_name"],
+                member_count=x["member_count"],
+                updated_at=x["updated_at"],
+            )
+            for x in items
+        ]
+    )
+
+
+@router.get(
+    "/team-recommendations/{project_id}",
+    response_model=HrTeamRecommendationDetailOut,
+)
+def get_team_recommendation(
+    project_id: str,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    workspace_id: Annotated[str, Depends(require_hr)],
+) -> HrTeamRecommendationDetailOut:
+    """
+    用途：严格 hr 读取单项目团队推荐编辑详情。
+    对接：GET /api/hr/team-recommendations/{projectId}；require_hr；get_recommendation_detail。
+    二次开发：
+      - 项目不可访问 404 hr_team_project_not_found；推荐不存在 404 hr_team_recommendation_not_found
+      - 二者禁止混淆，避免跨空间探测；no-store；成员快照不含 remark
+    """
+    _no_store(response)
+    try:
+        item = hr_team_recommendation_service.get_recommendation_detail(
+            db, workspace_id, project_id
+        )
+    except HrTeamProjectNotFoundError:
+        raise _http_team_project_not_found() from None
+    except HrTeamRecommendationNotFoundError:
+        raise _http_team_rec_not_found() from None
+    return _to_team_detail(item)
+
+
+@router.put(
+    "/team-recommendations/{project_id}",
+    response_model=HrTeamRecommendationDetailOut,
+)
+async def put_team_recommendation(
+    project_id: str,
+    request: Request,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    workspace_id: Annotated[str, Depends(require_hr)],
+) -> HrTeamRecommendationDetailOut:
+    """
+    用途：严格 hr 首建/整表替换团队推荐；空数组清空成员、保留记录、不物理删除。
+    对接：PUT /api/hr/team-recommendations/{projectId}；require_hr；put_recommendation。
+    二次开发：
+      - 手工读取 JSON + schema extra=forbid，仅接受有序 memberCardIds
+      - 超限/重复/无效/跨空间/停用卡统一固定 422，不回显后端细节
+      - CSRF 由中间件校验；审计 target 仅 htr_*；禁止写入 remark 或扩展写权
+    """
+    _no_store(response)
+    body = _parse_hr_model(
+        HrTeamRecommendationPut,
+        await _read_json_object(
+            request, invalid_detail=_TEAM_REQUEST_INVALID_DETAIL
+        ),
+        invalid_detail=_TEAM_REQUEST_INVALID_DETAIL,
+    )
+    actor = _actor_user_id(request)
+    try:
+        item, created = hr_team_recommendation_service.put_recommendation(
+            db,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            actor_user_id=actor,
+            member_card_ids=list(body.member_card_ids),
+        )
+    except HrTeamProjectNotFoundError:
+        raise _http_team_project_not_found() from None
+    except HrTeamRecommendationValidationError:
+        raise _http_team_invalid() from None
+    response.status_code = 201 if created else 200
+    return _to_team_detail(item)
