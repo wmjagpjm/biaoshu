@@ -11,7 +11,7 @@
 > **基线父提交**：`834969e`（包 7 文档状态同步后协作分支干净点）。
 > **包 7 已推送**：`2c7b3e0`（实现响应矩阵字段级三方合并）。
 > **分支**：`collab/grok-code-codex-review`。
-> **原 MVP 明确未做**：内嵌真实 MinerU / Docling；改 callback 默认 token 策略；包 9。后续 P8B 已作为独立包完成 `parseStrategy` 工作台接线（契约=`docs/p8b-parse-strategy-wiring-contract.md`；后端=`0994cc8`，前端=`80d2579`），不改变本计划的引擎边界。P8C 已另行冻结 required 模式的一次性公共回传票据，不修改 engine 注册或长期 Token 兼容语义。
+> **原 MVP 明确未做**：内嵌真实 MinerU / Docling；改 callback 默认 token 策略；包 9。后续 P8B 已作为独立包完成 `parseStrategy` 工作台接线（契约=`docs/p8b-parse-strategy-wiring-contract.md`；后端=`0994cc8`，前端=`80d2579`），不改变本计划的引擎边界。P8C 也已完成 required 模式一次性公共回传票据（计划=`cabe99d`、后端=`af39ff8`、前端=`1cf5576`），仍不修改 engine 注册或长期 Token 兼容语义。
 
 ## 1. 现状
 
@@ -23,6 +23,7 @@
 | 可插拔引擎注册/调度 | **已完成并推送**（`6db1586`） |
 | 真实 MinerU/Docling 内嵌或 subprocess | **不做**（部署决策，见 §5） |
 | `settings.parseStrategy=local/ask` 工作台决策 | **P8B 已接线**：`light` 创建 lightweight 任务，`local` 只去外置 callback，`ask` 一次性选择；它们仍不驱动本调度器注册新引擎 |
+| required 模式外部助手最小回传授权 | **P8C 已交付**：strict `bid_writer` 显式签发 10 分钟单项目单次票据；精确公共回调只接受受限 Markdown |
 
 ## 2. engine 契约（冻结）
 
@@ -69,11 +70,11 @@ task_service._run_parse
 |------|------|
 | 默认 `requirements.txt` 安装 | **否**（体积、二进制、许可与本机日用冲突） |
 | 进程内嵌调用 | **否**（安全面与超时难控） |
-| 外置 CLI/服务 + `parse-callback` | **推荐**后续独立 task：固定可执行路径白名单、workspace/project 绑定、token 强制 |
+| 外置 CLI/服务 + `parse-callback` | P8C 已完成 workspace/project/user 绑定的一次性回传授权；外部可执行路径、安装与进程治理仍未做 |
 | Docling | **未接**；若引入须新 engine 名 + 独立安全审查，不得 silently alias 到 lightweight |
 | `parseStrategy` | 后续 P8B 已独立完成工作台接线：读取脱敏枚举后在前端决定轻量任务或本地回传；仍**不**驱动本调度器注册 MinerU/Docling |
 
-P8C 后续契约只解决外部助手在 `AUTH_MODE=required` 下的最小回传授权：strict `bid_writer` 签发固定 10 分钟、单项目、单次票据，公共回调只接受票据和受限 Markdown。它不安装外部解析器、不开放可执行路径，也不把 `local` 注册为 engine；详见 `docs/p8c-local-parser-one-time-callback-ticket-contract.md`。
+P8C 已解决外部助手在 `AUTH_MODE=required` 下的最小回传授权：strict `bid_writer` 签发固定 10 分钟、单项目、单次票据，公共回调只接受票据和受限 Markdown。它没有安装外部解析器、开放可执行路径或把 `local` 注册为 engine；详见 `docs/p8c-local-parser-one-time-callback-ticket-contract.md`。
 
 ## 6. Token 默认空的风险（记录）
 

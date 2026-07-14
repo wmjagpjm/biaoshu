@@ -15,9 +15,9 @@
 
 **技术栈**：FastAPI、SQLAlchemy、SQLite/PostgreSQL 兼容 SQL、SHA-256、React/TypeScript、Playwright、pytest。
 
-> **状态**：计划已冻结，等待后端受限实现。
+> **状态**：**后端、前端均已完成独立审查、验收并推送**；进入文档闭环。
 > **工作方式**：项目约束要求继续使用唯一协作分支，不新建 worktree；Grok 留下未提交差异，Codex 唯一负责 Git。
-> **基线**：HEAD 以本计划提交为准；后端 422 passed，前端单 worker E2E 122 passed。
+> **交付提交**：计划=`cabe99d`，后端=`af39ff8`，前端=`1cf5576`；后端 432 passed，前端单 worker E2E 131 passed。
 
 ---
 
@@ -107,3 +107,22 @@ git diff --check
 ## 4. Grok review_request 必报项
 
 后端必须报告：原任务 ID、失败先测证据、精确七文件、表字段、随机强度/摘要/TTL、精确公开路径、权限与 CSRF、原子 SQL 和事务证据、固定错误脱敏、定向/回归结果、`git diff --check`、风险与未做项。前端必须报告：原任务 ID、失败先测、精确三文件、请求次数、票据生命周期、disabled/角色边界、网络/存储断言、定向/P8B E2E、lint/build/diff-check。两包均不得 commit/push。
+
+## 5. 实施、审查与验收实录
+
+### 5.1 后端
+
+- Grok 首版任务 `msg_9612a2253b3f458881a92fb4d94b77ba`，首版审查请求 `msg_8c4daf55e8f44a909ab0e107a928dc28`；精确七文件，无提交推送。
+- Codex 发现公开回调使用 `await request.body()` 后才检查 2 MiB，无法形成服务端内存硬上限，且两处测试断言被放宽为恒真。返修任务 `msg_9b79d50d5b97484096501a69299bb1e4` 将正文改为 `request.stream()` 分块累计、缺/空票据先 401，并收紧精确字段和跨空间断言。
+- 最终审查请求 `msg_5198455efa184c6691db8e44cc993e16`；Codex 独立通过 P8C 定向 10 项、解析/鉴权回归 51 项、后端串行全量 432 项，随后以 `af39ff8` 提交并推送。
+
+### 5.2 前端
+
+- Grok 首版任务 `msg_6b4e940347a448639f55afd75a2879a6`，失败先测 5 failed / 4 passed，实现后 9 passed；首版审查请求 `msg_a314fc03540e4d21a244fa81bf2cc298`。
+- Codex 首轮拒绝相对 curl 和 E2E 假绿：签发桩未验证空 body/CSRF，disabled 旧回调未验证 `X-Local-Token`，未知 API 被宽泛放行，存储与剪贴板检查可在失败时假绿。返修任务 `msg_17c4c6d2e7be48cdb7e3f4a710415d3d` 改为当前 origin 的绝对固定 `curl.exe`，并记录/断言请求详情、精确空存储和网络白名单。
+- Codex 二轮继续拒绝 IndexedDB 枚举异常伪装空列表，以及只用普通项目 ID 导致 `encodeURIComponent` 回归仍会通过。最终返修任务 `msg_3a6f1b68e77544fc9cc7a7b6a0ffa75c` 使用含空格、斜杠和中文的项目 ID，并让 IndexedDB API 不可用或枚举失败直接使测试失败。
+- 最终审查请求 `msg_23752da47f0848eeab1344a9c60b48f1`；Codex 独立通过 P8C 9 项、P8B 6 项、lint/build。第一次全量 130/131 的唯一失败来自既有矩阵分页初始化时序，单独复跑 1/1 通过；第二次单 worker 全量 131/131 全绿。前端以 `1cf5576` 提交并推送。
+
+### 5.3 保持未做
+
+本包没有安装、下载、启动或打包 MinerU/Docling，没有新增外部可执行路径、自动回传、重试/续期、长期 API Key、策略 engine、浏览器秘密存储或公共项目读取能力。真实解析器运行时与部署治理仍须独立契约。
