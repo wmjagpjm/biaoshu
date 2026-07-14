@@ -20,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import (
     auth as auth_api,
+    bidder as bidder_api,
     cards as cards_api,
     compliance as compliance_api,
     export as export_api,
@@ -130,6 +131,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_api.router, prefix="/api")
     app.include_router(finance_api.router, prefix="/api")
     app.include_router(hr_api.router, prefix="/api")
+    app.include_router(bidder_api.router, prefix="/api")
     app.include_router(projects.router, prefix="/api")
     app.include_router(settings_api.router, prefix="/api")
     app.include_router(llm.router, prefix="/api")

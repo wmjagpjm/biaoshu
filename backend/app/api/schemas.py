@@ -1306,3 +1306,42 @@ class HrCredentialCardUpdate(BaseModel):
     remark: str | None = Field(default=None, max_length=500)
     # StrictBool：仅 JSON true/false；"false"/0/1 均 422
     is_active: StrictBool | None = Field(default=None, alias="isActive")
+
+
+# ---------- P10E 投标人匿名合规预览 ----------
+
+
+BidderComplianceDataState = Literal["ready", "empty"]
+
+
+class BidderComplianceSummaryOut(BaseModel):
+    """
+    模块：投标人匿名合规汇总计数
+    用途：仅输出条目总量与覆盖/未覆盖/豁免及整数基点。
+    对接：GET /api/bidder/compliance-preview 的 summary。
+    二次开发：禁止附加项目 ID/名称、矩阵行或原文。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    total_items: int = Field(serialization_alias="totalItems")
+    covered_items: int = Field(serialization_alias="coveredItems")
+    uncovered_items: int = Field(serialization_alias="uncoveredItems")
+    waived_items: int = Field(serialization_alias="waivedItems")
+    coverage_basis_points: int | None = Field(
+        serialization_alias="coverageBasisPoints"
+    )
+
+
+class BidderCompliancePreviewOut(BaseModel):
+    """
+    模块：投标人匿名合规预览响应
+    用途：工作空间级只读聚合；dataState 仅 ready|empty。
+    对接：GET /api/bidder/compliance-preview。
+    二次开发：字段集合为契约白名单，不得扩展项目或矩阵细节。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    data_state: BidderComplianceDataState = Field(serialization_alias="dataState")
+    summary: BidderComplianceSummaryOut

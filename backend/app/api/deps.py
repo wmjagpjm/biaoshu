@@ -8,6 +8,7 @@
   - require_owner / require_bid_writer 供设置与后续细权限包使用
   - require_finance 为 P10B 严格财务依赖，不得放宽既有 get_workspace_id 语义
   - require_hr 为 P10D 严格人力依赖，逻辑与 require_finance 对称，仅 role=hr
+  - require_bidder 为 P10E 严格投标人依赖，逻辑与 require_finance/require_hr 对称，仅 role=bidder
 """
 
 from typing import Annotated
@@ -245,6 +246,76 @@ def require_hr(
         None,
     )
     if member is None or member.role != auth_service.ROLE_HR:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": auth_service.CODE_ROLE_FORBIDDEN,
+                "message": auth_service.MSG_ROLE_FORBIDDEN,
+            },
+        )
+    return workspace_id
+
+
+def require_bidder(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    x_workspace_id: Annotated[str | None, Header(alias="X-Workspace-Id")] = None,
+) -> str:
+    """
+    模块：P10E 严格投标人依赖
+    用途：仅 AUTH_MODE=required 且当前活动成员角色精确为 bidder 时解析 workspace。
+    对接：/api/bidder/*；与 require_finance/require_hr 对称，不改变 get_workspace_id 的 bid_writer 默认拒绝。
+    二次开发：
+      - required 未登录由全局认证中间件返回 401 auth_required
+      - disabled / 非 bidder / owner 一律 403 role_forbidden
+      - 非成员 X-Workspace-Id 保留 403 workspace_forbidden
+      - 不得因 is_owner 隐式放行；不得污染个人版兼容分支
+    """
+    if not settings.is_auth_required():
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": auth_service.CODE_ROLE_FORBIDDEN,
+                "message": auth_service.MSG_ROLE_FORBIDDEN,
+            },
+        )
+
+    principal = getattr(request.state, "auth_principal", None)
+    if principal is None:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": auth_service.CODE_ROLE_FORBIDDEN,
+                "message": auth_service.MSG_ROLE_FORBIDDEN,
+            },
+        )
+
+    try:
+        workspace_id = auth_service.resolve_workspace_for_principal(
+            principal,
+            x_workspace_id,
+            require_bid_writer=False,
+        )
+    except auth_service.AuthError as exc:
+        # 工作空间越权保留原码；角色问题统一收口为 role_forbidden
+        if exc.code == auth_service.CODE_WORKSPACE_FORBIDDEN:
+            raise HTTPException(
+                status_code=exc.status_code, detail=exc.as_detail()
+            ) from None
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": auth_service.CODE_ROLE_FORBIDDEN,
+                "message": auth_service.MSG_ROLE_FORBIDDEN,
+            },
+        ) from None
+
+    member = next(
+        (m for m in principal.members if m.workspace_id == workspace_id and m.is_active),
+        None,
+    )
+    if member is None or member.role != auth_service.ROLE_BIDDER:
         raise HTTPException(
             status_code=403,
             detail={
