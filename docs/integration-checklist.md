@@ -126,9 +126,12 @@ npm run test:e2e:finance-role
 
 # P10C：财务成本草案与毛利快照（隔离 8010/5174、路由桩；仅财务专用端点）
 npm run test:e2e:finance-cost-draft
+
+# P10D：人力人员资质素材卡（隔离 8010/5174、路由桩；仅 HR 专用端点）
+npm run test:e2e:hr-credential-cards
 ```
 
-当前基线：后端 **pytest 全量 314 passed**（按串行分组，1 条既有 Starlette/httpx 弃用警告；含 P10A 39 项、P10B 9 项和 P10C 15 项身份/财务测试）；前端 lint/build；P10C `test:e2e:finance-cost-draft` **4 passed**；P10B `test:e2e:finance-role` **7 passed**；P10A `test:e2e:auth-rbac` **11 passed**；P9C `test:e2e:semantic-index` **9 passed**；知识卡片 `test:e2e:cards` **1 passed**。P10C 仅向 strict `finance` 开放当前空间商务标的人工成本草案与毛利快照，`AUTH_MODE=disabled` 不开放该入口。完整契约见 `docs/p10a-local-identity-rbac-contract.md`、`docs/p10b-finance-business-quote-contract.md` 与 `docs/p10c-finance-cost-draft-contract.md`。
+当前基线：后端串行全量 **326 passed**（1 条既有 Starlette/httpx 弃用警告，含 P10D 严格布尔与 HR 隔离测试）；前端 `lint` / `build` 通过（仅既有大包体积提示）及全量 E2E **55 passed**。其中 P10D `test:e2e:hr-credential-cards` **9 passed**、P10C `finance-cost-draft` **4 passed**、P10B `finance-role` **7 passed**、P10A `auth-rbac` **11 passed**、P9C `semantic-index` **9 passed**、知识卡片 `cards` **1 passed**。P10D 仅向 strict `hr` 开放当前工作空间的最小人员资质素材卡，`AUTH_MODE=disabled` 不开放；完整契约见 `docs/p10a-local-identity-rbac-contract.md`、`docs/p10b-finance-business-quote-contract.md`、`docs/p10c-finance-cost-draft-contract.md` 与 `docs/p10d-hr-credential-cards-contract.md`。
 
 ## 6. 已接 API 一览
 
@@ -147,6 +150,10 @@ npm run test:e2e:finance-cost-draft
 | GET | `/api/finance/business-bids/{projectId}/cost-draft`（仅 strict `finance`；成本草案与毛利快照；`no-store`） |
 | POST | `/api/finance/business-bids/{projectId}/cost-entries`（仅 strict `finance` + CSRF；正整数分成本条目） |
 | PATCH/DELETE | `/api/finance/business-bids/{projectId}/cost-entries/{entryId}`（仅 strict `finance` + CSRF；跨项目统一 404） |
+| GET | `/api/hr/credential-cards`（仅 strict `hr`；当前空间摘要；不含备注；`no-store`） |
+| GET | `/api/hr/credential-cards/{cardId}`（仅 strict `hr`；跨空间/不存在统一 `404 hr_credential_not_found`；`no-store`） |
+| POST | `/api/hr/credential-cards`（仅 strict `hr` + CSRF；字段白名单与严格 JSON 布尔） |
+| PATCH | `/api/hr/credential-cards/{cardId}`（仅 strict `hr` + CSRF；更新/启停；无 DELETE） |
 | GET/POST | `/api/projects` |
 | GET/PATCH/DELETE | `/api/projects/{id}` |
 | GET | `/api/projects/{id}/tasks/{taskId}/events`（SSE） |
@@ -180,6 +187,14 @@ npm run test:e2e:finance-cost-draft
 | GET | `/api/knowledge/semantic-index`（当前工作空间的脱敏离线语义索引状态） |
 | GET | `/api/knowledge/semantic-index/{indexId}`（当前工作空间索引详情；跨空间 404） |
 | POST | `/api/knowledge/semantic-index/rebuild`（无请求体；仅显式构建时后台加载固定离线模型） |
+
+## 6.1 P10D 人员资质素材卡
+
+1. 以严格 `hr` 登录，打开 `/hr`；侧栏仅显示「人力 / 人员资质」，不得显示财务或标书制作者业务入口。
+2. 初始列表仅请求 `GET /api/hr/credential-cards`，摘要不显示 `remark`；点选卡片后才请求详情并显示备注。
+3. 新建、编辑和启停必须携带内存 CSRF；每次成功后均重新 GET 列表与当前详情，不使用乐观更新或浏览器存储。
+4. `owner` 的隐式绕过、`bid_writer`、`finance`、`bidder` 与 disabled 均没有人力入口；直达 `/hr` 只显示受限页，且不应发 HR API 请求。
+5. 不得出现证件号、手机号、住址、附件、URL、创建人或工作空间字段；无 DELETE、导出、项目关联、团队推荐或跨空间搜索。
 
 ## 7. 本机日用主链路（目标 A 加强版）
 
@@ -261,7 +276,7 @@ npm run test:e2e:finance-cost-draft
 
 ## 14. 仍未接（后续）
 
-Celery、真 MinerU 安装包、P9B 以外的外部标讯数据源、P9C 的其他模型/GPU/在线 embedding/真实用户语料评测与自动模型更新、P10C 以外的财务税务/审批/导出/预算/回款/版本与审计查看、人力团队数据域、投标人匿名预览/版本/合规数据域、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
+Celery、真 MinerU 安装包、P9B 以外的外部标讯数据源、P9C 的其他模型/GPU/在线 embedding/真实用户语料评测与自动模型更新、P10C 以外的财务税务/审批/导出/预算/回款/版本与审计查看、P10D 以外的人力团队推荐/人员业绩/附件与证件校验、投标人匿名预览/版本/合规数据域、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
 
 **响应矩阵相关（已接 vs 未扩）：** 多端冲突的版本写保护、409 与双浏览器上下文 E2E 主路径已接；「刷新来源」保留人工映射 E2E 已接；**智能建议人工确认后应用** E2E 已接；**来源超过 80 分页** 已推送（`1289c92`）；**字段级三方合并** MVP + E2E 已推送（`2c7b3e0`，`response-matrix-field-merge.spec.ts`）。仍未接：Word 失效引用在浏览器层的扩展（导出逻辑以后端单测为准）；包 9 交付增强。
 
