@@ -17,7 +17,7 @@ P10F 在 P10D 最小人员资质素材卡之上，提供当前工作空间内、
 | disabled、所有者隐式绕过、`bid_writer`、`finance`、`bidder` | HR 专用接口统一 `403 role_forbidden` |
 | HR 指定非成员 `X-Workspace-Id` | `403 workspace_forbidden` |
 | `AUTH_MODE=required` 且当前活动成员角色严格为 `bid_writer` 读取本空间单个技术标项目的展示投影 | 允许 `GET /api/projects/{projectId}/team-recommendation` |
-| disabled、所有者隐式绕过、`hr`、`finance`、`bidder` 或非成员读取上述项目投影 | disabled 与角色问题为 `403 role_forbidden`；非成员 `X-Workspace-Id` 为 `403 workspace_forbidden` |
+| disabled、当前成员角色不是 `bid_writer`（包括仅有 `is_owner`）或非成员读取上述项目投影 | disabled 与角色问题为 `403 role_forbidden`；非成员 `X-Workspace-Id` 为 `403 workspace_forbidden`。`is_owner` 不能替代角色；若成员角色本身精确为 `bid_writer`，则按上一行允许 |
 
 HR **不得**调用既有 `/api/projects*`。新增 HR 项目选择器只返回当前空间技术标项目的 `id` 与 `name`，不返回行业、状态、步骤、字数、关联项目、标讯、正文、文件、编辑态或任务。技术标项目不存在、跨空间或非技术标时，HR 写/读详情统一返回 `404 hr_team_project_not_found`。
 
@@ -76,3 +76,5 @@ HR 首建/替换（包括空数组清空）分别记录 `hr_team_recommendation_
 前端新增严格 HR 的「团队推荐」入口：先请求 HR 项目选择器和资质卡**摘要**，选择项目后才请求推荐详情；提交后重读摘要与详情，不乐观拼接。技术标工作区的标书制作者展示必须按用户动作按需读取单项目投影，错误只显示固定中文，不触发 `/hr/*`、完整 `/projects*`、编辑态、财务、文件或外网请求。
 
 独立验收至少覆盖：角色/未登录/disabled/跨空间矩阵、HR 项目白名单、仅有效卡可选、重复/额外键/非对象拒绝、0–30 边界、一次保存后的快照不随资质卡变化、项目投影最小字段与 empty 语义、`no-store`、CSRF、审计脱敏、浏览器存储为零，以及 HR 和标书制作者网络白名单。
+
+**验收记录（2026-07-14）**：计划=`12e067f`、后端=`3dc600a`、前端=`254f8c7` 已推送至协作分支。Codex 已独立通过后端全量 364 项、前端 `lint` / `build`、P10F 定向 E2E 4 项及前端全量 E2E；仅保留既有 Starlette/httpx 弃用警告与 Vite 大包体积提示。

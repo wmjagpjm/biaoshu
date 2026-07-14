@@ -130,6 +130,9 @@ npm run test:e2e:finance-cost-draft
 # P10D：人力人员资质素材卡（隔离 8010/5174、路由桩；仅 HR 专用端点）
 npm run test:e2e:hr-credential-cards
 
+# P10F：人力项目团队推荐快照（隔离 8010/5174、路由桩；HR 与标书制作者最小投影）
+npm run test:e2e:hr-team-recommendations
+
 # P10E：投标人匿名合规预览（隔离 8010/5174、路由桩；仅 bidder 专用端点）
 npm run test:e2e:bidder-compliance-preview
 
@@ -137,7 +140,7 @@ npm run test:e2e:bidder-compliance-preview
 npm run test:e2e:parse-strategy
 ```
 
-当前基线：后端串行全量 **348 passed**（1 条既有 Starlette/httpx 弃用警告，含 P8B 策略读取与 P10E 严格投标人隔离测试）；前端 `lint` / `build` 通过（仅既有大包体积提示）及全量 E2E **69 passed**。其中 P8B `test:e2e:parse-strategy` **6 passed**、P10E `test:e2e:bidder-compliance-preview` **8 passed**、P10D `test:e2e:hr-credential-cards` **9 passed**、P10C `finance-cost-draft` **4 passed**、P10B `finance-role` **7 passed**、P10A `auth-rbac` **11 passed**、P9C `semantic-index` **9 passed**、知识卡片 `cards` **1 passed**。P8B 完整契约见 `docs/p8b-parse-strategy-wiring-contract.md`；P10E 仅向 strict `bidder` 开放工作空间级匿名响应矩阵汇总，`AUTH_MODE=disabled` 不开放；其余角色契约保持原边界。
+当前基线：后端串行全量 **364 passed**（1 条既有 Starlette/httpx 弃用警告，含 P10F 严格角色与快照隔离测试）；前端 `lint` / `build` 通过（仅既有大包体积提示）及全量 E2E **73 passed**。其中 P10F `test:e2e:hr-team-recommendations` **4 passed**、P8B `test:e2e:parse-strategy` **6 passed**、P10E `test:e2e:bidder-compliance-preview` **8 passed**、P10D `test:e2e:hr-credential-cards` **9 passed**、P10C `finance-cost-draft` **4 passed**、P10B `finance-role` **7 passed**、P10A `auth-rbac` **11 passed**、P9C `semantic-index` **9 passed**、知识卡片 `cards` **1 passed**。P10F 完整契约见 `docs/p10f-hr-team-recommendation-contract.md`：仅 strict `hr` 维护当前空间技术标项目的最小团队快照，strict `bid_writer` 才能按需读取项目展示投影，`AUTH_MODE=disabled` 与仅 `is_owner` 均不放行；其余角色契约保持原边界。
 
 ## 6. 已接 API 一览
 
@@ -160,9 +163,13 @@ npm run test:e2e:parse-strategy
 | GET | `/api/hr/credential-cards/{cardId}`（仅 strict `hr`；跨空间/不存在统一 `404 hr_credential_not_found`；`no-store`） |
 | POST | `/api/hr/credential-cards`（仅 strict `hr` + CSRF；字段白名单与严格 JSON 布尔） |
 | PATCH | `/api/hr/credential-cards/{cardId}`（仅 strict `hr` + CSRF；更新/启停；无 DELETE） |
+| GET | `/api/hr/team-recommendations/projects`（仅 strict `hr`；当前空间技术标 `id/name` 选择器；`no-store`） |
+| GET | `/api/hr/team-recommendations`（仅 strict `hr`；推荐摘要；`no-store`） |
+| GET/PUT | `/api/hr/team-recommendations/{projectId}`（仅 strict `hr`；详情/有序快照写入，PUT 需 CSRF） |
 | GET | `/api/bidder/compliance-preview`（仅 strict `bidder`；当前空间技术标响应矩阵匿名汇总；`no-store`） |
 | GET/POST | `/api/projects` |
 | GET/PATCH/DELETE | `/api/projects/{id}` |
+| GET | `/api/projects/{projectId}/team-recommendation`（仅 strict `bid_writer`；当前空间技术标的最小展示投影；`no-store`） |
 | GET | `/api/projects/{id}/tasks/{taskId}/events`（SSE） |
 | GET/PUT | `/api/projects/{id}/editor-state`（含 responseMatrix） |
 | GET/POST | `/api/projects/{id}/files`（仅招标源文件） |
@@ -202,9 +209,17 @@ npm run test:e2e:parse-strategy
 2. 初始列表仅请求 `GET /api/hr/credential-cards`，摘要不显示 `remark`；点选卡片后才请求详情并显示备注。
 3. 新建、编辑和启停必须携带内存 CSRF；每次成功后均重新 GET 列表与当前详情，不使用乐观更新或浏览器存储。
 4. `owner` 的隐式绕过、`bid_writer`、`finance`、`bidder` 与 disabled 均没有人力入口；直达 `/hr` 只显示受限页，且不应发 HR API 请求。
-5. 不得出现证件号、手机号、住址、附件、URL、创建人或工作空间字段；无 DELETE、导出、项目关联、团队推荐或跨空间搜索。
+5. 不得出现证件号、手机号、住址、附件、URL、创建人或工作空间字段；P10D 卡片本身无 DELETE、导出、项目关联或跨空间搜索；项目团队快照由下节 P10F 独立受限提供。
 
-## 6.2 P10E 投标人匿名合规预览
+## 6.2 P10F 人力项目团队推荐快照
+
+1. 以严格 `hr` 登录，打开 `/hr/team-recommendations`；初始只能请求 HR 技术标 `id/name` 选择器和资质卡**摘要**，选择项目后才可请求推荐详情，绝不请求卡片备注。
+2. 保存只发送有序 `memberCardIds`，仅 `isActive=true` 的当前空间卡可加入；成功后必须重读推荐摘要和详情。已保存快照即使来源卡后续编辑或停用也不得自动改变，停用成员须由 HR 明确移除后再保存。
+3. `disabled`、非 HR、所有者隐式绕过和跨空间均不得获得 HR 入口或发出 HR API 请求；写入须携带内存 CSRF，错误不得回显输入、卡 ID 或服务端 detail。
+4. 以严格 `bid_writer` 打开技术标项目时，仅用户点击「查看团队推荐」后才可请求单项目投影；`ready` 只显示顺序、协作显示名和资质摘要，`empty` 明确未推荐。仅有 `is_owner` 不是授权；成员角色本身为 `bid_writer` 才可按角色通过。
+5. 标书制作者展示不得请求 `/hr/*`、完整项目、编辑态、文件、财务或外网；两侧均不得写入浏览器存储、导出、自动匹配、Word 写入、人员业绩、证件或附件。
+
+## 6.3 P10E 投标人匿名合规预览
 
 1. 以严格 `bidder` 登录，打开 `/bidder`；侧栏仅显示「投标人 / 合规预览」，不得显示标书制作者、财务或人力入口。
 2. 页面仅请求 `GET /api/bidder/compliance-preview`，并只展示总条目、已覆盖、未覆盖、已豁免和服务端给出的覆盖率基点；`empty` 时覆盖率显示「暂无可计算覆盖率」。
@@ -212,7 +227,7 @@ npm run test:e2e:parse-strategy
 4. `owner` 的隐式绕过、`bid_writer`、`finance`、`hr` 与 disabled 均没有投标人入口；直达 `/bidder` 只显示受限页，且不应发投标人预览 API 请求。
 5. 浏览器不得写入 `localStorage` 或 `sessionStorage`；除认证、健康检查和本接口外，不能请求项目、编辑态、设置、文件、财务、人力或外网端点。完整边界见 `docs/p10e-bidder-anonymous-compliance-preview-contract.md`。
 
-## 6.3 P8B 解析策略接线
+## 6.4 P8B 解析策略接线
 
 1. 设置页保存 `light`、`local` 或 `ask` 后，技术标和商务标解析动作都重新请求 `GET /api/settings/parse-strategy`；响应只能有 `parseStrategy` 且带 `Cache-Control: no-store`，不得回显完整设置或 Key。
 2. `light` 创建既有 `parse` 任务，任务 payload 固定 `engine=lightweight`；成功后继续按既有路径刷新解析预览或商务编辑态。
@@ -300,7 +315,7 @@ npm run test:e2e:parse-strategy
 
 ## 14. 仍未接（后续）
 
-Celery、真 MinerU 安装包、P9B 以外的外部标讯数据源、P9C 的其他模型/GPU/在线 embedding/真实用户语料评测与自动模型更新、P10C 以外的财务税务/审批/导出/预算/回款/版本与审计查看、P10D 以外的人力团队推荐/人员业绩/附件与证件校验、投标人项目级预览/版本/结果跟踪与其他合规数据域、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
+Celery、真 MinerU 安装包、P9B 以外的外部标讯数据源、P9C 的其他模型/GPU/在线 embedding/真实用户语料评测与自动模型更新、P10C 以外的财务税务/审批/导出/预算/回款/版本与审计查看、P10F 以外的人力人员业绩/附件与证件校验、投标人项目级预览/版本/结果跟踪与其他合规数据域、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
 
 **响应矩阵相关（已接 vs 未扩）：** 多端冲突的版本写保护、409 与双浏览器上下文 E2E 主路径已接；「刷新来源」保留人工映射 E2E 已接；**智能建议人工确认后应用** E2E 已接；**来源超过 80 分页** 已推送（`1289c92`）；**字段级三方合并** MVP + E2E 已推送（`2c7b3e0`，`response-matrix-field-merge.spec.ts`）。仍未接：Word 失效引用在浏览器层的扩展（导出逻辑以后端单测为准）；包 9 交付增强。
 
