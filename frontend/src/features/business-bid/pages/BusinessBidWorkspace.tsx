@@ -40,6 +40,7 @@ import {
   BUSINESS_STEPS,
 } from "../components/BusinessStepStepper";
 import { useBusinessBidWorkspace } from "../hooks/useBusinessBidWorkspace";
+import { EditorStateCheckpointPanel } from "../../editor-state-checkpoints/EditorStateCheckpointPanel";
 import type { BusinessBidStepId, QualifyItemStatus } from "../types";
 import "./BusinessBid.css";
 
@@ -101,6 +102,7 @@ export function BusinessBidWorkspace() {
     loading: wsLoading,
     loadError,
     saveError,
+    apiReady,
     fullStateConflict,
     fullStateConflictMessage,
     refreshFromApi,
@@ -111,6 +113,8 @@ export function BusinessBidWorkspace() {
     setQuoteNotes,
     updateCommitBlock,
     submitRevise,
+    createCheckpoint,
+    restoreCheckpoint,
   } = useBusinessBidWorkspace(projectId);
 
   const pipeline = useProjectPipeline(projectId);
@@ -416,6 +420,13 @@ export function BusinessBidWorkspace() {
           )}
         </div>
       </header>
+
+      <EditorStateCheckpointPanel
+        projectId={project.id}
+        disabled={!apiReady || Boolean(loadError) || fullStateConflict}
+        createCheckpoint={createCheckpoint}
+        restoreCheckpoint={restoreCheckpoint}
+      />
 
       {(busy || lastTask || pipeline.error || strategyTip) && (
         <div className="bb-hint" style={{ marginBottom: 12 }}>

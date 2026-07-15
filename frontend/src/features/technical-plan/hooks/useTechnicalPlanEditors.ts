@@ -24,6 +24,15 @@ export type VersionedExternalWriteOutcome<T> =
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  createEditorStateCheckpoint as postCreateEditorStateCheckpoint,
+  isCheckpointCreateStateVersionError,
+  restoreEditorStateCheckpoint as postRestoreEditorStateCheckpoint,
+} from "../../editor-state-checkpoints/editorStateCheckpointApi";
+import type {
+  CheckpointCreateOutcome,
+  CheckpointRestoreOutcome,
+} from "../../editor-state-checkpoints/EditorStateCheckpointPanel";
+import {
   apiFetch,
   getApiBase,
   getCsrfToken,
@@ -388,6 +397,18 @@ export function useTechnicalPlanEditors(projectId: string) {
   const matrixPutBlockedRef = useRef(false);
   /** 全状态冲突或 200 缺/非法版本后阻断全部 editor-state PUT */
   const fullStateBlockedRef = useRef(false);
+  /**
+   * 创建/恢复操作 token（项目绑定）：
+   * - 同项目连点：token 已属本项目 → 拒绝第二请求
+   * - 不同项目：允许新项目启动并把 ref 覆盖为新 token
+   * - finally 仅当 projectId+token 仍匹配时清空，绝不能误清新项目 token
+   * 禁止：跨项目共享 boolean，或切项目时简单 boolean=false
+   */
+  const checkpointOpTokenRef = useRef<{
+    projectId: string;
+    token: number;
+  } | null>(null);
+  const checkpointOpTokenSeqRef = useRef(0);
   const matrixVersionRef = useRef<string | null>(null);
   /** 当前项目内存中的服务端全状态版本；禁止落盘 */
   const stateVersionRef = useRef<string | null>(null);
@@ -584,13 +605,200 @@ export function useTechnicalPlanEditors(projectId: string) {
   ]);
 
   // 保存：仅 apiReady 后 debounce PUT；全状态 expected + 矩阵版本串行；409 分流；禁止 localStorage
+
+  /**
+   * 用途：共享「构造最新 body + 执行 PUT + 接受版本/冲突处理」执行器。
+   * 对接：普通防抖 autosave 与显式创建检查点强制即时 PUT 共用；禁止第二套 body。
+   * 二次开发：真正执行时读 stateRef + stateVersionRef；不在此 commit 检查点。
+   */
+  type ImmediatePutStatus =
+    | "ok"
+    | "stale"
+    | "blocked"
+    | "full_conflict"
+    | "matrix_conflict"
+    | "error"
+    | "invalid_version";
+
+  const executeImmediateEditorStatePut = useCallback(
+    async (
+      requestProjectId: string,
+      requestSession: number,
+      requestEpoch: number,
+    ): Promise<ImmediatePutStatus> => {
+      if (
+        !isCurrentWriteEpoch(requestProjectId, requestSession, requestEpoch)
+      ) {
+        return "stale";
+      }
+      if (fullStateBlockedRef.current) {
+        return "blocked";
+      }
+      const expected = stateVersionRef.current;
+      if (!isValidStateVersion(expected)) {
+        enterFullStateBlock();
+        return "invalid_version";
+      }
+      const latest = stateRef.current;
+      const body: Record<string, unknown> = {
+        outline: latest.outline,
+        chapters: latest.chapters,
+        facts: latest.facts,
+        mode: latest.mode,
+        analysisOverview: latest.analysis.overview || latest.analysisOverview,
+        analysis: latest.analysis,
+        guidance: latest.guidance,
+        expectedStateVersion: expected,
+      };
+      const includeMatrix = !matrixPutBlockedRef.current;
+      const matrixAtRequest = includeMatrix
+        ? cloneResponseMatrix(latest.responseMatrix)
+        : null;
+      const versionAtRequest = matrixVersionRef.current;
+      if (includeMatrix) {
+        body.responseMatrix = matrixAtRequest;
+        if (versionAtRequest) {
+          body.responseMatrixVersion = versionAtRequest;
+        }
+      }
+      try {
+        const res = await putEditorState(requestProjectId, body);
+        if (
+          !isCurrentWriteEpoch(requestProjectId, requestSession, requestEpoch)
+        ) {
+          return "stale";
+        }
+        if (res.status === 409) {
+          const raw = (await res.json().catch(() => null)) as {
+            detail?: {
+              code?: string;
+              message?: string;
+              responseMatrix?: ResponseMatrixItem[];
+              currentResponseMatrixVersion?: string;
+              currentStateVersion?: string;
+            };
+          } | null;
+          if (
+            !isCurrentWriteEpoch(
+              requestProjectId,
+              requestSession,
+              requestEpoch,
+            )
+          ) {
+            return "stale";
+          }
+          const detail = raw?.detail;
+          if (detail?.code === "editor_state_version_conflict") {
+            enterFullStateBlock();
+            return "full_conflict";
+          }
+          if (!hasRealMatrixConflictDetail(detail)) {
+            setSaveError(TECHNICAL_EDITOR_SAVE_ERROR);
+            return "error";
+          }
+          const remoteMatrix = normalizeResponseMatrix(detail.responseMatrix);
+          const remoteVersion = detail.currentResponseMatrixVersion.trim();
+          matrixPutBlockedRef.current = true;
+
+          const base = matrixBaseRef.current;
+          const baseVersion = matrixBaseVersionRef.current;
+          const localUnchanged =
+            matrixAtRequest != null &&
+            sameResponseMatrixEditableSnapshot(
+              stateRef.current.responseMatrix,
+              matrixAtRequest,
+            );
+          const canThreeWay =
+            Boolean(base) &&
+            Boolean(baseVersion) &&
+            Boolean(versionAtRequest) &&
+            baseVersion === versionAtRequest &&
+            localUnchanged &&
+            matrixAtRequest != null;
+
+          let mergePreview: ResponseMatrixThreeWayMergeResult | null = null;
+          if (canThreeWay && base && matrixAtRequest) {
+            mergePreview = threeWayMergeResponseMatrix(
+              base,
+              matrixAtRequest,
+              remoteMatrix,
+            );
+          }
+
+          setMergeChoices({});
+          setMatrixConflict({
+            message: TECHNICAL_MATRIX_CONFLICT_MESSAGE,
+            remoteMatrix,
+            remoteVersion,
+            mergePreview,
+            applyError: null,
+          });
+          return "matrix_conflict";
+        }
+        if (!res.ok) {
+          if (
+            !isCurrentWriteEpoch(
+              requestProjectId,
+              requestSession,
+              requestEpoch,
+            )
+          ) {
+            return "stale";
+          }
+          setSaveError(TECHNICAL_EDITOR_SAVE_ERROR);
+          return "error";
+        }
+        const saved = (await res.json()) as EditorStateApi;
+        if (
+          !isCurrentWriteEpoch(requestProjectId, requestSession, requestEpoch)
+        ) {
+          return "stale";
+        }
+        if (!isValidStateVersion(saved.stateVersion)) {
+          enterFullStateBlock();
+          return "invalid_version";
+        }
+        applyStateVersion(saved.stateVersion);
+        setSaveError(null);
+        if (saved.responseMatrixVersion) {
+          applyMatrixVersion(saved.responseMatrixVersion);
+        }
+        if (includeMatrix && matrixAtRequest) {
+          const savedMatrix = Array.isArray(saved.responseMatrix)
+            ? normalizeResponseMatrix(saved.responseMatrix)
+            : matrixAtRequest;
+          snapshotMatrixBase(
+            savedMatrix,
+            saved.responseMatrixVersion ?? versionAtRequest,
+          );
+        }
+        return "ok";
+      } catch {
+        if (
+          !isCurrentWriteEpoch(requestProjectId, requestSession, requestEpoch)
+        ) {
+          return "stale";
+        }
+        setSaveError(TECHNICAL_EDITOR_SAVE_ERROR);
+        return "error";
+      }
+    },
+    [
+      isCurrentWriteEpoch,
+      enterFullStateBlock,
+      applyStateVersion,
+      applyMatrixVersion,
+      snapshotMatrixBase,
+    ],
+  );
+
   useEffect(() => {
     if (!apiReady || !projectId) return;
     if (skipNextSave.current) {
       skipNextSave.current = false;
       return;
     }
-    // 合并成功写入矩阵后：跳过一次普通全量 PUT 副作用
+    // 合并成功写回后跳过下一次普通整包 PUT（防止 analysis/outline 等回写远端）
     if (skipNextAutosavePutRef.current) {
       skipNextAutosavePutRef.current = false;
       if (saveTimer.current) {
@@ -609,168 +817,11 @@ export function useTechnicalPlanEditors(projectId: string) {
       const requestSession = projectSessionRef.current;
       const requestEpoch = writeEpochRef.current;
       const runSave = async () => {
-        // 定时器触发时若已切项目/重载代次，直接丢弃
-        if (
-          !isCurrentWriteEpoch(requestProjectId, requestSession, requestEpoch)
-        ) {
-          return;
-        }
-        if (fullStateBlockedRef.current) {
-          return;
-        }
-        const expected = stateVersionRef.current;
-        if (!isValidStateVersion(expected)) {
-          enterFullStateBlock();
-          return;
-        }
-        // 真正执行时读取最新 UI 状态与最新服务端版本
-        const latest = stateRef.current;
-        const body: Record<string, unknown> = {
-          outline: latest.outline,
-          chapters: latest.chapters,
-          facts: latest.facts,
-          mode: latest.mode,
-          analysisOverview: latest.analysis.overview || latest.analysisOverview,
-          analysis: latest.analysis,
-          guidance: latest.guidance,
-          expectedStateVersion: expected,
-        };
-        const includeMatrix = !matrixPutBlockedRef.current;
-        const matrixAtRequest = includeMatrix
-          ? cloneResponseMatrix(latest.responseMatrix)
-          : null;
-        const versionAtRequest = matrixVersionRef.current;
-        if (includeMatrix) {
-          body.responseMatrix = matrixAtRequest;
-          if (versionAtRequest) {
-            body.responseMatrixVersion = versionAtRequest;
-          }
-        }
-        try {
-          const res = await putEditorState(requestProjectId, body);
-          // fetch 返回后再次校验：项目切换/重载后禁止写入
-          if (
-            !isCurrentWriteEpoch(requestProjectId, requestSession, requestEpoch)
-          ) {
-            return;
-          }
-          if (res.status === 409) {
-            const raw = (await res.json().catch(() => null)) as {
-              detail?: {
-                code?: string;
-                message?: string;
-                responseMatrix?: ResponseMatrixItem[];
-                currentResponseMatrixVersion?: string;
-                currentStateVersion?: string;
-              };
-            } | null;
-            if (
-              !isCurrentWriteEpoch(
-                requestProjectId,
-                requestSession,
-                requestEpoch,
-              )
-            ) {
-              return;
-            }
-            const detail = raw?.detail;
-            // 全状态冲突优先：仅精确 code 进入阻断；绝不构造矩阵远端/mergePreview
-            if (detail?.code === "editor_state_version_conflict") {
-              enterFullStateBlock();
-              return;
-            }
-            // 仅真实矩阵明细（数组 + 非空版本）才进矩阵冲突/三方合并
-            if (!hasRealMatrixConflictDetail(detail)) {
-              setSaveError(TECHNICAL_EDITOR_SAVE_ERROR);
-              return;
-            }
-            const remoteMatrix = normalizeResponseMatrix(detail.responseMatrix);
-            const remoteVersion = detail.currentResponseMatrixVersion.trim();
-            matrixPutBlockedRef.current = true;
-
-            const base = matrixBaseRef.current;
-            const baseVersion = matrixBaseVersionRef.current;
-            const localUnchanged =
-              matrixAtRequest != null &&
-              sameResponseMatrixEditableSnapshot(
-                stateRef.current.responseMatrix,
-                matrixAtRequest,
-              );
-            const canThreeWay =
-              Boolean(base) &&
-              Boolean(baseVersion) &&
-              Boolean(versionAtRequest) &&
-              baseVersion === versionAtRequest &&
-              localUnchanged &&
-              matrixAtRequest != null;
-
-            let mergePreview: ResponseMatrixThreeWayMergeResult | null = null;
-            if (canThreeWay && base && matrixAtRequest) {
-              mergePreview = threeWayMergeResponseMatrix(
-                base,
-                matrixAtRequest,
-                remoteMatrix,
-              );
-            }
-
-            setMergeChoices({});
-            // 固定中文；不得采用 detail.message / SECRET 原文
-            setMatrixConflict({
-              message: TECHNICAL_MATRIX_CONFLICT_MESSAGE,
-              remoteMatrix,
-              remoteVersion,
-              mergePreview,
-              applyError: null,
-            });
-            return;
-          }
-          if (!res.ok) {
-            if (
-              !isCurrentWriteEpoch(
-                requestProjectId,
-                requestSession,
-                requestEpoch,
-              )
-            ) {
-              return;
-            }
-            setSaveError(TECHNICAL_EDITOR_SAVE_ERROR);
-            return;
-          }
-          const saved = (await res.json()) as EditorStateApi;
-          if (
-            !isCurrentWriteEpoch(requestProjectId, requestSession, requestEpoch)
-          ) {
-            return;
-          }
-          // 200 缺/非法版本：可能已写入但客户端版本未知，阻断自动保存
-          if (!isValidStateVersion(saved.stateVersion)) {
-            enterFullStateBlock();
-            return;
-          }
-          applyStateVersion(saved.stateVersion);
-          setSaveError(null);
-          if (saved.responseMatrixVersion) {
-            applyMatrixVersion(saved.responseMatrixVersion);
-          }
-          // 成功带矩阵 PUT：刷新 base 快照
-          if (includeMatrix && matrixAtRequest) {
-            const savedMatrix = Array.isArray(saved.responseMatrix)
-              ? normalizeResponseMatrix(saved.responseMatrix)
-              : matrixAtRequest;
-            snapshotMatrixBase(
-              savedMatrix,
-              saved.responseMatrixVersion ?? versionAtRequest,
-            );
-          }
-        } catch {
-          if (
-            !isCurrentWriteEpoch(requestProjectId, requestSession, requestEpoch)
-          ) {
-            return;
-          }
-          setSaveError(TECHNICAL_EDITOR_SAVE_ERROR);
-        }
+        await executeImmediateEditorStatePut(
+          requestProjectId,
+          requestSession,
+          requestEpoch,
+        );
       };
 
       // 串行：上一矩阵/整包 PUT 完成并更新 version 后，再用最新 state 发出
@@ -785,11 +836,7 @@ export function useTechnicalPlanEditors(projectId: string) {
     projectId,
     state,
     apiReady,
-    applyMatrixVersion,
-    applyStateVersion,
-    snapshotMatrixBase,
-    isCurrentWriteEpoch,
-    enterFullStateBlock,
+    executeImmediateEditorStatePut,
   ]);
 
   const targetWordsTotal = useMemo(
@@ -1057,7 +1104,7 @@ export function useTechnicalPlanEditors(projectId: string) {
   );
 
   /**
-   * 用途：P12B-C3 受限版本化外部写 runner（M3-D apply/consume）。
+   * 用途：P12B-C3/D2 受限版本化外部写 runner（M3-D apply/consume + 检查点 restore）。
    * 规则：
    *   - 进入 matrixSaveChainRef，与普通 PUT / 矩阵合并串行；
    *   - 真正执行时才读 stateVersionRef 最新合法 expected；
@@ -1166,6 +1213,192 @@ export function useTechnicalPlanEditors(projectId: string) {
    * 对接：ResponseMatrixPanel「重新载入远端矩阵」
    * 二次开发：全状态阻断期间不得解除阻断或发 PUT。
    */
+
+  /**
+   * 用途：P12B-D2 显式创建检查点——清 timer、串行链内强制即时 PUT，再 POST 精确 {}。
+   * 约束：create 版本必须精确等于已接受 PUT 版本；PUT 挂起时 POST 不得发出。
+   */
+  const createCheckpoint = useCallback(async (): Promise<CheckpointCreateOutcome> => {
+    if (!projectId) return { status: "blocked" };
+    if (fullStateBlockedRef.current) return { status: "blocked" };
+    if (!isValidStateVersion(stateVersionRef.current)) return { status: "blocked" };
+    const requestProjectId = projectId;
+    // 同项目连点：已有本项目 token 则拒绝；不同项目可覆盖启动新操作
+    const existingOp = checkpointOpTokenRef.current;
+    if (existingOp && existingOp.projectId === requestProjectId) {
+      return { status: "failed" };
+    }
+    const myToken = ++checkpointOpTokenSeqRef.current;
+    checkpointOpTokenRef.current = {
+      projectId: requestProjectId,
+      token: myToken,
+    };
+
+    if (saveTimer.current) {
+      window.clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
+
+    const requestSession = projectSessionRef.current;
+
+    const run = async (): Promise<CheckpointCreateOutcome> => {
+      try {
+        if (!isCurrentEditorSession(requestProjectId, requestSession)) {
+          return { status: "failed" };
+        }
+        if (fullStateBlockedRef.current) {
+          return { status: "blocked" };
+        }
+        if (!isValidStateVersion(stateVersionRef.current)) {
+          return { status: "blocked" };
+        }
+        const requestEpoch = writeEpochRef.current;
+        const putStatus = await executeImmediateEditorStatePut(
+          requestProjectId,
+          requestSession,
+          requestEpoch,
+        );
+        if (!isCurrentEditorSession(requestProjectId, requestSession)) {
+          return { status: "failed" };
+        }
+        if (putStatus === "ok") {
+          const putVersion = stateVersionRef.current;
+          if (!isValidStateVersion(putVersion)) {
+            enterFullStateBlock();
+            return { status: "blocked" };
+          }
+          try {
+            const meta = await postCreateEditorStateCheckpoint(requestProjectId);
+            if (!isCurrentEditorSession(requestProjectId, requestSession)) {
+              return { status: "failed" };
+            }
+            // POST 版本不等于已接受 PUT 版本：远端期间可能已变，全状态阻断
+            // （缺失/空白/非法 stateVersion 由 parse 专用错误在 catch 中阻断）
+            if (
+              !isValidStateVersion(meta.stateVersion) ||
+              meta.stateVersion !== putVersion
+            ) {
+              enterFullStateBlock();
+              return { status: "blocked" };
+            }
+            return { status: "success" };
+          } catch (err) {
+            if (!isCurrentEditorSession(requestProjectId, requestSession)) {
+              return { status: "failed" };
+            }
+            // 仅 create 成功体 stateVersion 语义失败 → 全量阻断；
+            // 网络/HTTP/额外字段等普通 shape 失败仍 failed，禁止扩大阻断语义
+            if (isCheckpointCreateStateVersionError(err)) {
+              enterFullStateBlock();
+              return { status: "blocked" };
+            }
+            return { status: "failed" };
+          }
+        }
+        if (
+          putStatus === "full_conflict" ||
+          putStatus === "invalid_version" ||
+          putStatus === "blocked"
+        ) {
+          return { status: "blocked" };
+        }
+        // forced-create：网络 abort / 非 409 HTTP / 不可判定失败 → 保守全状态阻断
+        // 普通防抖 PUT 的 error 语义不变（executeImmediateEditorStatePut 仅 setSaveError）
+        if (putStatus === "error") {
+          enterFullStateBlock();
+          return { status: "blocked" };
+        }
+        if (putStatus === "stale") {
+          return { status: "failed" };
+        }
+        // matrix_conflict：保留矩阵冲突 UI，不伪造成全状态冲突
+        return { status: "failed" };
+      } finally {
+        // 仅清自己的 token；若 ref 已被 B 项目覆盖则不动
+        const cur = checkpointOpTokenRef.current;
+        if (
+          cur &&
+          cur.projectId === requestProjectId &&
+          cur.token === myToken
+        ) {
+          checkpointOpTokenRef.current = null;
+        }
+      }
+    };
+
+    const queued = matrixSaveChainRef.current
+      .catch(() => undefined)
+      .then(run);
+    matrixSaveChainRef.current = queued
+      .then(() => undefined)
+      .catch(() => undefined);
+    return queued;
+  }, [
+    projectId,
+    isCurrentEditorSession,
+    executeImmediateEditorStatePut,
+    enterFullStateBlock,
+  ]);
+
+  /**
+   * 用途：P12B-D2 检查点安全恢复——进入版本化外部写 runner；执行时读最新 expected。
+   * 约束：成功唯一 GET；409/abort/非法版本阻断且零自动重试。
+   */
+  const restoreCheckpoint = useCallback(
+    async (checkpointId: string): Promise<CheckpointRestoreOutcome> => {
+      if (!projectId) return { status: "blocked" };
+      if (fullStateBlockedRef.current) return { status: "blocked" };
+      if (!isValidStateVersion(stateVersionRef.current)) {
+        return { status: "blocked" };
+      }
+      const requestProjectId = projectId;
+      const existingOp = checkpointOpTokenRef.current;
+      if (existingOp && existingOp.projectId === requestProjectId) {
+        return { status: "post_failed" };
+      }
+      const myToken = ++checkpointOpTokenSeqRef.current;
+      checkpointOpTokenRef.current = {
+        projectId: requestProjectId,
+        token: myToken,
+      };
+
+      if (saveTimer.current) {
+        window.clearTimeout(saveTimer.current);
+        saveTimer.current = null;
+      }
+
+      try {
+        const outcome = await runVersionedExternalWrite((expectedStateVersion) =>
+          postRestoreEditorStateCheckpoint(
+            requestProjectId,
+            checkpointId,
+            expectedStateVersion,
+          ),
+        );
+
+        if (outcome.status === "success") {
+          return { status: "success" };
+        }
+        if (outcome.status === "reload_failed") {
+          return { status: "reload_failed" };
+        }
+        return outcome.blocked
+          ? { status: "blocked" }
+          : { status: "post_failed" };
+      } finally {
+        const cur = checkpointOpTokenRef.current;
+        if (
+          cur &&
+          cur.projectId === requestProjectId &&
+          cur.token === myToken
+        ) {
+          checkpointOpTokenRef.current = null;
+        }
+      }
+    },
+    [projectId, runVersionedExternalWrite],
+  );
+
   const reloadRemoteResponseMatrix = useCallback(() => {
     if (fullStateBlockedRef.current) {
       return;
@@ -1659,8 +1892,12 @@ export function useTechnicalPlanEditors(projectId: string) {
     guidance: state.guidance,
     updateGuidance,
     reloadFromApi,
-    /** P12B-C3：M3-D apply/consume 必须经此 runner，禁止 Dialog 旁路 */
+    /** P12B-C3/D2：M3-D apply/consume 与检查点 restore 必须经此 runner，禁止 Dialog 旁路 */
     runVersionedExternalWrite,
+    /** P12B-D2：显式创建检查点（强制即时 PUT + POST {}） */
+    createCheckpoint,
+    /** P12B-D2：检查点安全恢复（版本化外部写 + 唯一 GET） */
+    restoreCheckpoint,
     loading,
     loadError,
     saveError,

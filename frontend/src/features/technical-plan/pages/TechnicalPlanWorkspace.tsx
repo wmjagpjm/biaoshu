@@ -27,6 +27,7 @@ import {
 import { useWorkspaceParseStrategy } from "../../parse-strategy/hooks/useWorkspaceParseStrategy";
 import { ChapterEditor } from "../components/ChapterEditor";
 import { ContentFuseDialog } from "../components/ContentFuseDialog";
+import { EditorStateCheckpointPanel } from "../../editor-state-checkpoints/EditorStateCheckpointPanel";
 import { FactsEditor } from "../components/FactsEditor";
 import { OutlineStepWorkspace } from "../components/OutlineStepWorkspace";
 import { ProjectGuidanceCard } from "../components/ProjectGuidanceCard";
@@ -742,6 +743,17 @@ export function TechnicalPlanWorkspace() {
           </button>
         </div>
       </header>
+
+      <EditorStateCheckpointPanel
+        projectId={project.id}
+        disabled={
+          !editors.apiReady ||
+          Boolean(editors.loadError) ||
+          editors.fullStateConflict
+        }
+        createCheckpoint={editors.createCheckpoint}
+        restoreCheckpoint={editors.restoreCheckpoint}
+      />
 
       {saveTemplateTip && (
         <div className="tp-source-banner is-api" role="status">

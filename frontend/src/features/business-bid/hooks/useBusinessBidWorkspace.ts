@@ -15,6 +15,15 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  createEditorStateCheckpoint as postCreateEditorStateCheckpoint,
+  isCheckpointCreateStateVersionError,
+  restoreEditorStateCheckpoint as postRestoreEditorStateCheckpoint,
+} from "../../editor-state-checkpoints/editorStateCheckpointApi";
+import type {
+  CheckpointCreateOutcome,
+  CheckpointRestoreOutcome,
+} from "../../editor-state-checkpoints/EditorStateCheckpointPanel";
 import { apiFetch } from "../../../shared/lib/api";
 import type {
   AiFeedbackRecord,
@@ -51,6 +60,12 @@ const STATE_VERSION_RE = /^esv_[0-9a-f]{32}$/;
 function isValidStateVersion(value: unknown): value is string {
   return typeof value === "string" && STATE_VERSION_RE.test(value);
 }
+
+/** 用途：版本化外部写（检查点 restore）结果；与技术标 runner 语义对齐。 */
+export type BusinessVersionedExternalWriteOutcome<T> =
+  | { status: "success"; data: T }
+  | { status: "post_failed"; blocked: boolean }
+  | { status: "reload_failed"; data: T };
 
 /**
  * 反馈历史 localStorage 键。
@@ -140,6 +155,18 @@ export function useBusinessBidWorkspace(projectId: string) {
   const stateVersionRef = useRef<string | null>(null);
   /** 全状态阻断后禁止自动 PUT */
   const fullStateBlockedRef = useRef(false);
+  /**
+   * 创建/恢复操作 token（项目绑定）：
+   * - 同项目连点：token 已属本项目 → 拒绝第二请求
+   * - 不同项目：允许新项目启动并把 ref 覆盖为新 token
+   * - finally 仅当 projectId+token 仍匹配时清空，绝不能误清新项目 token
+   * 禁止：跨项目共享 boolean，或切项目时简单 boolean=false
+   */
+  const checkpointOpTokenRef = useRef<{
+    projectId: string;
+    token: number;
+  } | null>(null);
+  const checkpointOpTokenSeqRef = useRef(0);
   /** 同项目串行保存链 */
   const saveChainRef = useRef(Promise.resolve());
 
@@ -169,20 +196,22 @@ export function useBusinessBidWorkspace(projectId: string) {
    * 成功：水合真实字段、接受合法 stateVersion、清冲突、apiReady=true。
    * 失败：见全状态阻断分支；不抛原文。
    */
-  const refreshFromApi = useCallback(async (): Promise<boolean> => {
+  const refreshFromApi = useCallback(async (options?: { silent?: boolean }): Promise<boolean> => {
     const pid = projectId;
     if (!pid) {
       setLoading(false);
       return false;
     }
     const session = sessionRef.current;
+    const silent = options?.silent === true;
     // 同项目重载：递增写入代次并清未发送 timer
     writeEpochRef.current += 1;
     if (saveTimer.current) {
       clearTimeout(saveTimer.current);
       saveTimer.current = null;
     }
-    setLoading(true);
+    // silent：检查点 restore 唯一 GET，避免 loading 卸载工作区导致面板状态丢失
+    if (!silent) setLoading(true);
     try {
       const remote = await apiFetch<EditorStateApi>(
         `/projects/${encodeURIComponent(pid)}/editor-state`,
@@ -229,7 +258,7 @@ export function useBusinessBidWorkspace(projectId: string) {
       fullStateBlockedRef.current = false;
       return false;
     } finally {
-      if (isCurrentSession(session, pid)) {
+      if (!silent && isCurrentSession(session, pid)) {
         setLoading(false);
       }
     }
@@ -268,6 +297,74 @@ export function useBusinessBidWorkspace(projectId: string) {
     }
   }, [projectId, history]);
 
+
+  /**
+   * 用途：共享「构造最新 body + 执行 PUT + 接受版本/冲突处理」执行器。
+   * 对接：普通防抖 autosave 与显式创建检查点强制即时 PUT 共用；禁止第二套 body。
+   */
+  type ImmediatePutStatus =
+    | "ok"
+    | "stale"
+    | "blocked"
+    | "full_conflict"
+    | "error"
+    | "invalid_version";
+
+  const executeImmediateEditorStatePut = useCallback(
+    async (
+      session: number,
+      pid: string,
+      epoch: number,
+    ): Promise<ImmediatePutStatus> => {
+      if (!isCurrentWriteEpoch(session, pid, epoch)) return "stale";
+      if (fullStateBlockedRef.current) return "blocked";
+      const expected = stateVersionRef.current;
+      if (!isValidStateVersion(expected)) {
+        enterFullStateBlock();
+        return "invalid_version";
+      }
+      const ws = workspaceRef.current;
+      try {
+        const saved = await apiFetch<EditorStateApi>(
+          `/projects/${encodeURIComponent(pid)}/editor-state`,
+          {
+            method: "PUT",
+            body: JSON.stringify({
+              parsedMarkdown: ws.parseMarkdown,
+              businessQualify: ws.qualifyItems,
+              businessToc: ws.tocItems,
+              businessQuote: {
+                rows: ws.quoteRows,
+                notes: ws.quoteNotes,
+              },
+              businessCommit: ws.commitBlocks,
+              expectedStateVersion: expected,
+            }),
+          },
+        );
+        if (!isCurrentWriteEpoch(session, pid, epoch)) return "stale";
+        if (!isValidStateVersion(saved.stateVersion)) {
+          enterFullStateBlock();
+          return "invalid_version";
+        }
+        stateVersionRef.current = saved.stateVersion;
+        setSaveError(null);
+        return "ok";
+      } catch (err) {
+        if (!isCurrentWriteEpoch(session, pid, epoch)) return "stale";
+        const status = (err as { status?: number })?.status;
+        const code = (err as { code?: string })?.code;
+        if (status === 409 && code === "editor_state_version_conflict") {
+          enterFullStateBlock();
+          return "full_conflict";
+        }
+        setSaveError(BUSINESS_EDITOR_SAVE_ERROR);
+        return "error";
+      }
+    },
+    [enterFullStateBlock, isCurrentWriteEpoch],
+  );
+
   // 防抖入队：真正执行时读取 workspaceRef + stateVersionRef 最新值
   useEffect(() => {
     if (!apiReady || !projectId) return;
@@ -284,53 +381,7 @@ export function useBusinessBidWorkspace(projectId: string) {
     const epoch = writeEpochRef.current;
     saveTimer.current = setTimeout(() => {
       const runSave = async () => {
-        if (!isCurrentWriteEpoch(session, pid, epoch)) return;
-        if (fullStateBlockedRef.current) return;
-        const expected = stateVersionRef.current;
-        if (!isValidStateVersion(expected)) {
-          enterFullStateBlock();
-          return;
-        }
-        const ws = workspaceRef.current;
-        try {
-          const saved = await apiFetch<EditorStateApi>(
-            `/projects/${encodeURIComponent(pid)}/editor-state`,
-            {
-              method: "PUT",
-              body: JSON.stringify({
-                parsedMarkdown: ws.parseMarkdown,
-                businessQualify: ws.qualifyItems,
-                businessToc: ws.tocItems,
-                businessQuote: {
-                  rows: ws.quoteRows,
-                  notes: ws.quoteNotes,
-                },
-                businessCommit: ws.commitBlocks,
-                expectedStateVersion: expected,
-              }),
-            },
-          );
-          if (!isCurrentWriteEpoch(session, pid, epoch)) return;
-          if (!isValidStateVersion(saved.stateVersion)) {
-            enterFullStateBlock();
-            return;
-          }
-          stateVersionRef.current = saved.stateVersion;
-          setSaveError(null);
-        } catch (err) {
-          if (!isCurrentWriteEpoch(session, pid, epoch)) return;
-          const status = (err as { status?: number })?.status;
-          const code = (err as { code?: string })?.code;
-          if (
-            status === 409 &&
-            code === "editor_state_version_conflict"
-          ) {
-            enterFullStateBlock();
-            return;
-          }
-          // 固定中文；不得写异常 message 到页面/console/history/存储
-          setSaveError(BUSINESS_EDITOR_SAVE_ERROR);
-        }
+        await executeImmediateEditorStatePut(session, pid, epoch);
       };
       saveChainRef.current = saveChainRef.current
         .catch(() => undefined)
@@ -341,8 +392,7 @@ export function useBusinessBidWorkspace(projectId: string) {
     };
   }, [
     apiReady,
-    enterFullStateBlock,
-    isCurrentWriteEpoch,
+    executeImmediateEditorStatePut,
     projectId,
     workspace,
   ]);
@@ -603,6 +653,245 @@ export function useBusinessBidWorkspace(projectId: string) {
     ],
   );
 
+
+  /**
+   * 用途：P12B-D2 版本化外部写 runner（检查点 restore）；与技术标语义对齐。
+   * 约束：进入 saveChainRef；执行时读最新 expected；成功唯一 refreshFromApi；零自动重试。
+   */
+  const runVersionedExternalWrite = useCallback(
+    async <T extends { stateVersion: string }>(
+      execute: (expectedStateVersion: string) => Promise<T>,
+    ): Promise<BusinessVersionedExternalWriteOutcome<T>> => {
+      const requestSession = sessionRef.current;
+      const requestPid = projectId;
+      const requestEpoch = writeEpochRef.current;
+
+      const run = async (): Promise<BusinessVersionedExternalWriteOutcome<T>> => {
+        if (!isCurrentWriteEpoch(requestSession, requestPid, requestEpoch)) {
+          return { status: "post_failed", blocked: false };
+        }
+        if (fullStateBlockedRef.current) {
+          return { status: "post_failed", blocked: true };
+        }
+        const expected = stateVersionRef.current;
+        if (!isValidStateVersion(expected)) {
+          enterFullStateBlock();
+          return { status: "post_failed", blocked: true };
+        }
+
+        let data: T;
+        try {
+          data = await execute(expected);
+        } catch {
+          if (!isCurrentWriteEpoch(requestSession, requestPid, requestEpoch)) {
+            return { status: "post_failed", blocked: false };
+          }
+          enterFullStateBlock();
+          return { status: "post_failed", blocked: true };
+        }
+
+        if (!isCurrentWriteEpoch(requestSession, requestPid, requestEpoch)) {
+          return { status: "post_failed", blocked: false };
+        }
+        if (!isValidStateVersion(data.stateVersion)) {
+          enterFullStateBlock();
+          return { status: "post_failed", blocked: true };
+        }
+
+        stateVersionRef.current = data.stateVersion;
+        fullStateBlockedRef.current = true;
+        setFullStateConflict(true);
+        if (saveTimer.current) {
+          clearTimeout(saveTimer.current);
+          saveTimer.current = null;
+        }
+
+        const reloaded = await refreshFromApi({ silent: true });
+        if (!isCurrentSession(requestSession, requestPid)) {
+          return { status: "reload_failed", data };
+        }
+        if (!reloaded) {
+          enterFullStateBlock();
+          return { status: "reload_failed", data };
+        }
+        // 禁止在此将 skipNextSave 置 false：
+        // refreshFromApi 水合已设 skipNextSave=true，须由 effect 只吞一次水合触发的
+        // 自动保存；若此处清零会形成恢复后旧 UI 自动 PUT。
+        // 用户下一次真实编辑时 skip 已消费完毕，PUT 正常发出。
+        return { status: "success", data };
+      };
+
+      const queued = saveChainRef.current.catch(() => undefined).then(run);
+      saveChainRef.current = queued
+        .then(() => undefined)
+        .catch(() => undefined);
+      return queued;
+    },
+    [
+      projectId,
+      isCurrentWriteEpoch,
+      isCurrentSession,
+      enterFullStateBlock,
+      refreshFromApi,
+    ],
+  );
+
+  /**
+   * 用途：P12B-D2 显式创建检查点——清 timer、串行链内强制即时 PUT，再 POST 精确 {}。
+   */
+  const createCheckpoint = useCallback(async (): Promise<CheckpointCreateOutcome> => {
+    if (!projectId) return { status: "blocked" };
+    if (fullStateBlockedRef.current) return { status: "blocked" };
+    if (!isValidStateVersion(stateVersionRef.current)) return { status: "blocked" };
+    const requestPid = projectId;
+    const existingOp = checkpointOpTokenRef.current;
+    if (existingOp && existingOp.projectId === requestPid) {
+      return { status: "failed" };
+    }
+    const myToken = ++checkpointOpTokenSeqRef.current;
+    checkpointOpTokenRef.current = { projectId: requestPid, token: myToken };
+
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
+
+    const requestSession = sessionRef.current;
+
+    const run = async (): Promise<CheckpointCreateOutcome> => {
+      try {
+        if (!isCurrentSession(requestSession, requestPid)) {
+          return { status: "failed" };
+        }
+        if (fullStateBlockedRef.current) return { status: "blocked" };
+        if (!isValidStateVersion(stateVersionRef.current)) {
+          return { status: "blocked" };
+        }
+
+        const epoch = writeEpochRef.current;
+        const putStatus = await executeImmediateEditorStatePut(
+          requestSession,
+          requestPid,
+          epoch,
+        );
+        if (!isCurrentSession(requestSession, requestPid)) {
+          return { status: "failed" };
+        }
+        if (putStatus === "ok") {
+          const putVersion = stateVersionRef.current;
+          if (!isValidStateVersion(putVersion)) {
+            enterFullStateBlock();
+            return { status: "blocked" };
+          }
+          try {
+            const meta = await postCreateEditorStateCheckpoint(requestPid);
+            if (!isCurrentSession(requestSession, requestPid)) {
+              return { status: "failed" };
+            }
+            // POST 版本不等于已接受 PUT 版本：远端期间可能已变，全状态阻断
+            // （缺失/空白/非法 stateVersion 由 parse 专用错误在 catch 中阻断）
+            if (
+              !isValidStateVersion(meta.stateVersion) ||
+              meta.stateVersion !== putVersion
+            ) {
+              enterFullStateBlock();
+              return { status: "blocked" };
+            }
+            return { status: "success" };
+          } catch (err) {
+            if (!isCurrentSession(requestSession, requestPid)) {
+              return { status: "failed" };
+            }
+            // 仅 create 成功体 stateVersion 语义失败 → 全量阻断；
+            // 网络/HTTP/额外字段等普通 shape 失败仍 failed，禁止扩大阻断语义
+            if (isCheckpointCreateStateVersionError(err)) {
+              enterFullStateBlock();
+              return { status: "blocked" };
+            }
+            return { status: "failed" };
+          }
+        }
+        if (
+          putStatus === "full_conflict" ||
+          putStatus === "invalid_version" ||
+          putStatus === "blocked"
+        ) {
+          return { status: "blocked" };
+        }
+        // forced-create：网络 abort / 非 409 HTTP / 不可判定失败 → 保守全状态阻断
+        // 普通防抖 PUT 的 error 语义不变（executeImmediateEditorStatePut 仅 setSaveError）
+        if (putStatus === "error") {
+          enterFullStateBlock();
+          return { status: "blocked" };
+        }
+        return { status: "failed" };
+      } finally {
+        const cur = checkpointOpTokenRef.current;
+        if (cur && cur.projectId === requestPid && cur.token === myToken) {
+          checkpointOpTokenRef.current = null;
+        }
+      }
+    };
+
+    const queued = saveChainRef.current.catch(() => undefined).then(run);
+    saveChainRef.current = queued
+      .then(() => undefined)
+      .catch(() => undefined);
+    return queued;
+  }, [
+    projectId,
+    isCurrentSession,
+    executeImmediateEditorStatePut,
+    enterFullStateBlock,
+  ]);
+
+  /**
+   * 用途：P12B-D2 检查点安全恢复。
+   */
+  const restoreCheckpoint = useCallback(
+    async (checkpointId: string): Promise<CheckpointRestoreOutcome> => {
+      if (!projectId) return { status: "blocked" };
+      if (fullStateBlockedRef.current) return { status: "blocked" };
+      if (!isValidStateVersion(stateVersionRef.current)) {
+        return { status: "blocked" };
+      }
+      const requestPid = projectId;
+      const existingOp = checkpointOpTokenRef.current;
+      if (existingOp && existingOp.projectId === requestPid) {
+        return { status: "post_failed" };
+      }
+      const myToken = ++checkpointOpTokenSeqRef.current;
+      checkpointOpTokenRef.current = { projectId: requestPid, token: myToken };
+      if (saveTimer.current) {
+        clearTimeout(saveTimer.current);
+        saveTimer.current = null;
+      }
+
+      try {
+        const outcome = await runVersionedExternalWrite((expectedStateVersion) =>
+          postRestoreEditorStateCheckpoint(
+            requestPid,
+            checkpointId,
+            expectedStateVersion,
+          ),
+        );
+        if (outcome.status === "success") return { status: "success" };
+        if (outcome.status === "reload_failed") {
+          return { status: "reload_failed" };
+        }
+        return outcome.blocked
+          ? { status: "blocked" }
+          : { status: "post_failed" };
+      } finally {
+        const cur = checkpointOpTokenRef.current;
+        if (cur && cur.projectId === requestPid && cur.token === myToken) {
+          checkpointOpTokenRef.current = null;
+        }
+      }
+    },
+    [projectId, runVersionedExternalWrite],
+  );
+
   return {
     workspace,
     history,
@@ -615,6 +904,8 @@ export function useBusinessBidWorkspace(projectId: string) {
       ? BUSINESS_EDITOR_STATE_CONFLICT_MESSAGE
       : null,
     refreshFromApi,
+    createCheckpoint,
+    restoreCheckpoint,
     setParseMarkdown,
     updateQualifyItem,
     toggleTocItem,
