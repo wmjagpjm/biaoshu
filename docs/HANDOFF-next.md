@@ -1,13 +1,13 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-15（P12A 手动检查点只读库已完成并推送）
+> **交接日期**：2026-07-15（P12B-A 全状态版本与可选 CAS 基础已完成并推送）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
-> **协作分支已推送功能基线**：P12A 计划/契约=`bf8ccd6`、后端=`9f53d92`；P8E 计划/契约=`73b1264`、后端=`79b346e`、助手=`e3f9cc4`；P8D 计划=`30d066f`、助手=`e1fe316`；P11C 计划/契约=`24b7ba8`、安全细化=`c5b3eec`、前端=`1441509`；P11B 计划=`6a3f4fe`、前端=`a99d8d4`；P11A 计划=`70a2dc7`、前端=`b0a86e4`；M3-D 计划=`d326c7d`、后端=`6a5f61f`、前端=`b89a387`；P10K 计划=`2e53007`、后端=`1eaa75e`、前端=`dbf301c`；P8C 计划=`cabe99d`、后端=`af39ff8`、前端=`1cf5576`；P10J 计划=`701c946`、后端=`4e662d6`、前端=`fce6cb6`；P9D 计划=`4925a51`、实现=`e5adad7`；M3-C 计划=`c63310f`、实现=`b8ff605`；P10I 计划=`ddc1807`、后端=`d5201e9`、前端=`49daa16`；P10H 计划=`7694843`、后端=`6c76d80`、前端=`4eb8a14`；P8B 计划=`f662674`、后端=`0994cc8`、前端=`80d2579`；P10F 计划=`12e067f`、后端=`3dc600a`、前端=`254f8c7`；P10E 计划=`26f7e40`、后端=`1b6ccf3`、前端=`37cf835`；P10G 计划=`26b43ea`、后端=`c3cf8b4`、前端=`d5656cc`。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
+> **协作分支已推送功能基线**：P12B-A 计划/契约=`0b55c30`、实现=`780cc82`；P12A 计划/契约=`bf8ccd6`、后端=`9f53d92`；P8E 计划/契约=`73b1264`、后端=`79b346e`、助手=`e3f9cc4`；P8D 计划=`30d066f`、助手=`e1fe316`；P11C 计划/契约=`24b7ba8`、安全细化=`c5b3eec`、前端=`1441509`；P11B 计划=`6a3f4fe`、前端=`a99d8d4`；P11A 计划=`70a2dc7`、前端=`b0a86e4`；M3-D 计划=`d326c7d`、后端=`6a5f61f`、前端=`b89a387`；P10K 计划=`2e53007`、后端=`1eaa75e`、前端=`dbf301c`；P8C 计划=`cabe99d`、后端=`af39ff8`、前端=`1cf5576`；P10J 计划=`701c946`、后端=`4e662d6`、前端=`fce6cb6`；P9D 计划=`4925a51`、实现=`e5adad7`；M3-C 计划=`c63310f`、实现=`b8ff605`；P10I 计划=`ddc1807`、后端=`d5201e9`、前端=`49daa16`；P10H 计划=`7694843`、后端=`6c76d80`、前端=`4eb8a14`；P8B 计划=`f662674`、后端=`0994cc8`、前端=`80d2579`；P10F 计划=`12e067f`、后端=`3dc600a`、前端=`254f8c7`；P10E 计划=`26f7e40`、后端=`1b6ccf3`、前端=`37cf835`；P10G 计划=`26b43ea`、后端=`c3cf8b4`、前端=`d5656cc`。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **本地状态**：P12A 后端=`9f53d92` 已推送，本文档闭环提交位于其后。新会话仍须重新核对本地 HEAD、远端 SHA 与工作区。
-> **验收基线**：P12A 专项 **29 passed**、受影响回归 **97 passed**、P8C/异步 callback **15 passed**、后端串行全量 **518 passed**（1 条既有 Starlette/httpx 弃用警告）；前端 P11C **18 passed**、P11B **11 passed**、P11A **10 passed**、认证/RBAC **11 passed**、解析策略 **6 passed**、响应矩阵 **8 passed**、融合确认 **6 passed**、持久恢复 **5 passed**、模板 **1 passed**、单 worker 串行全量 E2E **184 passed**；`frontend npm run lint` 零问题，`build` 通过（仅既有大包体积提示）。**所有 Playwright E2E 共用 SQLite 重置库，必须逐条串行运行，禁止并行。**
+> **本地状态**：P12B-A 实现=`780cc82` 已推送，本文档闭环提交位于其后。新会话仍须重新核对本地 HEAD、远端 SHA 与工作区。
+> **验收基线**：P12B-A 专项 **19 passed**、内容融合三项加财务整文件 **12 passed**、P12A/editor-state/矩阵/融合确认/callback/模板回归 **104 passed**、后端串行全量 **537 passed**（1 条既有 Starlette/httpx 弃用警告）；前端 P11C **18 passed**、P11B **11 passed**、P11A **10 passed**、认证/RBAC **11 passed**、解析策略 **6 passed**、响应矩阵 **8 passed**、融合确认 **6 passed**、持久恢复 **5 passed**、模板 **1 passed**、单 worker 串行全量 E2E **184 passed**；`frontend npm run lint` 零问题，`build` 通过（仅既有大包体积提示）。**所有 Playwright E2E 共用 SQLite 重置库，必须逐条串行运行，禁止并行。**
 
 ---
 
@@ -18,9 +18,9 @@
 工作分支只能是 collab/grok-code-codex-review，禁止直接操作 main；先执行 git status -sb，并核对 HEAD 与 origin/collab/grok-code-codex-review 一致且工作区干净。
 完整阅读 docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/plans/2026-07-13-package-9-delivery-enhancement-plan.md、docs/integration-checklist.md。
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
-当前进度：P12A、P9D、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。P12A 计划/契约=`bf8ccd6`、后端=`9f53d92`；专项 29、受影响回归 97、P8C/异步 callback 15、后端全量 518 passed。前端全量仍沿用 184。
-当前执行包：P12B-A editor-state 全状态版本与可选 CAS 基础已完成只读审计并冻结契约/计划；五文件后端包只新增共享版本算法、GET/PUT `stateVersion`、可选 `expectedStateVersion` 和固定全状态 409。
-下一步：提交推送 P12B-A 契约/计划，再只派发五文件后端任务。不得修改前端、任务/callback/M3-D、模型/数据库或增加 restore；缺 expected 的兼容写入仍不是安全恢复门。
+当前进度：P12B-A、P12A、P9D、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。P12B-A 计划/契约=`0b55c30`、实现=`780cc82`；专项 19、定向 12、原回归 104、后端全量 537 passed。前端全量仍沿用 184。
+当前执行包：准备 P12B-B 技术标/商务标前端全状态 CAS。必须先只读审计两个 hook 的所有 PUT、在途串行、项目切换、Strict Mode 和现有矩阵 409/M3-D 兼容，再冻结独立前端契约与精确白名单。
+下一步：规划 P12B-B，要求 GET 保存服务端 `stateVersion`、每次 editor-state PUT 携带 `expectedStateVersion`，全状态 409 停止自动保存并提供显式重载；不得修改后端、任务/callback/M3-D、模型/数据库或增加 restore。P12B-C/D 仍未实现。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -114,8 +114,9 @@
 | 模板/卡片融合 M3-A | `services/fuse_context_service.py`、`services/task_service.py`（content_fuse）、`tests/test_content_fuse.py` | **齐** | 只读建议；禁写 editor-state；跨 workspace 不泄漏；sourceRefs 含服务端 title；裁剪后 *Used |
 | 融合写入持久恢复 M3-D | `models/entities.py`、`api/content_fuse_applications.py`、`services/content_fuse_application_service.py`、`api/schemas.py`、`tests/test_content_fuse_applications.py` | **齐** | 任务结果权威、锁内 base 校验、原子写入/快照/裁剪、最近 20 批、漂移安全一次消费；后端专项 34 passed |
 | 商务任务 | `services/business_task_service.py` | **齐** | qualify/toc/quote/commit |
-| 编辑态 | `services/editor_state_service.py` | **齐** | business_json、response_matrix_json 规范化与死引用收敛 |
+| 编辑态 | `services/editor_state_service.py` | **齐** | business_json、response_matrix_json 规范化与死引用收敛；P12B-A 共享 13 键版本、一次锁后 CAS、提交前响应和非有限值兼容 |
 | 编辑态手动检查点 P12A | `models/entities.py`、`api/editor_state_checkpoints.py`、`services/editor_state_checkpoint_service.py`、`api/schemas.py`、`tests/test_editor_state_checkpoints.py` | **齐** | 服务端权威 13 键标准 JSON、最近 20 条、最小 SQL、完整显式回滚、只读详情；专项 29、后端全量 518 passed |
+| 编辑态全状态版本 P12B-A | `api/projects.py`、`api/schemas.py`、`services/editor_state_service.py`、`services/editor_state_checkpoint_service.py`、`tests/test_editor_state_full_version.py` | **齐** | GET/PUT `stateVersion`、可选 expected CAS、固定最小 409、矩阵冲突优先级；专项 19、后端全量 537 passed |
 | 响应矩阵 | `services/editor_state_service.py`、`services/task_service.py`、`api/projects.py`、`api/tasks.py`、`services/export_service.py`、`models/entities.py`；前端 `useTechnicalPlanEditors` / `ResponseMatrixPanel` | **齐/部分** | service/API/导出与乐观锁注释齐；`response_match` 支持 `candidateBatchIndex` 候选分批且只产出待确认建议；前端冲突 UX 与串行分批进度注释齐；`entities.py` 仍按历史文件部分 |
 | 知识库 | `services/knowledge_service.py`、`api/knowledge.py` | **齐** | P9C 版本化离线索引、工作空间隔离、关键词降级；`get_chunk` 供卡片沉淀 |
 | 知识卡片 | `services/card_service.py`、`api/cards.py`、`models/entities.py`（KnowledgeCardRow） | **齐** | 独立 knowledge_cards；列表摘要/详情；from-chunk/from-project-image；insert-card → biaoshu-image |
@@ -198,7 +199,7 @@
 cd C:\Users\Administrator\biaoshu\backend
 .\.venv\Scripts\activate
 .\.venv\Scripts\python -m pytest -q
-# 当前完整串行基线：518 passed（1 条既有 Starlette/httpx 弃用警告）
+# 当前完整串行基线：537 passed（1 条既有 Starlette/httpx 弃用警告）
 
 cd ..\frontend
 npm run lint
@@ -369,7 +370,13 @@ P12A 已完成并推送：计划/契约=`bf8ccd6`、后端=`9f53d92`。新增 `e
 
 Grok 首版后经两轮受限返修：先修复完整正文批量加载、提交后 `refresh` 假失败、非规范 JSON 放行、损坏元数据异常泄漏和跨项目正文提前加载；再把项目锁、权威读取、序列化、计数、插入、裁剪、提交全部纳入显式回滚域，并拒绝 `NaN/Infinity`。Codex 独立通过专项 29、受影响回归 97、P8C/异步 callback 15、后端串行全量 518 passed。P12A 没有恢复、删除、下载、搜索、自动历史或前端；P12B 必须先冻结 expected current state version、恢复前安全检查点、原子恢复和迟到 autosave 防护。
 
-### 4.19 路径索引
+### 4.19 P12B-A editor-state 全状态版本与可选 CAS 基础
+
+P12B-A 已完成并推送：计划/契约=`0b55c30`、实现=`780cc82`。`editor_state_service` 成为 P12A/P12B 精确 13 键、紧凑 UTF-8 排序 JSON 和 `esv_` 版本的共享权威；GET/PUT 成功响应返回 `stateVersion`，PUT 可选 `expectedStateVersion`。携带 expected 时先取项目数据库写锁，只从同一锁后行计算全状态与矩阵版本；全状态冲突优先并固定只返回 `code/message/currentStateVersion`，任一冲突整包零写、显式回滚。缺 expected 仍为迁移期兼容覆盖，不是最终安全门。
+
+Grok 初版经两轮定点返修：第一次消除锁后重复读取和提交后 `refresh`/GET 假失败；Codex 首次全量发现 12 项回归后，第二次统一 `updatedAt` 提交前后格式，并在持久 JSON 读写边界把存量/新写 `NaN/±Infinity` 收敛为 `null`，同时保持规范哈希和 P12A 直接伪造快照严格 `allow_nan=False`。Codex 独立通过专项 19、内容融合/财务定向 12、原回归 104、后端串行全量 537 passed。P12B-A 没有前端 expected、迟到任务围栏或恢复；下一包只能是 P12B-B。
+
+### 4.20 路径索引
 
 ```text
 backend/app/
@@ -481,8 +488,8 @@ frontend/src/features/
 - **P11C 已完成并推送**：契约=`docs/p11c-technical-editor-state-truth-contract.md`，计划=`docs/plans/2026-07-15-p11c-technical-editor-state-truth-plan.md`，前端=`1441509`。技术标 editor-state 只认服务端；旧本地键忽略保值，真实空态不补 mock，失败固定脱敏；普通与合并 PUT 使用同源 Cookie/内存 CSRF；409/M3-D 保持兼容；A 的迟到或挂起保存不污染、阻塞 B；生产演示入口已移除。
 - **P8D 已完成并推送**：契约=`docs/p8d-mineru-local-helper-contract.md`，计划=`docs/plans/2026-07-15-p8d-mineru-local-helper-plan.md`，实现=`e1fe316`。纯标准库助手只从交互 TTY 读取 P8C 单次票据，Windows 只认 `mineru.exe`，强制本地离线模型、环境白名单、临时输出和回环无代理/无重定向单次回调；真实 CLI/模型由用户人工准备。
 - **P8E 已完成并推送**：契约/计划提交=`73b1264`，P8E-A 后端=`79b346e`，P8E-B 助手=`e3f9cc4`。Docling 46、MinerU 54、后端受影响回归 37、P8C E2E 9、P8B E2E 6 passed；真实 Docling/模型仍未安装、未验收，禁止声称真实模型就绪。
-- **Grok 当前状态**：额度与连接零改动探测回执=`msg_4951ee80c0fc406c96e7d8d8cae7f54c`，明确“额度可用”；模型会话已能读取消息箱、执行只读 Git 并回复。协作方式仍是 Grok 只实现/自测、不提交推送，Codex 独立审查、验收、中文提交与推送；后续不得因额度可用而跳过任务包和审查门。
-- 当前分支仍为 `collab/grok-code-codex-review`；P8D、P11C、P11B、P11A、M3-D、P10K、P8C、P10J、P9D、M3-C、P10I、P10H、P10G、P10F、P10E 与 P8B 基线均已推送，本文档闭环提交位于其后。新会话第一步必须用 `git status -sb`、`git rev-parse HEAD`、`git rev-parse origin/collab/grok-code-codex-review` 重新核验，不可只信本文静态 SHA。
+- **Grok 当前状态**：额度可用；P12B-A 初始实现回执=`msg_c5ffaaca3d18484ea577fc263376d694`，第一次返修=`msg_1cf1ec7bbc034c6a8bbc2be09a4a2e5d`，第二次返修=`msg_65c94e2a4d89444491ea4eb23a818eee`，Codex 验收 ack=`msg_64f95b4eed2c4f7696fd906d67e2c7df`。协作方式仍是 Grok 只实现/自测、不提交推送，Codex 独立审查、验收、中文提交与推送；后续不得因额度可用而跳过任务包和审查门。
+- 当前分支仍为 `collab/grok-code-codex-review`；P12B-A、P12A、P8D、P11C、P11B、P11A、M3-D、P10K、P8C、P10J、P9D、M3-C、P10I、P10H、P10G、P10F、P10E 与 P8B 基线均已推送，本文档闭环提交位于其后。新会话第一步必须用 `git status -sb`、`git rev-parse HEAD`、`git rev-parse origin/collab/grok-code-codex-review` 重新核验，不可只信本文静态 SHA。
 - 阶段 3 **已完成并推送**：M3-A 只读融合建议、M3-B 差异预览与浏览器确认、M3-C 会话内单批撤销、M3-D 服务端原子确认与最近 20 批持久恢复。
 - 阶段 4 **包 5** 已推送：`460097a` 智能建议人工确认 E2E。
 - 阶段 4 **包 6** 已推送：`1289c92` 实现响应矩阵源分页调用。
@@ -507,16 +514,17 @@ frontend/src/features/
 - **M3-C 融合写入单批撤销交付**：计划=`c63310f`，实现=`b8ff605`。当前融合对话框只保存最近成功批次的最小内存快照；撤销点击时精确校验章节存在性、标题、正文和状态，未漂移才恢复正文与原状态，漂移章跳过。快照一次消费、关闭即失效；无新 API、后端、存储、历史栈或通用撤销。完整契约见 `docs/m3c-content-fuse-undo-contract.md`。
 - **M3-D 融合写入持久恢复交付**：计划=`d326c7d`、后端=`6a5f61f`、前端=`b89a387`。后端以成功任务结果为唯一建议权威，锁内校验 base，同事务写章节/快照/裁剪，最近 20 批且漂移安全一次消费；前端确认前零本地写，POST 成功后唯一真实重载，业务已完成但重载失败有独立固定中文，项目/关闭迟到不污染，不写浏览器存储或外网。完整契约见 `docs/m3d-content-fuse-persistent-recovery-contract.md`。
 - **P9D 导出图片失效引用提示交付**：计划=`4925a51`，实现=`e5adad7`。技术标/商务标成功 export 只消费后端 `imageWarnings`，最多 20 条、每条 240 码点，以 React 纯文本显示且继续下载；告警绑定项目并用实例代次隔离迟到响应。两轮审查修复首帧旧告警/迟到污染、E2E 假同步、调用顺序和 lint warning。完整契约见 `docs/p9d-export-image-warning-contract.md`。
-- **已验证基线**：P12A 专项 29、editor-state/认证/项目/M3-D/模板受影响回归 97、P8C/异步 callback 15、后端串行全量 518 passed（只有 1 条既有 Starlette/httpx 弃用警告）。P8E 独立通过 Docling 46、MinerU 54、P8E-A/P8C/P8B/解析后端受影响回归 37 passed。前端 P11C 18、P11B 11、P11A 10、认证/RBAC 11、解析策略 6、响应矩阵 8、融合确认 6、持久恢复 5、模板 1 passed，单 worker 串行全量 E2E 184 passed；lint 零问题，build 通过（仅既有大 chunk 警告）。**E2E 共用 SQLite 重置库，所有 Playwright 命令必须串行。**
+- **已验证基线**：P12B-A 专项 19、内容融合三项加财务整文件 12、P12A/editor-state/矩阵/融合确认/callback/模板回归 104、后端串行全量 537 passed（只有 1 条既有 Starlette/httpx 弃用警告）。P8E 独立通过 Docling 46、MinerU 54、P8E-A/P8C/P8B/解析后端受影响回归 37 passed。前端 P11C 18、P11B 11、P11A 10、认证/RBAC 11、解析策略 6、响应矩阵 8、融合确认 6、持久恢复 5、模板 1 passed，单 worker 串行全量 E2E 184 passed；lint 零问题，build 通过（仅既有大 chunk 警告）。**E2E 共用 SQLite 重置库，所有 Playwright 命令必须串行。**
 - **P10J 已完成**：契约=`docs/p10j-finance-personal-cost-change-events-contract.md`，计划=`docs/plans/2026-07-14-p10j-finance-personal-cost-change-events-plan.md`。两轮后端审查和一轮前端测试网络审查均闭环。
 - **P8C 已完成**：契约=`docs/p8c-local-parser-one-time-callback-ticket-contract.md`，计划=`docs/plans/2026-07-14-p8c-local-parser-one-time-callback-ticket-plan.md`。两轮后端审查和三轮前端反假绿审查均闭环；它只补 required 模式回传授权，不交付 MinerU/Docling 运行时。
 - **P10K 已完成**：计划=`2e53007`、后端=`1eaa75e`、前端=`dbf301c`。最小 `finance_project_cost_change_events` 只记录本包上线后 P10C 成功变更并与业务/审计同事务；项目 GET 只回 action/entryId/actorScope/occurredAt，前端只在 `/finance` 显式点击后读取。后端全量 453、前端全量 140 均通过。
 - **M3-D 已完成**：服务端原子确认成功 `content_fuse` 任务中的用户选择，只保留每项目最近 20 批；一次性恢复时仅覆盖 title/body/status 仍精确等于 after 的章节。代码提交与远端一致后才开始本文档闭环。
 - **P11A/P11B/P11C 已完成**：P11A 让技术标/商务标列表、详情与创建只认服务端项目；P11B、P11C 分别让商务标和技术标编辑内容只认服务端 editor-state。旧项目键与两类旧 workspace/editor 键均不再作为成功依据；前端全量从 P11A 的 155、P11B 的 166 增至 P11C 的 184。
 - **P12A 已完成**：计划/契约=`bf8ccd6`、后端=`9f53d92`。显式服务端检查点精确保存 13 键规范快照，每项目最近 20 条；创建/裁剪同事务、完整失败域显式回滚，列表/淘汰不加载正文，详情作用域和完整性严格校验。两轮返修与 Codex 独立 29/97/15/518 验收闭环；没有恢复、删除、下载、自动历史或前端。
-- **P12B-A 已冻结待实现**：契约=`docs/p12b-editor-state-version-foundation-contract.md`，计划=`docs/plans/2026-07-15-p12b-editor-state-version-foundation-plan.md`。本包仅把 P12A 同算法 `stateVersion` 暴露给当前 editor-state，并提供可选 `expectedStateVersion` CAS；五文件后端范围，不修改模型、后台任务、callback、M3-D 或前端。缺 expected 仍兼容旧写入，明确不是恢复安全门。
+- **P12B-A 已完成并推送**：计划/契约=`0b55c30`、实现=`780cc82`。共享 P12A 同算法 `stateVersion`，可选 `expectedStateVersion` CAS 只用一次锁后行，全状态冲突优先且最小脱敏；两轮返修关闭重复读取、提交后假失败、时间戳漂移和非有限值兼容。Codex 独立 19/12/104/537 验收闭环。缺 expected 仍兼容旧写入，明确不是恢复安全门。
+- **下一包 P12B-B 尚未冻结**：只允许先审计技术标 `useTechnicalPlanEditors` 与商务标 `useBusinessBidWorkspace` 的全部 GET/PUT、在途串行、项目切换、Strict Mode、现有矩阵 409 和 M3-D 重载边界，再写独立前端契约/计划。目标是保存服务端 `stateVersion`、每次 PUT 携带 expected、全状态冲突停止自动保存并要求显式重载；禁止顺带修改后端、任务/callback/M3-D 或新增 restore。
 - **其余未实现主线**：editor-state 自动全写入版本历史/检查点安全恢复/多人协作；MinerU/Docling 自动安装、模型打包、常驻服务、真实模型样本验收与完整孙进程治理；P9C 后续真实语义调优；Word `structure`/整章布局；除国能 e 招外的合法外部标讯来源；人力附件/真实证件核验；财务税务/审批/导出/预算/回款/版本、失败尝试与完整身份审计；投标人矩阵明细/版本/结果跟踪；Alembic、PostgreSQL、HTTPS、Key 加密、Docker 和公网 SaaS 能力。任何一项都须另立契约，不得扩大既有角色与生产路径。
 - 新任务分工不变：Grok 只负责限定实现与自测，未经 Codex 审查确认不得提交；Codex 负责计划、范围冻结、差异审查、独立测试、验收、中文提交、文档闭环和 GitHub 状态核验。每一包仍按“计划提交 → 实现提交 → 文档闭环提交 → 推送协作分支”执行，禁止合包。
 - GitHub 若出现连接重置，可在当前 PowerShell 进程临时配置 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY=http://127.0.0.1:7890` 与 `NO_PROXY=localhost,127.0.0.1` 后重试；不得把代理或凭据写入仓库。
 
-**换会话可直接：核验分支、HEAD/远端与工作区 → 读本文 §0～§3.1、§5、§6、§11、P12A/P12B-A 契约与计划及路线图 → 确认 P12A 计划/契约 `bf8ccd6`、后端 `9f53d92`、闭环 `6fd4c76` 与 P12B-A 计划提交均已推送 → 只派发 P12B-A 五文件后端任务。禁止重新实现 P12A/P8D/P8E/P11A/P11B/P11C/M3-D、提前增加 restore/恢复按钮、让 Grok commit/push，或由 Codex 冒充 Grok 完成主实现。**
+**换会话可直接：核验分支、HEAD/远端与工作区 → 读本文 §0～§3.1、§5、§6、§11、P12A/P12B-A 契约与计划及路线图 → 确认 P12B-A 计划/契约 `0b55c30`、实现 `780cc82` 已推送且后端全量 537 passed → 先审计并冻结 P12B-B 前端 CAS 契约，随后只派发精确前端任务。禁止重新实现 P12B-A/P12A/P8D/P8E/P11A/P11B/P11C/M3-D、提前增加 restore/恢复按钮或任务围栏、让 Grok commit/push，或由 Codex 冒充 Grok 完成主实现。**
