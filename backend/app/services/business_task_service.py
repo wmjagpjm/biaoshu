@@ -8,6 +8,7 @@
 二次开发：
   - 勿编造招标未出现的硬性资质编号
   - JSON 契约变更时同步 tests/test_business_bid_mvp.py
+  - 四类 writer 写回必须走 _upsert_editor_state_for_task（固定 source=task + 异常脱敏）
 """
 
 from __future__ import annotations
@@ -21,6 +22,37 @@ from sqlalchemy.orm import Session
 from app.models.entities import ProjectTaskRow
 from app.services import editor_state_service, llm_service
 from app.services.project_service import update_project
+
+# 商务 writer upsert 非版本冲突失败：固定中文脱敏（禁止回显 SQL/路径/表名/异常类型）
+MSG_TASK_EDITOR_UPSERT_FAILED = "编辑内容写入失败，请重试"
+
+
+def _upsert_editor_state_for_task(
+    db: Session,
+    workspace_id: str,
+    project_id: str,
+    **kwargs: Any,
+) -> dict:
+    """
+    用途：商务四类任务 writer 专用 upsert 包装；固定 revision_source_kind=task。
+    对接：biz_qualify / biz_toc / biz_quote / biz_commit 真实写点。
+    二次开发：
+      - EditorStateVersionConflict 原样上抛，保持 stale 固定语义；
+      - 其他 upsert 异常脱敏为固定 RuntimeError，from 保留原链，禁止进 REST/SSE。
+    """
+    kwargs.pop("revision_source_kind", None)
+    try:
+        return editor_state_service.upsert_editor_state(
+            db,
+            workspace_id,
+            project_id,
+            revision_source_kind="task",
+            **kwargs,
+        )
+    except editor_state_service.EditorStateVersionConflict:
+        raise
+    except Exception as exc:  # noqa: BLE001 — 仅 upsert 窄范围脱敏
+        raise RuntimeError(MSG_TASK_EDITOR_UPSERT_FAILED) from exc
 
 
 def _parse_json_value(text: str) -> Any:
@@ -208,7 +240,7 @@ def run_biz_qualify(
     if not items:
         raise ValueError("模型未返回有效资格条目")
     assert_not_cancelled(db, task)
-    editor_state_service.upsert_editor_state(
+    _upsert_editor_state_for_task(
         db,
         workspace_id,
         project_id,
@@ -272,7 +304,7 @@ def run_biz_toc(
     if not items:
         raise ValueError("模型未返回有效目录条目")
     assert_not_cancelled(db, task)
-    editor_state_service.upsert_editor_state(
+    _upsert_editor_state_for_task(
         db,
         workspace_id,
         project_id,
@@ -336,7 +368,7 @@ def run_biz_quote(
     if not quote["rows"] and not quote["notes"]:
         raise ValueError("模型未返回有效报价内容")
     assert_not_cancelled(db, task)
-    editor_state_service.upsert_editor_state(
+    _upsert_editor_state_for_task(
         db,
         workspace_id,
         project_id,
@@ -398,7 +430,7 @@ def run_biz_commit(
     if not blocks:
         raise ValueError("模型未返回有效承诺正文")
     assert_not_cancelled(db, task)
-    editor_state_service.upsert_editor_state(
+    _upsert_editor_state_for_task(
         db,
         workspace_id,
         project_id,

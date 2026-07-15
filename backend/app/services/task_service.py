@@ -77,6 +77,36 @@ _PAYLOAD_EXPECTED_STATE_VERSION = "_expectedStateVersion"
 # 版本冲突固定脱敏终态（不得含版本/异常类型/正文）
 MSG_TASK_RESULT_STALE = "任务结果已过期"
 ERR_TASK_BASE_CHANGED = "任务基于的编辑内容已变化，请重新载入后重试"
+# 九类 writer upsert 非版本冲突失败：固定中文脱敏（禁止回显 SQL/路径/表名/异常类型）
+MSG_TASK_EDITOR_UPSERT_FAILED = "编辑内容写入失败，请重试"
+
+
+def _upsert_editor_state_for_task(
+    db: Session,
+    workspace_id: str,
+    project_id: str,
+    **kwargs: Any,
+) -> dict:
+    """
+    用途：九类任务 writer 专用 upsert 包装；固定 revision_source_kind=task。
+    对接：parse/analyze/outline/chapter/chapters 真实写点；非 writer 禁止调用。
+    二次开发：
+      - EditorStateVersionConflict 原样上抛，保持 stale 固定语义；
+      - 其他 upsert 异常脱敏为固定 RuntimeError，from 保留原链供日志，禁止进 REST/SSE。
+    """
+    kwargs.pop("revision_source_kind", None)
+    try:
+        return editor_state_service.upsert_editor_state(
+            db,
+            workspace_id,
+            project_id,
+            revision_source_kind="task",
+            **kwargs,
+        )
+    except editor_state_service.EditorStateVersionConflict:
+        raise
+    except Exception as exc:  # noqa: BLE001 — 仅 upsert 窄范围脱敏
+        raise RuntimeError(MSG_TASK_EDITOR_UPSERT_FAILED) from exc
 
 # 进行中状态：取消与防重入共用
 ACTIVE_STATUSES = frozenset({"pending", "running"})
@@ -528,7 +558,7 @@ def _run_parse(
 
     expected = _require_payload_expected_version(payload)
     # 禁止直接 ORM 覆盖；最终写走带 expected 的 upsert CAS
-    editor_state_service.upsert_editor_state(
+    _upsert_editor_state_for_task(
         db,
         workspace_id,
         project_id,
@@ -606,7 +636,7 @@ def _run_analyze(
         analysis = normalize_analysis(parsed)
         msg = "招标分析完成（结构化）"
     expected = _require_payload_expected_version(payload)
-    editor_state_service.upsert_editor_state(
+    _upsert_editor_state_for_task(
         db,
         workspace_id,
         project_id,
@@ -1171,7 +1201,7 @@ def _run_outline(
         )
     _set_task(db, task, progress=80, message="写入大纲…")
     expected = _require_payload_expected_version(payload)
-    editor_state_service.upsert_editor_state(
+    _upsert_editor_state_for_task(
         db,
         workspace_id,
         project_id,
@@ -1432,7 +1462,7 @@ def _run_chapter(
         else:
             new_chapters.append(c)
     expected = _require_payload_expected_version(payload)
-    editor_state_service.upsert_editor_state(
+    _upsert_editor_state_for_task(
         db,
         workspace_id,
         project_id,
@@ -1547,7 +1577,7 @@ def _run_chapters(
                     "status": "needs_review",
                 }
                 break
-        written = editor_state_service.upsert_editor_state(
+        written = _upsert_editor_state_for_task(
             db,
             workspace_id,
             project_id,
