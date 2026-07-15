@@ -206,6 +206,21 @@ P12B-A 独立验收命令（后端；全部串行）：
 
 结果依次为 **19 / 12 / 104 / 537 passed**，均只有 1 条既有 Starlette/httpx 弃用警告。CAS 同时带全状态与矩阵版本时必须只有一次项目锁和一次锁后 editor-state 读取；提交成功后不得 `refresh` 或重读；全状态 409 detail 只能含 `code/message/currentStateVersion`。`updatedAt` 提交前后字符串必须稳定；持久 JSON 中的非有限 float 收敛为 `null`，但 P12A 直接伪造非有限规范快照仍必须失败。
 
+P12B-B 冻结验收命令（前端；实现后必须逐条串行）：
+
+```powershell
+npm run lint
+npm run build
+npm run test:e2e:technical-editor-state-truth
+npm run test:e2e:business-editor-state-truth
+npm run test:e2e:matrix
+npm run test:e2e:fuse-apply
+npm run test:e2e:fuse-persistent-recovery
+npm run test:e2e
+```
+
+P12B-B 必须证明技术整包、guidance、矩阵合并和商务整包 PUT 都带最新 `expectedStateVersion`；同项目第二请求在第一响应前严格为 0；固定全状态 409 保留本地并阻断全部写入，只有显式全量 GET 才恢复。技术/商务 GET 缺失或非法版本、PUT 200 缺失新版本均不得进入可继续自动保存的假成功态。P12B-B 尚未实现，以上不是当前验收基线。
+
 ## 6. 已接 API 一览
 
 | 方法 | 路径 |
