@@ -327,4 +327,4 @@
 
 阶段 0/1/2、阶段 3 M3-A 至 M3-D、阶段 4 **包 5** 至 **包 8/P8B/P8C**、P9A/P9B/P9C/P9D、阶段 5 P10A 至 P10K，以及 **P11A/P11B/P11C 三个真实数据收口包**均保持已交付。P11C 完整契约见 `docs/p11c-technical-editor-state-truth-contract.md`，实施与独立验收记录见 `docs/plans/2026-07-15-p11c-technical-editor-state-truth-plan.md`。
 
-下一动作是对最高优先级剩余 P1——真实 MinerU/Docling 外置解析运行时与生产治理——做只读现状审计，先冻结进程边界、文件/正文出域、超时与资源上限、票据消费、失败回退、部署依赖和验收环境，再决定可独立交付的最小包。不得把 P8B 的策略接线、P8C 的一次性回传票据直接冒充解析器运行时，也不得在契约前安装服务或扩大网络权限。后续仍由 Grok 只实现和自测，Codex 负责计划、审查、独立验收、中文提交与闭环。
+最高优先级剩余 P1 的只读审计已收敛为 **P8D 本机 MinerU 外置解析助手**：纯标准库助手显式选择单文件，离线调用 PATH 中既有 MinerU pipeline，再用 P8C 单次票据向固定回环路径回传；不改后端/前端，不自动安装、下载、联网或持久化。契约见 `docs/p8d-mineru-local-helper-contract.md`，计划见 `docs/plans/2026-07-15-p8d-mineru-local-helper-plan.md`。Docling 因 P8C 当前只接受 `source=mineru` 而明确拆至后续 P8E；不得冒用来源或合包。后续仍由 Grok 只实现和自测，Codex 负责计划、审查、独立验收、中文提交与闭环。

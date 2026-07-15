@@ -19,8 +19,8 @@
 完整阅读 docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/plans/2026-07-13-package-9-delivery-enhancement-plan.md、docs/integration-checklist.md。
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
 当前进度：P9D、M3-A 至 M3-D、P8B、P8C、P9A、P9B、P9C、P10A 至 P10K、P11A、P11B 与 P11C 均已完成。P11C 计划/契约=`24b7ba8`、安全细化=`c5b3eec`、前端=`1441509`，技术标 workspace 已只认服务端 editor-state，前端全量 E2E 184 passed。
-当前执行包：P11C 已完成两轮受限返修、独立验收和推送，见 `docs/p11c-technical-editor-state-truth-contract.md` 与 `docs/plans/2026-07-15-p11c-technical-editor-state-truth-plan.md`。
-下一步：对最高优先级剩余 P1“真实 MinerU/Docling 外置解析运行时与生产治理”做只读审计并另立契约；不得把 P8B 策略接线或 P8C 回传票据冒充运行时，不得在审计前安装服务、扩大网络权限或让其他主线搭车。
+当前执行包：最高优先级剩余 P1 已收敛为 P8D 本机 MinerU 外置解析助手，契约=`docs/p8d-mineru-local-helper-contract.md`，三文件计划=`docs/plans/2026-07-15-p8d-mineru-local-helper-plan.md`。
+下一步：先提交推送 P8D 契约/计划，再按 §3.1 后台静默派发 Grok；只新增 Python 助手、单测和中文 README。不得改后端/前端、自动安装/下载模型、联网解析或把 Docling 冒充 `source=mineru`。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -406,7 +406,7 @@ frontend/src/features/
 
 1. 阶段 4 **功能包 8** MVP=`6db1586` 与后续 **P8B 解析策略接线**（计划=`f662674`、后端=`0994cc8`、前端=`80d2579`）均已验收并推送；真实 MinerU/Docling 外置生产部署仍须独立安全与部署契约。
 2. 阶段 4 **P9A/P9B/P9C/P9D** 与阶段 5 **P10A/P10B/P10C/P10D/P10F/P10E/P10G/P10H/P10I/P10J/P10K** 均已实现、独立验收并文档闭环。P9C 的真实模型门仍是运行时前置：固定依赖和模型缓存就绪后，用户显式构建索引，再运行固定预检；未通过前继续关键词降级。
-3. P8C、P10K、M3-D、P11A、P11B 与 P11C 均已完成。Grok Build 额度已恢复并完成 P11C 两轮返修；当前无额度阻断。下一包须先审计真实 MinerU/Docling 外置运行时与生产治理，继续保持 P8B/P8C 的策略、票据和正文出域边界。
+3. P8C、P10K、M3-D、P11A、P11B 与 P11C 均已完成。Grok Build 当前可用；下一包 P8D 已完成只读审计并冻结为三文件本机 MinerU 助手，继续保持 P8B/P8C 的策略、票据和正文出域边界。Docling 独立留给后续 P8E。
 
 资源同步后续只可由管理员配置新的签名发布方，绝不可放开浏览器 URL 或外网抓取。图片管线已冻结项目内资源引用协议，后续扩展不得放开外链或客户端路径。SSE 的多工作空间鉴权、事件游标和项目级总线不在当前范围。
 
@@ -502,4 +502,4 @@ frontend/src/features/
 - 新任务分工不变：Grok 只负责限定实现与自测，未经 Codex 审查确认不得提交；Codex 负责计划、范围冻结、差异审查、独立测试、验收、中文提交、文档闭环和 GitHub 状态核验。每一包仍按“计划提交 → 实现提交 → 文档闭环提交 → 推送协作分支”执行，禁止合包。
 - GitHub 若出现连接重置，可在当前 PowerShell 进程临时配置 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY=http://127.0.0.1:7890` 与 `NO_PROXY=localhost,127.0.0.1` 后重试；不得把代理或凭据写入仓库。
 
-**换会话可直接：核验分支、HEAD/远端与工作区 → 读本文 §0～§3.1、§5、§6、§11、P11C 契约/计划及路线图 → 确认 P11C 前端 `1441509` 与本文档闭环均已推送 → 对真实 MinerU/Docling 外置解析运行时与生产治理做只读审计，先写独立契约和计划再按 §3.1 派发。禁止重新实现 P11A/P11B/P11C/M3-D、把 P8B/P8C 冒充真实运行时、让 Grok commit/push，或由 Codex 冒充 Grok 完成主实现。**
+**换会话可直接：核验分支、HEAD/远端与工作区 → 读本文 §0～§3.1、§5、§6、§11、P8D 契约/计划及路线图 → 确认 P11C 前端 `1441509` 与文档闭环 `f4deade` 均已推送 → 按 §3.1 派发 P8D 三文件实现。禁止重新实现 P11A/P11B/P11C/M3-D、修改后端/前端、自动安装/下载 MinerU、提前合入 Docling、让 Grok commit/push，或由 Codex 冒充 Grok 完成主实现。**
