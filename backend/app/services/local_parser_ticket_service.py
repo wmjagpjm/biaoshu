@@ -1,8 +1,8 @@
 """
-模块：P8C 本地解析一次性回传票据服务
-用途：签发短期单项目单次票据，并在公共回调中原子消费后同事务写入解析结果。
+模块：P8C/P8E 本地解析一次性回传票据服务
+用途：签发短期单项目单次票据，并在公共回调中原子消费后同事务写入解析结果；来源精确 mineru|docling。
 对接：parse_callback 签发/回调路由；LocalParserCallbackTicketRow；auth_service.record_audit。
-二次开发：禁止保存/日志输出原始票据；禁止调用会中途 commit 的 service；不启动 MinerU/Docling。
+二次开发：禁止保存/日志输出原始票据；禁止调用会中途 commit 的 service；不启动 MinerU/Docling 解析器。
 """
 
 from __future__ import annotations
@@ -39,6 +39,8 @@ CODE_BAD_REQUEST = "local_parser_callback_bad_request"
 MSG_BAD_REQUEST = "回传请求体无效"
 CODE_PAYLOAD_TOO_LARGE = "local_parser_callback_payload_too_large"
 MSG_PAYLOAD_TOO_LARGE = "回传请求体过大"
+# 固定来源枚举：精确小写成员校验，禁止 strip/lower/客户端扩展
+ALLOWED_CALLBACK_SOURCES = frozenset({"mineru", "docling"})
 
 
 class TicketServiceError(Exception):
@@ -152,7 +154,7 @@ def normalize_callback_body(raw_body: bytes) -> tuple[str, str, str | None]:
     模块：公共回调请求体规范化
     用途：手工解析 JSON，限制键与长度，避免框架 422 回显敏感输入。
     对接：POST /api/local-parser/callback。
-    二次开发：只允许 markdown/source/filename；超限 413，其余非法 400。
+    二次开发：只允许 markdown/source/filename；source 仅 mineru|docling 精确成员；超限 413，其余非法 400。
     """
     if len(raw_body) > MAX_BODY_BYTES:
         raise TicketServiceError(413, CODE_PAYLOAD_TOO_LARGE, MSG_PAYLOAD_TOO_LARGE)
@@ -184,7 +186,7 @@ def normalize_callback_body(raw_body: bytes) -> tuple[str, str, str | None]:
     if not markdown or len(markdown) > MAX_MARKDOWN_CODEPOINTS:
         raise TicketServiceError(400, CODE_BAD_REQUEST, MSG_BAD_REQUEST)
 
-    if source_raw != "mineru":
+    if source_raw not in ALLOWED_CALLBACK_SOURCES:
         raise TicketServiceError(400, CODE_BAD_REQUEST, MSG_BAD_REQUEST)
 
     filename: str | None

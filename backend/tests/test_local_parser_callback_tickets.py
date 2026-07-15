@@ -1,8 +1,8 @@
 """
-模块：P8C 本地解析一次性回传票据定向测试
-用途：验收 required 模式下签发权限、精确公开回调、原子单次消费、固定错误脱敏与事务回滚。
+模块：P8C/P8E 本地解析一次性回传票据定向测试
+用途：验收 required 模式下签发权限、精确公开回调、原子单次消费、固定错误脱敏与事务回滚；来源精确 mineru|docling。
 对接：parse_callback；auth_middleware；local_parser_ticket_service；entities.LocalParserCallbackTicketRow。
-二次开发：仅固定合成口令与假票据；禁止外网、真实密钥、MinerU 启动或白名单外改动。
+二次开发：仅固定合成口令与假票据；禁止外网、真实密钥、启动 MinerU/Docling 解析器或白名单外改动。
 """
 
 from __future__ import annotations
@@ -545,13 +545,17 @@ def test_body_validation_fixed_errors(required_client):
     assert extra.status_code == 400, extra.text
     assert "SECRET_MARKDOWN_BODY_XYZ" not in extra.text
 
-    # source 非 mineru
+    # source 未知来源（非固定枚举 mineru|docling）
     bad_src = _public_callback(
         required_client,
         ticket=mint(),
-        body={"markdown": "ok", "source": "docling"},
+        body={"markdown": "ok", "source": "unknown-parser"},
     )
     assert bad_src.status_code == 400, bad_src.text
+    assert "unknown-parser" not in bad_src.text
+    detail_src = bad_src.json().get("detail") or {}
+    if isinstance(detail_src, dict):
+        assert detail_src.get("code") == "local_parser_callback_bad_request"
 
     # 非法 filename
     bad_name = _public_callback(
@@ -601,7 +605,7 @@ def test_stream_body_limit_and_missing_ticket_before_body(required_client):
         return ticket
 
     prefix = b'{"markdown":"'
-    suffix = b'","source":"docling"}'  # 非法 source，用于证明未超限时进入字段规则
+    suffix = b'","source":"unknown-parser"}'  # 非法 source，用于证明未超限时进入字段规则
     pad_len = MAX_BODY_BYTES - len(prefix) - len(suffix)
     assert pad_len > 0
     exact_body = prefix + (b"B" * pad_len) + suffix
@@ -614,7 +618,7 @@ def test_stream_body_limit_and_missing_ticket_before_body(required_client):
     if isinstance(detail, dict):
         assert detail.get("code") == "local_parser_callback_bad_request"
     assert "BBBB" not in exact.text
-    assert "docling" not in exact.text
+    assert "unknown-parser" not in exact.text
 
     # 超过上限：固定 413，响应不反射敏感正文
     oversize = (
@@ -823,3 +827,205 @@ def test_atomic_consume_and_midway_rollback(required_client, monkeypatch):
         assert "concurrent" in (state.parsed_markdown or "")
     finally:
         db.close()
+
+
+def test_callback_source_exact_enum_allowlist(required_client):
+    """精确 mineru|docling 成功；大小写/空白/前后缀/空值/非字符串/未知来源固定 400 且不反射。"""
+    project = _create_project(name="来源枚举项目")
+
+    def mint() -> str:
+        csrf_local = _login_role(required_client, "bid_writer")
+        res = _issue(required_client, csrf_local, project.id)
+        assert res.status_code == 201, res.text
+        ticket = res.json()["ticket"]
+        required_client.cookies.clear()
+        return ticket
+
+    # 精确允许：mineru
+    t_mineru = mint()
+    ok_mineru = _public_callback(
+        required_client,
+        ticket=t_mineru,
+        body={"markdown": "# mineru body\n\nok", "source": "mineru"},
+    )
+    assert ok_mineru.status_code == 200, ok_mineru.text
+    assert set(ok_mineru.json().keys()) == _SUCCESS_KEYS
+
+    # 精确允许：docling（另一张票）
+    t_docling = mint()
+    ok_docling = _public_callback(
+        required_client,
+        ticket=t_docling,
+        body={
+            "markdown": "# docling body\n\nok",
+            "source": "docling",
+            "filename": "d.pdf",
+        },
+    )
+    assert ok_docling.status_code == 200, ok_docling.text
+    assert set(ok_docling.json().keys()) == _SUCCESS_KEYS
+
+    illegal_cases = [
+        ("Docling", {"markdown": "ok", "source": "Docling"}),
+        ("leading space", {"markdown": "ok", "source": " docling"}),
+        ("trailing space", {"markdown": "ok", "source": "docling "}),
+        ("prefix", {"markdown": "ok", "source": "xdocling"}),
+        ("suffix", {"markdown": "ok", "source": "docling-extra"}),
+        ("empty string", {"markdown": "ok", "source": ""}),
+        ("unknown", {"markdown": "ok", "source": "unknown-parser"}),
+        ("upper mineru", {"markdown": "ok", "source": "MINERU"}),
+        ("non-string int", {"markdown": "ok", "source": 1}),
+        ("non-string null", {"markdown": "ok", "source": None}),
+    ]
+    for label, body in illegal_cases:
+        res = _public_callback(required_client, ticket=mint(), body=body)
+        assert res.status_code == 400, f"{label}: {res.text}"
+        detail = res.json().get("detail") or {}
+        if isinstance(detail, dict):
+            assert detail.get("code") == "local_parser_callback_bad_request", label
+        raw = res.text
+        # 固定错误不得反射非法来源值
+        assert "Docling" not in raw
+        assert "unknown-parser" not in raw
+        assert "MINERU" not in raw
+        assert "docling-extra" not in raw
+        assert "xdocling" not in raw
+        assert " docling" not in raw
+        assert "docling " not in raw
+
+
+def test_docling_success_real_transaction_and_illegal_does_not_consume(required_client):
+    """反假绿：非法来源 400 且不消费；随后精确 docling 成功一次写事务；第三次重放 401。"""
+    csrf = _login_role(required_client, "bid_writer")
+    project = _create_project(name="Docling真事务项目")
+    issued = _issue(required_client, csrf, project.id)
+    assert issued.status_code == 201, issued.text
+    ticket = issued.json()["ticket"]
+    digest = hashlib.sha256(ticket.encode("utf-8")).hexdigest()
+    required_client.cookies.clear()
+
+    # 1) 非法来源：固定 400，票据未消费
+    bad = _public_callback(
+        required_client,
+        ticket=ticket,
+        body={
+            "markdown": "# should-not-write\n\nSECRET_MARKDOWN_BODY_XYZ",
+            "source": "unknown-parser",
+        },
+    )
+    assert bad.status_code == 400, bad.text
+    detail_bad = bad.json().get("detail") or {}
+    if isinstance(detail_bad, dict):
+        assert detail_bad.get("code") == "local_parser_callback_bad_request"
+    assert "unknown-parser" not in bad.text
+    assert "SECRET_MARKDOWN_BODY_XYZ" not in bad.text
+
+    db = SessionLocal()
+    try:
+        row = db.scalars(
+            select(LocalParserCallbackTicketRow).where(
+                LocalParserCallbackTicketRow.ticket_digest == digest
+            )
+        ).one()
+        assert row.consumed_at is None
+        state = db.get(ProjectEditorStateRow, project.id)
+        assert state is None or not (state.parsed_markdown or "").strip()
+        tasks = list(
+            db.scalars(
+                select(ProjectTaskRow).where(ProjectTaskRow.project_id == project.id)
+            ).all()
+        )
+        assert tasks == []
+    finally:
+        db.close()
+
+    # 2) 精确 source=docling 成功一次：真实写 editor-state / parse task / 项目步骤
+    md = "# Docling 解析正文\n\nSECRET_SHOULD_NOT_LEAK_IN_AUDIT"
+    ok = _public_callback(
+        required_client,
+        ticket=ticket,
+        body={"markdown": md, "source": "docling", "filename": "docling_out.pdf"},
+    )
+    assert ok.status_code == 200, ok.text
+    body = ok.json()
+    assert set(body.keys()) == _SUCCESS_KEYS
+    assert body["ok"] is True
+    assert isinstance(body["chars"], int) and body["chars"] > 0
+    task_id = body["taskId"]
+    assert isinstance(task_id, str) and task_id
+
+    db = SessionLocal()
+    try:
+        row = db.scalars(
+            select(LocalParserCallbackTicketRow).where(
+                LocalParserCallbackTicketRow.ticket_digest == digest
+            )
+        ).one()
+        assert row.consumed_at is not None
+
+        state = db.get(ProjectEditorStateRow, project.id)
+        assert state is not None
+        parsed = state.parsed_markdown or ""
+        assert "Docling 解析正文" in parsed
+        assert "> 来源：docling" in parsed
+        assert "docling_out.pdf" in parsed
+
+        tasks = list(
+            db.scalars(
+                select(ProjectTaskRow).where(ProjectTaskRow.project_id == project.id)
+            ).all()
+        )
+        assert len(tasks) == 1
+        assert tasks[0].id == task_id
+        assert tasks[0].type == "parse"
+        assert tasks[0].status == "success"
+        assert tasks[0].progress == 100
+        assert "docling" in (tasks[0].message or "")
+        result = json.loads(tasks[0].result_json or "{}")
+        assert result.get("source") == "docling"
+        assert result.get("filename") == "docling_out.pdf"
+
+        proj = db.get(Project, project.id)
+        assert proj is not None
+        assert proj.status == "analyzing"
+        assert proj.technical_plan_step == 1
+
+        audits = list(
+            db.scalars(
+                select(AuthAuditEventRow).where(
+                    AuthAuditEventRow.action == "local_parser_callback_apply"
+                )
+            ).all()
+        )
+        assert len(audits) == 1
+        a = audits[0]
+        assert a.result == "success"
+        assert a.target == "one_time_ticket"
+        blob = json.dumps(
+            {
+                "t": a.target,
+                "a": a.action,
+                "r": a.result,
+                "w": a.workspace_id,
+                "u": a.actor_user_id,
+            },
+            ensure_ascii=False,
+        )
+        assert "SECRET_SHOULD_NOT_LEAK_IN_AUDIT" not in blob
+        assert ticket not in blob
+        assert project.id not in (a.target or "")
+        assert "docling_out.pdf" not in blob
+        assert "docling" not in blob  # 审计不得新增来源字段
+    finally:
+        db.close()
+
+    # 3) 同票据重放统一 401
+    replay = _public_callback(
+        required_client,
+        ticket=ticket,
+        body={"markdown": "# replay\n\nok", "source": "docling"},
+    )
+    assert replay.status_code == 401, replay.text
+    detail_replay = replay.json().get("detail") or {}
+    if isinstance(detail_replay, dict):
+        assert detail_replay.get("code") == "local_parser_ticket_invalid"
