@@ -18,6 +18,9 @@ import "./OutlineStepWorkspace.css";
 /**
  * 模块：STEP 03 目录生成（易标式三栏）
  * 用途：左生成过程、中目录树、右详情编辑；底栏步骤导航。
+ * 对接：TechnicalPlanWorkspace 大纲步；outline 来自服务端 editor-state。
+ * 二次开发：P11C 已移除固定 DEMO_LOGS/伪时间戳；仅据 generating/progress/outline 推导有限状态。
+ *       未接 onReset 时不得显示「重置」按钮。
  */
 
 export type OutlineStepWorkspaceProps = {
@@ -39,37 +42,43 @@ export type OutlineStepWorkspaceProps = {
   onReset?: () => void;
 };
 
-type LogItem = {
-  id: string;
-  time: string;
-  text: string;
-};
-
-const DEMO_LOGS: LogItem[] = [
-  {
-    id: "l1",
-    time: "10:24:08",
-    text: "已读取招标文件解析结果，开始识别技术评分大类",
-  },
-  {
-    id: "l2",
-    time: "10:24:15",
-    text: "技术评分大类提取完成，正在构建一级目录",
-  },
-  {
-    id: "l3",
-    time: "10:24:22",
-    text: "正在对齐招标文件一级章节与评分权重",
-  },
-  {
-    id: "l4",
-    time: "10:24:31",
-    text: "二级目录细化中：实施方案 / 运维保障",
-  },
-];
-
 function countLevel1(nodes: OutlineNode[]): number {
   return nodes.filter((n) => n.level === 1).length;
+}
+
+/** 用途：由真实 generating/progress/outline 推导过程说明，不冒充任务事件时间戳。 */
+function buildProcessLogs(input: {
+  generating: boolean;
+  progress: number;
+  isEmpty: boolean;
+  level1Count: number;
+}): Array<{ id: string; text: string }> {
+  if (input.generating) {
+    return [
+      {
+        id: "gen-1",
+        text: "正在根据招标分析生成目录结构…",
+      },
+      {
+        id: "gen-2",
+        text: `生成进度 ${Math.max(0, Math.min(100, Math.round(input.progress)))}%`,
+      },
+    ];
+  }
+  if (input.isEmpty) {
+    return [
+      {
+        id: "empty-1",
+        text: "尚无目录，请点击「AI 生成大纲」或手动添加节点",
+      },
+    ];
+  }
+  return [
+    {
+      id: "ready-1",
+      text: `目录已就绪，共 ${input.level1Count} 个一级节点`,
+    },
+  ];
 }
 
 export function OutlineStepWorkspace({
@@ -78,7 +87,7 @@ export function OutlineStepWorkspace({
   selectedId,
   moveFlags,
   generating = false,
-  progress = 34,
+  progress = 0,
   onSelect,
   onPatch,
   onDelete,
@@ -93,6 +102,12 @@ export function OutlineStepWorkspace({
   const totalWords = countTargetWords(outline);
   const selected = flat.find((n) => n.id === selectedId) ?? null;
   const isEmpty = outline.length === 0;
+  const processLogs = buildProcessLogs({
+    generating,
+    progress,
+    isEmpty,
+    level1Count,
+  });
 
   function expandAll() {
     setExpanded(true);
@@ -147,17 +162,16 @@ export function OutlineStepWorkspace({
             </div>
           </div>
           <ul className="od-timeline">
-            {DEMO_LOGS.map((log, i) => (
+            {processLogs.map((log, i) => (
               <li
                 key={log.id}
                 className={`od-timeline__item${
-                  generating && i === DEMO_LOGS.length - 1 ? " is-live" : ""
+                  generating && i === processLogs.length - 1 ? " is-live" : ""
                 }`}
               >
                 <span className="od-timeline__dot" />
                 <div className="od-timeline__body">
                   <p>{log.text}</p>
-                  <span className="od-timeline__time">{log.time}</span>
                 </div>
               </li>
             ))}
@@ -323,20 +337,17 @@ export function OutlineStepWorkspace({
         </section>
       </div>
 
-      {/* 底栏 */}
+      {/* 底栏：仅在父级提供 onReset 时显示重置；本包不新增示例目录恢复 */}
       <footer className="od-step__foot card">
-        <button
-          type="button"
-          className="btn btn-danger-text"
-          onClick={() => {
-            if (onReset) onReset();
-            else if (window.confirm("重置将恢复示例目录结构，确定？")) {
-              /* 父级可接 */
-            }
-          }}
-        >
-          重置
-        </button>
+        {onReset ? (
+          <button
+            type="button"
+            className="btn btn-danger-text"
+            onClick={() => onReset()}
+          >
+            重置
+          </button>
+        ) : null}
         <div className="od-step__foot-spacer" />
         <Link to="/projects" className="btn btn-ghost">
           首页

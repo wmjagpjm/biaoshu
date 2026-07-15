@@ -5,6 +5,7 @@ import type { GlobalFact } from "../types";
  * 模块：全局事实编辑器
  * 用途：抗幻觉事实清单增删改；来源区分招标/知识库/手动。
  * 对接：状态由 useTechnicalPlanEditors 持有。
+ * 二次开发：P11C 已移除伪抽取演示入口；不得再引入 mock 事实写入真实项目。
  */
 
 export type FactsEditorProps = {
@@ -12,7 +13,6 @@ export type FactsEditorProps = {
   onAdd: () => void;
   onUpdate: (id: string, patch: Partial<Omit<GlobalFact, "id">>) => void;
   onRemove: (id: string) => void;
-  onExtractDemo: () => void;
 };
 
 export function FactsEditor({
@@ -20,7 +20,6 @@ export function FactsEditor({
   onAdd,
   onUpdate,
   onRemove,
-  onExtractDemo,
 }: FactsEditorProps) {
   return (
     <div className="tp-facts-editor">
@@ -35,16 +34,6 @@ export function FactsEditor({
         <div className="tp-toolbar__spacer" />
         <button type="button" className="btn btn-ghost btn-sm" onClick={onAdd}>
           <Plus size={14} /> 手动添加
-        </button>
-        <button
-          type="button"
-          className="btn btn-soft btn-sm"
-          onClick={() => {
-            onExtractDemo();
-          }}
-          title="前端演示：追加示例事实"
-        >
-          从招标/知识库抽取
         </button>
       </div>
 

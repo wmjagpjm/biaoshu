@@ -1,20 +1,26 @@
 /**
- * 模块：技术方案大纲 / 正文 / 全局事实 / 分析概述
- * 用途：可编辑状态；优先 GET|PUT /api/projects/{id}/editor-state，失败回退 localStorage。
+ * 模块：技术方案大纲 / 正文 / 全局事实 / 分析概述（P11C 服务端权威）
+ * 用途：技术标编辑内容只认 GET|PUT /api/projects/{id}/editor-state；真实空态保持空。
  * 对接：editor-state API；页面 TechnicalPlanWorkspace；responseMatrixVersion 乐观锁；
- *       409 时在 base 快照匹配时生成字段级三方合并预览。
+ *       409 时在 base 快照匹配时生成字段级三方合并预览；getCsrfToken 内存 CSRF。
+ * 明确非目标：
+ *   - 禁止读写/删除/迁移 biaoshu.technicalPlan.editors.*（旧键忽略并保值）
+ *   - 禁止生产路径导入 mock 或字段 fallback 伪装成功
  * 二次开发：矩阵 409 时禁止静默覆盖本地；须用户显式「重新载入远端矩阵」或「应用合并」；
  *       应用合并 PUT 仅含 responseMatrix + responseMatrixVersion；禁止自动重试循环；
  *       项目切换后须丢弃过期合并/409 异步结果，禁止污染新项目编辑器状态。
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { apiFetch, getApiBase } from "../../../shared/lib/api";
+import {
+  apiFetch,
+  getApiBase,
+  getCsrfToken,
+} from "../../../shared/lib/api";
 import {
   addChild,
   addSibling,
   canMove,
-  cloneOutline,
   countTargetWords,
   moveNodeAmongSiblings,
   removeNode,
@@ -31,7 +37,6 @@ import {
   type ResponseMatrixConflictChoice,
   type ResponseMatrixThreeWayMergeResult,
 } from "../lib/responseMatrix";
-import { mockChapters, mockFacts, mockOutline } from "../mock";
 import type {
   BidAnalysis,
   ChapterContent,
@@ -42,6 +47,18 @@ import type {
   ResponseMatrixSuggestion,
 } from "../types";
 import { emptyBidAnalysis } from "../types";
+
+/** 固定加载失败文案（脱敏，不得拼接后端原文） */
+export const TECHNICAL_EDITOR_LOAD_ERROR =
+  "技术标工作区加载失败，请稍后重试";
+
+/** 固定保存失败文案（脱敏，不得拼接后端原文） */
+export const TECHNICAL_EDITOR_SAVE_ERROR =
+  "技术标工作区保存失败，请稍后重试";
+
+/** 固定矩阵冲突文案（不得回显服务端 detail/SECRET） */
+const TECHNICAL_MATRIX_CONFLICT_MESSAGE =
+  "响应矩阵已被其他终端更新，请重新载入后再保存";
 
 type StoredEditors = {
   outline: OutlineNode[];
@@ -131,9 +148,6 @@ function normalizeAnalysis(
   return base;
 }
 
-const storageKey = (projectId: string) =>
-  `biaoshu.technicalPlan.editors.${projectId}`;
-
 function derivePreview(body: string): string {
   const plain = body
     .replace(/^#+\s*/gm, "")
@@ -147,11 +161,15 @@ function countBodyWords(body: string): number {
   return body.replace(/\s/g, "").length;
 }
 
-function defaultState(): StoredEditors {
+/**
+ * 用途：内存空编辑态；不含 mock、不读 localStorage。
+ * 对接：初始 state、切项目重置、GET 失败重置。
+ */
+function createEmptyEditors(): StoredEditors {
   return {
-    outline: cloneOutline(mockOutline),
-    chapters: mockChapters.map((c) => ({ ...c })),
-    facts: mockFacts.map((f) => ({ ...f })),
+    outline: [],
+    chapters: [],
+    facts: [],
     mode: "ALIGNED",
     analysisOverview: "",
     analysis: emptyBidAnalysis(),
@@ -160,86 +178,72 @@ function defaultState(): StoredEditors {
   };
 }
 
-function loadLocal(projectId: string): StoredEditors {
-  const empty = defaultState();
-  try {
-    const raw = localStorage.getItem(storageKey(projectId));
-    if (!raw) return empty;
-    const parsed = JSON.parse(raw) as Partial<StoredEditors>;
-    return {
-      outline: parsed.outline?.length ? parsed.outline : empty.outline,
-      chapters: parsed.chapters?.length
-        ? parsed.chapters.map((c) => ({
-            ...c,
-            body: c.body ?? "",
-            preview: c.preview ?? derivePreview(c.body ?? ""),
-          }))
-        : empty.chapters,
-      facts: parsed.facts?.length
-        ? parsed.facts.map((f) => ({ ...f }))
-        : empty.facts,
-      mode: parsed.mode === "FREE" ? "FREE" : "ALIGNED",
-      analysisOverview:
-        typeof parsed.analysisOverview === "string"
-          ? parsed.analysisOverview
-          : empty.analysisOverview,
-      analysis: normalizeAnalysis(
-        parsed.analysis,
-        typeof parsed.analysisOverview === "string"
-          ? parsed.analysisOverview
-          : "",
-      ),
-      responseMatrix: normalizeResponseMatrix(parsed.responseMatrix),
-      parsedMarkdown:
-        typeof parsed.parsedMarkdown === "string"
-          ? parsed.parsedMarkdown
-          : empty.parsedMarkdown,
-    };
-  } catch {
-    return empty;
-  }
-}
-
-function saveLocal(projectId: string, state: StoredEditors) {
-  localStorage.setItem(storageKey(projectId), JSON.stringify(state));
-}
-
-function fromApi(data: EditorStateApi, fallback: StoredEditors): StoredEditors {
+/**
+ * 用途：远端 editor-state → 编辑态；null/[]/空串/updatedAt=null 均为权威空态。
+ * 对接：仅消费同一响应内 analysis + responseMatrix 做既有 merge/reconcile。
+ * 二次开发：禁止引入响应外 fallback/mock。
+ */
+function fromApi(data: EditorStateApi): StoredEditors {
   const analysis = normalizeAnalysis(
     data.analysis,
-    data.analysisOverview || fallback.analysisOverview || "",
+    data.analysisOverview || "",
   );
-  const outline = Array.isArray(data.outline) && data.outline.length
+  const outline = Array.isArray(data.outline)
     ? (data.outline as OutlineNode[])
-    : fallback.outline;
-  const chapters = Array.isArray(data.chapters) && data.chapters.length
-    ? (data.chapters as ChapterContent[])
-    : fallback.chapters;
+    : [];
+  const chapters = Array.isArray(data.chapters)
+    ? (data.chapters as ChapterContent[]).map((c) => ({
+        ...c,
+        body: c.body ?? "",
+        preview: c.preview ?? derivePreview(c.body ?? ""),
+      }))
+    : [];
+  const facts = Array.isArray(data.facts)
+    ? (data.facts as GlobalFact[]).map((f) => ({ ...f }))
+    : [];
+  const remoteMatrix = Array.isArray(data.responseMatrix)
+    ? data.responseMatrix
+    : [];
   const responseMatrix = reconcileResponseMatrixLinks(
-    mergeResponseMatrix(
-      analysis,
-      Array.isArray(data.responseMatrix)
-        ? data.responseMatrix
-        : fallback.responseMatrix,
-    ),
+    mergeResponseMatrix(analysis, remoteMatrix),
     chapters,
     outline,
   );
   return {
     outline,
     chapters,
-    facts: Array.isArray(data.facts) && data.facts.length
-      ? (data.facts as GlobalFact[])
-      : fallback.facts,
+    facts,
     mode: data.mode === "FREE" ? "FREE" : "ALIGNED",
     analysisOverview: analysis.overview || data.analysisOverview || "",
     analysis,
     responseMatrix,
     parsedMarkdown:
-      typeof data.parsedMarkdown === "string" && data.parsedMarkdown
-        ? data.parsedMarkdown
-        : fallback.parsedMarkdown,
+      typeof data.parsedMarkdown === "string" ? data.parsedMarkdown : "",
   };
+}
+
+/**
+ * 用途：同源 PUT editor-state；携带内存 CSRF，credentials=same-origin。
+ * 对接：普通防抖 PUT 与矩阵合并 PUT；禁止读 Cookie/存储或输出 Token。
+ */
+async function putEditorState(
+  projectId: string,
+  body: unknown,
+): Promise<Response> {
+  const path = `${getApiBase()}/projects/${encodeURIComponent(projectId)}/editor-state`;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  const csrf = getCsrfToken();
+  if (csrf) {
+    headers["X-CSRF-Token"] = csrf;
+  }
+  return fetch(path, {
+    method: "PUT",
+    headers,
+    credentials: "same-origin",
+    body: JSON.stringify(body),
+  });
 }
 
 function syncChapterTitles(
@@ -282,9 +286,12 @@ export function factsToText(facts: GlobalFact[]): string {
 }
 
 export function useTechnicalPlanEditors(projectId: string) {
-  const [state, setState] = useState<StoredEditors>(() => loadLocal(projectId));
-  const [hydrated, setHydrated] = useState(false);
-  const [persistSource, setPersistSource] = useState<"api" | "local">("local");
+  const [state, setState] = useState<StoredEditors>(() => createEmptyEditors());
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  /** 当前项目初始 GET 成功且会话有效后才允许 PUT */
+  const [apiReady, setApiReady] = useState(false);
   const [matrixVersion, setMatrixVersion] = useState<string | null>(null);
   const [matrixConflict, setMatrixConflict] =
     useState<ResponseMatrixConflict | null>(null);
@@ -302,7 +309,7 @@ export function useTechnicalPlanEditors(projectId: string) {
   const saveTimer = useRef<number | null>(null);
   /**
    * 合并成功后的 setState 会触发本 hook 的普通防抖保存 effect；
-   * 置 true 时仍写 localStorage，但跳过下一次全量 PUT（避免把 analysis/outline/chapters/facts 回写远端）。
+   * 置 true 时跳过下一次全量 PUT（避免把 analysis/outline/chapters/facts 回写远端）。
    */
   const skipNextAutosavePutRef = useRef(false);
   /** 409 后停止携带旧版本写矩阵，直至用户显式载入远端或应用合并 */
@@ -323,8 +330,9 @@ export function useTechnicalPlanEditors(projectId: string) {
   const projectSessionRef = useRef(0);
   activeProjectIdRef.current = projectId;
   /**
-   * 版本化矩阵 PUT 串行链：飞行中不发下一个带矩阵的请求；
+   * 当前项目的矩阵/整包 PUT 串行链：同项目飞行中排队；
    * 完成后用最新 state + 新 version 再保存，避免同页误 409。
+   * 切项目时必须重置为已解决链，禁止被旧项目挂起 Promise 队头阻塞。
    */
   const matrixSaveChainRef = useRef(Promise.resolve());
 
@@ -358,20 +366,32 @@ export function useTechnicalPlanEditors(projectId: string) {
     matrixBaseVersionRef.current = null;
   }, []);
 
-  // 加载：API 优先；切换项目时作废旧会话的异步写回
+  // 切项目：立即作废旧会话、清计时器/错误/冲突，重置空编辑态后唯一 GET
   useEffect(() => {
     let cancelled = false;
+    if (saveTimer.current) {
+      window.clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
     const session = ++projectSessionRef.current;
     activeProjectIdRef.current = projectId;
+    // 新项目保存链与旧项目解耦：旧 A 挂起 PUT 不得阻塞 B 的合法防抖保存
+    matrixSaveChainRef.current = Promise.resolve();
     skipNextSave.current = true;
     skipNextAutosavePutRef.current = false;
     matrixPutBlockedRef.current = false;
     clearMatrixBase();
+    applyMatrixVersion(null);
     setMatrixConflict(null);
     setMergeChoices({});
     setMergeApplying(false);
-    setHydrated(false);
-    const local = loadLocal(projectId);
+    setApiReady(false);
+    setLoadError(null);
+    setSaveError(null);
+    setState(createEmptyEditors());
+    setSelectedOutlineId(null);
+    setSelectedChapterId(null);
+    setLoading(true);
 
     void (async () => {
       try {
@@ -379,47 +399,30 @@ export function useTechnicalPlanEditors(projectId: string) {
           `/projects/${encodeURIComponent(projectId)}/editor-state`,
         );
         if (cancelled || !isCurrentEditorSession(projectId, session)) return;
-        const hasRemote =
-          (Array.isArray(remote.outline) && remote.outline.length > 0) ||
-          (Array.isArray(remote.chapters) && remote.chapters.length > 0) ||
-          !!remote.analysisOverview ||
-          !!remote.analysis?.overview ||
-          (Array.isArray(remote.responseMatrix) &&
-            remote.responseMatrix.length > 0) ||
-          !!remote.parsedMarkdown ||
-          !!remote.responseMatrixVersion;
-        const next = hasRemote ? fromApi(remote, local) : local;
+        const next = fromApi(remote);
+        skipNextSave.current = true;
         setState(next);
         applyMatrixVersion(remote.responseMatrixVersion);
-        if (hasRemote || remote.updatedAt) {
-          snapshotMatrixBase(
-            next.responseMatrix,
-            remote.responseMatrixVersion,
-          );
-        } else {
-          clearMatrixBase();
-        }
-        setPersistSource(hasRemote || remote.updatedAt ? "api" : "local");
+        snapshotMatrixBase(next.responseMatrix, remote.responseMatrixVersion);
         setSelectedOutlineId(next.outline[0]?.id ?? null);
         setSelectedChapterId(null);
-        saveLocal(projectId, next);
+        setApiReady(true);
+        setLoadError(null);
+        setSaveError(null);
       } catch {
         if (cancelled || !isCurrentEditorSession(projectId, session)) return;
-        setState(local);
+        skipNextSave.current = true;
+        setState(createEmptyEditors());
         applyMatrixVersion(null);
         clearMatrixBase();
-        setPersistSource("local");
-        setSelectedOutlineId(local.outline[0]?.id ?? null);
+        setSelectedOutlineId(null);
         setSelectedChapterId(null);
+        setApiReady(false);
+        setLoadError(TECHNICAL_EDITOR_LOAD_ERROR);
+        setSaveError(null);
       } finally {
         if (!cancelled && isCurrentEditorSession(projectId, session)) {
-          setHydrated(true);
-          window.setTimeout(() => {
-            // 仅当前会话才解除 skip；避免旧项目超时回调打开新项目的误保存
-            if (isCurrentEditorSession(projectId, session)) {
-              skipNextSave.current = false;
-            }
-          }, 50);
+          setLoading(false);
         }
       }
     })();
@@ -441,11 +444,14 @@ export function useTechnicalPlanEditors(projectId: string) {
     isCurrentEditorSession,
   ]);
 
-  // 保存：debounce PUT + localStorage；矩阵带版本且串行；409 不静默覆盖
+  // 保存：仅 apiReady 后 debounce PUT；矩阵带版本且串行；409 不静默覆盖；禁止 localStorage
   useEffect(() => {
-    if (!hydrated || skipNextSave.current) return;
-    saveLocal(projectId, state);
-    // 合并成功写入矩阵后：保留本地缓存，跳过一次普通全量 PUT 副作用
+    if (!apiReady || !projectId) return;
+    if (skipNextSave.current) {
+      skipNextSave.current = false;
+      return;
+    }
+    // 合并成功写入矩阵后：跳过一次普通全量 PUT 副作用
     if (skipNextAutosavePutRef.current) {
       skipNextAutosavePutRef.current = false;
       if (saveTimer.current) {
@@ -472,9 +478,7 @@ export function useTechnicalPlanEditors(projectId: string) {
           analysisOverview: latest.analysis.overview || latest.analysisOverview,
           analysis: latest.analysis,
         };
-        const includeMatrix =
-          !matrixPutBlockedRef.current &&
-          (persistSource === "api" || latest.responseMatrix.length > 0);
+        const includeMatrix = !matrixPutBlockedRef.current;
         const matrixAtRequest = includeMatrix
           ? cloneResponseMatrix(latest.responseMatrix)
           : null;
@@ -485,13 +489,8 @@ export function useTechnicalPlanEditors(projectId: string) {
             body.responseMatrixVersion = versionAtRequest;
           }
         }
-        const path = `${getApiBase()}/projects/${encodeURIComponent(requestProjectId)}/editor-state`;
         try {
-          const res = await fetch(path, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
-          });
+          const res = await putEditorState(requestProjectId, body);
           // fetch 返回后再次校验：项目切换后禁止写入 mergePreview / 版本 / base
           if (!isCurrentEditorSession(requestProjectId, requestSession)) {
             return;
@@ -543,10 +542,9 @@ export function useTechnicalPlanEditors(projectId: string) {
             }
 
             setMergeChoices({});
+            // 固定中文；不得采用 detail.message / SECRET 原文
             setMatrixConflict({
-              message:
-                (detail?.message && String(detail.message)) ||
-                "响应矩阵已被其他终端更新，请重新载入后再保存",
+              message: TECHNICAL_MATRIX_CONFLICT_MESSAGE,
               remoteMatrix,
               remoteVersion,
               mergePreview,
@@ -555,14 +553,17 @@ export function useTechnicalPlanEditors(projectId: string) {
             return;
           }
           if (!res.ok) {
-            setPersistSource("local");
+            if (!isCurrentEditorSession(requestProjectId, requestSession)) {
+              return;
+            }
+            setSaveError(TECHNICAL_EDITOR_SAVE_ERROR);
             return;
           }
           const saved = (await res.json()) as EditorStateApi;
           if (!isCurrentEditorSession(requestProjectId, requestSession)) {
             return;
           }
-          setPersistSource("api");
+          setSaveError(null);
           if (saved.responseMatrixVersion) {
             applyMatrixVersion(saved.responseMatrixVersion);
           }
@@ -580,7 +581,7 @@ export function useTechnicalPlanEditors(projectId: string) {
           if (!isCurrentEditorSession(requestProjectId, requestSession)) {
             return;
           }
-          setPersistSource("local");
+          setSaveError(TECHNICAL_EDITOR_SAVE_ERROR);
         }
       };
 
@@ -589,11 +590,13 @@ export function useTechnicalPlanEditors(projectId: string) {
         .catch(() => undefined)
         .then(runSave);
     }, 800);
+    return () => {
+      if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    };
   }, [
     projectId,
     state,
-    hydrated,
-    persistSource,
+    apiReady,
     applyMatrixVersion,
     snapshotMatrixBase,
     isCurrentEditorSession,
@@ -657,33 +660,6 @@ export function useTechnicalPlanEditors(projectId: string) {
       };
     });
   }, []);
-
-  const fillDemoAnalysis = useCallback(() => {
-    const demo: BidAnalysis = {
-      overview:
-        "建设覆盖城市主干路网的智慧交通综合管理平台，实现信号优化、违法抓拍汇聚、运行监测与指挥调度一体化。要求国产化适配、等保三级，并与现有交警业务系统对接。",
-      techRequirements: [
-        "支持视频流接入不少于 2000 路，可横向扩展",
-        "提供开放 API 与消息总线对接现有指挥平台",
-        "关键组件支持信创环境部署",
-        "提供完整的权限、审计与备份恢复方案",
-      ],
-      rejectionRisks: [
-        "未按招标文件规定目录编制",
-        "未响应★号关键条款",
-        "业绩证明材料不齐",
-      ],
-      scoringPoints: [
-        { name: "总体架构与技术路线", weight: "20%" },
-        { name: "功能模块完整性", weight: "25%" },
-        { name: "实施与运维保障", weight: "15%" },
-        { name: "业绩与团队", weight: "15%" },
-        { name: "售后与培训", weight: "10%" },
-        { name: "报价合理性", weight: "15%" },
-      ],
-    };
-    setAnalysis(demo);
-  }, [setAnalysis]);
 
   const setParsedMarkdown = useCallback((parsedMarkdown: string) => {
     setState((prev) => ({ ...prev, parsedMarkdown }));
@@ -765,32 +741,73 @@ export function useTechnicalPlanEditors(projectId: string) {
   );
 
   /**
-   * 用途：任务成功后从服务端重新拉取 editor-state（单次 GET）。
+   * 用途：任务成功后 / 显式重试 从服务端重新拉取 editor-state（单次 GET）。
    * 返回 true：GET 成功且已完成 setState/版本/冲突态更新；
-   * 返回 false：请求或转换失败，保持本地状态；不抛出、不泄露服务端错误。
-   * 二次开发：调用方可忽略 boolean；ContentFuseDialog 必须据返回值判定刷新成败。
+   * 返回 false：失败时设置固定 loadError、apiReady=false、重置空态；不抛原文。
+   * @param options.blocking 为 true 时置 loading（页面普通任务）；M3-D 无参调用保持 false，避免卸载对话框。
+   * 二次开发：ContentFuseDialog 必须据返回值判定刷新成败；页面可在 false 时不提示“已刷新”。
    */
-  const reloadFromApi = useCallback(async (): Promise<boolean> => {
-    try {
-      const remote = await apiFetch<EditorStateApi>(
-        `/projects/${encodeURIComponent(projectId)}/editor-state`,
-      );
-      setState((prev) => {
-        const next = fromApi(remote, prev);
+  const reloadFromApi = useCallback(
+    async (options?: { blocking?: boolean }): Promise<boolean> => {
+      const requestProjectId = projectId;
+      if (!requestProjectId) return false;
+      const requestSession = projectSessionRef.current;
+      const blocking = options?.blocking === true;
+      if (blocking) setLoading(true);
+      try {
+        const remote = await apiFetch<EditorStateApi>(
+          `/projects/${encodeURIComponent(requestProjectId)}/editor-state`,
+        );
+        if (!isCurrentEditorSession(requestProjectId, requestSession)) {
+          return false;
+        }
+        const next = fromApi(remote);
+        skipNextSave.current = true;
+        setState(next);
         snapshotMatrixBase(next.responseMatrix, remote.responseMatrixVersion);
-        return next;
-      });
-      applyMatrixVersion(remote.responseMatrixVersion);
-      matrixPutBlockedRef.current = false;
-      setMatrixConflict(null);
-      setMergeChoices({});
-      setPersistSource("api");
-      return true;
-    } catch {
-      /* 保持本地；不抛出、不泄露 */
-      return false;
-    }
-  }, [projectId, applyMatrixVersion, snapshotMatrixBase]);
+        applyMatrixVersion(remote.responseMatrixVersion);
+        matrixPutBlockedRef.current = false;
+        setMatrixConflict(null);
+        setMergeChoices({});
+        setSelectedOutlineId(next.outline[0]?.id ?? null);
+        setApiReady(true);
+        setLoadError(null);
+        setSaveError(null);
+        return true;
+      } catch {
+        if (!isCurrentEditorSession(requestProjectId, requestSession)) {
+          return false;
+        }
+        skipNextSave.current = true;
+        setState(createEmptyEditors());
+        applyMatrixVersion(null);
+        clearMatrixBase();
+        matrixPutBlockedRef.current = false;
+        setMatrixConflict(null);
+        setMergeChoices({});
+        setSelectedOutlineId(null);
+        setSelectedChapterId(null);
+        setApiReady(false);
+        setLoadError(TECHNICAL_EDITOR_LOAD_ERROR);
+        setSaveError(null);
+        return false;
+      } finally {
+        if (
+          blocking &&
+          isCurrentEditorSession(requestProjectId, requestSession)
+        ) {
+          setLoading(false);
+        }
+      }
+    },
+    [
+      projectId,
+      applyMatrixVersion,
+      snapshotMatrixBase,
+      clearMatrixBase,
+      isCurrentEditorSession,
+    ],
+  );
 
   /**
    * 用途：冲突后显式采用远端矩阵并恢复保存；不提供静默强制覆盖。
@@ -866,7 +883,6 @@ export function useTechnicalPlanEditors(projectId: string) {
     }
 
     setMergeApplying(true);
-    const path = `${getApiBase()}/projects/${encodeURIComponent(requestProjectId)}/editor-state`;
     // 仅矩阵 PUT：禁止携带 analysis/outline/chapters/facts，避免旧编辑器状态回写
     const body = {
       responseMatrix: mergedMatrix,
@@ -874,11 +890,7 @@ export function useTechnicalPlanEditors(projectId: string) {
     };
 
     try {
-      const res = await fetch(path, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+      const res = await putEditorState(requestProjectId, body);
       // 切换/卸载后：静默丢弃，不得改写新项目的 matrix/base/version/conflict
       if (!isCurrentEditorSession(requestProjectId, requestSession)) {
         return;
@@ -902,11 +914,10 @@ export function useTechnicalPlanEditors(projectId: string) {
           detail?.currentResponseMatrixVersion || "",
         ).trim();
         // 二次 409：禁止复用旧 mergePreview + 新 remoteVersion 写库；须从远端重进合并
+        // 固定中文；不得回显 detail.message / SECRET
         setMergeChoices({});
         setMatrixConflict({
-          message:
-            (detail?.message && String(detail.message)) ||
-            conflict.message,
+          message: TECHNICAL_MATRIX_CONFLICT_MESSAGE,
           remoteMatrix: nextRemote,
           remoteVersion: nextVersion || conflict.remoteVersion,
           mergePreview: null,
@@ -916,10 +927,13 @@ export function useTechnicalPlanEditors(projectId: string) {
         return;
       }
       if (!res.ok) {
+        if (!isCurrentEditorSession(requestProjectId, requestSession)) {
+          return;
+        }
         setMatrixConflict({
           ...conflict,
           mergePreview: preview,
-          applyError: `应用合并失败（HTTP ${res.status}）。本地合并预览仍保留，可稍后重试。`,
+          applyError: "应用合并失败，请稍后重试。本地合并预览仍保留。",
         });
         return;
       }
@@ -952,11 +966,7 @@ export function useTechnicalPlanEditors(projectId: string) {
       matrixPutBlockedRef.current = false;
       setMatrixConflict(null);
       setMergeChoices({});
-      setPersistSource("api");
-      saveLocal(requestProjectId, {
-        ...stateRef.current,
-        responseMatrix: savedMatrix,
-      });
+      setSaveError(null);
     } catch {
       if (!isCurrentEditorSession(requestProjectId, requestSession)) {
         return;
@@ -1201,28 +1211,6 @@ export function useTechnicalPlanEditors(projectId: string) {
     }));
   }, []);
 
-  const extractDemoFacts = useCallback(() => {
-    const stamp = Date.now().toString(36);
-    const extras: GlobalFact[] = [
-      {
-        id: `fact_ext_${stamp}_1`,
-        category: "招标摘录",
-        content: "投标人须具备近三年同类业绩不少于 2 个（演示抽取）。",
-        source: "tender",
-      },
-      {
-        id: `fact_ext_${stamp}_2`,
-        category: "知识库",
-        content: "同类项目推荐双机房 + 消息总线架构（演示抽取）。",
-        source: "knowledge",
-      },
-    ];
-    setState((prev) => ({
-      ...prev,
-      facts: [...extras, ...prev.facts],
-    }));
-  }, []);
-
   const responseMatrixMergeUi: ResponseMatrixMergeUi | null =
     matrixConflict?.mergePreview
       ? {
@@ -1254,12 +1242,13 @@ export function useTechnicalPlanEditors(projectId: string) {
     setAnalysisOverview,
     setAnalysis,
     patchAnalysis,
-    fillDemoAnalysis,
     parsedMarkdown: state.parsedMarkdown,
     setParsedMarkdown,
     reloadFromApi,
-    hydrated,
-    persistSource,
+    loading,
+    loadError,
+    saveError,
+    apiReady,
     targetWordsTotal,
     selectedOutlineId,
     setSelectedOutlineId,
@@ -1280,6 +1269,5 @@ export function useTechnicalPlanEditors(projectId: string) {
     addFact,
     updateFact,
     removeFact,
-    extractDemoFacts,
   };
 }

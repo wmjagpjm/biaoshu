@@ -115,18 +115,20 @@ const STEP_IDS: TechnicalPlanStepId[] = [
 ];
 
 /**
- * 模块：技术方案工作区
+ * 模块：技术方案工作区（P11C 服务端编辑态权威）
  * 用途：六步流水线 + 异步任务 + 反馈修订 + 知识库引用展示。
  *   - 取消任务、大纲 revise「应用到大纲树」、生成后展示 kbCitations
  *   - 响应矩阵智能建议：外层来源页 × 内层候选批串行、本地累计、禁止自动写 editor-state
  *   - 文档解析入口按工作空间 parseStrategy 决策 light/local/ask（P8B）
  *   - 严格 bid_writer 可按需查看人力团队推荐投影（P10F，disabled 不展示）
+ *   - P11C：editor-state 加载失败固定卡；项目详情绑定 requestProjectId；A→B 首帧不渲染旧项目
  * 对接：
  *   - useProjectPipeline / useTechnicalPlanEditors / useProjectGuidance
  *   - useWorkspaceParseStrategy / ParseStrategyChoiceDialog
  *   - BidWriterTeamRecommendationPanel
  *   - editor-state、POST .../tasks（response_match payload.sourceBatchIndex + candidateBatchIndex）、POST .../revise
  * 二次开发：勿在此堆业务；任务与持久化进 hooks；分批合并用 mergeResponseMatrixSuggestions；禁止字段级合并；轻量路径必须 engine=lightweight。
+ *       禁止生产演示入口（填入演示数据/伪抽取/示例目录）；M3-D 对话框打开时不得用 loadError 卡提前卸载。
  */
 
 type MatrixMatchProgress = {
@@ -194,12 +196,20 @@ function formatMatchProgressLabel(progress: MatrixMatchProgress): string {
 export function TechnicalPlanWorkspace() {
   const { projectId = "", step } = useParams<{ projectId: string; step?: string }>();
   const navigate = useNavigate();
-  const [project, setProject] = useState<Project | null | undefined>(undefined);
-  const resolvedId = project?.id ?? projectId ?? "missing";
+  /**
+   * 项目详情与请求 id 绑定，避免 SPA A→B 首帧复用旧 project 对象。
+   * status=loading：仍在拉取；ready 且 requestProjectId 匹配当前路由才可渲染。
+   */
+  const [projectLoad, setProjectLoad] = useState<{
+    requestProjectId: string;
+    status: "loading" | "ready";
+    project: Project | null;
+  }>({ requestProjectId: projectId, status: "loading", project: null });
+  // Hook/管线/guidance 始终绑定当前路由 projectId，禁止用旧 project.id 驱动
   const { guidance, history, updateGuidance, submitRevise } =
-    useProjectGuidance(resolvedId);
-  const editors = useTechnicalPlanEditors(resolvedId);
-  const pipeline = useProjectPipeline(resolvedId);
+    useProjectGuidance(projectId);
+  const editors = useTechnicalPlanEditors(projectId);
+  const pipeline = useProjectPipeline(projectId);
   const parseStrategy = useWorkspaceParseStrategy();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [revisePreview, setRevisePreview] = useState<string | null>(null);
@@ -254,8 +264,8 @@ export function TechnicalPlanWorkspace() {
     try {
       const t = await pipeline.runTask("parse", { engine: "lightweight" });
       if (t.status === "success") {
-        await editors.reloadFromApi();
-        setTaskTip("解析完成，请查看右侧预览");
+        const ok = await editors.reloadFromApi({ blocking: true });
+        if (ok) setTaskTip("解析完成，请查看右侧预览");
       }
     } catch {
       /* error 已在 pipeline */
@@ -269,10 +279,10 @@ export function TechnicalPlanWorkspace() {
    * 二次开发：项目 ID 为空时不得导航。
    */
   const goLocalParser = useCallback(() => {
-    const pid = (project?.id || projectId || "").trim();
+    const pid = (projectId || "").trim();
     if (!pid) return;
     navigate(`/local-parser?projectId=${encodeURIComponent(pid)}`);
-  }, [navigate, project?.id, projectId]);
+  }, [navigate, projectId]);
 
   /**
    * 模块：handleDocumentParse
@@ -282,7 +292,7 @@ export function TechnicalPlanWorkspace() {
    */
   const handleDocumentParse = useCallback(async () => {
     if (pipeline.busy || parseStrategy.loading) return;
-    const pid = (project?.id || projectId || "").trim();
+    const pid = (projectId || "").trim();
     if (!pid) return;
     setTaskTip("正在读取解析策略");
     const result = await parseStrategy.refresh();
@@ -304,7 +314,6 @@ export function TechnicalPlanWorkspace() {
   }, [
     pipeline.busy,
     parseStrategy,
-    project?.id,
     projectId,
     runLightweightParse,
     goLocalParser,
@@ -335,20 +344,21 @@ export function TechnicalPlanWorkspace() {
     }
   }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 解析正文：优先服务端 parsedMarkdown，否则演示占位
-  const documentPreviewMd =
-    editors.parsedMarkdown?.trim() ||
-    `# 招标公告（尚未解析）
-
-请上传 PDF/DOCX/TXT 后点击「轻量解析」。
-项目：${project?.name ?? "未命名"}
-`;
-
   useEffect(() => {
     let cancelled = false;
-    setProject(undefined);
-    void getProjectAsync(projectId).then((p) => {
-      if (!cancelled) setProject(p ?? null);
+    const requestProjectId = projectId;
+    setProjectLoad({
+      requestProjectId,
+      status: "loading",
+      project: null,
+    });
+    void getProjectAsync(requestProjectId).then((p) => {
+      if (cancelled) return;
+      setProjectLoad({
+        requestProjectId,
+        status: "ready",
+        project: p ?? null,
+      });
     });
     return () => {
       cancelled = true;
@@ -363,9 +373,19 @@ export function TechnicalPlanWorkspace() {
     setParseChoiceOpen(false);
   }, [projectId]);
 
-  if (project === undefined) {
+  // 渲染顺序：项目/editor loading → 不存在跳列表 → loadError（ContentFuse 打开时例外）→ 工作区
+  const projectReady =
+    projectLoad.status === "ready" &&
+    projectLoad.requestProjectId === projectId;
+  const project = projectReady ? projectLoad.project : null;
+
+  if (
+    !projectReady ||
+    projectLoad.status === "loading" ||
+    editors.loading
+  ) {
     return (
-      <div className="page">
+      <div className="page" data-testid="technical-editor-loading">
         <LoadingBlock label="加载项目…" />
       </div>
     );
@@ -374,6 +394,41 @@ export function TechnicalPlanWorkspace() {
   if (!project) {
     return <Navigate to="/technical-plan" replace />;
   }
+
+  if (editors.loadError && !contentFuseOpen) {
+    return (
+      <div
+        className="page"
+        data-testid="technical-editor-load-error"
+      >
+        <p style={{ color: "var(--danger)" }}>{editors.loadError}</p>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            data-testid="technical-editor-retry"
+            onClick={() => {
+              void editors.reloadFromApi({ blocking: true });
+            }}
+          >
+            重试
+          </button>
+          <Link to="/technical-plan" className="btn btn-ghost">
+            返回列表
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  // 解析正文：优先服务端 parsedMarkdown；空态为纯 UI「尚未解析」说明，不写 editor-state
+  const documentPreviewMd =
+    editors.parsedMarkdown?.trim() ||
+    `# 招标公告（尚未解析）
+
+请上传 PDF/DOCX/TXT 后点击「轻量解析」。
+项目：${project.name}
+`;
 
   const pendingFiles = getPendingFileNames(project.id);
   const displayFiles =
@@ -570,19 +625,26 @@ export function TechnicalPlanWorkspace() {
       : null;
 
   return (
-    <div className="page tp-layout">
+    <div className="page tp-layout" data-testid="technical-editor-workspace">
       <header className="page-header">
         <div>
           <h1>{project.name}</h1>
           <p>
-            {project.industry} · 编辑：
-            {editors.persistSource === "api" ? "后端" : "本地"}
+            {project.industry} · 服务端编辑态
             {pipeline.busy
               ? " · 任务执行中…"
               : pipeline.lastTask
                 ? ` · 最近任务 ${pipeline.lastTask.type}/${pipeline.lastTask.status}`
                 : ""}
           </p>
+          {editors.saveError ? (
+            <p
+              data-testid="technical-editor-save-error"
+              style={{ color: "var(--danger)", margin: "6px 0 0" }}
+            >
+              {editors.saveError}
+            </p>
+          ) : null}
         </div>
         <div className="page-actions">
           <Link to="/technical-plan" className="btn btn-ghost">
@@ -944,6 +1006,8 @@ export function TechnicalPlanWorkspace() {
               <div className="analysis-block">
                 <h3>项目概述（可编辑）</h3>
                 <textarea
+                  aria-label="项目概述"
+                  data-testid="technical-analysis-overview"
                   value={editors.analysis.overview}
                   onChange={(e) => editors.setAnalysisOverview(e.target.value)}
                   placeholder="点击「AI 招标分析」或手动填写概述…"
@@ -1062,13 +1126,6 @@ export function TechnicalPlanWorkspace() {
                 <div className="tp-toolbar__spacer" />
                 <button
                   type="button"
-                  className="btn btn-ghost btn-sm"
-                  onClick={() => editors.fillDemoAnalysis()}
-                >
-                  填入演示数据
-                </button>
-                <button
-                  type="button"
                   className="btn btn-primary btn-sm"
                   disabled={pipeline.busy}
                   onClick={() => {
@@ -1076,8 +1133,14 @@ export function TechnicalPlanWorkspace() {
                       try {
                         const t = await pipeline.runTask("analyze");
                         if (t.status === "success") {
-                          await editors.reloadFromApi();
-                          setTaskTip(t.message || "招标分析已写入结构化结果");
+                          const ok = await editors.reloadFromApi({
+                            blocking: true,
+                          });
+                          if (ok) {
+                            setTaskTip(
+                              t.message || "招标分析已写入结构化结果",
+                            );
+                          }
                         }
                       } catch {
                         /* */
@@ -1252,13 +1315,17 @@ export function TechnicalPlanWorkspace() {
                   try {
                     const t = await pipeline.runTask("outline");
                     if (t.status === "success") {
-                      await editors.reloadFromApi();
-                      const cite = formatKbCitationsTip(t);
-                      setTaskTip(
-                        cite
-                          ? `大纲与章节列表已生成 · ${cite}`
-                          : "大纲与章节列表已生成",
-                      );
+                      const ok = await editors.reloadFromApi({
+                        blocking: true,
+                      });
+                      if (ok) {
+                        const cite = formatKbCitationsTip(t);
+                        setTaskTip(
+                          cite
+                            ? `大纲与章节列表已生成 · ${cite}`
+                            : "大纲与章节列表已生成",
+                        );
+                      }
                     }
                   } catch {
                     /* */
@@ -1343,7 +1410,6 @@ export function TechnicalPlanWorkspace() {
             onAdd={editors.addFact}
             onUpdate={editors.updateFact}
             onRemove={editors.removeFact}
-            onExtractDemo={editors.extractDemoFacts}
           />
 
           <AiFeedbackPanel
@@ -1413,12 +1479,16 @@ export function TechnicalPlanWorkspace() {
                       onlyEmpty: true,
                     });
                     if (t.status === "success") {
-                      await editors.reloadFromApi();
-                      const cite = formatKbCitationsTip(t);
-                      setTaskTip(
-                        `全书空章生成完成（${String(t.result?.generated ?? "")} 章）` +
-                          (cite ? ` · ${cite}` : ""),
-                      );
+                      const ok = await editors.reloadFromApi({
+                        blocking: true,
+                      });
+                      if (ok) {
+                        const cite = formatKbCitationsTip(t);
+                        setTaskTip(
+                          `全书空章生成完成（${String(t.result?.generated ?? "")} 章）` +
+                            (cite ? ` · ${cite}` : ""),
+                        );
+                      }
                     }
                   } catch {
                     /* */
@@ -1439,12 +1509,16 @@ export function TechnicalPlanWorkspace() {
                       chapterId: selectedChapter?.id,
                     });
                     if (t.status === "success") {
-                      await editors.reloadFromApi();
-                      const cite = formatKbCitationsTip(t);
-                      setTaskTip(
-                        `章节已生成：${selectedChapter?.title ?? ""}` +
-                          (cite ? ` · ${cite}` : ""),
-                      );
+                      const ok = await editors.reloadFromApi({
+                        blocking: true,
+                      });
+                      if (ok) {
+                        const cite = formatKbCitationsTip(t);
+                        setTaskTip(
+                          `章节已生成：${selectedChapter?.title ?? ""}` +
+                            (cite ? ` · ${cite}` : ""),
+                        );
+                      }
                     }
                   } catch {
                     /* */
@@ -1458,7 +1532,7 @@ export function TechnicalPlanWorkspace() {
 
           <ContentFuseDialog
             open={contentFuseOpen}
-            projectId={resolvedId}
+            projectId={projectId}
             chapters={editors.chapters}
             busy={pipeline.busy && pipeline.lastTask?.type === "content_fuse"}
             onClose={() => setContentFuseOpen(false)}

@@ -3,6 +3,7 @@
  * 用途：左章节列表 + 右 Markdown 正文编辑；字数实时统计；支持项目图片与知识卡片插入。
  * 对接：body 写入 useTechnicalPlanEditors；项目图片 → biaoshu-image；卡片经 insert-card 追加。
  * 二次开发：新增图片来源时必须继续只写入项目 file_id；禁止外链、data URL 和卡片路径。
+ *       P11C：空态文案不得再引用 mockChapters 或演示内容。
  */
 
 import { useMemo, useRef, useState } from "react";
@@ -95,7 +96,7 @@ export function ChapterEditor({
     return (
       <div className="card empty-state">
         <strong>暂无章节</strong>
-        请先在大纲步确认目录，再由生成任务创建章节（前端 mock 见 mockChapters）。
+        请先在大纲步确认目录，再由生成任务创建章节。
       </div>
     );
   }
