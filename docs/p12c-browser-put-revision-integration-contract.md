@@ -7,7 +7,7 @@
 
 # P12C-B-A 浏览器 PUT 修订账本原子接入契约
 
-> **状态**：已冻结，尚未实现。
+> **状态**：已完成、独立验收并推送（冻结=`fbf93c0`，实现=`acf3139`）。
 > **前置**：P12C-A 冻结=`daa8c43`、实现=`226e1c1`、闭环=`b025b20`，后端/前端全量基线 **666/263 passed**。
 > **单一目标**：只让公开 `PUT /api/projects/{project_id}/editor-state` 的成功状态迁移以内部固定来源 `browser_put` 写入独立修订账本，并与 editor-state 同锁、同事务、同成同败。
 
@@ -105,3 +105,11 @@ Grok 只允许修改：
 本包不接任务、revise、个人 callback、P8C 本机票据 callback、content-fuse apply/consume 或 checkpoint restore；不新增 revision 列表/详情/恢复/删除/diff/搜索/分页、前端、下载、导出、审计正文、多人协作或任意版本能力。
 
 P12C-B-A 独立验收并闭环后，才可重新审计并冻结 P12C-B-B 的任务/revise 接入；不得因为服务已有可选来源参数就让其他调用方自行传值。
+
+## 6. 实现与验收记录
+
+实现提交 `acf3139` 只修改 `editor_state_service.py`、`projects.py` 并新增独立专项测试。`upsert_editor_state` 的内部来源参数默认 `None`；公开 PUT 唯一传入服务端字面量 `browser_put`。带来源调用强制复用现有项目写锁，锁后同一 row 构造 before，commit 前同一事务记录 after；P12C-A recorder 仍只 flush。任务、revise、商务任务和其他直接调用保持不记录。
+
+Grok 失败先测为 **11 failed / 1 passed**，实现后专项 12、受影响回归 107、后端全量 678 passed。Codex 两轮受限返修关闭并列时间戳用随机 ID 冒充插入序、缺少真实跨工作空间 HTTP 404、recorder flush 后没有脱敏 HTTP 500 响应证据，以及 commit 失败测试未证明 recorder 已在 commit 前 flush 四个反假绿点。最终专项增至 **14 passed**。
+
+Codex 独立验收：专项 **14 passed**、P12C-A/全状态/矩阵/基础 PUT 受影响回归 **107 passed**、后端串行全量 **680 passed**；只有 1 条既有 Starlette/httpx 弃用警告。`py_compile`、精确三文件白名单、工作树与暂存区 diff 检查全部通过。当前仍无 revision 列表、详情、恢复或前端，且任务/revise/callback/content-fuse/checkpoint restore 均尚未接入。
