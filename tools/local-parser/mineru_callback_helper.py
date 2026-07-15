@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-模块：P8D 本机 MinerU 外置解析助手
+模块：P8D 本机 MinerU 外置解析助手（并提供 P8E 可复用的回调原语）
 用途：用户显式选择本地源文件，离线调用 PATH 中已安装的 mineru，再用 P8C 一次性票据向回环后端回传 Markdown。
-对接：docs/p8d-mineru-local-helper-contract.md；POST /api/local-parser/callback；P8C X-Local-Parse-Ticket。
-二次开发：仅标准库；票据仅交互 TTY+getpass 且固定 43 字符 URL-safe；Windows 仅 mineru.exe；禁止代理/重定向/自动安装；禁止打印票据/路径/正文/taskId。
+对接：docs/p8d-mineru-local-helper-contract.md；P8E Docling 助手复用 build_callback_body/post_callback 内部 source；POST /api/local-parser/callback。
+二次开发：仅标准库；票据仅交互 TTY+getpass 且固定 43 字符 URL-safe；Windows 仅 mineru.exe；内部 source 仅 mineru|docling；禁止代理/重定向/自动安装；禁止打印票据/路径/正文/taskId。
 """
 
 from __future__ import annotations
@@ -66,6 +66,9 @@ ENV_WHITELIST = frozenset(
 DEFAULT_BACKEND_ORIGIN = "http://127.0.0.1:8000"
 CALLBACK_PATH = "/api/local-parser/callback"
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+# 共享回调内部 source：仅精确 mineru|docling；不是客户端可控公开枚举
+ALLOWED_CALLBACK_SOURCES = frozenset({"mineru", "docling"})
 
 # 固定中文输出（不得拼接敏感信息）
 MSG_SUCCESS = "本地解析回传成功"
@@ -426,11 +429,22 @@ def find_and_read_markdown(temp_root: Path) -> str:
     return stripped
 
 
-def build_callback_body(markdown: str, filename: str) -> bytes:
-    """用途：构造精确 JSON body，并强制 UTF-8 字节 ≤ 2 MiB。"""
+def build_callback_body(
+    markdown: str,
+    filename: str,
+    *,
+    source: str = "mineru",
+) -> bytes:
+    """
+    用途：构造精确 JSON body，并强制 UTF-8 字节 ≤ 2 MiB。
+    二次开发：source 为内部受控参数，默认 mineru；仅允许精确 mineru|docling；
+    非法 source 在序列化前固定失败，禁止反射非法值。
+    """
+    if not isinstance(source, str) or source not in ALLOWED_CALLBACK_SOURCES:
+        raise HelperError(MSG_ERR_CALLBACK)
     payload = {
         "markdown": markdown,
-        "source": "mineru",
+        "source": source,
         "filename": filename,
     }
     try:
@@ -491,17 +505,21 @@ def post_callback(
     filename: str,
     *,
     timeout_seconds: float = 60.0,
+    source: str = "mineru",
 ) -> None:
     """
     用途：向 <归一化 origin>/api/local-parser/callback 发起一次无代理、无重定向 POST。
-    二次开发：入口内再次校验 origin/ticket/filename；零重试；成功响应 ≤64KiB；
-    非 2xx/HTTPError 不整包读取 body；成功须 ok=true 且 chars 非负整数、taskId 非空字符串。
+    二次开发：入口内再次校验 origin/ticket/filename/内部 source；零重试；成功响应 ≤64KiB；
+    非 2xx/HTTPError 不整包读取 body；成功须 ok=true 且 chars 非负整数、taskId 非空字符串；
+    非法内部 source 必须在构造 Request 前固定失败且零请求。
     """
-    # 防御深度：不依赖 main，内部必须归一化/校验
+    # 防御深度：不依赖 main，内部必须归一化/校验；source 须在 Request 前失败
+    if not isinstance(source, str) or source not in ALLOWED_CALLBACK_SOURCES:
+        raise HelperError(MSG_ERR_CALLBACK)
     safe_origin = normalize_backend_origin(origin)
     safe_ticket = validate_ticket(ticket)
     safe_filename = validate_filename_basename(filename)
-    body = build_callback_body(markdown, safe_filename)
+    body = build_callback_body(markdown, safe_filename, source=source)
     url = f"{safe_origin}{CALLBACK_PATH}"
     headers = {
         "Content-Type": "application/json",
