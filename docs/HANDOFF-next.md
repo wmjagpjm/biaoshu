@@ -19,8 +19,8 @@
 完整阅读 docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/plans/2026-07-13-package-9-delivery-enhancement-plan.md、docs/integration-checklist.md。
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
 当前进度：P9D、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。P8E 计划=`73b1264`、后端=`79b346e`、助手=`e3f9cc4`；Docling 46、MinerU 54、受影响后端 37、P8C E2E 9、P8B E2E 6 passed；后端/前端全量仍沿用 487/184。
-当前执行包：P8E 实现已完成，正在完成中文文档闭环；真实 Docling/离线模型仍未安装和验收，不能把假 CLI 自动化冒充真实可用。
-下一步：从剩余 P2 主线只读审计并冻结一个最小包；Word 精细结构、P9B 以外合法外部标讯源、P9C 真实语义调优必须拆开，不得合包或伪造外部依赖已就绪。
+当前执行包：P12A editor-state 手动检查点只读库已完成只读审计并冻结契约/计划；只保存用户显式创建的服务端权威快照，最多 20 个，列表最小投影、详情按需读取。
+下一步：先提交推送 P12A 契约/计划，再只派发七文件后端任务。不得自动拦截所有 editor-state 写入、实现恢复/删除/下载、修改 P8C/M3-D/普通 PUT，或把 P12A 冒充完整版本历史。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -429,6 +429,8 @@ frontend/src/features/
 | docs/integration-checklist.md | 联调步骤 |
 | docs/p8e-docling-local-helper-contract.md | P8E 后端来源枚举与本机 Docling 助手冻结契约 |
 | docs/plans/2026-07-15-p8e-docling-local-helper-plan.md | P8E 两阶段受限实施与验收计划 |
+| docs/p12a-editor-state-manual-checkpoints-contract.md | P12A 手动检查点只读库冻结契约 |
+| docs/plans/2026-07-15-p12a-editor-state-manual-checkpoints-plan.md | P12A 七文件后端实施与验收计划 |
 | docs/agent-collaboration.md | Grok-Codex 本地消息箱协议与接入命令 |
 | docs/diagrams/ | 架构图 + 目标图 |
 | docs/HANDOFF-backend.md | 历史，过时 |
@@ -506,4 +508,4 @@ frontend/src/features/
 - 新任务分工不变：Grok 只负责限定实现与自测，未经 Codex 审查确认不得提交；Codex 负责计划、范围冻结、差异审查、独立测试、验收、中文提交、文档闭环和 GitHub 状态核验。每一包仍按“计划提交 → 实现提交 → 文档闭环提交 → 推送协作分支”执行，禁止合包。
 - GitHub 若出现连接重置，可在当前 PowerShell 进程临时配置 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY=http://127.0.0.1:7890` 与 `NO_PROXY=localhost,127.0.0.1` 后重试；不得把代理或凭据写入仓库。
 
-**换会话可直接：核验分支、HEAD/远端与工作区 → 读本文 §0～§3.1、§5、§6、§11、P8E 契约/计划及路线图 → 确认 P8E 计划 `73b1264`、后端 `79b346e`、助手 `e3f9cc4` 与本文档闭环均已推送 → 从剩余 P2 主线只读审计并冻结一个最小包。禁止重新实现 P8D/P8E/P11A/P11B/P11C/M3-D、自动安装/下载解析器、冒充真实模型就绪、让 Grok commit/push，或由 Codex 冒充 Grok 完成主实现。**
+**换会话可直接：核验分支、HEAD/远端与工作区 → 读本文 §0～§3.1、§5、§6、§11、P12A 契约/计划及路线图 → 确认 P8E 计划 `73b1264`、后端 `79b346e`、助手 `e3f9cc4`、文档 `7a50332` 与 P12A 计划提交均已推送 → 只派发 P12A 七文件后端任务。禁止重新实现 P8D/P8E/P11A/P11B/P11C/M3-D、给 P12A 偷加恢复或自动历史、让 Grok commit/push，或由 Codex 冒充 Grok 完成主实现。**

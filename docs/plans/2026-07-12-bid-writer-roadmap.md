@@ -327,4 +327,6 @@
 
 阶段 0/1/2、阶段 3 M3-A 至 M3-D、阶段 4 **包 5** 至 **包 8/P8B/P8C/P8D/P8E**、P9A/P9B/P9C/P9D、阶段 5 P10A 至 P10K，以及 **P11A/P11B/P11C 三个真实数据收口包**均保持已交付。P8E 完整契约见 `docs/p8e-docling-local-helper-contract.md`，实施与独立验收记录见 `docs/plans/2026-07-15-p8e-docling-local-helper-plan.md`。
 
-P8D 与 P8E 本机外置解析助手均已完成并推送：P8D 计划=`30d066f`、实现=`e1fe316`、闭环=`38b9318`；P8E 计划=`73b1264`、后端=`79b346e`、助手=`e3f9cc4`。P8E 独立验收为 Docling 46、MinerU 54、后端受影响回归 37、P8C E2E 9、P8B E2E 6 passed；真实 Docling/模型未安装、未验收，自动安装/模型打包/服务端内嵌仍不是已交付能力。下一动作回到剩余 P2 主线做只读审计并单独冻结一个最小包；Word 精细结构、P9B 以外合法标讯源、P9C 真实语义调优三项不得合包，外部模型或来源未就绪时不得伪造效果。
+P8D 与 P8E 本机外置解析助手均已完成并推送：P8D 计划=`30d066f`、实现=`e1fe316`、闭环=`38b9318`；P8E 计划=`73b1264`、后端=`79b346e`、助手=`e3f9cc4`。P8E 独立验收为 Docling 46、MinerU 54、后端受影响回归 37、P8C E2E 9、P8B E2E 6 passed；真实 Docling/模型未安装、未验收，自动安装/模型打包/服务端内嵌仍不是已交付能力。
+
+下一包冻结为 **P12A editor-state 手动检查点只读库**：契约=`docs/p12a-editor-state-manual-checkpoints-contract.md`，计划=`docs/plans/2026-07-15-p12a-editor-state-manual-checkpoints-plan.md`。它只允许用户显式保存当前服务端权威技术/商务 editor-state，固定每项目最近 20 个，列表最小投影、详情按需读取；不自动记录所有写入，不恢复、不删除、不下载，也不改 P8C/M3-D/普通 PUT。P12B 恢复前必须另行解决全状态并发版本与迟到 autosave。Word `structure` 因缺少容器/跨页视觉决策继续不接线；外部来源和真实语义调优也不得与 P12A 合包。
