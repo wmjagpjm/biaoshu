@@ -266,8 +266,13 @@ def put_editor_state(
         kwargs["business_commit"] = payload["business_commit"]
 
     try:
+        # P12C-B-A：公开浏览器 PUT 唯一写入修订账本；字面量来源，禁止读客户端字段
         data = editor_state_service.upsert_editor_state(
-            db, workspace_id, project_id, **kwargs
+            db,
+            workspace_id,
+            project_id,
+            revision_source_kind="browser_put",
+            **kwargs,
         )
     except ProjectNotFoundError:
         raise HTTPException(status_code=404, detail="项目不存在") from None

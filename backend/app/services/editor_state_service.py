@@ -697,6 +697,7 @@ def upsert_editor_state(
     business_toc: Any = ...,
     business_quote: Any = ...,
     business_commit: Any = ...,
+    revision_source_kind: str | None = None,
 ) -> dict:
     """
     用途：部分更新；analysis 与 analysis_overview 双写；商务字段合并进 business_json。
@@ -706,6 +707,9 @@ def upsert_editor_state(
       - 先比全状态再比矩阵；任一冲突显式 rollback。
       - commit 前构造成功响应；commit 后禁止 refresh/重读/再序列化，避免假失败。
       - 缺 expected 时保持兼容覆盖（非最终安全门）。
+      - 可选 revision_source_kind：仅内部写入者传入；存在时强制项目写锁，
+        在唯一 commit 前以锁后 before 与本轮 after 原子记入修订账本（P12C-B-A）。
+        默认 None，既有任务/revise 等调用不得被误记。
     """
     writing_matrix = response_matrix is not ... and response_matrix is not None
     client_matrix_version = (
@@ -719,7 +723,12 @@ def upsert_editor_state(
         if expected_state_version is ... or expected_state_version is None
         else str(expected_state_version).strip() or None
     )
-    needs_version_lock = expected_sv is not None or versioned_matrix_write
+    # 携带修订来源时必须进入既有项目写锁，保证 before/after 同源锁后行
+    needs_version_lock = (
+        expected_sv is not None
+        or versioned_matrix_write
+        or revision_source_kind is not None
+    )
 
     try:
         if expected_sv is not None:
@@ -738,20 +747,23 @@ def upsert_editor_state(
                     )
             # 禁止再次 get_editor_state / db.get；写入复用锁后同一 row
         elif needs_version_lock:
-            # 仅矩阵版本写：仍走同一项目锁
+            # 矩阵版本写 或 仅修订来源：同一项目锁 + 同一 row 构造 before
             row = _lock_for_versioned_write(db, workspace_id, project_id)
             current_state = _state_from_row(project_id, row)
-            current_matrix = current_state["responseMatrix"]
-            current_matrix_version = current_state["responseMatrixVersion"]
-            if client_matrix_version != current_matrix_version:
-                raise ResponseMatrixVersionConflict(
-                    message="响应矩阵已被其他终端更新，请重新载入后再保存",
-                    current_matrix=current_matrix,
-                    current_version=current_matrix_version,
-                )
+            # 只有真实矩阵版本写才比较；禁止 client 无版本时 None != current 假 409
+            if versioned_matrix_write:
+                current_matrix = current_state["responseMatrix"]
+                current_matrix_version = current_state["responseMatrixVersion"]
+                if client_matrix_version != current_matrix_version:
+                    raise ResponseMatrixVersionConflict(
+                        message="响应矩阵已被其他终端更新，请重新载入后再保存",
+                        current_matrix=current_matrix,
+                        current_version=current_matrix_version,
+                    )
         else:
             get_project(db, workspace_id, project_id)
             row = db.get(ProjectEditorStateRow, project_id)
+            current_state = None
 
         if row is None:
             row = ProjectEditorStateRow(project_id=project_id, mode="ALIGNED")
@@ -819,6 +831,23 @@ def upsert_editor_state(
         row.updated_at = datetime.now(timezone.utc)
         # 提交前基于本轮内存赋值构造完整成功响应；失败则同域 rollback，库不变
         response = _state_from_row(project_id, row)
+
+        # 仅内部来源路径：局部导入记账，同事务、唯一 commit 前
+        if revision_source_kind is not None:
+            # 禁止顶层反向导入 revision 服务（P12C-A 已顶层依赖本模块）
+            from app.services.editor_state_revision_service import (
+                record_editor_state_transition,
+            )
+
+            record_editor_state_transition(
+                db,
+                workspace_id,
+                project_id,
+                before_state=current_state,
+                after_state=response,
+                source_kind=revision_source_kind,
+            )
+
         db.commit()
     except EditorStateVersionConflict:
         db.rollback()
