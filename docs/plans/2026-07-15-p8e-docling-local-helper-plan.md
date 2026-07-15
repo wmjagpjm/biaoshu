@@ -13,6 +13,8 @@
 
 **架构**：P8E-A 只扩 P8C 的固定来源枚举与测试；P8E-B 新增 Docling 专属 CLI，复用 P8D 已验收的输入、票据、Markdown 和回调原语，只参数化内部来源字段。两个实现包顺序派发、分别审查和提交。
 
+**完成状态**：计划/契约=`73b1264`，P8E-A=`79b346e`，P8E-B=`e3f9cc4`；两包均已独立验收并推送，文档闭环位于其后。
+
 **技术栈**：Python 标准库、FastAPI、SQLAlchemy、pytest、unittest、Playwright Chromium headless 单 worker。
 
 ---
@@ -150,3 +152,18 @@ P8E-A 与 P8E-B 均推送后，Codex 更新：
 - `tools/local-parser/README.md`（应随 P8E-B 实现提交完成）
 
 文档必须区分“假 CLI 自动化通过”与“真实 Docling/模型未安装、未验收”，记录精确提交、测试数、继承的全量基线、残余风险和下一主线包。Codex 中文提交并推送后，再核对本地 HEAD、远端 SHA 和干净工作区；长期目标保持 active。
+
+## 4. 实际执行记录
+
+### 4.1 P8E-A
+
+- Grok task=`msg_de4791815a334884920df7064efccbd5`，首轮 review=`msg_0dedf5f5a27f4b7a9ba6e7f6c2019a28`；Codex 拒绝审计条数/顺序与数字子串宽松断言。
+- 定点返修 task=`msg_0f2d9d25b06e4ff78fbfa44bd8568492`，review=`msg_8aafae7cb2b7484eaf744b4875941830`；Codex 独立通过专项 12 项、受影响回归 37 项后提交 `79b346e`。
+
+### 4.2 P8E-B
+
+- 首轮 task=`msg_6ed5381177a64180b6f5c81510812c36`，review=`msg_47918b9ef31349cc9989be6bafddb144`。首轮报告只有“预期失败”，没有真实 failure-first 命令日志，文档明确记为流程缺口，不得追补伪证据。
+- 第一轮安全返修 task=`msg_c37edf8b19e043458a1848ba6c980cdb`，review=`msg_2e4bbad3f0d840d7932b503ad5018d17`：真实红测为 43 项中 17 个失败；修复临时 cwd、模型目录二次校验、共享全局状态、精确格式枚举和多行反作弊。
+- 第二轮缓存隔离返修 task=`msg_3cc7d94ba6dc4c089edcdde324fb91f8`，review=`msg_a5e355e111b04166a1a5850f80a317c7`：6 个目标用例真实出现 30 个失败子断言和 1 个错误；修复 14 个可写运行目录环境变量后，Codex 发出 ack=`msg_ae4e709c127847639776eee0bbb9e5df`。
+- Codex 最终独立结果：Docling 46、MinerU 54、后端受影响回归 37、P8C E2E 9、P8B E2E 6 全通过；lint/build 与 staged whitespace 通过。实现提交并推送 `e3f9cc4`。
+- 未重跑后端全量 487 或前端全量 184，继续标注为最近一次真实基线；未安装/探测真实 Docling 或模型。

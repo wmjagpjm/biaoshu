@@ -175,13 +175,14 @@ npm run test:e2e:technical-editor-state-truth
 
 当前基线：后端串行全量 **487 passed**（1 条既有 Starlette/httpx 弃用警告）；M3-D 专项 **34 passed**、M3-A/editor-state/响应矩阵/认证受影响回归 **71 passed**。前端 `lint` / `build` 通过（仅既有大包体积提示），P11C **18 passed**、P11B **11 passed**、P11A **10 passed**、认证/RBAC **11 passed**、解析策略 **6 passed**、响应矩阵 **8 passed**、融合确认 **6 passed**、持久恢复 **5 passed**、模板复用 **1 passed**，Chromium headless、单 worker 串行全量 E2E **184 passed**。M3-D、P10K、P8C、P9D 及其他既有专项继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
 
-P8D 本机助手独立验收命令（仓库根；不安装或探测真实 MinerU）：
+P8D/P8E 本机助手独立验收命令（仓库根；不安装或探测真实 MinerU/Docling）：
 
 ```powershell
-backend\.venv\Scripts\python.exe -m unittest discover -s tools\local-parser -p "test_*.py" -v
+backend\.venv\Scripts\python.exe -m unittest discover -s tools\local-parser -p "test_docling_callback_helper.py" -v
+backend\.venv\Scripts\python.exe -m unittest discover -s tools\local-parser -p "test_mineru_callback_helper.py" -v
 ```
 
-P8D 当前为 **54 passed**；后端 P8C/P8B/解析受影响回归 **35 passed**，P8C E2E **9 passed**、P8B E2E **6 passed**。它未改后端或前端，因此后端全量 487、前端全量 184 继续沿用最近一次真实全量结果，不冒充本包重跑。
+P8E 当前为 Docling **46 passed**、P8D MinerU **54 passed**；后端 P8E-A/P8C/P8B/解析受影响回归 **37 passed**，P8C E2E **9 passed**、P8B E2E **6 passed**。后端全量 487、前端全量 184 继续沿用最近一次真实全量结果，不冒充本包重跑；真实 Docling/模型未安装、未验收。
 
 ## 6. 已接 API 一览
 
@@ -387,7 +388,16 @@ P8D 当前为 **54 passed**；后端 P8C/P8B/解析受影响回归 **35 passed**
 3. Windows 只接受 PATH 中普通 `mineru.exe`，拒绝 `.cmd/.bat/.com`；命令固定 pipeline、`shell=False`，子进程只继承系统环境白名单并强制本地离线模型，代理/API Key/票据不继承。
 4. 输入只允许单个非符号链接 PDF/图片/DOCX/PPTX/XLSX，非空且不超过 50 MiB；输出只在系统临时目录，树上限 4096 项、唯一 Markdown、读取前/有界读取/码点/JSON 四重上限，失败零回调并清理。
 5. 回调只允许 `http|https` 回环 Origin，固定 `/api/local-parser/callback`，无代理、无重定向、一次请求零重试；成功/错误响应均有读取上限，页面和终端不回显票据、绝对路径、正文、taskId 或 detail。
-6. 完整契约见 `docs/p8d-mineru-local-helper-contract.md`，计划=`30d066f`，实现=`e1fe316`。Docling、自动安装、真实模型样本验收、常驻服务和 MinerU 孙进程百分百回收仍未交付。
+6. 完整契约见 `docs/p8d-mineru-local-helper-contract.md`，计划=`30d066f`，实现=`e1fe316`。自动安装、真实模型样本验收、常驻服务和 MinerU 孙进程百分百回收仍未交付。
+
+## 6.17 P8E 本机 Docling 外置解析助手
+
+1. P8C 公共回调只精确接受 `mineru|docling`；非法大小写、空白、前后缀和未知来源在消费票据前固定失败，合法 `docling` 进入同一事务并保留固定审计脱敏。
+2. Docling 助手仅接受 `--input`、`--artifacts-path` 和可选回环 Origin；Windows 只认 PATH 中普通非符号链接 `docling.exe`，固定 `docling convert` 参数且禁止远程服务、外部插件和用户附加参数。
+3. 用户须在助手外人工安装 CLI、下载离线模型并传入已存在普通非符号链接模型目录；助手不安装、不下载、不探测模型，不把假 CLI 测试冒充真实模型就绪。
+4. 子进程 `cwd`、HOME/USERPROFILE、APPDATA、TEMP、XDG/HF/Torch/Matplotlib/Python 缓存等 14 个可写目录全部绑定单次 `biaoshu-docling-*` 临时根；代理、Docling service/API、Token、业务配置和票据不继承，退出后统一清理。
+5. 输出继续复用 P8D 的树、唯一 Markdown、有界读取、码点、JSON、无代理/无重定向单回调和固定脱敏边界；`source=docling` 必须显式进入 body，MinerU 默认仍为 `source=mineru`。
+6. 完整契约=`docs/p8e-docling-local-helper-contract.md`，计划=`73b1264`，后端=`79b346e`，助手=`e3f9cc4`；独立验收 Docling 46、MinerU 54、后端 37、P8C E2E 9、P8B E2E 6 passed。
 
 ## 7. 本机日用主链路（目标 A 加强版）
 
@@ -469,11 +479,11 @@ P8D 当前为 **54 passed**；后端 P8C/P8B/解析受影响回归 **35 passed**
 
 ## 14. 仍未接（后续）
 
-Celery、MinerU 自动安装/模型打包/常驻服务与完整孙进程治理、Docling 对接、P9B 以外的外部标讯数据源、P9C 的其他模型/GPU/在线 embedding/真实用户语料评测与自动模型更新、M3-D 以外的通用版本历史/任意历史浏览回滚/多人协作、商务 AI 反馈历史服务端化、P10K 以外的财务税务/审批/导出/预算/回款/版本与失败尝试/完整身份审计、P10I 以外的人力附件与真实证件核验、P10G 以外的投标人矩阵明细/版本/结果跟踪与其他合规数据域、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
+Celery、MinerU/Docling 自动安装、模型打包、常驻服务、真实模型样本验收与完整孙进程治理、P9B 以外的外部标讯数据源、P9C 的其他模型/GPU/在线 embedding/真实用户语料评测与自动模型更新、M3-D 以外的通用版本历史/任意历史浏览回滚/多人协作、商务 AI 反馈历史服务端化、P10K 以外的财务税务/审批/导出/预算/回款/版本与失败尝试/完整身份审计、P10I 以外的人力附件与真实证件核验、P10G 以外的投标人矩阵明细/版本/结果跟踪与其他合规数据域、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
 
 **响应矩阵相关（已接 vs 未扩）：** 多端冲突的版本写保护、409 与双浏览器上下文 E2E 主路径已接；「刷新来源」保留人工映射 E2E 已接；**智能建议人工确认后应用** E2E 已接；**来源超过 80 分页** 已推送（`1289c92`）；**字段级三方合并** MVP + E2E 已推送（`2c7b3e0`，`response-matrix-field-merge.spec.ts`）。仍未接：Word 失效引用在浏览器层的扩展（导出逻辑以后端单测为准）；包 9 交付增强。
 
-**解析相关（包 8 MVP + P8B + P8C + P8D）：** 可插拔调度 `parse_engines` + 默认 `lightweight` + 任务 `result.engine` 已推送（`6db1586`）；P8B 已把工作空间 `light/local/ask` 接到技术标和商务标解析入口；P8C 已提供 10 分钟单项目单次回传票据；P8D 已提供只调用本机既有 `mineru.exe` 的离线、回环、受限标准库助手（`e1fe316`）。旧个人 callback 与可选长期 Token 仍兼容；MinerU/模型需人工安装准备，自动部署与 Docling 仍未接。
+**解析相关（包 8 MVP + P8B + P8C + P8D + P8E）：** 可插拔调度 `parse_engines` + 默认 `lightweight` + 任务 `result.engine` 已推送（`6db1586`）；P8B 已把工作空间 `light/local/ask` 接到技术标和商务标解析入口；P8C 已提供 10 分钟单项目单次回传票据；P8D/P8E 已提供只调用本机既有 `mineru.exe`/`docling.exe` 的离线、回环、受限标准库助手（`e1fe316`/`e3f9cc4`）。旧个人 callback 与可选长期 Token 仍兼容；真实 CLI/模型需人工安装准备，自动部署仍未接。
 
 ## 15. 知识库 RAG 简版
 
