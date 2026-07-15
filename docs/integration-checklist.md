@@ -175,6 +175,14 @@ npm run test:e2e:technical-editor-state-truth
 
 当前基线：后端串行全量 **487 passed**（1 条既有 Starlette/httpx 弃用警告）；M3-D 专项 **34 passed**、M3-A/editor-state/响应矩阵/认证受影响回归 **71 passed**。前端 `lint` / `build` 通过（仅既有大包体积提示），P11C **18 passed**、P11B **11 passed**、P11A **10 passed**、认证/RBAC **11 passed**、解析策略 **6 passed**、响应矩阵 **8 passed**、融合确认 **6 passed**、持久恢复 **5 passed**、模板复用 **1 passed**，Chromium headless、单 worker 串行全量 E2E **184 passed**。M3-D、P10K、P8C、P9D 及其他既有专项继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
 
+P8D 本机助手独立验收命令（仓库根；不安装或探测真实 MinerU）：
+
+```powershell
+backend\.venv\Scripts\python.exe -m unittest discover -s tools\local-parser -p "test_*.py" -v
+```
+
+P8D 当前为 **54 passed**；后端 P8C/P8B/解析受影响回归 **35 passed**，P8C E2E **9 passed**、P8B E2E **6 passed**。它未改后端或前端，因此后端全量 487、前端全量 184 继续沿用最近一次真实全量结果，不冒充本包重跑。
+
 ## 6. 已接 API 一览
 
 | 方法 | 路径 |
@@ -372,6 +380,15 @@ npm run test:e2e:technical-editor-state-truth
 6. SPA A→B 时，A 的项目对象、初始化 GET、任务后刷新、普通 PUT 成功/失败/409 均不得污染 B；即使 A PUT 挂起，B 的 GET 和合法保存也不得被同一保存链阻塞。
 7. P11C E2E 使用 method+精确路径白名单，主动阻断未知 API 和外网，并核对 local/session/IndexedDB/Cookie/clipboard/console 边界。完整契约见 `docs/p11c-technical-editor-state-truth-contract.md`，计划/契约=`24b7ba8`，安全细化=`c5b3eec`，前端=`1441509`。
 
+## 6.16 P8D 本机 MinerU 外置解析助手
+
+1. 先按 MinerU 官方文档人工安装 `mineru.exe` 和本地模型；助手绝不执行 pip、模型下载、远程 API、浏览器或后端内嵌进程。没有真实运行时也可完整运行 54 项假进程/假 HTTP 单测。
+2. 在 P8C 页面显式签发 10 分钟单项目单次票据，再从交互 TTY 运行 `tools/local-parser/mineru_callback_helper.py --input <本地单文件>`；非 TTY 管道、非 43 字符 URL-safe 票据、命令行/环境/文件票据均拒绝。
+3. Windows 只接受 PATH 中普通 `mineru.exe`，拒绝 `.cmd/.bat/.com`；命令固定 pipeline、`shell=False`，子进程只继承系统环境白名单并强制本地离线模型，代理/API Key/票据不继承。
+4. 输入只允许单个非符号链接 PDF/图片/DOCX/PPTX/XLSX，非空且不超过 50 MiB；输出只在系统临时目录，树上限 4096 项、唯一 Markdown、读取前/有界读取/码点/JSON 四重上限，失败零回调并清理。
+5. 回调只允许 `http|https` 回环 Origin，固定 `/api/local-parser/callback`，无代理、无重定向、一次请求零重试；成功/错误响应均有读取上限，页面和终端不回显票据、绝对路径、正文、taskId 或 detail。
+6. 完整契约见 `docs/p8d-mineru-local-helper-contract.md`，计划=`30d066f`，实现=`e1fe316`。Docling、自动安装、真实模型样本验收、常驻服务和 MinerU 孙进程百分百回收仍未交付。
+
 ## 7. 本机日用主链路（目标 A 加强版）
 
 | 步骤 | 操作 |
@@ -452,11 +469,11 @@ npm run test:e2e:technical-editor-state-truth
 
 ## 14. 仍未接（后续）
 
-Celery、真 MinerU/Docling 安装包与外部进程部署治理、P9B 以外的外部标讯数据源、P9C 的其他模型/GPU/在线 embedding/真实用户语料评测与自动模型更新、M3-D 以外的通用版本历史/任意历史浏览回滚/多人协作、商务 AI 反馈历史服务端化、P10K 以外的财务税务/审批/导出/预算/回款/版本与失败尝试/完整身份审计、P10I 以外的人力附件与真实证件核验、P10G 以外的投标人矩阵明细/版本/结果跟踪与其他合规数据域、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
+Celery、MinerU 自动安装/模型打包/常驻服务与完整孙进程治理、Docling 对接、P9B 以外的外部标讯数据源、P9C 的其他模型/GPU/在线 embedding/真实用户语料评测与自动模型更新、M3-D 以外的通用版本历史/任意历史浏览回滚/多人协作、商务 AI 反馈历史服务端化、P10K 以外的财务税务/审批/导出/预算/回款/版本与失败尝试/完整身份审计、P10I 以外的人力附件与真实证件核验、P10G 以外的投标人矩阵明细/版本/结果跟踪与其他合规数据域、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
 
 **响应矩阵相关（已接 vs 未扩）：** 多端冲突的版本写保护、409 与双浏览器上下文 E2E 主路径已接；「刷新来源」保留人工映射 E2E 已接；**智能建议人工确认后应用** E2E 已接；**来源超过 80 分页** 已推送（`1289c92`）；**字段级三方合并** MVP + E2E 已推送（`2c7b3e0`，`response-matrix-field-merge.spec.ts`）。仍未接：Word 失效引用在浏览器层的扩展（导出逻辑以后端单测为准）；包 9 交付增强。
 
-**解析相关（包 8 MVP + P8B + P8C）：** 可插拔调度 `parse_engines` + 默认 `lightweight` + 任务 `result.engine` 已推送（`6db1586`）；P8B 已把工作空间 `light/local/ask` 接到技术标和商务标解析入口；P8C 已推送（计划=`cabe99d`、后端=`af39ff8`、前端=`1cf5576`），required 外部助手可用 10 分钟单项目单次票据向精确公共路径回传。旧个人 callback 与可选长期 Token 仍兼容；真实 MinerU/Docling 安装、外部可执行路径与进程治理仍未接。
+**解析相关（包 8 MVP + P8B + P8C + P8D）：** 可插拔调度 `parse_engines` + 默认 `lightweight` + 任务 `result.engine` 已推送（`6db1586`）；P8B 已把工作空间 `light/local/ask` 接到技术标和商务标解析入口；P8C 已提供 10 分钟单项目单次回传票据；P8D 已提供只调用本机既有 `mineru.exe` 的离线、回环、受限标准库助手（`e1fe316`）。旧个人 callback 与可选长期 Token 仍兼容；MinerU/模型需人工安装准备，自动部署与 Docling 仍未接。
 
 ## 15. 知识库 RAG 简版
 

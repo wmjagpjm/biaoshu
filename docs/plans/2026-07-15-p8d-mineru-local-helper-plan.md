@@ -7,7 +7,7 @@
 
 # P8D 本机 MinerU 外置解析助手实施计划
 
-> **状态**：只读审计完成，计划已冻结；尚未派发。
+> **状态**：已完成、独立验收并推送。计划=`30d066f`，实现=`e1fe316`。
 > **工作分支**：`collab/grok-code-codex-review`。
 > **基线**：P11C 实现=`1441509`、文档闭环=`f4deade`；后端 487 passed，前端全量 E2E 184 passed。
 
@@ -73,3 +73,11 @@ Codex 必须逐条审查契约 §3～§5，尤其是票据来源、Origin 解析
 ## 6. 明确后续
 
 Docling 不能在本包借用 `source=mineru`。若 P8D 通过，后续 P8E 才可只读审计 P8C source 枚举扩展、Docling CLI 的本地/插件/远程服务关闭参数、输出格式与独立测试，不得提前合包。
+
+## 7. 实施与验收记录
+
+1. 首版回执=`msg_946ce42568644463afd15ae0ff1c0e76`；Codex 退回非 TTY 票据降级、Windows `.cmd` 假绿、HTTP 响应无上限、Origin 非法端口和内部防御深度。
+2. 首轮返修回执=`msg_7055c3eae48c4dac9995bf6c9bfef663`；Codex 再退回 Markdown 无界 `read_text()` 与输出树无条目上限。
+3. 第二轮返修回执=`msg_fb05701444c640e2bf6e857d8264cdf2`；最终加入 4096 输出条目、读取前 2 MiB 文件限制、`2 MiB + 1` 有界二进制读取及完整反假绿测试。
+4. Codex 独立结果：助手 unittest 54 passed；后端 `test_local_parser_callback_tickets/test_async_and_callback/test_parse_engines/test_parse_strategy_read` 合计 35 passed（仅 1 条既有弃用警告）；lint/build 通过；P8C E2E 9 passed；P8B E2E 6 passed；暂存区 whitespace 检查通过。
+5. 三文件实现提交 `e1fe316` 已推送；未安装或探测真实 MinerU/模型，未运行后端或前端全量，继续沿用后端 487、前端 184 的既有全量基线。

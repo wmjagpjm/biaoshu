@@ -7,9 +7,9 @@
 
 # P8D 本机 MinerU 外置解析助手契约
 
-> **状态**：只读审计完成，契约已冻结；尚未实现。
+> **状态**：已完成、独立验收并推送。计划=`30d066f`，实现=`e1fe316`。
 > **工作分支**：`collab/grok-code-codex-review`。
-> **验收起点**：后端串行全量 487 passed；前端 Chromium headless 单 worker 串行全量 E2E 184 passed。
+> **验收结果**：助手单测 54 passed；后端 P8C/P8B/解析受影响回归 35 passed；前端 lint/build、P8C E2E 9 passed、P8B E2E 6 passed。后端 487/前端全量 184 基线未重跑也未改变。
 
 ## 1. 现状与方案选择
 
@@ -53,7 +53,7 @@
 - 固定最长运行 30 分钟；超时、Ctrl+C 或助手异常必须终止当前 MinerU 进程，等待短暂退出后必要时强制结束。不得后台遗留助手自身；无法证明的孙进程治理风险必须在 README 如实写明。
 - MinerU stdout/stderr 固定丢弃，不写内存、磁盘或控制台；助手成功输出和固定失败信息不得回显 MinerU 原始输出、源文件绝对路径、Markdown、票据或服务端 detail。
 - 输出只写 `tempfile.TemporaryDirectory`；无论成功、失败、超时或中断都清理。不得在仓库、源文件目录、用户桌面或固定 data/cache 目录写助手产物。
-- 递归找到的 `.md` 必须恰好一个、为普通非符号链接文件、位于临时根内；去首尾空白后长度 1–1,000,000 Unicode 码点，最终 JSON UTF-8 body 不超过 P8C 的 2 MiB。零个、多个、越界或空 Markdown 均固定失败且不回调。
+- 输出树目录项与文件项合计最多 4096；递归找到的 `.md` 必须恰好一个、为普通非符号链接文件、位于临时根内。读取前先校验文件字节不超过 2 MiB，再以 `2 MiB + 1` 二进制有界读取；去首尾空白后长度 1–1,000,000 Unicode 码点，最终 JSON UTF-8 body 仍不超过 P8C 的 2 MiB。零个、多个、越界或空 Markdown 均固定失败且不回调。
 
 ## 5. 票据与回调边界
 
@@ -78,3 +78,10 @@
 自动化必须用完全假的 `mineru` 进程和回环假 HTTP，不要求安装 MinerU、模型或访问网络。至少覆盖：PATH 缺失；输入扩展/目录/符号链接/空/50 MiB 上下界；命令数组与 `shell=False`；离线环境和代理剥离；成功/失败/超时/中断清理；Markdown 零个/多个/空/越界；票据不进 argv/env/文件/输出；Origin 白名单、固定路径、无代理、拒绝重定向；请求 Header/body 精确；服务端错误脱敏；一次回调零重试；成功固定中文。
 
 Codex 还须独立回归 P8C 后端票据专项、P8B/P8C 前端 E2E、lint/build，并运行 `git diff --check`。所有 PowerShell 与测试进程后台静默；Playwright 继续 Chromium headless、单 worker、逐条串行。
+
+## 8. 交付与审查结论
+
+- Grok 首版严格保持三文件边界，但 Codex 首轮审查发现 `getpass` 非 TTY 管道降级、Windows `.cmd` 的 shell 假绿、HTTP 响应无界读取和非法端口错误分类；返修后再发现 Markdown 在码点校验前无界读取，遂进行第二轮定点返修。
+- 最终助手只接受交互 TTY 中 43 字符 P8C 票据；Windows 只认 `mineru.exe`，POSIX 只认普通非符号链接可执行文件；回调响应上限 64 KiB，非 2xx 不读错误正文；Markdown 与输出树均在读取前有硬上限。
+- Codex 独立通过助手单测 54 项、后端受影响回归 35 项、P8C E2E 9 项、P8B E2E 6 项以及 lint/build；暂存区 `git diff --cached --check` 通过。
+- 实现提交 `e1fe316` 已推送协作分支。真实 MinerU CLI/本地模型仍需用户按官方文档人工安装准备；未用真实模型样本验收，Docling、安装器、常驻服务和孙进程完整治理仍是后续独立事项。
