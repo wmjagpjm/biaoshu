@@ -1486,3 +1486,65 @@ class EditorStateCheckpointRow(Base):
         default=utc_now,
         index=True,
     )
+
+
+class EditorStateRevisionRow(Base):
+    """
+    模块：P12C-A editor-state 有限自动修订账本
+    用途：与手动/安全检查点独立的最近自动修订快照（每项目最近 10 条）。
+    对接：editor_state_revision_service.record_editor_state_transition。
+    二次开发：
+      - 禁止客户端投稿 snapshot/source；A 包无生产写入者、无公开 API
+      - 不得复用 editor_state_checkpoints 的 20 条裁剪域
+      - 列表/最新/裁剪不得投影 snapshot_json；不提供删除/浏览/恢复端点
+    """
+
+    __tablename__ = "editor_state_revisions"
+    __table_args__ = (
+        CheckConstraint(
+            "snapshot_bytes >= 1 AND snapshot_bytes <= 2097152",
+            name="ck_editor_state_revisions_snapshot_bytes",
+        ),
+        CheckConstraint(
+            "source_kind IN ("
+            "'browser_put','task','revise','callback',"
+            "'local_parser','content_fuse_apply',"
+            "'content_fuse_consume','checkpoint_restore'"
+            ")",
+            name="ck_editor_state_revisions_source_kind",
+        ),
+        Index(
+            "ix_esr_workspace_project_created_id",
+            "workspace_id",
+            "project_id",
+            "created_at",
+            "id",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # 服务端规范快照 JSON（紧凑 sort_keys UTF-8，委托 editor_state_service）
+    snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
+    # esv_ + SHA-256 前 32 hex
+    state_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    snapshot_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 固定内部来源枚举；禁止任意字符串
+    source_kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        index=True,
+    )
