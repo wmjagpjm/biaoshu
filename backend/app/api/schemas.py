@@ -1936,3 +1936,63 @@ class ContentFuseApplicationConsumeOut(BaseModel):
     restored_chapter_count: int = Field(serialization_alias="restoredChapterCount")
     skipped_chapter_count: int = Field(serialization_alias="skippedChapterCount")
     consumed_at: datetime = Field(serialization_alias="consumedAt")
+
+
+class EditorStateCheckpointCreate(BaseModel):
+    """
+    模块：P12A 手动检查点创建请求
+    用途：仅接受精确空对象 {}；拒绝任何客户端快照/名称/版本投稿。
+    对接：POST /api/projects/{projectId}/editor-state-checkpoints。
+    二次开发：extra=forbid；禁止 populate_by_name 扩展字段。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class EditorStateCheckpointMetaOut(BaseModel):
+    """
+    模块：P12A 检查点元数据
+    用途：创建响应与列表项共用字段，不含 snapshot 正文。
+    对接：POST/GET .../editor-state-checkpoints。
+    二次开发：禁止附加 projectId/正文/路径/用户字段。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    checkpoint_id: str = Field(serialization_alias="checkpointId")
+    state_version: str = Field(serialization_alias="stateVersion")
+    snapshot_bytes: int = Field(serialization_alias="snapshotBytes")
+    outline_node_count: int = Field(serialization_alias="outlineNodeCount")
+    chapter_count: int = Field(serialization_alias="chapterCount")
+    created_at: datetime = Field(serialization_alias="createdAt")
+
+
+class EditorStateCheckpointListOut(BaseModel):
+    """
+    模块：P12A 检查点列表
+    用途：固定最近 20 条元数据，顶层仅 items。
+    对接：GET /api/projects/{projectId}/editor-state-checkpoints。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    items: list[EditorStateCheckpointMetaOut]
+
+
+class EditorStateCheckpointDetailOut(BaseModel):
+    """
+    模块：P12A 检查点详情
+    用途：元数据 + 已校验的规范 snapshot 对象。
+    对接：GET .../editor-state-checkpoints/{checkpointId}。
+    二次开发：snapshot 必须服务端重验键集/字节/版本后返回。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    checkpoint_id: str = Field(serialization_alias="checkpointId")
+    state_version: str = Field(serialization_alias="stateVersion")
+    snapshot_bytes: int = Field(serialization_alias="snapshotBytes")
+    outline_node_count: int = Field(serialization_alias="outlineNodeCount")
+    chapter_count: int = Field(serialization_alias="chapterCount")
+    created_at: datetime = Field(serialization_alias="createdAt")
+    snapshot: dict[str, Any]

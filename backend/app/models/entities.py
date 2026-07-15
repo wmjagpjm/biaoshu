@@ -1419,3 +1419,66 @@ class ContentFuseApplicationBatchRow(Base):
     consumed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+class EditorStateCheckpointRow(Base):
+    """
+    模块：P12A editor-state 手动检查点只读库
+    用途：保存用户显式创建的完整编辑态规范快照（每项目最近 20 条）。
+    对接：editor_state_checkpoint_service；
+      /api/projects/{id}/editor-state-checkpoints*。
+    二次开发：
+      - 快照仅服务端从 get_editor_state 抽取 13 键生成，禁止客户端投稿
+      - 列表不得投影 snapshot_json；不提供恢复/删除/下载/自动历史
+      - 禁止修改旧表；仅 create_all 建新表
+    """
+
+    __tablename__ = "editor_state_checkpoints"
+    __table_args__ = (
+        CheckConstraint(
+            "snapshot_bytes >= 1 AND snapshot_bytes <= 2097152",
+            name="ck_editor_state_checkpoints_snapshot_bytes",
+        ),
+        CheckConstraint(
+            "outline_node_count >= 0",
+            name="ck_editor_state_checkpoints_outline_node_count",
+        ),
+        CheckConstraint(
+            "chapter_count >= 0",
+            name="ck_editor_state_checkpoints_chapter_count",
+        ),
+        Index(
+            "ix_escp_workspace_project_created_id",
+            "workspace_id",
+            "project_id",
+            "created_at",
+            "id",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # 服务端规范快照 JSON（紧凑 sort_keys UTF-8）
+    snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
+    # esv_ + SHA-256 前 32 hex
+    state_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    snapshot_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    outline_node_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    chapter_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        index=True,
+    )
