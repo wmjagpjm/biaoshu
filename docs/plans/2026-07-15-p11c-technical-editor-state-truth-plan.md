@@ -34,7 +34,7 @@
 4. 保留 `reloadFromApi(): Promise<boolean>` 兼容 M3-D，并允许页面普通任务选择 blocking 刷新；所有路径捕获 projectId/session。失败设置 loadError、禁止保存并返回 false，不抛原文；M3-D 对话框打开期间由页面暂不替换为失败卡，关闭后显示。
 5. 保存 effect 只在 apiReady 且当前会话有效时运行。移除 localStorage；非 409 失败设固定 saveError，成功清错；409 保持现有 base/merge/conflict 行为。
 6. 普通 PUT 与合并 PUT 复用 Hook 内最小同源请求函数：从 `getCsrfToken()` 读内存值，存在时加 `X-CSRF-Token`，始终 `credentials: same-origin`。不得修改共享客户端或记录 Token。
-7. `reloadFromApi`、普通 PUT、409 解析、合并 PUT 的 success/catch/finally 都加当前会话校验；移除合并成功后的 `saveLocal` 和 `persistSource`。
+7. `reloadFromApi`、普通 PUT、409 解析、合并 PUT 的 success/catch/finally 都加当前会话校验；409 只读取类型收敛后的远端矩阵/version，冲突提示固定中文且不采用 `detail.message`；移除合并成功后的 `saveLocal` 和 `persistSource`。
 8. 删除 `fillDemoAnalysis/extractDemoFacts` 及导出成员。其余大纲/章节/事实/矩阵编辑算法不改。
 
 ## 3. 页面与组件
@@ -56,7 +56,7 @@
 5. 编辑分析/大纲/事实/章节后 800 ms 防抖 PUT 的次数、路径和 body 精确；parsedMarkdown 不被普通编辑误写。
 6. required 登录场景：登录响应内存 CSRF 精确出现在普通 PUT 与合并 PUT 请求头；会话 Cookie 由同源浏览器携带，Token/正文不落存储。
 7. PUT 500/401/403：固定保存失败、SECRET/detail/code/路径/ID 不泄漏；再次编辑新增一次 PUT，成功清错。
-8. 409 仍出现矩阵冲突且不出现通用保存错误；应用合并仍仅两个键，无自动循环。
+8. 409 仍出现固定中文矩阵冲突且不出现通用保存错误，服务端 SECRET/detail.message 不展示；应用合并仍仅两个键，无自动循环。
 9. 普通任务成功而 editor GET 失败：任务只执行一次，旧内容被失败卡遮蔽，重试恢复。
 10. M3-D reload 失败：对话框既有业务完成提示仍可见、业务 POST/consume 不重复；关闭后出现 P11C 失败卡。
 11. SPA A→B：A 项目对象、初始化 GET、任务后 reload、普通 PUT 成功/失败/409 均不得污染 B。
