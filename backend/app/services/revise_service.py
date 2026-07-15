@@ -286,6 +286,7 @@ def revise_artifact(
                     workspace_id,
                     project_id,
                     expected_state_version=expected_state_version,
+                    revision_source_kind="revise",
                     **kwargs,
                 )
             except editor_state_service.EditorStateVersionConflict:
@@ -309,6 +310,7 @@ def revise_artifact(
                 project_id,
                 parsed_markdown=revised.strip(),
                 expected_state_version=expected_state_version,
+                revision_source_kind="revise",
             )
         except editor_state_service.EditorStateVersionConflict:
             raise
