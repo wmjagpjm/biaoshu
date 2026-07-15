@@ -1,0 +1,44 @@
+<!--
+模块：P12B-A editor-state 全状态版本与可选 CAS 实施计划
+用途：把共享版本算法、GET 输出、可选条件 PUT 和独立验收拆成一个五文件后端受限任务。
+对接：docs/p12b-editor-state-version-foundation-contract.md；P12A；Grok-Codex 消息箱。
+二次开发：Grok 只实现与自测；Codex 负责范围冻结、两类版本冲突审查、独立验收、中文提交和文档闭环。
+-->
+
+# P12B-A editor-state 全状态版本与可选 CAS 实施计划
+
+> **状态**：契约已冻结，等待后端受限实现。
+> **前置提交**：P12A 后端=`9f53d92`、闭环=`6fd4c76`。
+
+## 1. 实施顺序
+
+1. 先在新专项测试中独立实现规范 13 键、紧凑排序 UTF-8 JSON 与 SHA-256 前 32 位重算，证明当前 GET 缺 `stateVersion`、当前 Schema 忽略 expected 或无法 CAS 的真实失败。
+2. 在 `editor_state_service` 建立共享键集、规范快照和版本函数；重构当前状态组装，使 GET、锁后 CAS 与 P12A 检查点使用同一权威算法，避免循环依赖和双实现漂移。
+3. Schema 新增成功响应 `stateVersion` 与请求 `expectedStateVersion` 严格格式；projects 路由只转发可选 expected 并映射固定全状态 409。
+4. 泛化既有矩阵写锁为一次项目锁：带 expected 时锁后重算全状态版本，先比全状态、后比矩阵；冲突零写并 rollback。
+5. P12A checkpoint service 委托共享算法，同时保留测试或内部调用需要的兼容函数名；不得改 P12A API/表/快照键集。
+6. 完成后只发送 `review_request`，不得提交或推送。
+
+## 2. Codex 审查重点
+
+1. 是否真的从锁后服务端行重算版本，而不是信任客户端、缓存、`updatedAt` 或 P12A 存量记录。
+2. 13 键与 P12A 是否逐字一致；`projectId/updatedAt/responseMatrixVersion` 和敏感字段是否排除；是否 `allow_nan=False`。
+3. expected 与矩阵版本是否只锁一次、全状态冲突优先、任一冲突整包零写；是否显式 rollback。
+4. 缺 expected 是否如实保留兼容，文档和测试不得冒充最终安全门。
+5. 并发测试是否真用独立 Session/线程与 barrier；409 是否精确、最小、脱敏。
+6. 是否偷改模型、旧测试、后台任务、callback、M3-D、前端或新增 restore/history。
+
+## 3. 独立验收
+
+```powershell
+cd C:\Users\Administrator\biaoshu\backend
+.\.venv\Scripts\python.exe -m pytest tests/test_editor_state_full_version.py -q
+.\.venv\Scripts\python.exe -m pytest tests/test_editor_state_checkpoints.py tests/test_editor_state.py tests/test_response_matrix.py tests/test_content_fuse_applications.py tests/test_local_parser_callback_tickets.py tests/test_bid_templates.py -q
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+仓库根继续运行 `git diff --check` 与暂存后 `git diff --cached --check`。所有进程后台静默；本包无 Playwright，不启动浏览器。
+
+## 4. 提交与后续
+
+计划/契约先由 Codex 中文提交并推送；Grok 实现经审查与独立验收后由 Codex 单独提交后端，再做文档闭环。P12B-A 结束后先做 P12B-B 前端 CAS，不得跳到恢复；长期目标保持 active。

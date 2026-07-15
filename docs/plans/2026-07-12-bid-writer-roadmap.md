@@ -331,4 +331,4 @@ P8D 与 P8E 本机外置解析助手均已完成并推送：P8D 计划=`30d066f`
 
 **P12A editor-state 手动检查点只读库已完成并推送**：计划/契约=`bf8ccd6`，后端=`9f53d92`。它只允许用户显式保存当前服务端权威技术/商务 editor-state，固定每项目最近 20 个，列表和淘汰 SQL 不读取正文、详情按工作空间/项目/检查点三重作用域按需读取；不自动记录所有写入，不恢复、不删除、不下载，也不改 P8C/M3-D/普通 PUT。两轮受限审查修复资源投影、提交后假失败、规范 JSON 完整性、跨项目正文加载、完整回滚域和非有限浮点；Codex 独立通过专项 29、受影响回归 97、P8C/异步 callback 15、后端串行全量 518 passed。
 
-下一步只能先做 **P12B editor-state 安全恢复只读审计与契约设计**：必须覆盖普通 PUT、异步任务、两类 callback、模板新建和 M3-D 的并发顺序，冻结 expected current state version、恢复前安全检查点、原子全状态写入与迟到 autosave 防护。在契约完成前不得直接增加恢复端点或前端按钮。Word `structure` 因缺少容器/跨页视觉决策继续不接线；外部来源和真实语义调优也不得与 P12B 合包。
+**P12B 安全恢复审计已拆为四道门**：P12B-A 服务端规范全状态版本与可选 CAS；P12B-B 技术/商务前端 expected 版本与整态冲突 UX；P12B-C 任务、个人 callback、P8C 票据和 M3-D 的迟到写入围栏；P12B-D 恢复前安全检查点与原子恢复。当前只冻结 P12B-A，契约=`docs/p12b-editor-state-version-foundation-contract.md`，计划=`docs/plans/2026-07-15-p12b-editor-state-version-foundation-plan.md`，五文件后端范围。P12B-A 缺 expected 时仍兼容旧写入，明确不是最终安全门；任何阶段都不得提前增加 restore 端点或按钮。Word `structure` 因缺少容器/跨页视觉决策继续不接线；外部来源和真实语义调优不得合包。

@@ -19,8 +19,8 @@
 完整阅读 docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/plans/2026-07-13-package-9-delivery-enhancement-plan.md、docs/integration-checklist.md。
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
 当前进度：P12A、P9D、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。P12A 计划/契约=`bf8ccd6`、后端=`9f53d92`；专项 29、受影响回归 97、P8C/异步 callback 15、后端全量 518 passed。前端全量仍沿用 184。
-当前执行包：P12A editor-state 手动检查点只读库已完成实现、两轮返修、独立验收和推送；只保存用户显式创建的服务端权威快照，最多 20 个，列表/淘汰最小投影、详情按需读取。
-下一步：只做 P12B 安全恢复的只读审计与契约设计，先覆盖普通 PUT、异步任务、callback、模板新建、M3-D 的并发顺序和迟到 autosave；契约冻结前不得增加 restore API、恢复按钮或客户端静默覆盖。
+当前执行包：P12B-A editor-state 全状态版本与可选 CAS 基础已完成只读审计并冻结契约/计划；五文件后端包只新增共享版本算法、GET/PUT `stateVersion`、可选 `expectedStateVersion` 和固定全状态 409。
+下一步：提交推送 P12B-A 契约/计划，再只派发五文件后端任务。不得修改前端、任务/callback/M3-D、模型/数据库或增加 restore；缺 expected 的兼容写入仍不是安全恢复门。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -438,6 +438,8 @@ frontend/src/features/
 | docs/plans/2026-07-15-p8e-docling-local-helper-plan.md | P8E 两阶段受限实施与验收计划 |
 | docs/p12a-editor-state-manual-checkpoints-contract.md | P12A 手动检查点只读库冻结契约 |
 | docs/plans/2026-07-15-p12a-editor-state-manual-checkpoints-plan.md | P12A 七文件后端实施与验收计划 |
+| docs/p12b-editor-state-version-foundation-contract.md | P12B-A 全状态版本与可选 CAS 冻结契约 |
+| docs/plans/2026-07-15-p12b-editor-state-version-foundation-plan.md | P12B-A 五文件后端实施与验收计划 |
 | docs/agent-collaboration.md | Grok-Codex 本地消息箱协议与接入命令 |
 | docs/diagrams/ | 架构图 + 目标图 |
 | docs/HANDOFF-backend.md | 历史，过时 |
@@ -512,8 +514,9 @@ frontend/src/features/
 - **M3-D 已完成**：服务端原子确认成功 `content_fuse` 任务中的用户选择，只保留每项目最近 20 批；一次性恢复时仅覆盖 title/body/status 仍精确等于 after 的章节。代码提交与远端一致后才开始本文档闭环。
 - **P11A/P11B/P11C 已完成**：P11A 让技术标/商务标列表、详情与创建只认服务端项目；P11B、P11C 分别让商务标和技术标编辑内容只认服务端 editor-state。旧项目键与两类旧 workspace/editor 键均不再作为成功依据；前端全量从 P11A 的 155、P11B 的 166 增至 P11C 的 184。
 - **P12A 已完成**：计划/契约=`bf8ccd6`、后端=`9f53d92`。显式服务端检查点精确保存 13 键规范快照，每项目最近 20 条；创建/裁剪同事务、完整失败域显式回滚，列表/淘汰不加载正文，详情作用域和完整性严格校验。两轮返修与 Codex 独立 29/97/15/518 验收闭环；没有恢复、删除、下载、自动历史或前端。
+- **P12B-A 已冻结待实现**：契约=`docs/p12b-editor-state-version-foundation-contract.md`，计划=`docs/plans/2026-07-15-p12b-editor-state-version-foundation-plan.md`。本包仅把 P12A 同算法 `stateVersion` 暴露给当前 editor-state，并提供可选 `expectedStateVersion` CAS；五文件后端范围，不修改模型、后台任务、callback、M3-D 或前端。缺 expected 仍兼容旧写入，明确不是恢复安全门。
 - **其余未实现主线**：editor-state 自动全写入版本历史/检查点安全恢复/多人协作；MinerU/Docling 自动安装、模型打包、常驻服务、真实模型样本验收与完整孙进程治理；P9C 后续真实语义调优；Word `structure`/整章布局；除国能 e 招外的合法外部标讯来源；人力附件/真实证件核验；财务税务/审批/导出/预算/回款/版本、失败尝试与完整身份审计；投标人矩阵明细/版本/结果跟踪；Alembic、PostgreSQL、HTTPS、Key 加密、Docker 和公网 SaaS 能力。任何一项都须另立契约，不得扩大既有角色与生产路径。
 - 新任务分工不变：Grok 只负责限定实现与自测，未经 Codex 审查确认不得提交；Codex 负责计划、范围冻结、差异审查、独立测试、验收、中文提交、文档闭环和 GitHub 状态核验。每一包仍按“计划提交 → 实现提交 → 文档闭环提交 → 推送协作分支”执行，禁止合包。
 - GitHub 若出现连接重置，可在当前 PowerShell 进程临时配置 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY=http://127.0.0.1:7890` 与 `NO_PROXY=localhost,127.0.0.1` 后重试；不得把代理或凭据写入仓库。
 
-**换会话可直接：核验分支、HEAD/远端与工作区 → 读本文 §0～§3.1、§5、§6、§11、P12A 契约/计划及路线图 → 确认 P12A 计划/契约 `bf8ccd6`、后端 `9f53d92` 与本文档闭环均已推送 → 先做 P12B 安全恢复只读审计和契约设计。禁止重新实现 P12A/P8D/P8E/P11A/P11B/P11C/M3-D、直接增加 restore/恢复按钮、让 Grok commit/push，或由 Codex 冒充 Grok 完成主实现。**
+**换会话可直接：核验分支、HEAD/远端与工作区 → 读本文 §0～§3.1、§5、§6、§11、P12A/P12B-A 契约与计划及路线图 → 确认 P12A 计划/契约 `bf8ccd6`、后端 `9f53d92`、闭环 `6fd4c76` 与 P12B-A 计划提交均已推送 → 只派发 P12B-A 五文件后端任务。禁止重新实现 P12A/P8D/P8E/P11A/P11B/P11C/M3-D、提前增加 restore/恢复按钮、让 Grok commit/push，或由 Codex 冒充 Grok 完成主实现。**
