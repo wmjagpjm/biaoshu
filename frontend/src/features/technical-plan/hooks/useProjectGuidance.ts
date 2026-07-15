@@ -1,13 +1,15 @@
 /**
- * 模块：项目级生成约束 + 各阶段反馈历史
+ * 模块：项目级生成约束反馈历史 + 定向修订
  * 用途：
- *   1. guidance 随 editor-state 持久化到后端
+ *   1. history 仍 localStorage 承载既有反馈语义
  *   2. submitRevise 调 POST revise，返回 revisedContent 供工作区预览/替换
- * 对接：/projects/{id}/editor-state、/projects/{id}/artifacts/{aid}/revise
- * 二次开发：history 也可入库；当前 history 仍 localStorage
+ *   3. guidance 权威改由 useTechnicalPlanEditors 持有并 PUT；本 hook 只接收只读 guidance
+ * 对接：页面传入的服务端权威 guidance；/projects/{id}/artifacts/{aid}/revise
+ * 二次开发：禁止再发 editor-state GET/PUT；禁止从 localStorage guidance 水合成功内容；
+ *       更新 history 时可保留旧对象无关字段，但旧 guidance 永不参与 UI/expected/CAS。
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { apiFetch } from "../../../shared/lib/api";
 import type {
   AiFeedbackRecord,
@@ -18,42 +20,44 @@ import type {
 
 const storageKey = (projectId: string) => `biaoshu.projectFeedback.${projectId}`;
 
-function emptyGuidance(): ProjectGenerationGuidance {
-  return {
-    targetWordCount: 80000,
-    chapterFocus: "",
-    formatRequirements: "",
-    extraRequirements: "",
-    lockedForNextStage: false,
-    kbEnabled: true,
-    kbFolderIds: [],
-  };
-}
-
-function loadState(projectId: string): ProjectFeedbackState {
-  const empty: ProjectFeedbackState = {
-    projectId,
-    guidance: emptyGuidance(),
-    history: [],
-  };
+/**
+ * 用途：只加载 history；忽略旧 guidance 作为成功真值。
+ * 对接：localStorage biaoshu.projectFeedback.{projectId}
+ */
+function loadHistoryOnly(projectId: string): AiFeedbackRecord[] {
   try {
     const raw = localStorage.getItem(storageKey(projectId));
-    if (!raw) return empty;
-    const parsed = JSON.parse(raw) as ProjectFeedbackState;
-    return {
-      ...empty,
-      ...parsed,
-      projectId,
-      guidance: { ...empty.guidance, ...parsed.guidance },
-      history: parsed.history ?? [],
-    };
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as Partial<ProjectFeedbackState>;
+    return Array.isArray(parsed.history) ? parsed.history : [];
   } catch {
-    return empty;
+    return [];
   }
 }
 
-function saveState(state: ProjectFeedbackState) {
-  localStorage.setItem(storageKey(state.projectId), JSON.stringify(state));
+/**
+ * 用途：写回 history；保留旧对象无关字段，但不把 guidance 当权威。
+ * 二次开发：不得写入 stateVersion；不得删除旧键。
+ */
+function saveHistory(projectId: string, history: AiFeedbackRecord[]) {
+  let previous: Record<string, unknown> = {};
+  try {
+    const raw = localStorage.getItem(storageKey(projectId));
+    if (raw) {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      if (parsed && typeof parsed === "object") {
+        previous = parsed;
+      }
+    }
+  } catch {
+    previous = {};
+  }
+  const next = {
+    ...previous,
+    projectId,
+    history,
+  };
+  localStorage.setItem(storageKey(projectId), JSON.stringify(next));
 }
 
 export type ReviseSubmitResult = {
@@ -76,81 +80,30 @@ type ReviseApiResult = {
   model?: string;
 };
 
-export function useProjectGuidance(projectId: string) {
-  const [state, setState] = useState<ProjectFeedbackState>(() =>
-    loadState(projectId),
+/**
+ * 用途：反馈历史 + revise；guidance 由技术主 hook 注入，只读用于 revise payload。
+ * 对接：useTechnicalPlanEditors.guidance；页面必须先初始化 editors 再调用本 hook。
+ */
+export function useProjectGuidance(
+  projectId: string,
+  authoritativeGuidance: ProjectGenerationGuidance,
+) {
+  const [history, setHistory] = useState<AiFeedbackRecord[]>(() =>
+    loadHistoryOnly(projectId),
   );
-  const skipSave = useRef(true);
-  const saveTimer = useRef<number | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
-    skipSave.current = true;
-    const local = loadState(projectId);
-    setState(local);
-
-    void (async () => {
-      try {
-        const remote = await apiFetch<{
-          guidance?: ProjectGenerationGuidance | null;
-        }>(`/projects/${encodeURIComponent(projectId)}/editor-state`);
-        if (cancelled) return;
-        if (remote.guidance && typeof remote.guidance === "object") {
-          setState((prev) => ({
-            ...prev,
-            projectId,
-            guidance: { ...emptyGuidance(), ...remote.guidance },
-            history: prev.history.length ? prev.history : local.history,
-          }));
-        }
-      } catch {
-        /* 保持 local */
-      } finally {
-        if (!cancelled) {
-          window.setTimeout(() => {
-            skipSave.current = false;
-          }, 50);
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      if (saveTimer.current) window.clearTimeout(saveTimer.current);
-    };
+    setHistory(loadHistoryOnly(projectId));
   }, [projectId]);
 
   useEffect(() => {
-    saveState(state);
-    if (skipSave.current) return;
-    if (saveTimer.current) window.clearTimeout(saveTimer.current);
-    saveTimer.current = window.setTimeout(() => {
-      void apiFetch(
-        `/projects/${encodeURIComponent(projectId)}/editor-state`,
-        {
-          method: "PUT",
-          body: JSON.stringify({ guidance: state.guidance }),
-        },
-      ).catch(() => undefined);
-    }, 800);
-  }, [state, projectId]);
-
-  const updateGuidance = useCallback(
-    (patch: Partial<ProjectGenerationGuidance>) => {
-      setState((prev) => ({
-        ...prev,
-        guidance: {
-          ...prev.guidance,
-          ...patch,
-          updatedAt: new Date().toISOString(),
-        },
-      }));
-    },
-    [],
-  );
+    if (!projectId) return;
+    saveHistory(projectId, history);
+  }, [projectId, history]);
 
   /**
    * 用途：提交定向修订；更新 history，并向调用方返回 revisedContent。
+   * 对接：权威 guidance 来自参数，不读 localStorage guidance。
    */
   const submitRevise = useCallback(
     async (input: {
@@ -172,10 +125,7 @@ export function useProjectGuidance(projectId: string) {
         status: "applying",
       };
 
-      setState((prev) => ({
-        ...prev,
-        history: [applying, ...prev.history],
-      }));
+      setHistory((prev) => [applying, ...prev]);
 
       const artifactId = input.targetId || input.stage || "default";
 
@@ -192,12 +142,12 @@ export function useProjectGuidance(projectId: string) {
               targetId: input.targetId,
               targetLabel: input.targetLabel,
               guidance: {
-                targetWordCount: state.guidance.targetWordCount,
-                chapterFocus: state.guidance.chapterFocus,
-                formatRequirements: state.guidance.formatRequirements,
-                extraRequirements: state.guidance.extraRequirements,
-                kbEnabled: state.guidance.kbEnabled !== false,
-                kbFolderIds: state.guidance.kbFolderIds ?? [],
+                targetWordCount: authoritativeGuidance.targetWordCount,
+                chapterFocus: authoritativeGuidance.chapterFocus,
+                formatRequirements: authoritativeGuidance.formatRequirements,
+                extraRequirements: authoritativeGuidance.extraRequirements,
+                kbEnabled: authoritativeGuidance.kbEnabled !== false,
+                kbFolderIds: authoritativeGuidance.kbFolderIds ?? [],
               },
             }),
           },
@@ -209,9 +159,8 @@ export function useProjectGuidance(projectId: string) {
             ? `已由 ${result.model} 完成定向修订`
             : "已完成定向修订");
 
-        setState((prev) => ({
-          ...prev,
-          history: prev.history.map((h) =>
+        setHistory((prev) =>
+          prev.map((h) =>
             h.id === id
               ? {
                   ...h,
@@ -223,7 +172,7 @@ export function useProjectGuidance(projectId: string) {
                 }
               : h,
           ),
-        }));
+        );
 
         return {
           ok: result.status !== "failed",
@@ -233,9 +182,8 @@ export function useProjectGuidance(projectId: string) {
       } catch (err) {
         const apiMsg =
           (err as { message?: string })?.message || "修订请求失败";
-        setState((prev) => ({
-          ...prev,
-          history: prev.history.map((h) =>
+        setHistory((prev) =>
+          prev.map((h) =>
             h.id === id
               ? {
                   ...h,
@@ -244,17 +192,17 @@ export function useProjectGuidance(projectId: string) {
                 }
               : h,
           ),
-        }));
+        );
         return { ok: false, error: apiMsg };
       }
     },
-    [projectId, state.guidance],
+    [projectId, authoritativeGuidance],
   );
 
   return {
-    guidance: state.guidance,
-    history: state.history,
-    updateGuidance,
+    /** 只读镜像：页面展示/卡片请使用 editors.guidance */
+    guidance: authoritativeGuidance,
+    history,
     submitRevise,
   };
 }

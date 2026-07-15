@@ -1,6 +1,7 @@
 /**
- * 模块：商务标工作区状态（P11B 服务端权威）
- * 用途：分步编辑数据只认 GET|PUT /api/projects/{id}/editor-state；真实空态保持空。
+ * 模块：商务标工作区状态（P11B 服务端权威 + P12B 全状态 CAS）
+ * 用途：分步编辑数据只认 GET|PUT /api/projects/{id}/editor-state；真实空态保持空；
+ *       全部 editor-state PUT 携带 expectedStateVersion；同项目串行保存链。
  * 对接：
  *   - GET|PUT /api/projects/{id}/editor-state（businessQualify/Toc/Quote/Commit、parsedMarkdown）
  *   - POST /api/projects/{id}/artifacts/workspace/revise（stage=business_*）
@@ -8,7 +9,9 @@
  *   - 禁止读写/删除/迁移 biaoshu.businessBid.workspace.*（旧键忽略并保值）
  *   - biaoshu.businessBid.feedback.{projectId} 仅作 AI 反馈历史本地存储，
  *     绝不参与 workspace 水合、API 成功判定或加载失败回退
- * 二次开发：形状保持 BusinessBidWorkspaceState；不得复活 createDemoWorkspace 生产路径。
+ *   - 禁止本地计算 stateVersion；禁止版本落盘
+ * 二次开发：形状保持 BusinessBidWorkspaceState；不得复活 createDemoWorkspace 生产路径；
+ *       全状态 409 阻断后仅允许显式全量 GET 恢复。
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -35,6 +38,21 @@ export const BUSINESS_EDITOR_SAVE_ERROR =
   "商务标工作区保存失败，请稍后重试";
 
 /**
+ * 固定全状态版本冲突文案。
+ * 用途：P12B CAS 冲突固定中文；禁止拼接服务端 message/version/正文。
+ */
+export const BUSINESS_EDITOR_STATE_CONFLICT_MESSAGE =
+  "编辑内容已被其他操作更新，已停止自动保存。重新载入远端内容将替换当前未保存修改。";
+
+/** 服务端 stateVersion 精确格式 */
+const STATE_VERSION_RE = /^esv_[0-9a-f]{32}$/;
+
+/** 用途：校验服务端 stateVersion。 */
+function isValidStateVersion(value: unknown): value is string {
+  return typeof value === "string" && STATE_VERSION_RE.test(value);
+}
+
+/**
  * 反馈历史 localStorage 键。
  * 非 editor-state 权威；仅保留既有 AI 反馈记录语义。
  */
@@ -48,6 +66,8 @@ type EditorStateApi = {
   businessToc?: TocItem[] | null;
   businessQuote?: { rows?: QuoteRow[]; notes?: string } | null;
   businessCommit?: CommitBlock[] | null;
+  /** P12B：全状态版本；仅接受 ^esv_[0-9a-f]{32}$ */
+  stateVersion?: string | null;
 };
 
 /** 用途：读取反馈历史；失败返回 []，不抛原文。 */
@@ -101,17 +121,27 @@ export function useBusinessBidWorkspace(projectId: string) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [apiReady, setApiReady] = useState(false);
+  /** 全状态 CAS 冲突/版本未知阻断 */
+  const [fullStateConflict, setFullStateConflict] = useState(false);
 
   /** 跳过水合后的下一次防抖 PUT */
   const skipNextSave = useRef(true);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** 项目会话代次：切项目或重置时递增，作废所有飞行中回调 */
   const sessionRef = useRef(0);
+  /** 同项目写入代次：重载时递增，旧代次回调不得覆盖新 GET */
+  const writeEpochRef = useRef(0);
   /** 当前活跃项目 id（与 session 成对校验） */
   const activeProjectRef = useRef(projectId);
-  /** 最新 workspace 引用，供防抖 PUT 闭包读取 */
+  /** 最新 workspace 引用，供队列执行时读取 */
   const workspaceRef = useRef(workspace);
   workspaceRef.current = workspace;
+  /** 当前内存服务端全状态版本 */
+  const stateVersionRef = useRef<string | null>(null);
+  /** 全状态阻断后禁止自动 PUT */
+  const fullStateBlockedRef = useRef(false);
+  /** 同项目串行保存链 */
+  const saveChainRef = useRef(Promise.resolve());
 
   /** 用途：判断回调是否仍属于当前项目会话。 */
   const isCurrentSession = useCallback(
@@ -122,10 +152,22 @@ export function useBusinessBidWorkspace(projectId: string) {
     [projectId],
   );
 
+  const isCurrentWriteEpoch = useCallback(
+    (session: number, pid: string, epoch: number) =>
+      isCurrentSession(session, pid) && writeEpochRef.current === epoch,
+    [isCurrentSession],
+  );
+
+  const enterFullStateBlock = useCallback(() => {
+    fullStateBlockedRef.current = true;
+    setFullStateConflict(true);
+    setSaveError(null);
+  }, []);
+
   /**
    * 用途：从 editor-state 刷新当前项目。
-   * 成功：水合真实字段、清 load/save error、apiReady=true，返回 true。
-   * 失败：重置空 workspace、apiReady=false、固定 loadError，返回 false；不抛原文。
+   * 成功：水合真实字段、接受合法 stateVersion、清冲突、apiReady=true。
+   * 失败：见全状态阻断分支；不抛原文。
    */
   const refreshFromApi = useCallback(async (): Promise<boolean> => {
     const pid = projectId;
@@ -134,25 +176,57 @@ export function useBusinessBidWorkspace(projectId: string) {
       return false;
     }
     const session = sessionRef.current;
+    // 同项目重载：递增写入代次并清未发送 timer
+    writeEpochRef.current += 1;
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
     setLoading(true);
     try {
       const remote = await apiFetch<EditorStateApi>(
         `/projects/${encodeURIComponent(pid)}/editor-state`,
       );
       if (!isCurrentSession(session, pid)) return false;
+      if (!isValidStateVersion(remote.stateVersion)) {
+        if (fullStateBlockedRef.current) {
+          // 保持本地与阻断；不卸载正文
+          setLoadError(BUSINESS_EDITOR_LOAD_ERROR);
+          return false;
+        }
+        skipNextSave.current = true;
+        setWorkspace(createEmptyWorkspace(pid));
+        stateVersionRef.current = null;
+        setApiReady(false);
+        setLoadError(BUSINESS_EDITOR_LOAD_ERROR);
+        setSaveError(null);
+        setFullStateConflict(false);
+        fullStateBlockedRef.current = false;
+        return false;
+      }
       skipNextSave.current = true;
       setWorkspace(fromApi(pid, remote));
+      stateVersionRef.current = remote.stateVersion;
       setApiReady(true);
       setLoadError(null);
       setSaveError(null);
+      setFullStateConflict(false);
+      fullStateBlockedRef.current = false;
       return true;
     } catch {
       if (!isCurrentSession(session, pid)) return false;
+      if (fullStateBlockedRef.current) {
+        setLoadError(BUSINESS_EDITOR_LOAD_ERROR);
+        return false;
+      }
       skipNextSave.current = true;
       setWorkspace(createEmptyWorkspace(pid));
+      stateVersionRef.current = null;
       setApiReady(false);
       setLoadError(BUSINESS_EDITOR_LOAD_ERROR);
       setSaveError(null);
+      setFullStateConflict(false);
+      fullStateBlockedRef.current = false;
       return false;
     } finally {
       if (isCurrentSession(session, pid)) {
@@ -161,25 +235,30 @@ export function useBusinessBidWorkspace(projectId: string) {
     }
   }, [isCurrentSession, projectId]);
 
-  // 切项目：立即作废旧会话、清计时器/错误、重置空 workspace，再拉真实 GET
+  // 切项目：立即作废旧会话、清计时器/错误/版本/链，重置空 workspace，再拉真实 GET
   useEffect(() => {
     if (saveTimer.current) {
       clearTimeout(saveTimer.current);
       saveTimer.current = null;
     }
     sessionRef.current += 1;
+    writeEpochRef.current += 1;
     activeProjectRef.current = projectId;
+    saveChainRef.current = Promise.resolve();
     skipNextSave.current = true;
+    stateVersionRef.current = null;
+    fullStateBlockedRef.current = false;
     setApiReady(false);
     setLoadError(null);
     setSaveError(null);
+    setFullStateConflict(false);
     setWorkspace(createEmptyWorkspace(projectId));
     setHistory(loadHistory(projectId));
     setLoading(true);
     void refreshFromApi();
   }, [projectId, refreshFromApi]);
 
-  // 仅 feedback 历史落盘；禁止写入 workspace 键
+  // 仅 feedback 历史落盘；禁止写入 workspace 键或版本
   useEffect(() => {
     if (!projectId) return;
     try {
@@ -189,22 +268,32 @@ export function useBusinessBidWorkspace(projectId: string) {
     }
   }, [projectId, history]);
 
-  // 防抖写回 editor-state：仅当前项目 GET 成功（apiReady）后可 PUT
+  // 防抖入队：真正执行时读取 workspaceRef + stateVersionRef 最新值
   useEffect(() => {
     if (!apiReady || !projectId) return;
     if (skipNextSave.current) {
       skipNextSave.current = false;
       return;
     }
+    if (fullStateBlockedRef.current) {
+      return;
+    }
     if (saveTimer.current) clearTimeout(saveTimer.current);
     const session = sessionRef.current;
     const pid = projectId;
+    const epoch = writeEpochRef.current;
     saveTimer.current = setTimeout(() => {
-      void (async () => {
-        if (!isCurrentSession(session, pid)) return;
+      const runSave = async () => {
+        if (!isCurrentWriteEpoch(session, pid, epoch)) return;
+        if (fullStateBlockedRef.current) return;
+        const expected = stateVersionRef.current;
+        if (!isValidStateVersion(expected)) {
+          enterFullStateBlock();
+          return;
+        }
         const ws = workspaceRef.current;
         try {
-          await apiFetch(
+          const saved = await apiFetch<EditorStateApi>(
             `/projects/${encodeURIComponent(pid)}/editor-state`,
             {
               method: "PUT",
@@ -217,22 +306,46 @@ export function useBusinessBidWorkspace(projectId: string) {
                   notes: ws.quoteNotes,
                 },
                 businessCommit: ws.commitBlocks,
+                expectedStateVersion: expected,
               }),
             },
           );
-          if (!isCurrentSession(session, pid)) return;
+          if (!isCurrentWriteEpoch(session, pid, epoch)) return;
+          if (!isValidStateVersion(saved.stateVersion)) {
+            enterFullStateBlock();
+            return;
+          }
+          stateVersionRef.current = saved.stateVersion;
           setSaveError(null);
-        } catch {
-          if (!isCurrentSession(session, pid)) return;
+        } catch (err) {
+          if (!isCurrentWriteEpoch(session, pid, epoch)) return;
+          const status = (err as { status?: number })?.status;
+          const code = (err as { code?: string })?.code;
+          if (
+            status === 409 &&
+            code === "editor_state_version_conflict"
+          ) {
+            enterFullStateBlock();
+            return;
+          }
           // 固定中文；不得写异常 message 到页面/console/history/存储
           setSaveError(BUSINESS_EDITOR_SAVE_ERROR);
         }
-      })();
+      };
+      saveChainRef.current = saveChainRef.current
+        .catch(() => undefined)
+        .then(runSave);
     }, 600);
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
-  }, [apiReady, isCurrentSession, projectId, workspace]);
+  }, [
+    apiReady,
+    enterFullStateBlock,
+    isCurrentWriteEpoch,
+    projectId,
+    workspace,
+  ]);
 
   const setParseMarkdown = useCallback((parseMarkdown: string) => {
     setWorkspace((prev) => ({ ...prev, parseMarkdown }));
@@ -396,6 +509,10 @@ export function useBusinessBidWorkspace(projectId: string) {
     loadError,
     saveError,
     apiReady,
+    fullStateConflict,
+    fullStateConflictMessage: fullStateConflict
+      ? BUSINESS_EDITOR_STATE_CONFLICT_MESSAGE
+      : null,
     refreshFromApi,
     setParseMarkdown,
     updateQualifyItem,

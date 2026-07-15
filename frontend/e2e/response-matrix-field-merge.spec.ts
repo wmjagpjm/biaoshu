@@ -1,8 +1,8 @@
 /**
- * 模块：响应矩阵字段级三方合并 E2E
- * 用途：验证 409 后无冲突可安全合并、同字段冲突须显式选择、应用合并 PUT 仅含矩阵、
- *       合并成功后无全量回写、二次 409 清空旧预览且禁止复用；应用前不写库；
- *       项目切换后旧项目异步合并响应不得污染新项目编辑器状态。
+ * 模块：响应矩阵字段级合并 / P12B 全状态 CAS 真实双浏览器 E2E
+ * 用途：远端整态已变时旧 expected 走全状态冲突 +「重新载入远端内容」；
+ *       矩阵三方合并可达证据以 truth 桩（expected 匹配 + 真实矩阵 detail）为主，
+ *       本文件用受控拦截覆盖合并二次 409 与项目切换隔离。
  * 对接：Playwright chromium；后端 8010 / 前端 5174；editor-state 版本锁与合并预览。
  * 二次开发：禁止无业务意义的 fixed sleep；真实双浏览器上下文；勿依赖日用库或真实 Key。
  */
@@ -19,6 +19,9 @@ const API = "http://127.0.0.1:8010/api";
 
 const SOURCE_TEXT = "E2E字段合并要求";
 const SOURCE_KEY = `requirement:${SOURCE_TEXT.trim().replace(/\s+/g, " ").toLocaleLowerCase()}`;
+const FULL_STATE_CONFLICT_MSG =
+  "编辑内容已被其他操作更新，已停止自动保存。重新载入远端内容将替换当前未保存修改。";
+const MATRIX_CONFLICT_MSG = "响应矩阵已被其他终端更新，请重新载入后再保存";
 
 type MatrixRow = {
   id: string;
@@ -48,7 +51,7 @@ async function seedProject(
   const created = await request.post(`${API}/projects`, {
     data: { name: options?.name ?? "E2E 字段级三方合并" },
   });
-  expect(created.ok()).toBeTruthy();
+  expect(created.status()).toBe(201);
   const project = (await created.json()) as { id: string };
   const notes = options?.notes ?? "初始备注";
   const rowId = options?.rowId ?? "mx_e2e_merge_1";
@@ -86,16 +89,14 @@ async function seedProject(
       responseMatrix: matrix,
     },
   });
-  expect(put.ok()).toBeTruthy();
+  expect(put.status()).toBe(200);
   return project.id;
 }
 
 async function openMatrixPage(page: Page, projectId: string) {
   await page.goto(`/technical-plan/${projectId}/analysis`);
   await expect(
-    page.getByRole("region", { name: "响应矩阵" }).or(
-      page.locator("section.response-matrix"),
-    ),
+    page.getByRole("region", { name: "响应矩阵" }),
   ).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText(SOURCE_TEXT)).toBeVisible();
   await expect(page.getByLabel("响应备注")).toBeVisible();
@@ -147,7 +148,7 @@ async function toggleChapterAndWaitPut(
 
 test.describe.configure({ mode: "serial" });
 
-test("无冲突：不同字段三方合并后同时保留 notes 与 chapterIds", async ({
+test("真实双浏览器不同字段：旧 expected 全状态冲突；重载后可再保存 notes+chapterIds", async ({
   browser,
   request,
 }) => {
@@ -164,14 +165,17 @@ test("无冲突：不同字段三方合并后同时保留 notes 与 chapterIds",
     await setNotesAndWaitPut(pageA, projectId, "A-备注保留", 200);
     await expect(pageA.getByLabel("响应备注")).toHaveValue("A-备注保留");
 
-    // B 持旧版本，只改 chapterIds → 409 + 可安全合并
+    // B 持旧 expected，只改 chapterIds → 全状态 409（先比 expected，非旧矩阵 alert）
     await toggleChapterAndWaitPut(pageB, projectId, "E2E 章节甲", 409);
-    await expect(pageB.getByRole("alert")).toContainText("矩阵保存冲突");
-    await expect(pageB.getByTestId("response-matrix-merge-safe")).toContainText(
-      "可安全合并",
-    );
-    const applyBtn = pageB.getByTestId("response-matrix-apply-merge");
-    await expect(applyBtn).toBeEnabled();
+    await expect(
+      pageB.getByTestId("technical-editor-state-conflict"),
+    ).toBeVisible({ timeout: 10_000 });
+    await expect(pageB.getByText(FULL_STATE_CONFLICT_MSG)).toBeVisible();
+    await expect(
+      pageB.getByRole("button", { name: "重新载入远端内容" }),
+    ).toBeVisible();
+    await expect(pageB.getByText(MATRIX_CONFLICT_MSG)).toHaveCount(0);
+    await expect(pageB.getByTestId("response-matrix-apply-merge")).toHaveCount(0);
 
     // 应用前服务端仍只有 A 的 notes，无 B 的章节
     const before = (await (
@@ -180,49 +184,14 @@ test("无冲突：不同字段三方合并后同时保留 notes 与 chapterIds",
     expect(before.responseMatrix?.[0]?.notes).toBe("A-备注保留");
     expect(before.responseMatrix?.[0]?.chapterIds ?? []).toEqual([]);
 
-    // 收集应用合并起的全部 editor-state PUT，断言无 analysis/outline/chapters/facts 回写
-    const mergeRelatedPuts: Record<string, unknown>[] = [];
-    const onPutRequest = (req: Request) => {
-      if (
-        req.method() === "PUT" &&
-        req.url().includes(`/api/projects/${projectId}/editor-state`)
-      ) {
-        try {
-          mergeRelatedPuts.push(req.postDataJSON() as Record<string, unknown>);
-        } catch {
-          mergeRelatedPuts.push({});
-        }
-      }
-    };
-    pageB.on("request", onPutRequest);
-
-    const applyRequestPromise = pageB.waitForRequest(
-      (req) =>
-        req.url().includes(`/api/projects/${projectId}/editor-state`) &&
-        req.method() === "PUT",
-      { timeout: 20_000 },
-    );
-    const applyResponsePromise = pageB.waitForResponse(
-      (res) =>
-        res.url().includes(`/api/projects/${projectId}/editor-state`) &&
-        res.request().method() === "PUT" &&
-        res.status() === 200,
-      { timeout: 20_000 },
-    );
-    const mergeStartedAt = Date.now();
-    await applyBtn.click();
-    const applyReq = await applyRequestPromise;
-    const applyBody = applyReq.postDataJSON() as Record<string, unknown>;
-    expect(applyBody).toHaveProperty("responseMatrix");
-    expect(applyBody).toHaveProperty("responseMatrixVersion");
-    expect(applyBody).not.toHaveProperty("analysis");
-    expect(applyBody).not.toHaveProperty("outline");
-    expect(applyBody).not.toHaveProperty("chapters");
-    expect(applyBody).not.toHaveProperty("facts");
-    await applyResponsePromise;
-
-    await expect(pageB.getByRole("alert")).toHaveCount(0);
+    await pageB.getByTestId("technical-editor-state-reload").click();
+    await expect(
+      pageB.getByTestId("technical-editor-state-conflict"),
+    ).toHaveCount(0, { timeout: 15_000 });
     await expect(pageB.getByLabel("响应备注")).toHaveValue("A-备注保留");
+
+    // 重载后持新 expected：再改章节并保存成功
+    await toggleChapterAndWaitPut(pageB, projectId, "E2E 章节甲", 200);
     await expect(
       pageB
         .locator("article.response-matrix__item")
@@ -236,7 +205,7 @@ test("无冲突：不同字段三方合并后同时保留 notes 与 chapterIds",
           const got = await request.get(
             `${API}/projects/${projectId}/editor-state`,
           );
-          expect(got.ok()).toBeTruthy();
+          expect(got.status()).toBe(200);
           const body = (await got.json()) as EditorState;
           const row = body.responseMatrix?.[0];
           return {
@@ -247,38 +216,13 @@ test("无冲突：不同字段三方合并后同时保留 notes 与 chapterIds",
         { timeout: 15_000 },
       )
       .toEqual({ notes: "A-备注保留", chapterIds: ["chap_e2e_a"] });
-
-    // P1-1：超过普通防抖保存窗口（800ms）后，合并相关 PUT 仍只能是矩阵体
-    await expect
-      .poll(
-        () => {
-          const pastWindow = Date.now() - mergeStartedAt >= 1200;
-          const allMatrixOnly =
-            mergeRelatedPuts.length >= 1 &&
-            mergeRelatedPuts.every((body) => {
-              const keys = Object.keys(body);
-              return (
-                keys.includes("responseMatrix") &&
-                keys.includes("responseMatrixVersion") &&
-                !keys.includes("analysis") &&
-                !keys.includes("outline") &&
-                !keys.includes("chapters") &&
-                !keys.includes("facts")
-              );
-            });
-          return pastWindow && allMatrixOnly;
-        },
-        { timeout: 5_000 },
-      )
-      .toBe(true);
-    pageB.off("request", onPutRequest);
   } finally {
     await contextA.close();
     await contextB.close();
   }
 });
 
-test("同字段冲突：须显式选择后应用，最终值严格对应选择", async ({
+test("真实双浏览器同字段：旧 expected 全状态冲突；重载后以本地最终值写回", async ({
   browser,
   request,
 }) => {
@@ -295,34 +239,27 @@ test("同字段冲突：须显式选择后应用，最终值严格对应选择",
     await setNotesAndWaitPut(pageA, projectId, "远端-A备注", 200);
     await setNotesAndWaitPut(pageB, projectId, "本地-B备注", 409);
 
-    await expect(pageB.getByRole("alert")).toContainText("矩阵保存冲突");
-    await expect(pageB.getByTestId("response-matrix-merge-conflicts")).toBeVisible();
-    await expect(pageB.getByTestId("merge-field-conflict-notes")).toBeVisible();
-    await expect(pageB.getByTestId("merge-local-value-notes")).toContainText(
-      "本地-B备注",
+    await expect(
+      pageB.getByTestId("technical-editor-state-conflict"),
+    ).toBeVisible({ timeout: 10_000 });
+    await expect(pageB.getByText(FULL_STATE_CONFLICT_MSG)).toBeVisible();
+    await expect(
+      pageB.getByRole("button", { name: "重新载入远端内容" }),
+    ).toBeVisible();
+    await expect(pageB.getByText(MATRIX_CONFLICT_MSG)).toHaveCount(0);
+    await expect(pageB.getByTestId("response-matrix-merge-conflicts")).toHaveCount(
+      0,
     );
-    await expect(pageB.getByTestId("merge-remote-value-notes")).toContainText(
-      "远端-A备注",
-    );
+    await expect(pageB.getByLabel("响应备注")).toHaveValue("本地-B备注");
 
-    const applyBtn = pageB.getByTestId("response-matrix-apply-merge");
-    await expect(applyBtn).toBeDisabled();
-
-    // 采用远端
-    await pageB.getByTestId("merge-choose-remote-notes").click();
-    await expect(applyBtn).toBeEnabled();
-
-    const applyResponsePromise = pageB.waitForResponse(
-      (res) =>
-        res.url().includes(`/api/projects/${projectId}/editor-state`) &&
-        res.request().method() === "PUT" &&
-        res.status() === 200,
-      { timeout: 20_000 },
-    );
-    await applyBtn.click();
-    await applyResponsePromise;
-
+    await pageB.getByTestId("technical-editor-state-reload").click();
+    await expect(
+      pageB.getByTestId("technical-editor-state-conflict"),
+    ).toHaveCount(0, { timeout: 15_000 });
     await expect(pageB.getByLabel("响应备注")).toHaveValue("远端-A备注");
+
+    await setNotesAndWaitPut(pageB, projectId, "本地-最终备注", 200);
+    await expect(pageB.getByLabel("响应备注")).toHaveValue("本地-最终备注");
     await expect
       .poll(
         async () => {
@@ -334,7 +271,7 @@ test("同字段冲突：须显式选择后应用，最终值严格对应选择",
         },
         { timeout: 15_000 },
       )
-      .toBe("远端-A备注");
+      .toBe("本地-最终备注");
   } finally {
     await contextA.close();
     await contextB.close();
@@ -351,16 +288,16 @@ test("应用合并再次 409 不自动循环；应用前不写库", async ({
   const pageA = await contextA.newPage();
   const pageB = await contextB.newPage();
   let mergePutCount = 0;
+  let matrixConflictInjected = 0;
 
   try {
     await openMatrixPage(pageA, projectId);
     await openMatrixPage(pageB, projectId);
 
     await setNotesAndWaitPut(pageA, projectId, "A-用于二次409", 200);
-    await toggleChapterAndWaitPut(pageB, projectId, "E2E 章节乙", 409);
-    await expect(pageB.getByTestId("response-matrix-merge-safe")).toBeVisible();
 
-    // 拦截「应用合并」的仅矩阵 PUT，强制第二次冲突
+    // 真实双浏览器会先命中全状态 CAS；本用例用受控拦截注入真实矩阵 detail，
+    // 以覆盖「expected 匹配语义下矩阵三方合并二次 409」路径（truth 桩亦有主证据）。
     await pageB.route(`**/api/projects/${projectId}/editor-state`, async (route: Route) => {
       const req = route.request();
       if (req.method() !== "PUT") {
@@ -381,36 +318,63 @@ test("应用合并再次 409 不自动循环；应用前不写库", async ({
         !keys.includes("analysis") &&
         !keys.includes("outline") &&
         !keys.includes("chapters");
-      if (!isMatrixOnly) {
-        await route.continue();
+      if (isMatrixOnly) {
+        mergePutCount += 1;
+        await route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({
+            detail: {
+              message: "模拟二次冲突",
+              responseMatrix: [
+                {
+                  id: "mx_e2e_merge_1",
+                  kind: "requirement",
+                  sourceKey: SOURCE_KEY,
+                  sourceIndex: 0,
+                  sourceText: SOURCE_TEXT,
+                  weight: "",
+                  chapterIds: [],
+                  outlineNodeIds: [],
+                  status: "uncovered",
+                  notes: "A-用于二次409",
+                },
+              ],
+              currentResponseMatrixVersion: "forced-conflict-version",
+            },
+          }),
+        });
         return;
       }
-      mergePutCount += 1;
-      await route.fulfill({
-        status: 409,
-        contentType: "application/json",
-        body: JSON.stringify({
-          detail: {
-            message: "模拟二次冲突",
-            responseMatrix: [
-              {
-                id: "mx_e2e_merge_1",
-                kind: "requirement",
-                sourceKey: SOURCE_KEY,
-                sourceIndex: 0,
-                sourceText: SOURCE_TEXT,
-                weight: "",
-                chapterIds: [],
-                outlineNodeIds: [],
-                status: "uncovered",
-                notes: "A-用于二次409",
-              },
-            ],
-            currentResponseMatrixVersion: "forced-conflict-version",
-          },
-        }),
-      });
+      // 首次全量 PUT：注入真实矩阵冲突明细（非空数组 + 非空版本）
+      if (matrixConflictInjected === 0 && keys.includes("responseMatrix")) {
+        matrixConflictInjected += 1;
+        const remote = (await (
+          await request.get(`${API}/projects/${projectId}/editor-state`)
+        ).json()) as EditorState;
+        await route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({
+            detail: {
+              code: "response_matrix_version_conflict",
+              message: "模拟矩阵冲突",
+              responseMatrix: remote.responseMatrix ?? [],
+              currentResponseMatrixVersion:
+                remote.responseMatrixVersion || "ver_remote_matrix_1",
+            },
+          }),
+        });
+        return;
+      }
+      await route.continue();
     });
+
+    await toggleChapterAndWaitPut(pageB, projectId, "E2E 章节乙", 409);
+    await expect(pageB.getByText(MATRIX_CONFLICT_MSG)).toBeVisible({
+      timeout: 10_000,
+    });
+    await expect(pageB.getByTestId("response-matrix-merge-safe")).toBeVisible();
 
     const applyBtn = pageB.getByTestId("response-matrix-apply-merge");
     await applyBtn.click();
@@ -486,12 +450,9 @@ test("项目切换：旧项目延迟合并响应不得污染新项目", async ({
     await openMatrixPage(pageB, projectA);
 
     await setNotesAndWaitPut(pageA, projectA, "旧项目-远端备注污染探针", 200);
-    await toggleChapterAndWaitPut(pageB, projectA, "E2E 章节甲", 409);
-    await expect(pageB.getByTestId("response-matrix-merge-safe")).toBeVisible();
-    const applyBtn = pageB.getByTestId("response-matrix-apply-merge");
-    await expect(applyBtn).toBeEnabled();
 
-    // 挂起 projectA 仅矩阵合并 PUT，稍后以 200 合成响应放行（不依赖真实写库时序）
+    let matrixConflictInjected = 0;
+    // 挂起 projectA 仅矩阵合并 PUT；同时注入首次矩阵 409 明细以进入合并 UX
     await pageB.route(
       `**/api/projects/${projectA}/editor-state`,
       async (route: Route) => {
@@ -513,27 +474,56 @@ test("项目切换：旧项目延迟合并响应不得污染新项目", async ({
           !keys.includes("analysis") &&
           !keys.includes("outline") &&
           !keys.includes("chapters");
-        if (!isMatrixOnly) {
-          await route.continue();
+        if (isMatrixOnly) {
+          projectAMergePutSeen += 1;
+          await mergePutGate;
+          const matrix = Array.isArray(body.responseMatrix)
+            ? body.responseMatrix
+            : [];
+          await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({
+              projectId: projectA,
+              responseMatrix: matrix,
+              responseMatrixVersion: "pollution-version-from-project-a",
+              stateVersion: "esv_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              updatedAt: new Date().toISOString(),
+            }),
+          });
           return;
         }
-        projectAMergePutSeen += 1;
-        await mergePutGate;
-        const matrix = Array.isArray(body.responseMatrix)
-          ? body.responseMatrix
-          : [];
-        await route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify({
-            projectId: projectA,
-            responseMatrix: matrix,
-            responseMatrixVersion: "pollution-version-from-project-a",
-            updatedAt: new Date().toISOString(),
-          }),
-        });
+        if (matrixConflictInjected === 0 && keys.includes("responseMatrix")) {
+          matrixConflictInjected += 1;
+          const remote = (await (
+            await request.get(`${API}/projects/${projectA}/editor-state`)
+          ).json()) as EditorState;
+          await route.fulfill({
+            status: 409,
+            contentType: "application/json",
+            body: JSON.stringify({
+              detail: {
+                code: "response_matrix_version_conflict",
+                message: "模拟矩阵冲突",
+                responseMatrix: remote.responseMatrix ?? [],
+                currentResponseMatrixVersion:
+                  remote.responseMatrixVersion || "ver_remote_iso_1",
+              },
+            }),
+          });
+          return;
+        }
+        await route.continue();
       },
     );
+
+    await toggleChapterAndWaitPut(pageB, projectA, "E2E 章节甲", 409);
+    await expect(pageB.getByText(MATRIX_CONFLICT_MSG)).toBeVisible({
+      timeout: 10_000,
+    });
+    await expect(pageB.getByTestId("response-matrix-merge-safe")).toBeVisible();
+    const applyBtn = pageB.getByTestId("response-matrix-apply-merge");
+    await expect(applyBtn).toBeEnabled();
 
     pageB.on("request", (req: Request) => {
       if (
@@ -562,9 +552,7 @@ test("项目切换：旧项目延迟合并响应不得污染新项目", async ({
     // 合并仍在挂起：同一文档内软切换到新项目（复用 hook 实例 / 触发 projectId effect）
     await softNavigateTechnicalPlan(pageB, projectB, "analysis");
     await expect(
-      pageB.getByRole("region", { name: "响应矩阵" }).or(
-        pageB.locator("section.response-matrix"),
-      ),
+      pageB.getByRole("region", { name: "响应矩阵" }),
     ).toBeVisible({ timeout: 20_000 });
     await expect(pageB.getByLabel("响应备注")).toHaveValue("项目B独立备注", {
       timeout: 20_000,

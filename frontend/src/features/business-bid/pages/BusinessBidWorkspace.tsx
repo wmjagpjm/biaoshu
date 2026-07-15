@@ -101,6 +101,8 @@ export function BusinessBidWorkspace() {
     loading: wsLoading,
     loadError,
     saveError,
+    fullStateConflict,
+    fullStateConflictMessage,
     refreshFromApi,
     setParseMarkdown,
     updateQualifyItem,
@@ -313,8 +315,8 @@ export function BusinessBidWorkspace() {
     );
   }
 
-  // P11B：editor-state 加载失败固定卡；不挂步骤/表格/编辑控件，不闪旧/演示内容
-  if (loadError) {
+  // P11B：editor-state 加载失败固定卡；全状态阻断时保留本地内容不卸载
+  if (loadError && !fullStateConflict) {
     return (
       <div className="page bb-layout" data-testid="business-editor-load-error">
         <p style={{ color: "var(--danger)" }}>{loadError}</p>
@@ -372,6 +374,33 @@ export function BusinessBidWorkspace() {
               </span>
             ) : null}
           </p>
+          {fullStateConflict ? (
+            <div
+              data-testid="business-editor-state-conflict"
+              style={{
+                marginTop: 8,
+                padding: "10px 12px",
+                borderRadius: 8,
+                background: "var(--danger-soft, #fff1f0)",
+                color: "var(--danger)",
+              }}
+            >
+              <p style={{ margin: "0 0 8px" }}>{fullStateConflictMessage}</p>
+              {loadError ? (
+                <p style={{ margin: "0 0 8px" }}>{loadError}</p>
+              ) : null}
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                data-testid="business-editor-state-reload"
+                onClick={() => {
+                  void refreshFromApi();
+                }}
+              >
+                重新载入远端内容
+              </button>
+            </div>
+          ) : null}
         </div>
         <div className="page-actions">
           <Link to="/business-bid" className="btn btn-ghost">

@@ -25,6 +25,9 @@ const LOCAL_SECRET = "LOCAL_EDITORS_SECRET_SHOULD_NOT_RENDER_P11C";
 const MOCK_SNIPPET = "智慧交通综合管理平台";
 const LOAD_ERROR = "技术标工作区加载失败，请稍后重试";
 const SAVE_ERROR = "技术标工作区保存失败，请稍后重试";
+const FULL_STATE_CONFLICT_MSG =
+  "编辑内容已被其他操作更新，已停止自动保存。重新载入远端内容将替换当前未保存修改。";
+const STATE_VERSION_RE = /^esv_[0-9a-f]{32}$/;
 const MATRIX_CONFLICT_MSG = "响应矩阵已被其他终端更新，请重新载入后再保存";
 const CSRF_TOKEN = "e2e-p11c-csrf-token-memory";
 /** 不含敏感信息的 E2E 会话 Cookie（HttpOnly；document.cookie 不可见） */
@@ -89,6 +92,8 @@ type EditorState = {
   responseMatrix: MatrixRow[];
   responseMatrixVersion: string | null;
   parsedMarkdown: string;
+  guidance?: Record<string, unknown> | null;
+  stateVersion: string;
   updatedAt: string | null;
 };
 
@@ -97,6 +102,8 @@ type PutRecord = {
   body: Record<string, unknown>;
   raw: string;
   headers: Record<string, string>;
+  /** 服务端成功 200 响应中的 stateVersion；缺/非法时为 null */
+  responseVersion?: string | null;
 };
 
 /** 用途：受控挂起，便于 A→B 在响应释放前切换项目。 */
@@ -107,8 +114,11 @@ type HoldGate = {
 };
 
 type PutMode =
-  | { kind: "ok" }
+  | { kind: "ok"; stripStateVersion?: boolean; invalidStateVersion?: boolean }
   | { kind: "fail"; status: number }
+  | { kind: "full_conflict" }
+  /** 普通 409：无 editor_state_version_conflict code、无矩阵明细 */
+  | { kind: "plain_409" }
   | {
       kind: "conflict";
       remoteNotes?: string;
@@ -163,6 +173,10 @@ type ProbeState = {
   fuseCreatePosts: Array<{ projectId: string; body: Record<string, unknown> }>;
   fuseListGets: string[];
   fuseConsumePosts: string[];
+  /** 服务端桩版本序号；成功 PUT 生成下一 esv_，禁止回显客户端 expected */
+  versionSeq: number;
+  /** 成功 200 且响应含合法 stateVersion 时按序记录，供串链反假绿 */
+  successVersionLog: string[];
 };
 
 type StorageSnapshot = {
@@ -192,6 +206,22 @@ function createHoldGate(): HoldGate {
     },
     isReleased: () => released,
   };
+}
+
+
+function isValidStateVersion(value: unknown): value is string {
+  return typeof value === "string" && STATE_VERSION_RE.test(value);
+}
+
+/** 用途：服务端桩分配下一合法 stateVersion，不得回显客户端 expected。 */
+function allocateStateVersion(state: ProbeState): string {
+  state.versionSeq += 1;
+  return `esv_${state.versionSeq.toString(16).padStart(32, "0")}`;
+}
+
+/** 用途：固定种子版本（GET 初始态）。 */
+function seedStateVersion(n: number): string {
+  return `esv_${n.toString(16).padStart(32, "0")}`;
 }
 
 function isLegacyFontUrl(url: string): boolean {
@@ -341,6 +371,16 @@ function emptyTechnicalEditor(projectId: string): EditorState {
     responseMatrix: [],
     responseMatrixVersion: null,
     parsedMarkdown: "",
+    guidance: {
+      targetWordCount: 80000,
+      chapterFocus: "",
+      formatRequirements: "",
+      extraRequirements: "",
+      lockedForNextStage: false,
+      kbEnabled: true,
+      kbFolderIds: [],
+    },
+    stateVersion: seedStateVersion(1),
     updatedAt: null,
   };
 }
@@ -391,6 +431,16 @@ function realTechnicalEditor(
     responseMatrix: [matrixRow()],
     responseMatrixVersion: "ver_srv_1",
     parsedMarkdown: "服务端解析正文",
+    guidance: {
+      targetWordCount: 80000,
+      chapterFocus: "服务端章节侧重点",
+      formatRequirements: "",
+      extraRequirements: "",
+      lockedForNextStage: false,
+      kbEnabled: true,
+      kbFolderIds: [],
+    },
+    stateVersion: seedStateVersion(10),
     updatedAt: "2026-07-15T12:00:00.000Z",
   };
 }
@@ -466,6 +516,8 @@ function createProbeState(seed: ProjectStub[] = []): ProbeState {
     fuseCreatePosts: [],
     fuseListGets: [],
     fuseConsumePosts: [],
+    versionSeq: 100,
+    successVersionLog: [],
   };
 }
 
@@ -507,6 +559,36 @@ async function fulfillEditorPut(
     return;
   }
 
+  if (mode.kind === "full_conflict") {
+    const prev = state.editorById[id] ?? emptyTechnicalEditor(id);
+    await json(
+      route,
+      {
+        detail: {
+          code: "editor_state_version_conflict",
+          message: "编辑内容已被其他操作更新，请重新载入后再保存",
+          currentStateVersion: prev.stateVersion,
+        },
+      },
+      409,
+    );
+    return;
+  }
+
+  if (mode.kind === "plain_409") {
+    await json(
+      route,
+      {
+        detail: {
+          code: "generic_conflict",
+          message: SECRET,
+        },
+      },
+      409,
+    );
+    return;
+  }
+
   if (mode.kind === "conflict") {
     const times = mode.times ?? 1;
     const nextTimes = times - 1;
@@ -537,9 +619,32 @@ async function fulfillEditorPut(
     return;
   }
 
-  // ok
+  // ok：可选 CAS；成功生成下一版本，禁止回显客户端 expected
   const prev = state.editorById[id] ?? emptyTechnicalEditor(id);
-  const nextVersion =
+  if (body.expectedStateVersion != null) {
+    const expected = body.expectedStateVersion;
+    if (!isValidStateVersion(expected) || expected !== prev.stateVersion) {
+      await json(
+        route,
+        {
+          detail: {
+            code: "editor_state_version_conflict",
+            message: "编辑内容已被其他操作更新，请重新载入后再保存",
+            currentStateVersion: prev.stateVersion,
+          },
+        },
+        409,
+      );
+      return;
+    }
+  }
+
+  const nextVersion = allocateStateVersion(state);
+  const nextGuidance =
+    body.guidance && typeof body.guidance === "object"
+      ? (body.guidance as Record<string, unknown>)
+      : prev.guidance;
+  const nextVersionMatrix =
     typeof body.responseMatrixVersion === "string" && body.responseMatrixVersion
       ? `ver_after_${body.responseMatrixVersion}`
       : prev.responseMatrixVersion || "ver_srv_saved";
@@ -568,15 +673,36 @@ async function fulfillEditorPut(
       ? (body.responseMatrix as MatrixRow[])
       : prev.responseMatrix,
     responseMatrixVersion: Array.isArray(body.responseMatrix)
-      ? nextVersion
+      ? nextVersionMatrix
       : prev.responseMatrixVersion,
     parsedMarkdown:
       body.parsedMarkdown != null
         ? String(body.parsedMarkdown)
         : prev.parsedMarkdown,
+    guidance: nextGuidance ?? prev.guidance,
+    stateVersion: nextVersion,
     updatedAt: new Date().toISOString(),
   };
-  await json(route, state.editorById[id]);
+  const responseBody: Record<string, unknown> = {
+    ...state.editorById[id],
+  };
+  let responseVersion: string | null = nextVersion;
+  if (mode.kind === "ok" && mode.stripStateVersion) {
+    delete responseBody.stateVersion;
+    responseVersion = null;
+  } else if (mode.kind === "ok" && mode.invalidStateVersion) {
+    responseBody.stateVersion = "not-a-valid-esv";
+    responseVersion = null;
+  }
+  // 挂到最近一条 putLog，供串链断言读取服务端真实响应版本
+  const lastPut = state.putLog[state.putLog.length - 1];
+  if (lastPut && lastPut.projectId === id) {
+    lastPut.responseVersion = responseVersion;
+  }
+  if (responseVersion && isValidStateVersion(responseVersion)) {
+    state.successVersionLog.push(responseVersion);
+  }
+  await json(route, responseBody);
 }
 
 async function installP11cRoutes(page: Page, state: ProbeState) {
@@ -1733,7 +1859,9 @@ test.describe("P11C 技术标编辑态真实数据收口", () => {
         "analysis",
         "analysisOverview",
         "chapters",
+        "expectedStateVersion",
         "facts",
+        "guidance",
         "mode",
         "outline",
         "responseMatrix",
@@ -1742,6 +1870,8 @@ test.describe("P11C 技术标编辑态真实数据收口", () => {
         .slice()
         .sort(),
     );
+    expect(put.body.expectedStateVersion).toBe(seedStateVersion(10));
+    expect(isValidStateVersion(put.body.expectedStateVersion)).toBe(true);
     expect(put.body.analysisOverview).toBe(edited);
     expect(
       (put.body.analysis as { overview?: string } | undefined)?.overview,
@@ -1993,7 +2123,12 @@ test.describe("P11C 技术标编辑态真实数据收口", () => {
     const mergePut409 = state.putLog[state.putLog.length - 1];
     assertRequiredPutAuth(mergePut409);
     expect(Object.keys(mergePut409.body).slice().sort()).toEqual(
-      ["responseMatrix", "responseMatrixVersion"].slice().sort(),
+      ["expectedStateVersion", "responseMatrix", "responseMatrixVersion"]
+        .slice()
+        .sort(),
+    );
+    expect(isValidStateVersion(mergePut409.body.expectedStateVersion)).toBe(
+      true,
     );
     expect(mergePut409.body.responseMatrixVersion).toBe("ver_remote_merge_1");
     await expect(
@@ -2033,7 +2168,12 @@ test.describe("P11C 技术标编辑态真实数据收口", () => {
     const mergePutOk = state.putLog[state.putLog.length - 1];
     assertRequiredPutAuth(mergePutOk);
     expect(Object.keys(mergePutOk.body).slice().sort()).toEqual(
-      ["responseMatrix", "responseMatrixVersion"].slice().sort(),
+      ["expectedStateVersion", "responseMatrix", "responseMatrixVersion"]
+        .slice()
+        .sort(),
+    );
+    expect(isValidStateVersion(mergePutOk.body.expectedStateVersion)).toBe(
+      true,
     );
     expect(mergePutOk.body.responseMatrixVersion).toBe("ver_remote_merge_3");
     await expect(page.getByText(MATRIX_CONFLICT_MSG)).toHaveCount(0);
@@ -2675,4 +2815,449 @@ test.describe("P11C 技术标编辑态真实数据收口", () => {
     assertEditorsKeyFamilyExact(after, { [seeded.key]: seeded.value });
     assertCleanConsole(consoleLines);
   });
+
+  // ---------------------------------------------------------------------------
+  // P12B：全状态 CAS / 串行队列 / guidance 收口 / 冲突与代次
+  // ---------------------------------------------------------------------------
+
+  test("P12B GET 缺失 stateVersion 固定加载失败且零 PUT", async ({ page }) => {
+    const project = makeProject({ id: REAL_TECH_A, name: "P12B缺版本" });
+    const state = createProbeState([project]);
+    const editor = realTechnicalEditor(REAL_TECH_A, REAL_OVERVIEW);
+    // @ts-expect-error 故意缺失版本以测加载失败
+    delete editor.stateVersion;
+    state.editorById[REAL_TECH_A] = editor;
+    await installP11cRoutes(page, state);
+    await openTechWorkspace(page, REAL_TECH_A, "analysis");
+    await expect(page.getByTestId("technical-editor-load-error")).toBeVisible({
+      timeout: 10_000,
+    });
+    await expect(page.getByText(LOAD_ERROR)).toBeVisible();
+    expect(state.putLog.length).toBe(0);
+  });
+
+  test("P12B GET 非法 stateVersion 固定加载失败且零 PUT", async ({ page }) => {
+    const project = makeProject({ id: REAL_TECH_A, name: "P12B非法版本" });
+    const state = createProbeState([project]);
+    state.editorById[REAL_TECH_A] = {
+      ...realTechnicalEditor(REAL_TECH_A, REAL_OVERVIEW),
+      stateVersion: "bad_version",
+    };
+    await installP11cRoutes(page, state);
+    await openTechWorkspace(page, REAL_TECH_A, "analysis");
+    await expect(page.getByTestId("technical-editor-load-error")).toBeVisible({
+      timeout: 10_000,
+    });
+    expect(state.putLog.length).toBe(0);
+  });
+
+  test("P12B 技术连续编辑真挂起串行：第二 PUT 在第一响应前为 0，expected 串链", async ({
+    page,
+  }) => {
+    const project = makeProject({ id: REAL_TECH_A, name: "P12B串行" });
+    const state = createProbeState([project]);
+    state.editorById[REAL_TECH_A] = realTechnicalEditor(
+      REAL_TECH_A,
+      REAL_OVERVIEW,
+    );
+    const gate = createHoldGate();
+    state.putMode[REAL_TECH_A] = { kind: "gate", gate, then: "ok" };
+    await installP11cRoutes(page, state);
+    await openTechWorkspace(page, REAL_TECH_A, "analysis");
+    await expectWorkspaceReady(page, "P12B串行");
+
+    const v0 = state.editorById[REAL_TECH_A].stateVersion;
+    await page
+      .getByTestId("technical-analysis-overview")
+      .fill(`${REAL_OVERVIEW}\n第一波编辑`);
+    await expect.poll(() => state.putLog.length, { timeout: 5_000 }).toBe(1);
+    expect(state.putLog[0].body.expectedStateVersion).toBe(v0);
+
+    await page
+      .getByTestId("technical-analysis-overview")
+      .fill(`${REAL_OVERVIEW}\n第二波最新正文`);
+    // 防抖 800ms 后仍不得发出第二 PUT（第一仍挂起）
+    await expect
+      .poll(async () => {
+        await new Promise((r) => setTimeout(r, 50));
+        return state.putLog.length;
+      }, { timeout: 2_000 })
+      .toBe(1);
+
+    gate.release();
+    await expect.poll(() => state.putLog.length, { timeout: 8_000 }).toBe(2);
+    const first = state.putLog[0];
+    const second = state.putLog[1];
+    // 反假绿：第二 expected 必须精确等于第一 PUT 响应的服务端 stateVersion
+    expect(first.responseVersion).toBeTruthy();
+    expect(isValidStateVersion(first.responseVersion)).toBe(true);
+    expect(first.responseVersion).not.toBe(v0);
+    expect(state.successVersionLog[0]).toBe(first.responseVersion);
+    expect(second.body.expectedStateVersion).toBe(first.responseVersion);
+    expect(second.body.expectedStateVersion).toBe(state.successVersionLog[0]);
+    expect(
+      (second.body.analysis as { overview?: string }).overview,
+    ).toContain("第二波最新正文");
+  });
+
+  test("P12B guidance 编辑只走技术主队列；含 guidance+expected；无独立 guidance GET/PUT；旧 feedback guidance 不水合", async ({
+    page,
+  }) => {
+    const project = makeProject({ id: REAL_TECH_A, name: "P12Bguidance" });
+    const state = createProbeState([project]);
+    state.editorById[REAL_TECH_A] = realTechnicalEditor(
+      REAL_TECH_A,
+      REAL_OVERVIEW,
+    );
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "biaoshu.projectFeedback.proj_e2e_p11c_tech_a",
+        JSON.stringify({
+          projectId: "proj_e2e_p11c_tech_a",
+          guidance: {
+            chapterFocus: "LOCAL_GUIDANCE_SHOULD_NOT_HYDRATE",
+            extraRequirements: "local-extra",
+          },
+          history: [],
+          keepMe: "preserve-unrelated",
+        }),
+      );
+    });
+    await installP11cRoutes(page, state);
+    await openTechWorkspace(page, REAL_TECH_A, "analysis");
+    await expectWorkspaceReady(page, "P12Bguidance");
+    await expect(page.locator("body")).not.toContainText(
+      "LOCAL_GUIDANCE_SHOULD_NOT_HYDRATE",
+    );
+
+    const getsBefore = state.getLog.filter((id) => id === REAL_TECH_A).length;
+    const putsBefore = state.putLog.length;
+
+    // ProjectGuidanceCard：#gw-focus 章节侧重点
+    await page.locator("#gw-focus").fill("P12B_GUIDANCE_EDIT_FOCUS");
+
+    await expect
+      .poll(() => state.putLog.length, { timeout: 5_000 })
+      .toBe(putsBefore + 1);
+    const put = state.putLog[state.putLog.length - 1];
+    expect(put.body).toHaveProperty("guidance");
+    expect(put.body).toHaveProperty("expectedStateVersion");
+    expect(
+      (put.body.guidance as { chapterFocus?: string }).chapterFocus,
+    ).toContain("P12B_GUIDANCE_EDIT_FOCUS");
+    const getsAfter = state.getLog.filter((id) => id === REAL_TECH_A).length;
+    expect(getsAfter).toBe(getsBefore);
+
+    const snap = await readStorageSnapshot(page);
+    const fbKey = Object.keys(snap.ls).find((k) =>
+      k.startsWith("biaoshu.projectFeedback."),
+    );
+    if (fbKey) {
+      expect(snap.ls[fbKey]).toContain("preserve-unrelated");
+      expect(snap.ls[fbKey]).not.toMatch(/esv_[0-9a-f]{32}/);
+    }
+  });
+
+  test("P12B 技术全状态 409：本地保留、全量 PUT 阻断、固定 UI、无矩阵伪冲突；显式 reload 恢复", async ({
+    page,
+  }) => {
+    const project = makeProject({ id: REAL_TECH_A, name: "P12B全状态冲突" });
+    const state = createProbeState([project]);
+    state.editorById[REAL_TECH_A] = realTechnicalEditor(
+      REAL_TECH_A,
+      REAL_OVERVIEW,
+    );
+    state.putMode[REAL_TECH_A] = { kind: "full_conflict" };
+    await installP11cRoutes(page, state);
+    await openTechWorkspace(page, REAL_TECH_A, "analysis");
+    await expectWorkspaceReady(page, "P12B全状态冲突");
+
+    const localText = `${REAL_OVERVIEW}\n本地未保存冲突正文`;
+    await page.getByTestId("technical-analysis-overview").fill(localText);
+    await expect(
+      page.getByTestId("technical-editor-state-conflict"),
+    ).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(FULL_STATE_CONFLICT_MSG)).toBeVisible();
+    await expect(page.getByText(MATRIX_CONFLICT_MSG)).toHaveCount(0);
+    await expect(
+      page.getByTestId("response-matrix-merge-conflicts"),
+    ).toHaveCount(0);
+    await expect(page.getByTestId("technical-analysis-overview")).toHaveValue(
+      localText,
+    );
+
+    const putsAtConflict = state.putLog.length;
+    await page
+      .getByTestId("technical-analysis-overview")
+      .fill(`${localText}\n继续编辑不应自动重试`);
+    await expect
+      .poll(async () => {
+        await new Promise((r) => setTimeout(r, 100));
+        return state.putLog.length;
+      }, { timeout: 2_000 })
+      .toBe(putsAtConflict);
+
+    state.editorById[REAL_TECH_A] = {
+      ...realTechnicalEditor(REAL_TECH_A, "远端重载后的概述"),
+      stateVersion: seedStateVersion(999),
+    };
+    state.putMode[REAL_TECH_A] = { kind: "ok" };
+    const getsBefore = state.getLog.filter((id) => id === REAL_TECH_A).length;
+    await page.getByTestId("technical-editor-state-reload").click();
+    await expect
+      .poll(
+        () => state.getLog.filter((id) => id === REAL_TECH_A).length,
+        { timeout: 5_000 },
+      )
+      .toBe(getsBefore + 1);
+    await expect(
+      page.getByTestId("technical-editor-state-conflict"),
+    ).toHaveCount(0);
+    await expect(page.getByTestId("technical-analysis-overview")).toHaveValue(
+      "远端重载后的概述",
+    );
+
+    const putsBefore = state.putLog.length;
+    await page
+      .getByTestId("technical-analysis-overview")
+      .fill("远端重载后的概述\n恢复后编辑");
+    await expect
+      .poll(() => state.putLog.length, { timeout: 5_000 })
+      .toBe(putsBefore + 1);
+    expect(
+      state.putLog[state.putLog.length - 1].body.expectedStateVersion,
+    ).toBe(seedStateVersion(999));
+  });
+
+  test("P12B 技术 200 缺失 stateVersion 阻断；零后续 PUT", async ({ page }) => {
+    const project = makeProject({ id: REAL_TECH_A, name: "P12B缺失200" });
+    const state = createProbeState([project]);
+    state.editorById[REAL_TECH_A] = realTechnicalEditor(
+      REAL_TECH_A,
+      REAL_OVERVIEW,
+    );
+    state.putMode[REAL_TECH_A] = { kind: "ok", stripStateVersion: true };
+    await installP11cRoutes(page, state);
+    await openTechWorkspace(page, REAL_TECH_A, "analysis");
+    await expectWorkspaceReady(page, "P12B缺失200");
+    await page
+      .getByTestId("technical-analysis-overview")
+      .fill(`${REAL_OVERVIEW}\n触发缺失200`);
+    await expect(
+      page.getByTestId("technical-editor-state-conflict"),
+    ).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(FULL_STATE_CONFLICT_MSG)).toBeVisible();
+    await expect(page.getByText(MATRIX_CONFLICT_MSG)).toHaveCount(0);
+    const putsBlocked = state.putLog.length;
+    expect(state.putLog[putsBlocked - 1].responseVersion).toBeNull();
+    expect(state.successVersionLog.length).toBe(0);
+    await page
+      .getByTestId("technical-analysis-overview")
+      .fill(`${REAL_OVERVIEW}\n缺失后仍阻断`);
+    await expect
+      .poll(async () => {
+        await new Promise((r) => setTimeout(r, 100));
+        return state.putLog.length;
+      }, { timeout: 2_000 })
+      .toBe(putsBlocked);
+  });
+
+  test("P12B 技术 200 非法新版本阻断；reload 失败继续阻断", async ({ page }) => {
+    const project = makeProject({ id: REAL_TECH_A, name: "P12B非法200" });
+    const state = createProbeState([project]);
+    state.editorById[REAL_TECH_A] = realTechnicalEditor(
+      REAL_TECH_A,
+      REAL_OVERVIEW,
+    );
+    state.putMode[REAL_TECH_A] = { kind: "ok", invalidStateVersion: true };
+    await installP11cRoutes(page, state);
+    await openTechWorkspace(page, REAL_TECH_A, "analysis");
+    await expectWorkspaceReady(page, "P12B非法200");
+    await page
+      .getByTestId("technical-analysis-overview")
+      .fill(`${REAL_OVERVIEW}\n触发非法200`);
+    await expect(
+      page.getByTestId("technical-editor-state-conflict"),
+    ).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(FULL_STATE_CONFLICT_MSG)).toBeVisible();
+    const putsBlocked = state.putLog.length;
+    expect(state.putLog[putsBlocked - 1].responseVersion).toBeNull();
+    expect(state.successVersionLog.length).toBe(0);
+    await page
+      .getByTestId("technical-analysis-overview")
+      .fill(`${REAL_OVERVIEW}\n阻断后再编辑`);
+    await expect
+      .poll(async () => {
+        await new Promise((r) => setTimeout(r, 100));
+        return state.putLog.length;
+      }, { timeout: 2_000 })
+      .toBe(putsBlocked);
+
+    state.getMode[REAL_TECH_A] = { kind: "fail", status: 500 };
+    await page.getByTestId("technical-editor-state-reload").click();
+    await expect(page.getByText(LOAD_ERROR)).toBeVisible({ timeout: 5_000 });
+    await expect(
+      page.getByTestId("technical-editor-state-conflict"),
+    ).toBeVisible();
+    await page
+      .getByTestId("technical-analysis-overview")
+      .fill(`${REAL_OVERVIEW}\n失败后仍阻断`);
+    await expect
+      .poll(async () => {
+        await new Promise((r) => setTimeout(r, 100));
+        return state.putLog.length;
+      }, { timeout: 2_000 })
+      .toBe(putsBlocked);
+  });
+
+  test("P12B 普通 409 无矩阵明细：固定保存失败，不伪造空矩阵冲突/mergePreview", async ({
+    page,
+  }) => {
+    const project = makeProject({ id: REAL_TECH_A, name: "P12B普通409" });
+    const state = createProbeState([project]);
+    state.editorById[REAL_TECH_A] = realTechnicalEditor(
+      REAL_TECH_A,
+      REAL_OVERVIEW,
+    );
+    state.putMode[REAL_TECH_A] = { kind: "plain_409" };
+    await installP11cRoutes(page, state);
+    await openTechWorkspace(page, REAL_TECH_A, "analysis");
+    await expectWorkspaceReady(page, "P12B普通409");
+
+    await page
+      .getByTestId("technical-analysis-overview")
+      .fill(`${REAL_OVERVIEW}\n普通409无明细`);
+    await expect(page.getByText(SAVE_ERROR)).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(MATRIX_CONFLICT_MSG)).toHaveCount(0);
+    await expect(
+      page.getByTestId("technical-editor-state-conflict"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("response-matrix-merge-preview"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("response-matrix-merge-conflicts"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("response-matrix-apply-merge"),
+    ).toHaveCount(0);
+    await expect(page.getByText(SECRET)).toHaveCount(0);
+    await expect(page.getByText("generic_conflict")).toHaveCount(0);
+
+    // 全状态阻断期间：矩阵相关动作不得产生 PUT
+    state.putMode[REAL_TECH_A] = { kind: "full_conflict" };
+    await page
+      .getByTestId("technical-analysis-overview")
+      .fill(`${REAL_OVERVIEW}\n进入全状态阻断`);
+    await expect(
+      page.getByTestId("technical-editor-state-conflict"),
+    ).toBeVisible({ timeout: 5_000 });
+    const putsBlocked = state.putLog.length;
+    await matrixNotesLocator(page).fill("阻断期矩阵备注不应发PUT");
+    await page
+      .getByTestId("technical-analysis-overview")
+      .fill(`${REAL_OVERVIEW}\n阻断期继续编辑`);
+    await expect
+      .poll(async () => {
+        await new Promise((r) => setTimeout(r, 100));
+        return state.putLog.length;
+      }, { timeout: 2_000 })
+      .toBe(putsBlocked);
+  });
+
+  test("P12B 矩阵既有 409 与合并三键串行；全状态 code 不进矩阵 UX", async ({
+    page,
+  }) => {
+    const project = makeProject({ id: REAL_TECH_A, name: "P12B矩阵兼容" });
+    const state = createProbeState([project]);
+    state.editorById[REAL_TECH_A] = realTechnicalEditor(
+      REAL_TECH_A,
+      REAL_OVERVIEW,
+    );
+    await installP11cRoutes(page, state);
+    await openTechWorkspace(page, REAL_TECH_A, "analysis");
+    await expectWorkspaceReady(page, "P12B矩阵兼容");
+    const notesBox = matrixNotesLocator(page);
+    await notesBox.fill("基线");
+    await expect.poll(() => state.putLog.length, { timeout: 5_000 }).toBe(1);
+
+    state.putMode[REAL_TECH_A] = {
+      kind: "conflict",
+      remoteNotes: "远端矩阵备注",
+      remoteVersion: "ver_remote_p12b",
+      times: 1,
+    };
+    await notesBox.fill("本地矩阵备注");
+    await expect.poll(() => state.putLog.length, { timeout: 5_000 }).toBe(2);
+    await expect(page.getByText(MATRIX_CONFLICT_MSG)).toBeVisible();
+    await expect(
+      page.getByTestId("technical-editor-state-conflict"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("response-matrix-merge-conflicts"),
+    ).toBeVisible();
+    await page.getByTestId("merge-choose-local-notes").click();
+    state.putMode[REAL_TECH_A] = { kind: "ok" };
+    const before = state.putLog.length;
+    await page.getByTestId("response-matrix-apply-merge").click();
+    await expect
+      .poll(() => state.putLog.length, { timeout: 5_000 })
+      .toBe(before + 1);
+    const mergePut = state.putLog[state.putLog.length - 1];
+    expect(Object.keys(mergePut.body).slice().sort()).toEqual(
+      ["expectedStateVersion", "responseMatrix", "responseMatrixVersion"]
+        .slice()
+        .sort(),
+    );
+    expect(mergePut.body).not.toHaveProperty("analysis");
+    expect(mergePut.body).not.toHaveProperty("outline");
+    expect(mergePut.body).not.toHaveProperty("guidance");
+  });
+
+  test("P12B A→B 挂起/迟到不污染 B；版本不落存储", async ({ page }) => {
+    const projectA = makeProject({ id: REAL_TECH_A, name: "P12B甲" });
+    const projectB = makeProject({ id: REAL_TECH_B, name: "P12B乙" });
+    const state = createProbeState([projectA, projectB]);
+    state.editorById[REAL_TECH_A] = realTechnicalEditor(
+      REAL_TECH_A,
+      REAL_OVERVIEW,
+    );
+    state.editorById[REAL_TECH_B] = realTechnicalEditor(
+      REAL_TECH_B,
+      REAL_OVERVIEW_B,
+    );
+    const gate = createHoldGate();
+    state.putMode[REAL_TECH_A] = { kind: "gate", gate, then: "ok" };
+    await installP11cRoutes(page, state);
+    await openTechWorkspace(page, REAL_TECH_A, "analysis");
+    await expectWorkspaceReady(page, "P12B甲");
+    await page
+      .getByTestId("technical-analysis-overview")
+      .fill(`${REAL_OVERVIEW}\n甲挂起编辑`);
+    await expect.poll(() => state.putLog.length, { timeout: 5_000 }).toBe(1);
+
+    await page.goto(`/technical-plan/${REAL_TECH_B}/analysis`);
+    await expectWorkspaceReady(page, "P12B乙");
+    await expect(page.getByTestId("technical-analysis-overview")).toHaveValue(
+      REAL_OVERVIEW_B,
+    );
+    gate.release();
+    await expect
+      .poll(async () => {
+        return page.getByTestId("technical-analysis-overview").inputValue();
+      }, { timeout: 5_000 })
+      .toBe(REAL_OVERVIEW_B);
+    await expect(
+      page.getByTestId("technical-editor-state-conflict"),
+    ).toHaveCount(0);
+
+    const snap = await readStorageSnapshot(page);
+    for (const v of Object.values(snap.ls)) {
+      expect(v).not.toMatch(/esv_[0-9a-f]{32}/);
+    }
+    for (const v of Object.values(snap.ss)) {
+      expect(v).not.toMatch(/esv_[0-9a-f]{32}/);
+    }
+  });
+
 });

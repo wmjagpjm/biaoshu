@@ -205,10 +205,13 @@ export function TechnicalPlanWorkspace() {
     status: "loading" | "ready";
     project: Project | null;
   }>({ requestProjectId: projectId, status: "loading", project: null });
-  // Hook/管线/guidance 始终绑定当前路由 projectId，禁止用旧 project.id 驱动
-  const { guidance, history, updateGuidance, submitRevise } =
-    useProjectGuidance(projectId);
+  // Hook/管线始终绑定当前路由 projectId，禁止用旧 project.id 驱动
+  // P12B：先技术主 hook（含权威 guidance），再注入 useProjectGuidance（仅 history/revise）
   const editors = useTechnicalPlanEditors(projectId);
+  const { history, submitRevise } = useProjectGuidance(
+    projectId,
+    editors.guidance,
+  );
   const pipeline = useProjectPipeline(projectId);
   const parseStrategy = useWorkspaceParseStrategy();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -395,7 +398,8 @@ export function TechnicalPlanWorkspace() {
     return <Navigate to="/technical-plan" replace />;
   }
 
-  if (editors.loadError && !contentFuseOpen) {
+  // 全状态阻断时保留本地内容，不得因重载失败卸载工作区
+  if (editors.loadError && !contentFuseOpen && !editors.fullStateConflict) {
     return (
       <div
         className="page"
@@ -644,6 +648,35 @@ export function TechnicalPlanWorkspace() {
             >
               {editors.saveError}
             </p>
+          ) : null}
+          {editors.fullStateConflict ? (
+            <div
+              data-testid="technical-editor-state-conflict"
+              style={{
+                marginTop: 8,
+                padding: "10px 12px",
+                borderRadius: 8,
+                background: "var(--danger-soft, #fff1f0)",
+                color: "var(--danger)",
+              }}
+            >
+              <p style={{ margin: "0 0 8px" }}>
+                {editors.fullStateConflictMessage}
+              </p>
+              {editors.loadError ? (
+                <p style={{ margin: "0 0 8px" }}>{editors.loadError}</p>
+              ) : null}
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                data-testid="technical-editor-state-reload"
+                onClick={() => {
+                  void editors.reloadFromApi({ blocking: true });
+                }}
+              >
+                重新载入远端内容
+              </button>
+            </div>
           ) : null}
         </div>
         <div className="page-actions">
@@ -1263,7 +1296,11 @@ export function TechnicalPlanWorkspace() {
             onApplyMerge={() => void editors.applyResponseMatrixMerge()}
           />
 
-          <ProjectGuidanceCard guidance={guidance} onChange={updateGuidance} mode="edit" />
+          <ProjectGuidanceCard
+            guidance={editors.guidance}
+            onChange={editors.updateGuidance}
+            mode="edit"
+          />
 
           <div className="card card-pad" style={{ paddingTop: 4, paddingBottom: 4 }}>
             <AiFeedbackPanel
@@ -1397,7 +1434,11 @@ export function TechnicalPlanWorkspace() {
 
       {active === "facts" && (
         <section className="card card-pad">
-          <ProjectGuidanceCard guidance={guidance} onChange={updateGuidance} mode="summary" />
+          <ProjectGuidanceCard
+            guidance={editors.guidance}
+            onChange={editors.updateGuidance}
+            mode="summary"
+          />
           <div className="hint-banner">
             <Info size={16} />
             <span>
@@ -1450,7 +1491,11 @@ export function TechnicalPlanWorkspace() {
 
       {active === "content" && (
         <div className="tp-layout">
-          <ProjectGuidanceCard guidance={guidance} onChange={updateGuidance} mode="summary" />
+          <ProjectGuidanceCard
+            guidance={editors.guidance}
+            onChange={editors.updateGuidance}
+            mode="summary"
+          />
           <div className="tp-toolbar">
             <span className="badge badge-primary">
               {pipeline.busy ? "生成中…" : "可生成章节"}

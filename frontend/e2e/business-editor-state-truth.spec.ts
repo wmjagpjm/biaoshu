@@ -23,6 +23,9 @@ const LOCAL_SECRET_MD = "LOCAL_WORKSPACE_SECRET_SHOULD_NOT_RENDER_P11B";
 const DEMO_SNIPPET = "独立法人资格，营业执照有效";
 const LOAD_ERROR = "商务标工作区加载失败，请稍后重试";
 const SAVE_ERROR = "商务标工作区保存失败，请稍后重试";
+const FULL_STATE_CONFLICT_MSG =
+  "编辑内容已被其他操作更新，已停止自动保存。重新载入远端内容将替换当前未保存修改。";
+const STATE_VERSION_RE = /^esv_[0-9a-f]{32}$/;
 
 const WORKSPACE_KEY_RE = /^biaoshu\.businessBid\.workspace(?:\.|$)/;
 const FEEDBACK_KEY_RE = /^biaoshu\.businessBid\.feedback\./;
@@ -51,12 +54,15 @@ type EditorState = {
   chapters: unknown[];
   mode: string;
   version: number;
+  stateVersion: string;
 };
 
 type PutRecord = {
   projectId: string;
   body: Record<string, unknown>;
   raw: string;
+  /** 服务端成功 200 响应中的 stateVersion；缺/非法时为 null */
+  responseVersion?: string | null;
 };
 
 type ProbeState = {
@@ -72,10 +78,27 @@ type ProbeState = {
   /** 项目 id → PUT 行为 */
   putMode: Record<
     string,
-    | { kind: "ok" }
+    | { kind: "ok"; stripStateVersion?: boolean; invalidStateVersion?: boolean }
     | { kind: "fail"; status: number }
-    | { kind: "delay"; ms: number; then: "ok" | "fail"; status?: number }
+    | { kind: "full_conflict" }
+    | {
+        kind: "delay";
+        ms: number;
+        then: "ok" | "fail" | "full_conflict";
+        status?: number;
+      }
+    | {
+        kind: "gate";
+        gate: {
+          wait: () => Promise<void>;
+          release: () => void;
+          isReleased: () => boolean;
+        };
+        then: "ok" | "fail" | "full_conflict";
+        status?: number;
+      }
   >;
+  versionSeq: number;
   getLog: string[];
   putLog: PutRecord[];
   taskPosts: Array<{ projectId: string; type: string }>;
@@ -86,6 +109,8 @@ type ProbeState = {
   clipboard: { installed: boolean; read: number; write: number };
   /** 任务成功后下一次 editor-state GET 失败（按项目） */
   failNextEditorGetAfterTask: Record<string, boolean>;
+  /** 成功 200 且响应含合法 stateVersion 时按序记录 */
+  successVersionLog: string[];
 };
 
 type StorageSnapshot = {
@@ -95,6 +120,41 @@ type StorageSnapshot = {
   ss: Record<string, string>;
   cookies: string;
 };
+
+
+function isValidStateVersion(value: unknown): value is string {
+  return typeof value === "string" && STATE_VERSION_RE.test(value);
+}
+
+function allocateStateVersion(state: ProbeState): string {
+  state.versionSeq += 1;
+  return `esv_${state.versionSeq.toString(16).padStart(32, "0")}`;
+}
+
+function seedStateVersion(n: number): string {
+  return `esv_${n.toString(16).padStart(32, "0")}`;
+}
+
+function createHoldGate() {
+  let released = false;
+  const waiters: Array<() => void> = [];
+  return {
+    wait: () =>
+      released
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+            waiters.push(resolve);
+          }),
+    release: () => {
+      released = true;
+      while (waiters.length > 0) {
+        const w = waiters.shift();
+        w?.();
+      }
+    },
+    isReleased: () => released,
+  };
+}
 
 function isLegacyFontUrl(url: string): boolean {
   return (
@@ -189,6 +249,7 @@ function emptyBusinessEditor(projectId: string): EditorState {
     chapters: [],
     mode: "ALIGNED",
     version: 1,
+    stateVersion: seedStateVersion(1),
   };
 }
 
@@ -243,6 +304,7 @@ function realBusinessEditor(
     chapters: [],
     mode: "ALIGNED",
     version: 1,
+    stateVersion: seedStateVersion(20),
   };
 }
 
@@ -293,6 +355,8 @@ function createProbeState(seed: ProjectStub[] = []): ProbeState {
     orderLog: [],
     clipboard: { installed: false, read: 0, write: 0 },
     failNextEditorGetAfterTask: {},
+    versionSeq: 200,
+    successVersionLog: [],
   };
 }
 
@@ -563,6 +627,48 @@ async function installP11bRoutes(page: Page, state: ProbeState) {
           );
           return;
         }
+        if (mode.then === "full_conflict") {
+          const cur = state.editorById[id] ?? emptyBusinessEditor(id);
+          await json(
+            route,
+            {
+              detail: {
+                code: "editor_state_version_conflict",
+                message: "编辑内容已被其他操作更新，请重新载入后再保存",
+                currentStateVersion: cur.stateVersion,
+              },
+            },
+            409,
+          );
+          return;
+        }
+      } else if (mode.kind === "gate") {
+        await mode.gate.wait();
+        if (mode.then === "fail") {
+          await json(
+            route,
+            {
+              detail: { code: "editor_state_put_failed", message: SECRET },
+            },
+            mode.status ?? 500,
+          );
+          return;
+        }
+        if (mode.then === "full_conflict") {
+          const cur = state.editorById[id] ?? emptyBusinessEditor(id);
+          await json(
+            route,
+            {
+              detail: {
+                code: "editor_state_version_conflict",
+                message: "编辑内容已被其他操作更新，请重新载入后再保存",
+                currentStateVersion: cur.stateVersion,
+              },
+            },
+            409,
+          );
+          return;
+        }
       } else if (mode.kind === "fail") {
         await json(
           route,
@@ -572,12 +678,44 @@ async function installP11bRoutes(page: Page, state: ProbeState) {
           mode.status,
         );
         return;
+      } else if (mode.kind === "full_conflict") {
+        const cur = state.editorById[id] ?? emptyBusinessEditor(id);
+        await json(
+          route,
+          {
+            detail: {
+              code: "editor_state_version_conflict",
+              message: "编辑内容已被其他操作更新，请重新载入后再保存",
+              currentStateVersion: cur.stateVersion,
+            },
+          },
+          409,
+        );
+        return;
       }
 
       const prev = state.editorById[id] ?? emptyBusinessEditor(id);
+      if (body.expectedStateVersion != null) {
+        const expected = body.expectedStateVersion;
+        if (!isValidStateVersion(expected) || expected !== prev.stateVersion) {
+          await json(
+            route,
+            {
+              detail: {
+                code: "editor_state_version_conflict",
+                message: "编辑内容已被其他操作更新，请重新载入后再保存",
+                currentStateVersion: prev.stateVersion,
+              },
+            },
+            409,
+          );
+          return;
+        }
+      }
       const quote = body.businessQuote as
         | { rows?: unknown[]; notes?: string }
         | undefined;
+      const nextVersion = allocateStateVersion(state);
       state.editorById[id] = {
         ...prev,
         projectId: id,
@@ -601,8 +739,27 @@ async function installP11bRoutes(page: Page, state: ProbeState) {
         businessCommit: Array.isArray(body.businessCommit)
           ? (body.businessCommit as Array<Record<string, unknown>>)
           : prev.businessCommit,
+        stateVersion: nextVersion,
       };
-      await json(route, state.editorById[id]);
+      const responseBody: Record<string, unknown> = {
+        ...state.editorById[id],
+      };
+      let responseVersion: string | null = nextVersion;
+      if (mode.kind === "ok" && mode.stripStateVersion) {
+        delete responseBody.stateVersion;
+        responseVersion = null;
+      } else if (mode.kind === "ok" && mode.invalidStateVersion) {
+        responseBody.stateVersion = "not-a-valid-esv";
+        responseVersion = null;
+      }
+      const lastPut = state.putLog[state.putLog.length - 1];
+      if (lastPut && lastPut.projectId === id) {
+        lastPut.responseVersion = responseVersion;
+      }
+      if (responseVersion && isValidStateVersion(responseVersion)) {
+        state.successVersionLog.push(responseVersion);
+      }
+      await json(route, responseBody);
       return;
     }
 
@@ -1085,9 +1242,12 @@ test.describe("P11B 商务标编辑态真实数据收口", () => {
         "businessQualify",
         "businessQuote",
         "businessToc",
+        "expectedStateVersion",
         "parsedMarkdown",
       ].slice().sort(),
     );
+    expect(put.body.expectedStateVersion).toBe(seedStateVersion(20));
+    expect(isValidStateVersion(put.body.expectedStateVersion)).toBe(true);
     expect(put.body.parsedMarkdown).toBe(edited);
     expect(Array.isArray(put.body.businessQualify)).toBe(true);
     expect(Array.isArray(put.body.businessToc)).toBe(true);
@@ -1477,4 +1637,269 @@ test.describe("P11B 商务标编辑态真实数据收口", () => {
     expect(clip.write).toBe(0);
     assertCleanConsole(consoleLines);
   });
+
+  // ---------------------------------------------------------------------------
+  // P12B：商务全状态 CAS / 串行队列 / 冲突与代次
+  // ---------------------------------------------------------------------------
+
+  test("P12B 商务 GET 缺失 stateVersion 固定加载失败且零 PUT", async ({
+    page,
+  }) => {
+    const project = makeProject({ id: REAL_BIZ_A, name: "P12B商务缺版本" });
+    const state = createProbeState([project]);
+    const editor = realBusinessEditor(REAL_BIZ_A, REAL_MARKDOWN);
+    // @ts-expect-error 故意缺失
+    delete editor.stateVersion;
+    state.editorById[REAL_BIZ_A] = editor;
+    await installP11bRoutes(page, state);
+    await openBusinessWorkspace(page, REAL_BIZ_A);
+    await expect(page.getByTestId("business-editor-load-error")).toBeVisible({
+      timeout: 10_000,
+    });
+    expect(state.putLog.length).toBe(0);
+  });
+
+  test("P12B 商务 GET 非法 stateVersion 固定加载失败且零 PUT", async ({
+    page,
+  }) => {
+    const project = makeProject({ id: REAL_BIZ_A, name: "P12B商务非法版本" });
+    const state = createProbeState([project]);
+    state.editorById[REAL_BIZ_A] = {
+      ...realBusinessEditor(REAL_BIZ_A, REAL_MARKDOWN),
+      stateVersion: "bad_version",
+    };
+    await installP11bRoutes(page, state);
+    await openBusinessWorkspace(page, REAL_BIZ_A);
+    await expect(page.getByTestId("business-editor-load-error")).toBeVisible({
+      timeout: 10_000,
+    });
+    expect(state.putLog.length).toBe(0);
+  });
+
+  test("P12B 商务连续编辑真挂起串行：第二 PUT 在第一响应前为 0，expected 串链", async ({
+    page,
+  }) => {
+    const project = makeProject({ id: REAL_BIZ_A, name: "P12B商务串行" });
+    const state = createProbeState([project]);
+    state.editorById[REAL_BIZ_A] = realBusinessEditor(
+      REAL_BIZ_A,
+      REAL_MARKDOWN,
+    );
+    const gate = createHoldGate();
+    state.putMode[REAL_BIZ_A] = { kind: "gate", gate, then: "ok" };
+    await installP11bRoutes(page, state);
+    await openBusinessWorkspace(page, REAL_BIZ_A);
+    await expectWorkspaceReady(page, "P12B商务串行");
+
+    const v0 = state.editorById[REAL_BIZ_A].stateVersion;
+    await page
+      .getByLabel("商务条款解析 Markdown")
+      .fill(`${REAL_MARKDOWN}\n第一波`);
+    await expect.poll(() => state.putLog.length, { timeout: 5_000 }).toBe(1);
+    expect(state.putLog[0].body.expectedStateVersion).toBe(v0);
+
+    await page
+      .getByLabel("商务条款解析 Markdown")
+      .fill(`${REAL_MARKDOWN}\n第二波最新`);
+    await expect
+      .poll(async () => {
+        await new Promise((r) => setTimeout(r, 50));
+        return state.putLog.length;
+      }, { timeout: 2_000 })
+      .toBe(1);
+
+    gate.release();
+    await expect.poll(() => state.putLog.length, { timeout: 8_000 }).toBe(2);
+    const first = state.putLog[0];
+    const second = state.putLog[1];
+    // 反假绿：第二 expected 必须精确等于第一 PUT 响应的服务端 stateVersion
+    expect(first.responseVersion).toBeTruthy();
+    expect(isValidStateVersion(first.responseVersion)).toBe(true);
+    expect(first.responseVersion).not.toBe(v0);
+    expect(state.successVersionLog[0]).toBe(first.responseVersion);
+    expect(second.body.expectedStateVersion).toBe(first.responseVersion);
+    expect(second.body.expectedStateVersion).toBe(state.successVersionLog[0]);
+    expect(String(second.body.parsedMarkdown)).toContain("第二波最新");
+  });
+
+  test("P12B 商务全状态 409：本地保留、阻断、固定 UI；显式 reload 恢复", async ({
+    page,
+  }) => {
+    const project = makeProject({ id: REAL_BIZ_A, name: "P12B商务冲突" });
+    const state = createProbeState([project]);
+    state.editorById[REAL_BIZ_A] = realBusinessEditor(
+      REAL_BIZ_A,
+      REAL_MARKDOWN,
+    );
+    state.putMode[REAL_BIZ_A] = { kind: "full_conflict" };
+    await installP11bRoutes(page, state);
+    await openBusinessWorkspace(page, REAL_BIZ_A);
+    await expectWorkspaceReady(page, "P12B商务冲突");
+
+    const localText = `${REAL_MARKDOWN}\n本地未保存冲突`;
+    await page.getByLabel("商务条款解析 Markdown").fill(localText);
+    await expect(
+      page.getByTestId("business-editor-state-conflict"),
+    ).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(FULL_STATE_CONFLICT_MSG)).toBeVisible();
+    await expect(page.getByLabel("商务条款解析 Markdown")).toHaveValue(
+      localText,
+    );
+
+    const putsAtConflict = state.putLog.length;
+    await page
+      .getByLabel("商务条款解析 Markdown")
+      .fill(`${localText}\n继续编辑`);
+    await expect
+      .poll(async () => {
+        await new Promise((r) => setTimeout(r, 100));
+        return state.putLog.length;
+      }, { timeout: 2_000 })
+      .toBe(putsAtConflict);
+
+    state.editorById[REAL_BIZ_A] = {
+      ...realBusinessEditor(REAL_BIZ_A, "远端重载商务正文"),
+      stateVersion: seedStateVersion(888),
+    };
+    state.putMode[REAL_BIZ_A] = { kind: "ok" };
+    const getsBefore = state.getLog.filter((id) => id === REAL_BIZ_A).length;
+    await page.getByTestId("business-editor-state-reload").click();
+    await expect
+      .poll(
+        () => state.getLog.filter((id) => id === REAL_BIZ_A).length,
+        { timeout: 5_000 },
+      )
+      .toBe(getsBefore + 1);
+    await expect(
+      page.getByTestId("business-editor-state-conflict"),
+    ).toHaveCount(0);
+    await expect(page.getByLabel("商务条款解析 Markdown")).toHaveValue(
+      "远端重载商务正文",
+    );
+
+    const putsBefore = state.putLog.length;
+    await page
+      .getByLabel("商务条款解析 Markdown")
+      .fill("远端重载商务正文\n恢复后编辑");
+    await expect
+      .poll(() => state.putLog.length, { timeout: 5_000 })
+      .toBe(putsBefore + 1);
+    expect(
+      state.putLog[state.putLog.length - 1].body.expectedStateVersion,
+    ).toBe(seedStateVersion(888));
+  });
+
+  test("P12B 商务 200 缺失 stateVersion 阻断；零后续 PUT", async ({ page }) => {
+    const project = makeProject({ id: REAL_BIZ_A, name: "P12B商务缺失200" });
+    const state = createProbeState([project]);
+    state.editorById[REAL_BIZ_A] = realBusinessEditor(
+      REAL_BIZ_A,
+      REAL_MARKDOWN,
+    );
+    state.putMode[REAL_BIZ_A] = { kind: "ok", stripStateVersion: true };
+    await installP11bRoutes(page, state);
+    await openBusinessWorkspace(page, REAL_BIZ_A);
+    await expectWorkspaceReady(page, "P12B商务缺失200");
+    await page
+      .getByLabel("商务条款解析 Markdown")
+      .fill(`${REAL_MARKDOWN}\n触发缺失200`);
+    await expect(
+      page.getByTestId("business-editor-state-conflict"),
+    ).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(FULL_STATE_CONFLICT_MSG)).toBeVisible();
+    const putsBlocked = state.putLog.length;
+    expect(state.putLog[putsBlocked - 1].responseVersion).toBeNull();
+    expect(state.successVersionLog.length).toBe(0);
+    await page
+      .getByLabel("商务条款解析 Markdown")
+      .fill(`${REAL_MARKDOWN}\n缺失后仍阻断`);
+    await expect
+      .poll(async () => {
+        await new Promise((r) => setTimeout(r, 100));
+        return state.putLog.length;
+      }, { timeout: 2_000 })
+      .toBe(putsBlocked);
+  });
+
+  test("P12B 商务 200 非法新版本阻断；reload 失败继续阻断", async ({ page }) => {
+    const project = makeProject({ id: REAL_BIZ_A, name: "P12B商务非法200" });
+    const state = createProbeState([project]);
+    state.editorById[REAL_BIZ_A] = realBusinessEditor(
+      REAL_BIZ_A,
+      REAL_MARKDOWN,
+    );
+    state.putMode[REAL_BIZ_A] = { kind: "ok", invalidStateVersion: true };
+    await installP11bRoutes(page, state);
+    await openBusinessWorkspace(page, REAL_BIZ_A);
+    await expectWorkspaceReady(page, "P12B商务非法200");
+    await page
+      .getByLabel("商务条款解析 Markdown")
+      .fill(`${REAL_MARKDOWN}\n触发非法200`);
+    await expect(
+      page.getByTestId("business-editor-state-conflict"),
+    ).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(FULL_STATE_CONFLICT_MSG)).toBeVisible();
+    const putsBlocked = state.putLog.length;
+    expect(state.putLog[putsBlocked - 1].responseVersion).toBeNull();
+    expect(state.successVersionLog.length).toBe(0);
+    state.getMode[REAL_BIZ_A] = { kind: "fail", status: 500 };
+    await page.getByTestId("business-editor-state-reload").click();
+    await expect(page.getByText(LOAD_ERROR)).toBeVisible({ timeout: 5_000 });
+    await expect(
+      page.getByTestId("business-editor-state-conflict"),
+    ).toBeVisible();
+    await page
+      .getByLabel("商务条款解析 Markdown")
+      .fill(`${REAL_MARKDOWN}\n仍阻断`);
+    await expect
+      .poll(async () => {
+        await new Promise((r) => setTimeout(r, 100));
+        return state.putLog.length;
+      }, { timeout: 2_000 })
+      .toBe(putsBlocked);
+  });
+
+  test("P12B 商务 A→B 挂起/迟到不污染 B；版本不落存储", async ({ page }) => {
+    const projectA = makeProject({ id: REAL_BIZ_A, name: "P12B商务甲" });
+    const projectB = makeProject({ id: REAL_BIZ_B, name: "P12B商务乙" });
+    const state = createProbeState([projectA, projectB]);
+    state.editorById[REAL_BIZ_A] = realBusinessEditor(
+      REAL_BIZ_A,
+      REAL_MARKDOWN,
+    );
+    state.editorById[REAL_BIZ_B] = realBusinessEditor(
+      REAL_BIZ_B,
+      REAL_MARKDOWN_B,
+    );
+    const gate = createHoldGate();
+    state.putMode[REAL_BIZ_A] = { kind: "gate", gate, then: "ok" };
+    await installP11bRoutes(page, state);
+    await openBusinessWorkspace(page, REAL_BIZ_A);
+    await expectWorkspaceReady(page, "P12B商务甲");
+    await page
+      .getByLabel("商务条款解析 Markdown")
+      .fill(`${REAL_MARKDOWN}\n甲挂起`);
+    await expect.poll(() => state.putLog.length, { timeout: 5_000 }).toBe(1);
+
+    await softNavigateBusiness(page, REAL_BIZ_B, "parse");
+    await expectWorkspaceReady(page, "P12B商务乙");
+    await expect(page.getByLabel("商务条款解析 Markdown")).toHaveValue(
+      REAL_MARKDOWN_B,
+    );
+    gate.release();
+    await expect
+      .poll(async () => page.getByLabel("商务条款解析 Markdown").inputValue(), {
+        timeout: 5_000,
+      })
+      .toBe(REAL_MARKDOWN_B);
+    await expect(
+      page.getByTestId("business-editor-state-conflict"),
+    ).toHaveCount(0);
+
+    const snap = await readStorageSnapshot(page);
+    for (const v of Object.values(snap.ls)) {
+      expect(v).not.toMatch(/esv_[0-9a-f]{32}/);
+    }
+  });
+
 });

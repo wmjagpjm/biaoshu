@@ -270,6 +270,8 @@ async function installP10fRoutes(page: Page, state: P10fState) {
           chapters: [],
           responseMatrix: [],
           version: 1,
+          // 服务端合法 stateVersion，避免 P12B 客户端将缺版本当作加载失败
+          stateVersion: "esv_0123456789abcdef0123456789abcdef",
         });
         return;
       }

@@ -1,14 +1,17 @@
 /**
- * 模块：技术方案大纲 / 正文 / 全局事实 / 分析概述（P11C 服务端权威）
- * 用途：技术标编辑内容只认 GET|PUT /api/projects/{id}/editor-state；真实空态保持空。
+ * 模块：技术方案大纲 / 正文 / 全局事实 / 分析概述（P11C + P12B 全状态 CAS）
+ * 用途：技术标编辑内容只认 GET|PUT /api/projects/{id}/editor-state；真实空态保持空；
+ *       全部 editor-state PUT 携带服务端 expectedStateVersion，同项目串行队列。
  * 对接：editor-state API；页面 TechnicalPlanWorkspace；responseMatrixVersion 乐观锁；
- *       409 时在 base 快照匹配时生成字段级三方合并预览；getCsrfToken 内存 CSRF。
+ *       全状态 409 code=editor_state_version_conflict；矩阵 409 字段级三方合并；
+ *       guidance 纳入主状态同一队列；getCsrfToken 内存 CSRF。
  * 明确非目标：
  *   - 禁止读写/删除/迁移 biaoshu.technicalPlan.editors.*（旧键忽略并保值）
  *   - 禁止生产路径导入 mock 或字段 fallback 伪装成功
+ *   - 禁止本地计算 stateVersion；禁止版本落盘/URL/Cookie/console
  * 二次开发：矩阵 409 时禁止静默覆盖本地；须用户显式「重新载入远端矩阵」或「应用合并」；
- *       应用合并 PUT 仅含 responseMatrix + responseMatrixVersion；禁止自动重试循环；
- *       项目切换后须丢弃过期合并/409 异步结果，禁止污染新项目编辑器状态。
+ *       应用合并 PUT 仅含 responseMatrix + responseMatrixVersion + expectedStateVersion；
+ *       全状态冲突时禁止矩阵旁路解除阻断；项目切换后须丢弃过期合并/409 异步结果。
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -17,6 +20,7 @@ import {
   getApiBase,
   getCsrfToken,
 } from "../../../shared/lib/api";
+import type { ProjectGenerationGuidance } from "../../../shared/types/aiFeedback";
 import {
   addChild,
   addSibling,
@@ -60,6 +64,51 @@ export const TECHNICAL_EDITOR_SAVE_ERROR =
 const TECHNICAL_MATRIX_CONFLICT_MESSAGE =
   "响应矩阵已被其他终端更新，请重新载入后再保存";
 
+/**
+ * 固定全状态版本冲突文案。
+ * 用途：P12B CAS 冲突固定中文；禁止拼接服务端 message/version/正文/ID。
+ */
+export const TECHNICAL_EDITOR_STATE_CONFLICT_MESSAGE =
+  "编辑内容已被其他操作更新，已停止自动保存。重新载入远端内容将替换当前未保存修改。";
+
+/** 服务端 stateVersion 精确格式 */
+const STATE_VERSION_RE = /^esv_[0-9a-f]{32}$/;
+
+/** 用途：校验服务端 stateVersion；不得本地生成或用 updatedAt 替代。 */
+function isValidStateVersion(value: unknown): value is string {
+  return typeof value === "string" && STATE_VERSION_RE.test(value);
+}
+
+/**
+ * 用途：判断 409 detail 是否携带真实矩阵冲突明细。
+ * 对接：普通/合并 PUT 409 分流；仅数组矩阵 + 非空版本串才进矩阵 UX。
+ * 二次开发：禁止把缺失明细当成 remoteMatrix=[] 伪造空矩阵冲突。
+ */
+function hasRealMatrixConflictDetail(detail: {
+  responseMatrix?: ResponseMatrixItem[];
+  currentResponseMatrixVersion?: string;
+} | null | undefined): detail is {
+  responseMatrix: ResponseMatrixItem[];
+  currentResponseMatrixVersion: string;
+} {
+  if (!detail || !Array.isArray(detail.responseMatrix)) return false;
+  const version = detail.currentResponseMatrixVersion;
+  return typeof version === "string" && version.trim() !== "";
+}
+
+/** 用途：guidance 默认空态；与 useProjectGuidance 历史语义对齐但不读 localStorage。 */
+function emptyGuidance(): ProjectGenerationGuidance {
+  return {
+    targetWordCount: 80000,
+    chapterFocus: "",
+    formatRequirements: "",
+    extraRequirements: "",
+    lockedForNextStage: false,
+    kbEnabled: true,
+    kbFolderIds: [],
+  };
+}
+
 type StoredEditors = {
   outline: OutlineNode[];
   chapters: ChapterContent[];
@@ -69,6 +118,8 @@ type StoredEditors = {
   analysis: BidAnalysis;
   responseMatrix: ResponseMatrixItem[];
   parsedMarkdown: string;
+  /** 服务端权威生成约束；与 outline/chapters 同源水合 */
+  guidance: ProjectGenerationGuidance;
 };
 
 type EditorStateApi = {
@@ -82,7 +133,9 @@ type EditorStateApi = {
   responseMatrix?: ResponseMatrixItem[] | null;
   responseMatrixVersion?: string | null;
   parsedMarkdown?: string | null;
-  guidance?: Record<string, unknown> | null;
+  guidance?: ProjectGenerationGuidance | Record<string, unknown> | null;
+  /** P12B：全状态版本；仅接受 ^esv_[0-9a-f]{32}$ */
+  stateVersion?: string | null;
   updatedAt?: string | null;
 };
 
@@ -175,13 +228,14 @@ function createEmptyEditors(): StoredEditors {
     analysis: emptyBidAnalysis(),
     responseMatrix: [],
     parsedMarkdown: "",
+    guidance: emptyGuidance(),
   };
 }
 
 /**
  * 用途：远端 editor-state → 编辑态；null/[]/空串/updatedAt=null 均为权威空态。
- * 对接：仅消费同一响应内 analysis + responseMatrix 做既有 merge/reconcile。
- * 二次开发：禁止引入响应外 fallback/mock。
+ * 对接：仅消费同一响应内 analysis + responseMatrix + guidance 做既有 merge/reconcile。
+ * 二次开发：禁止引入响应外 fallback/mock；guidance 不得从 localStorage 水合。
  */
 function fromApi(data: EditorStateApi): StoredEditors {
   const analysis = normalizeAnalysis(
@@ -209,6 +263,8 @@ function fromApi(data: EditorStateApi): StoredEditors {
     chapters,
     outline,
   );
+  const guidanceRaw =
+    data.guidance && typeof data.guidance === "object" ? data.guidance : null;
   return {
     outline,
     chapters,
@@ -219,6 +275,9 @@ function fromApi(data: EditorStateApi): StoredEditors {
     responseMatrix,
     parsedMarkdown:
       typeof data.parsedMarkdown === "string" ? data.parsedMarkdown : "",
+    guidance: guidanceRaw
+      ? { ...emptyGuidance(), ...(guidanceRaw as ProjectGenerationGuidance) }
+      : emptyGuidance(),
   };
 }
 
@@ -293,6 +352,11 @@ export function useTechnicalPlanEditors(projectId: string) {
   /** 当前项目初始 GET 成功且会话有效后才允许 PUT */
   const [apiReady, setApiReady] = useState(false);
   const [matrixVersion, setMatrixVersion] = useState<string | null>(null);
+  /**
+   * 全状态冲突/版本未知阻断。
+   * 用途：保留本地内容；阻断全部 editor-state PUT；仅显式全量重载可恢复。
+   */
+  const [fullStateConflict, setFullStateConflict] = useState(false);
   const [matrixConflict, setMatrixConflict] =
     useState<ResponseMatrixConflict | null>(null);
   const [mergeChoices, setMergeChoices] = useState<
@@ -314,7 +378,11 @@ export function useTechnicalPlanEditors(projectId: string) {
   const skipNextAutosavePutRef = useRef(false);
   /** 409 后停止携带旧版本写矩阵，直至用户显式载入远端或应用合并 */
   const matrixPutBlockedRef = useRef(false);
+  /** 全状态冲突或 200 缺/非法版本后阻断全部 editor-state PUT */
+  const fullStateBlockedRef = useRef(false);
   const matrixVersionRef = useRef<string | null>(null);
+  /** 当前项目内存中的服务端全状态版本；禁止落盘 */
+  const stateVersionRef = useRef<string | null>(null);
   /** 成功同步后的 base 矩阵深拷贝；project 切换/卸载清空 */
   const matrixBaseRef = useRef<ResponseMatrixItem[] | null>(null);
   /** base 对应的 responseMatrixVersion */
@@ -330,7 +398,11 @@ export function useTechnicalPlanEditors(projectId: string) {
   const projectSessionRef = useRef(0);
   activeProjectIdRef.current = projectId;
   /**
-   * 当前项目的矩阵/整包 PUT 串行链：同项目飞行中排队；
+   * 同项目写入代次：显式/任务重载时递增；旧代次 PUT 回调不得覆盖新 GET 的版本/冲突。
+   */
+  const writeEpochRef = useRef(0);
+  /**
+   * 当前项目的矩阵/整包/guidance PUT 串行链：同项目飞行中排队；
    * 完成后用最新 state + 新 version 再保存，避免同页误 409。
    * 切项目时必须重置为已解决链，禁止被旧项目挂起 Promise 队头阻塞。
    */
@@ -344,10 +416,42 @@ export function useTechnicalPlanEditors(projectId: string) {
     [],
   );
 
+  /** 用途：判断是否仍属于当前会话且同一写入代次。 */
+  const isCurrentWriteEpoch = useCallback(
+    (
+      requestProjectId: string,
+      requestSession: number,
+      requestEpoch: number,
+    ) =>
+      isCurrentEditorSession(requestProjectId, requestSession) &&
+      writeEpochRef.current === requestEpoch,
+    [isCurrentEditorSession],
+  );
+
   const applyMatrixVersion = useCallback((version: string | null | undefined) => {
     const next = version && String(version).trim() ? String(version).trim() : null;
     matrixVersionRef.current = next;
     setMatrixVersion(next);
+  }, []);
+
+  /** 用途：仅接受合法服务端 stateVersion 写入内存 ref。 */
+  const applyStateVersion = useCallback((version: unknown) => {
+    if (!isValidStateVersion(version)) {
+      stateVersionRef.current = null;
+      return false;
+    }
+    stateVersionRef.current = version;
+    return true;
+  }, []);
+
+  /**
+   * 用途：进入全状态阻断；保留本地 UI；禁止自动重试。
+   * 对接：CAS 409、PUT 200 缺/非法版本。
+   */
+  const enterFullStateBlock = useCallback(() => {
+    fullStateBlockedRef.current = true;
+    setFullStateConflict(true);
+    setSaveError(null);
   }, []);
 
   /** 用途：仅在成功 GET / 成功带矩阵 PUT / 显式载入远端时更新 base 快照。 */
@@ -366,7 +470,7 @@ export function useTechnicalPlanEditors(projectId: string) {
     matrixBaseVersionRef.current = null;
   }, []);
 
-  // 切项目：立即作废旧会话、清计时器/错误/冲突，重置空编辑态后唯一 GET
+  // 切项目：立即作废旧会话、清计时器/错误/冲突/版本，重置空编辑态后唯一 GET
   useEffect(() => {
     let cancelled = false;
     if (saveTimer.current) {
@@ -374,15 +478,19 @@ export function useTechnicalPlanEditors(projectId: string) {
       saveTimer.current = null;
     }
     const session = ++projectSessionRef.current;
+    writeEpochRef.current += 1;
     activeProjectIdRef.current = projectId;
     // 新项目保存链与旧项目解耦：旧 A 挂起 PUT 不得阻塞 B 的合法防抖保存
     matrixSaveChainRef.current = Promise.resolve();
     skipNextSave.current = true;
     skipNextAutosavePutRef.current = false;
     matrixPutBlockedRef.current = false;
+    fullStateBlockedRef.current = false;
+    stateVersionRef.current = null;
     clearMatrixBase();
     applyMatrixVersion(null);
     setMatrixConflict(null);
+    setFullStateConflict(false);
     setMergeChoices({});
     setMergeApplying(false);
     setApiReady(false);
@@ -399,14 +507,33 @@ export function useTechnicalPlanEditors(projectId: string) {
           `/projects/${encodeURIComponent(projectId)}/editor-state`,
         );
         if (cancelled || !isCurrentEditorSession(projectId, session)) return;
+        // 缺失/非法 stateVersion：固定加载失败、零 PUT、无 mock fallback
+        if (!isValidStateVersion(remote.stateVersion)) {
+          skipNextSave.current = true;
+          setState(createEmptyEditors());
+          applyMatrixVersion(null);
+          clearMatrixBase();
+          stateVersionRef.current = null;
+          setSelectedOutlineId(null);
+          setSelectedChapterId(null);
+          setApiReady(false);
+          setFullStateConflict(false);
+          fullStateBlockedRef.current = false;
+          setLoadError(TECHNICAL_EDITOR_LOAD_ERROR);
+          setSaveError(null);
+          return;
+        }
         const next = fromApi(remote);
         skipNextSave.current = true;
         setState(next);
+        applyStateVersion(remote.stateVersion);
         applyMatrixVersion(remote.responseMatrixVersion);
         snapshotMatrixBase(next.responseMatrix, remote.responseMatrixVersion);
         setSelectedOutlineId(next.outline[0]?.id ?? null);
         setSelectedChapterId(null);
         setApiReady(true);
+        setFullStateConflict(false);
+        fullStateBlockedRef.current = false;
         setLoadError(null);
         setSaveError(null);
       } catch {
@@ -415,9 +542,12 @@ export function useTechnicalPlanEditors(projectId: string) {
         setState(createEmptyEditors());
         applyMatrixVersion(null);
         clearMatrixBase();
+        stateVersionRef.current = null;
         setSelectedOutlineId(null);
         setSelectedChapterId(null);
         setApiReady(false);
+        setFullStateConflict(false);
+        fullStateBlockedRef.current = false;
         setLoadError(TECHNICAL_EDITOR_LOAD_ERROR);
         setSaveError(null);
       } finally {
@@ -439,12 +569,13 @@ export function useTechnicalPlanEditors(projectId: string) {
   }, [
     projectId,
     applyMatrixVersion,
+    applyStateVersion,
     snapshotMatrixBase,
     clearMatrixBase,
     isCurrentEditorSession,
   ]);
 
-  // 保存：仅 apiReady 后 debounce PUT；矩阵带版本且串行；409 不静默覆盖；禁止 localStorage
+  // 保存：仅 apiReady 后 debounce PUT；全状态 expected + 矩阵版本串行；409 分流；禁止 localStorage
   useEffect(() => {
     if (!apiReady || !projectId) return;
     if (skipNextSave.current) {
@@ -460,15 +591,31 @@ export function useTechnicalPlanEditors(projectId: string) {
       }
       return;
     }
+    // 全状态阻断期间：继续编辑也不自动重试 PUT
+    if (fullStateBlockedRef.current) {
+      return;
+    }
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => {
       const requestProjectId = projectId;
       const requestSession = projectSessionRef.current;
+      const requestEpoch = writeEpochRef.current;
       const runSave = async () => {
-        // 定时器触发时若已切项目，直接丢弃，避免旧项目 PUT 写回新会话
-        if (!isCurrentEditorSession(requestProjectId, requestSession)) {
+        // 定时器触发时若已切项目/重载代次，直接丢弃
+        if (
+          !isCurrentWriteEpoch(requestProjectId, requestSession, requestEpoch)
+        ) {
           return;
         }
+        if (fullStateBlockedRef.current) {
+          return;
+        }
+        const expected = stateVersionRef.current;
+        if (!isValidStateVersion(expected)) {
+          enterFullStateBlock();
+          return;
+        }
+        // 真正执行时读取最新 UI 状态与最新服务端版本
         const latest = stateRef.current;
         const body: Record<string, unknown> = {
           outline: latest.outline,
@@ -477,6 +624,8 @@ export function useTechnicalPlanEditors(projectId: string) {
           mode: latest.mode,
           analysisOverview: latest.analysis.overview || latest.analysisOverview,
           analysis: latest.analysis,
+          guidance: latest.guidance,
+          expectedStateVersion: expected,
         };
         const includeMatrix = !matrixPutBlockedRef.current;
         const matrixAtRequest = includeMatrix
@@ -491,29 +640,44 @@ export function useTechnicalPlanEditors(projectId: string) {
         }
         try {
           const res = await putEditorState(requestProjectId, body);
-          // fetch 返回后再次校验：项目切换后禁止写入 mergePreview / 版本 / base
-          if (!isCurrentEditorSession(requestProjectId, requestSession)) {
+          // fetch 返回后再次校验：项目切换/重载后禁止写入
+          if (
+            !isCurrentWriteEpoch(requestProjectId, requestSession, requestEpoch)
+          ) {
             return;
           }
           if (res.status === 409) {
-            // 仅真实版本冲突：串行后仍 409 才提示（同页旧版本重试已被队列消除）
             const raw = (await res.json().catch(() => null)) as {
               detail?: {
+                code?: string;
                 message?: string;
                 responseMatrix?: ResponseMatrixItem[];
                 currentResponseMatrixVersion?: string;
+                currentStateVersion?: string;
               };
             } | null;
-            if (!isCurrentEditorSession(requestProjectId, requestSession)) {
+            if (
+              !isCurrentWriteEpoch(
+                requestProjectId,
+                requestSession,
+                requestEpoch,
+              )
+            ) {
               return;
             }
             const detail = raw?.detail;
-            const remoteMatrix = Array.isArray(detail?.responseMatrix)
-              ? normalizeResponseMatrix(detail.responseMatrix)
-              : [];
-            const remoteVersion = String(
-              detail?.currentResponseMatrixVersion || "",
-            ).trim();
+            // 全状态冲突优先：仅精确 code 进入阻断；绝不构造矩阵远端/mergePreview
+            if (detail?.code === "editor_state_version_conflict") {
+              enterFullStateBlock();
+              return;
+            }
+            // 仅真实矩阵明细（数组 + 非空版本）才进矩阵冲突/三方合并
+            if (!hasRealMatrixConflictDetail(detail)) {
+              setSaveError(TECHNICAL_EDITOR_SAVE_ERROR);
+              return;
+            }
+            const remoteMatrix = normalizeResponseMatrix(detail.responseMatrix);
+            const remoteVersion = detail.currentResponseMatrixVersion.trim();
             matrixPutBlockedRef.current = true;
 
             const base = matrixBaseRef.current;
@@ -553,16 +717,30 @@ export function useTechnicalPlanEditors(projectId: string) {
             return;
           }
           if (!res.ok) {
-            if (!isCurrentEditorSession(requestProjectId, requestSession)) {
+            if (
+              !isCurrentWriteEpoch(
+                requestProjectId,
+                requestSession,
+                requestEpoch,
+              )
+            ) {
               return;
             }
             setSaveError(TECHNICAL_EDITOR_SAVE_ERROR);
             return;
           }
           const saved = (await res.json()) as EditorStateApi;
-          if (!isCurrentEditorSession(requestProjectId, requestSession)) {
+          if (
+            !isCurrentWriteEpoch(requestProjectId, requestSession, requestEpoch)
+          ) {
             return;
           }
+          // 200 缺/非法版本：可能已写入但客户端版本未知，阻断自动保存
+          if (!isValidStateVersion(saved.stateVersion)) {
+            enterFullStateBlock();
+            return;
+          }
+          applyStateVersion(saved.stateVersion);
           setSaveError(null);
           if (saved.responseMatrixVersion) {
             applyMatrixVersion(saved.responseMatrixVersion);
@@ -578,7 +756,9 @@ export function useTechnicalPlanEditors(projectId: string) {
             );
           }
         } catch {
-          if (!isCurrentEditorSession(requestProjectId, requestSession)) {
+          if (
+            !isCurrentWriteEpoch(requestProjectId, requestSession, requestEpoch)
+          ) {
             return;
           }
           setSaveError(TECHNICAL_EDITOR_SAVE_ERROR);
@@ -598,8 +778,10 @@ export function useTechnicalPlanEditors(projectId: string) {
     state,
     apiReady,
     applyMatrixVersion,
+    applyStateVersion,
     snapshotMatrixBase,
-    isCurrentEditorSession,
+    isCurrentWriteEpoch,
+    enterFullStateBlock,
   ]);
 
   const targetWordsTotal = useMemo(
@@ -664,6 +846,24 @@ export function useTechnicalPlanEditors(projectId: string) {
   const setParsedMarkdown = useCallback((parsedMarkdown: string) => {
     setState((prev) => ({ ...prev, parsedMarkdown }));
   }, []);
+
+  /**
+   * 用途：更新服务端权威 guidance；走同一 800ms 防抖与 expected 队列。
+   * 对接：ProjectGuidanceCard；禁止独立 guidance PUT。
+   */
+  const updateGuidance = useCallback(
+    (patch: Partial<ProjectGenerationGuidance>) => {
+      setState((prev) => ({
+        ...prev,
+        guidance: {
+          ...prev.guidance,
+          ...patch,
+          updatedAt: new Date().toISOString(),
+        },
+      }));
+    },
+    [],
+  );
 
   const refreshResponseMatrix = useCallback(() => {
     setState((prev) => ({
@@ -752,6 +952,12 @@ export function useTechnicalPlanEditors(projectId: string) {
       const requestProjectId = projectId;
       if (!requestProjectId) return false;
       const requestSession = projectSessionRef.current;
+      // 同项目重载：递增写入代次并清未发送 timer；旧代次回调不得覆盖新 GET
+      writeEpochRef.current += 1;
+      if (saveTimer.current) {
+        window.clearTimeout(saveTimer.current);
+        saveTimer.current = null;
+      }
       const blocking = options?.blocking === true;
       if (blocking) setLoading(true);
       try {
@@ -761,12 +967,37 @@ export function useTechnicalPlanEditors(projectId: string) {
         if (!isCurrentEditorSession(requestProjectId, requestSession)) {
           return false;
         }
+        if (!isValidStateVersion(remote.stateVersion)) {
+          if (fullStateBlockedRef.current) {
+            // 全状态阻断下重载失败：保留本地内容与阻断，不卸载工作区
+            setLoadError(TECHNICAL_EDITOR_LOAD_ERROR);
+            return false;
+          }
+          // 非阻断场景的缺版本 GET：固定加载失败并重置
+          skipNextSave.current = true;
+          setState(createEmptyEditors());
+          applyMatrixVersion(null);
+          clearMatrixBase();
+          stateVersionRef.current = null;
+          matrixPutBlockedRef.current = false;
+          setMatrixConflict(null);
+          setMergeChoices({});
+          setSelectedOutlineId(null);
+          setSelectedChapterId(null);
+          setApiReady(false);
+          setLoadError(TECHNICAL_EDITOR_LOAD_ERROR);
+          setSaveError(null);
+          return false;
+        }
         const next = fromApi(remote);
         skipNextSave.current = true;
         setState(next);
+        applyStateVersion(remote.stateVersion);
         snapshotMatrixBase(next.responseMatrix, remote.responseMatrixVersion);
         applyMatrixVersion(remote.responseMatrixVersion);
         matrixPutBlockedRef.current = false;
+        fullStateBlockedRef.current = false;
+        setFullStateConflict(false);
         setMatrixConflict(null);
         setMergeChoices({});
         setSelectedOutlineId(next.outline[0]?.id ?? null);
@@ -778,10 +1009,17 @@ export function useTechnicalPlanEditors(projectId: string) {
         if (!isCurrentEditorSession(requestProjectId, requestSession)) {
           return false;
         }
+        if (fullStateBlockedRef.current) {
+          // 保持本地与阻断；loadError 供横幅展示，页面不得因阻断重载失败卸载正文
+          setLoadError(TECHNICAL_EDITOR_LOAD_ERROR);
+          return false;
+        }
+        // 非冲突场景的任务后刷新失败：重置空态（保持 P11C 既有语义）
         skipNextSave.current = true;
         setState(createEmptyEditors());
         applyMatrixVersion(null);
         clearMatrixBase();
+        stateVersionRef.current = null;
         matrixPutBlockedRef.current = false;
         setMatrixConflict(null);
         setMergeChoices({});
@@ -803,6 +1041,7 @@ export function useTechnicalPlanEditors(projectId: string) {
     [
       projectId,
       applyMatrixVersion,
+      applyStateVersion,
       snapshotMatrixBase,
       clearMatrixBase,
       isCurrentEditorSession,
@@ -812,8 +1051,12 @@ export function useTechnicalPlanEditors(projectId: string) {
   /**
    * 用途：冲突后显式采用远端矩阵并恢复保存；不提供静默强制覆盖。
    * 对接：ResponseMatrixPanel「重新载入远端矩阵」
+   * 二次开发：全状态阻断期间不得解除阻断或发 PUT。
    */
   const reloadRemoteResponseMatrix = useCallback(() => {
+    if (fullStateBlockedRef.current) {
+      return;
+    }
     setMatrixConflict((conflict) => {
       if (!conflict) return null;
       const remoteMatrix = reconcileResponseMatrixLinks(
@@ -845,18 +1088,21 @@ export function useTechnicalPlanEditors(projectId: string) {
   );
 
   /**
-   * 用途：用户确认后写入合并结果；PUT 体仅含 responseMatrix + responseMatrixVersion。
+   * 用途：用户确认后写入合并结果；进入技术主保存队列；
+   *       PUT 体仅含 responseMatrix + responseMatrixVersion + expectedStateVersion。
    * 对接：ResponseMatrixPanel「应用合并」；
    * 成功后跳过一次普通全量防抖 PUT；二次 409 清空预览、禁止复用旧预览写新版本；
-   * 项目切换后丢弃本请求的一切状态写回。
+   * 项目切换后丢弃本请求的一切状态写回；全状态阻断期间不得发 PUT。
    */
   const applyResponseMatrixMerge = useCallback(async () => {
     const conflict = matrixConflict;
     const preview = conflict?.mergePreview;
     if (!conflict || !preview || mergeApplying) return;
+    if (fullStateBlockedRef.current) return;
 
     const requestProjectId = projectId;
     const requestSession = projectSessionRef.current;
+    const requestEpoch = writeEpochRef.current;
 
     const resolved = resolveResponseMatrixThreeWayChoices(preview, mergeChoices);
     if (!resolved) {
@@ -883,101 +1129,151 @@ export function useTechnicalPlanEditors(projectId: string) {
     }
 
     setMergeApplying(true);
-    // 仅矩阵 PUT：禁止携带 analysis/outline/chapters/facts，避免旧编辑器状态回写
-    const body = {
-      responseMatrix: mergedMatrix,
-      responseMatrixVersion: remoteVersion,
-    };
 
-    try {
-      const res = await putEditorState(requestProjectId, body);
-      // 切换/卸载后：静默丢弃，不得改写新项目的 matrix/base/version/conflict
-      if (!isCurrentEditorSession(requestProjectId, requestSession)) {
+    const runMerge = async () => {
+      if (
+        !isCurrentWriteEpoch(requestProjectId, requestSession, requestEpoch)
+      ) {
         return;
       }
-      if (res.status === 409) {
-        const raw = (await res.json().catch(() => null)) as {
-          detail?: {
-            message?: string;
-            responseMatrix?: ResponseMatrixItem[];
-            currentResponseMatrixVersion?: string;
-          };
-        } | null;
-        if (!isCurrentEditorSession(requestProjectId, requestSession)) {
+      if (fullStateBlockedRef.current) {
+        return;
+      }
+      // 执行时读取最新 expected，不得在入队时固化旧版本
+      const expected = stateVersionRef.current;
+      if (!isValidStateVersion(expected)) {
+        enterFullStateBlock();
+        return;
+      }
+      // 仅矩阵 PUT：禁止携带 analysis/outline/chapters/facts/guidance
+      const body = {
+        responseMatrix: mergedMatrix,
+        responseMatrixVersion: remoteVersion,
+        expectedStateVersion: expected,
+      };
+
+      try {
+        const res = await putEditorState(requestProjectId, body);
+        if (
+          !isCurrentWriteEpoch(requestProjectId, requestSession, requestEpoch)
+        ) {
           return;
         }
-        const detail = raw?.detail;
-        const nextRemote = Array.isArray(detail?.responseMatrix)
-          ? normalizeResponseMatrix(detail.responseMatrix)
-          : conflict.remoteMatrix;
-        const nextVersion = String(
-          detail?.currentResponseMatrixVersion || "",
-        ).trim();
-        // 二次 409：禁止复用旧 mergePreview + 新 remoteVersion 写库；须从远端重进合并
-        // 固定中文；不得回显 detail.message / SECRET
+        if (res.status === 409) {
+          const raw = (await res.json().catch(() => null)) as {
+            detail?: {
+              code?: string;
+              message?: string;
+              responseMatrix?: ResponseMatrixItem[];
+              currentResponseMatrixVersion?: string;
+            };
+          } | null;
+          if (
+            !isCurrentWriteEpoch(requestProjectId, requestSession, requestEpoch)
+          ) {
+            return;
+          }
+          const detail = raw?.detail;
+          // 全状态 code 优先：不构造矩阵伪冲突
+          if (detail?.code === "editor_state_version_conflict") {
+            enterFullStateBlock();
+            return;
+          }
+          // 无真实矩阵明细：保留本地预览与既有远端快照，固定 applyError
+          if (!hasRealMatrixConflictDetail(detail)) {
+            setMatrixConflict({
+              ...conflict,
+              mergePreview: preview,
+              applyError:
+                "应用合并失败（409）。本地合并预览仍保留，请稍后重试或重新载入远端矩阵。",
+            });
+            return;
+          }
+          const nextRemote = normalizeResponseMatrix(detail.responseMatrix);
+          const nextVersion = detail.currentResponseMatrixVersion.trim();
+          // 二次 409 且有真实明细：禁止复用旧 mergePreview + 新 remoteVersion 写库
+          setMergeChoices({});
+          setMatrixConflict({
+            message: TECHNICAL_MATRIX_CONFLICT_MESSAGE,
+            remoteMatrix: nextRemote,
+            remoteVersion: nextVersion,
+            mergePreview: null,
+            applyError:
+              "应用合并时远端再次变更（409）。未自动重试；旧合并预览已失效，请点击「重新载入远端矩阵」后从远端状态重新进入合并流程。",
+          });
+          return;
+        }
+        if (!res.ok) {
+          if (
+            !isCurrentWriteEpoch(requestProjectId, requestSession, requestEpoch)
+          ) {
+            return;
+          }
+          setMatrixConflict({
+            ...conflict,
+            mergePreview: preview,
+            applyError: "应用合并失败，请稍后重试。本地合并预览仍保留。",
+          });
+          return;
+        }
+        const saved = (await res.json()) as EditorStateApi;
+        if (
+          !isCurrentWriteEpoch(requestProjectId, requestSession, requestEpoch)
+        ) {
+          return;
+        }
+        if (!isValidStateVersion(saved.stateVersion)) {
+          enterFullStateBlock();
+          return;
+        }
+        applyStateVersion(saved.stateVersion);
+        const savedMatrix = Array.isArray(saved.responseMatrix)
+          ? reconcileResponseMatrixLinks(
+              normalizeResponseMatrix(saved.responseMatrix),
+              latest.chapters,
+              latest.outline,
+            )
+          : mergedMatrix;
+        // 跳过 setState 触发的普通全量防抖 PUT
+        skipNextAutosavePutRef.current = true;
+        if (saveTimer.current) {
+          window.clearTimeout(saveTimer.current);
+          saveTimer.current = null;
+        }
+        setState((prev) => ({
+          ...prev,
+          responseMatrix: savedMatrix,
+        }));
+        applyMatrixVersion(saved.responseMatrixVersion ?? remoteVersion);
+        snapshotMatrixBase(
+          savedMatrix,
+          saved.responseMatrixVersion ?? remoteVersion,
+        );
+        matrixPutBlockedRef.current = false;
+        setMatrixConflict(null);
         setMergeChoices({});
-        setMatrixConflict({
-          message: TECHNICAL_MATRIX_CONFLICT_MESSAGE,
-          remoteMatrix: nextRemote,
-          remoteVersion: nextVersion || conflict.remoteVersion,
-          mergePreview: null,
-          applyError:
-            "应用合并时远端再次变更（409）。未自动重试；旧合并预览已失效，请点击「重新载入远端矩阵」后从远端状态重新进入合并流程。",
-        });
-        return;
-      }
-      if (!res.ok) {
-        if (!isCurrentEditorSession(requestProjectId, requestSession)) {
+        setSaveError(null);
+      } catch {
+        if (
+          !isCurrentWriteEpoch(requestProjectId, requestSession, requestEpoch)
+        ) {
           return;
         }
         setMatrixConflict({
           ...conflict,
           mergePreview: preview,
-          applyError: "应用合并失败，请稍后重试。本地合并预览仍保留。",
+          applyError:
+            "应用合并时网络异常。本地合并预览仍保留，请检查连接后重试。",
         });
-        return;
       }
-      const saved = (await res.json()) as EditorStateApi;
-      if (!isCurrentEditorSession(requestProjectId, requestSession)) {
-        return;
-      }
-      const savedMatrix = Array.isArray(saved.responseMatrix)
-        ? reconcileResponseMatrixLinks(
-            normalizeResponseMatrix(saved.responseMatrix),
-            latest.chapters,
-            latest.outline,
-          )
-        : mergedMatrix;
-      // 跳过 setState 触发的普通全量防抖 PUT，避免 analysis/outline/chapters 被旧本地值回写
-      skipNextAutosavePutRef.current = true;
-      if (saveTimer.current) {
-        window.clearTimeout(saveTimer.current);
-        saveTimer.current = null;
-      }
-      setState((prev) => ({
-        ...prev,
-        responseMatrix: savedMatrix,
-      }));
-      applyMatrixVersion(saved.responseMatrixVersion ?? remoteVersion);
-      snapshotMatrixBase(
-        savedMatrix,
-        saved.responseMatrixVersion ?? remoteVersion,
-      );
-      matrixPutBlockedRef.current = false;
-      setMatrixConflict(null);
-      setMergeChoices({});
-      setSaveError(null);
-    } catch {
-      if (!isCurrentEditorSession(requestProjectId, requestSession)) {
-        return;
-      }
-      setMatrixConflict({
-        ...conflict,
-        mergePreview: preview,
-        applyError: "应用合并时网络异常。本地合并预览仍保留，请检查连接后重试。",
-      });
+    };
+
+    try {
+      // 矩阵合并进入技术主队列，不得旁路 PUT
+      await (matrixSaveChainRef.current = matrixSaveChainRef.current
+        .catch(() => undefined)
+        .then(runMerge));
     } finally {
-      // 仅当前会话结束 loading，避免旧请求 finally 关掉新项目的 applying 状态
       if (isCurrentEditorSession(requestProjectId, requestSession)) {
         setMergeApplying(false);
       }
@@ -988,8 +1284,11 @@ export function useTechnicalPlanEditors(projectId: string) {
     mergeApplying,
     projectId,
     applyMatrixVersion,
+    applyStateVersion,
     snapshotMatrixBase,
     isCurrentEditorSession,
+    isCurrentWriteEpoch,
+    enterFullStateBlock,
   ]);
 
   /**
@@ -1244,11 +1543,18 @@ export function useTechnicalPlanEditors(projectId: string) {
     patchAnalysis,
     parsedMarkdown: state.parsedMarkdown,
     setParsedMarkdown,
+    guidance: state.guidance,
+    updateGuidance,
     reloadFromApi,
     loading,
     loadError,
     saveError,
     apiReady,
+    /** 全状态 CAS 冲突或 200 版本未知阻断；页面展示固定文案与显式重载 */
+    fullStateConflict,
+    fullStateConflictMessage: fullStateConflict
+      ? TECHNICAL_EDITOR_STATE_CONFLICT_MESSAGE
+      : null,
     targetWordsTotal,
     selectedOutlineId,
     setSelectedOutlineId,
