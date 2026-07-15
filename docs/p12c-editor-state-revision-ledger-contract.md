@@ -8,7 +8,7 @@
 # P12C editor-state 有限自动修订历史契约
 
 > **状态**：P12C-A 账本、P12C-B-A 浏览器 PUT、P12C-B-B1 九类任务与 P12C-B-B2 商务 revise 接入均已实现、独立验收并推送。
-> **拆包**：P12C-A（`daa8c43`/`226e1c1`）→ B-A 浏览器 PUT（`fbf93c0`/`acf3139`）→ B-B1 九类任务（`05864f6`/`5a0d1c0`）→ B-B2 商务 revise（`3a30c03`/`5149385`）→ callback/content-fuse/checkpoint restore 逐包接入 → P12C-C 受限浏览/恢复另行冻结。
+> **拆包**：P12C-A（`daa8c43`/`226e1c1`）→ B-A 浏览器 PUT（`fbf93c0`/`acf3139`）→ B-B1 九类任务（`05864f6`/`5a0d1c0`）→ B-B2 商务 revise（`3a30c03`/`5149385`）→ B-C1 个人 callback → B-C2 P8C 票据 callback → content-fuse/checkpoint restore 逐包接入 → P12C-C 受限浏览/恢复另行冻结。
 
 ## 1. 只读审计结论
 
@@ -116,3 +116,9 @@ Grok failure-first **8 failed / 2 passed**，首版专项/受影响回归 10/109
 冻结提交 `3a30c03`、实现提交 `5149385`。`revise_service.py` 的两个真实 upsert 写点固定传 `revise`，覆盖 `business_parse` 与四类结构化商务阶段；结构化解析失败、空 revised、普通技术 revise、陈旧 expected 和 LLM 期间漂移不产生本次 `revise` 修订。同步 HTTP 失败继续由既有全局 500 脱敏，未新增包装器。
 
 Grok failure-first **6 failed / 5 passed**，最终专项/受影响回归 11/122 passed。Codex 独立通过专项 **11**、扩展受影响回归 **147**、后端串行全量 **701 passed**；编译、精确双文件白名单和 diff 检查通过。recorder flush 与 commit 失败均已证明 editor-state/revision 双零，外部 `browser_put` 漂移按来源和精确版本排除。个人 callback、P8C 一次性本地解析 callback、content-fuse 与 checkpoint restore 仍未接入。
+
+## 13. P12C-B-C callback 审计与拆包
+
+只读审计确认个人 callback 与 P8C 票据 callback 不能合包：前者在现有项目锁下把 editor-state、成功任务与项目步骤用唯一 commit 原子提交，任何失败统一 rollback；后者在版本陈旧或旧空版本票据时必须单独 commit 票据消费并返回 409，只有非版本中途异常才回滚并允许票据重用。
+
+因此先冻结 B-C1：只改 `parse_callback.py` 与独立新测试，在个人 callback 唯一 commit 前用锁后 before、内存 after 和固定 `callback` 调用无提交原语。P8C `local_parser` 留给 B-C2 独立证明 fresh 原子留史、stale/null 仅消费无修订和失败票据可重用。完整边界见 `docs/p12c-callback-revision-integration-contract.md`。
