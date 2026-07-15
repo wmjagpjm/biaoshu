@@ -7,9 +7,10 @@
 
 # P11B 商务标编辑态真实数据收口契约
 
-> **状态**：只读审计完成，方案已冻结，等待前端受限实现。
+> **状态**：已完成、独立验收并推送。
 > **工作分支**：`collab/grok-code-codex-review`。
 > **验收起点**：后端串行全量 487 passed；前端 lint/build 通过、单 worker 串行全量 E2E 155 passed。
+> **交付提交**：计划=`6a3f4fe`，前端=`a99d8d4`。
 
 ## 1. 审计结论
 
@@ -50,3 +51,9 @@ P11A 已让商务标项目列表、详情和创建只认服务端，但 `useBusi
 ## 6. 验收底线
 
 前端 E2E 至少覆盖：服务端真实内容与真实空态、预置旧 workspace 键不读取且原值不变、GET 失败固定卡且零旧内容/零 PUT、显式重试单次 GET、成功后防抖 PUT 精确 body、PUT 失败固定脱敏、任务后刷新失败不谎报最新、A→B GET/PUT 迟到隔离、旧 workspace 键族无别名、反馈历史精确允许、method+路径白名单、未知 API/外网阻断及 local/session/IndexedDB/Cookie/clipboard/console 边界。P11A、解析策略、导出图片告警和全量 E2E 必须单 worker 串行回归。
+
+## 7. 交付与验收记录
+
+Grok 按四文件白名单完成实现，但在发送正式 `review_request` 和自测前因使用额度耗尽返回 402；Codex 未重启 Grok，直接对现有差异做独立受限审查。产品代码无需返修；新 E2E 首轮暴露两处测试编排问题：资格页初始化 GET 提前消费“一次性失败”标志，以及 A GET 尚未发出就切 B。Codex 仅修正测试时序与步骤定位，没有扩大产品实现范围。
+
+独立验收结果：`lint`、`build` 通过（仅既有大包体积提示）；P11B **11 passed**、P11A **10 passed**、解析策略 **6 passed**、导出图片告警 **4 passed**；Chromium headless、单 worker 串行全量 E2E **166 passed**；`git diff --check` 与四文件白名单检查通过。后端未改，沿用 **487 passed** 基线。

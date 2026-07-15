@@ -165,9 +165,12 @@ npm run test:e2e:export-image-warnings
 
 # P11A：核心项目列表/详情/创建服务端单一真值（路由桩 + mock/localStorage 假成功与存储边界反假绿）
 npm run test:e2e:core-project-data-truth
+
+# P11B：商务标 editor-state 服务端单一真值（路由桩 + 旧 workspace 保值 + GET/PUT/会话隔离反假绿）
+npm run test:e2e:business-editor-state-truth
 ```
 
-当前基线：后端串行全量 **487 passed**（1 条既有 Starlette/httpx 弃用警告）；M3-D 专项 **34 passed**、M3-A/editor-state/响应矩阵/认证受影响回归 **71 passed**。前端 `lint` / `build` 通过（仅既有大包体积提示），P11A **10 passed**、认证/RBAC **11 passed**、解析策略 **6 passed**、模板复用 **1 passed**，单 worker 串行全量 E2E **155 passed**。M3-D、P10K、P8C、P9D 及其他既有专项继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
+当前基线：后端串行全量 **487 passed**（1 条既有 Starlette/httpx 弃用警告）；M3-D 专项 **34 passed**、M3-A/editor-state/响应矩阵/认证受影响回归 **71 passed**。前端 `lint` / `build` 通过（仅既有大包体积提示），P11B **11 passed**、P11A **10 passed**、认证/RBAC **11 passed**、解析策略 **6 passed**、导出图片告警 **4 passed**、模板复用 **1 passed**，Chromium headless、单 worker 串行全量 E2E **166 passed**。M3-D、P10K、P8C、P9D 及其他既有专项继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
 
 ## 6. 已接 API 一览
 
@@ -343,9 +346,18 @@ npm run test:e2e:core-project-data-truth
 1. 后端返回真实技术标/商务标项目时，列表只显示对应 `kind` 的服务端项目；返回 `200 []` 时显示真实空态，不得补 `mockProjects`、`mockBusinessProjects` 或旧 localStorage 项目。
 2. 预置旧 `biaoshu.projects.v1` 后刷新列表、触发列表 500、直达演示 ID，旧项目都不得出现；旧键和值必须保持精确不变，不得新增 v2/cache/其他项目元数据键，也不得上传旧值。
 3. 技术标新建页、创建方案页、商务标入口各自模拟 POST 失败：按钮在途禁用，页面保持原 URL/表单/列表，显示固定「项目创建失败，请稍后重试」，不得生成 `proj_*`、导航假工作区或写 pending。再次点击只能新增一次真实 POST。
-4. 创建成功只使用 POST 响应的真实 projectId 导航；创建方案有文件时，`biaoshu.pendingProjectFiles` 只能在成功后写入，键集和值精确为真实 projectId 与页面文件名。技术标/商务标 editor-state 既有本地备份属于本包非目标，但不得被当成项目列表/详情真值。
+4. 创建成功只使用 POST 响应的真实 projectId 导航；创建方案有文件时，`biaoshu.pendingProjectFiles` 只能在成功后写入，键集和值精确为真实 projectId 与页面文件名。P11A 当时未改 editor-state；后续 P11B 已移除商务标 workspace 本地备份，技术标 editor-state 本地/mock 回退仍须独立审计。
 5. 商务标详情 404/失败显示「未找到项目」而不是复活演示卡；技术标详情可回真实列表。查重/废标项目列表失败时选择器为空、固定中文且无未处理 Promise。
 6. P11A E2E 主动阻断未知 `/api`、`/api/projects` 前缀未知端点与外网；应用层 console error/warning 精确空，local/session/IndexedDB/Cookie/clipboard 按场景精确收敛。完整契约见 `docs/p11a-core-project-data-truth-contract.md`，计划=`70a2dc7`，前端=`b0a86e4`。
+
+## 6.14 P11B 商务标编辑态真实数据收口
+
+1. 商务标工作区首次加载、显式重试、任务/修订后刷新只认当前项目 `GET /api/projects/{id}/editor-state`；服务端空字段保持空，不得补 `bb_*` 演示资格、目录、报价或承诺内容。
+2. 预置 `biaoshu.businessBid.workspace.{projectId}` 后，页面不得读取、写入、删除、迁移或上传它，键和值必须精确不变，也不得新增 v2/cache/其他 workspace 别名。`biaoshu.businessBid.feedback.{projectId}` 仅保留 AI 反馈历史既有语义，不参与水合或成功判定。
+3. GET 失败、401、404 均显示固定「商务标工作区加载失败，请稍后重试」卡片，只提供重试和返回列表；编辑控件、旧内容和 PUT 均为零。重试每次只增加一次当前项目 GET，成功后才挂工作区。
+4. 初始 GET 成功后，编辑按既有 600 ms 防抖发送精确商务字段 PUT；失败只显示固定「商务标工作区保存失败，请稍后重试」，不得回显 detail/code/路径/项目 ID。再次编辑可新增一次 PUT，成功清错。
+5. 任务成功后的唯一 editor-state 刷新失败时，任务成功事实不反转，但旧内容立即退出并进入同一加载失败态；项目 A→B 时，A 的迟到 GET、PUT 成功/失败与定时器不得污染 B。
+6. P11B E2E 使用 method+精确路径白名单，主动阻断未知 API 和外网，并核对 local/session/IndexedDB/Cookie/clipboard/console 边界。完整契约见 `docs/p11b-business-editor-state-truth-contract.md`，计划=`6a3f4fe`，前端=`a99d8d4`。
 
 ## 7. 本机日用主链路（目标 A 加强版）
 
@@ -427,7 +439,7 @@ npm run test:e2e:core-project-data-truth
 
 ## 14. 仍未接（后续）
 
-Celery、真 MinerU/Docling 安装包与外部进程部署治理、P9B 以外的外部标讯数据源、P9C 的其他模型/GPU/在线 embedding/真实用户语料评测与自动模型更新、M3-D 以外的通用版本历史/任意历史浏览回滚/多人协作、P10K 以外的财务税务/审批/导出/预算/回款/版本与失败尝试/完整身份审计、P10I 以外的人力附件与真实证件核验、P10G 以外的投标人矩阵明细/版本/结果跟踪与其他合规数据域、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
+Celery、真 MinerU/Docling 安装包与外部进程部署治理、P9B 以外的外部标讯数据源、P9C 的其他模型/GPU/在线 embedding/真实用户语料评测与自动模型更新、M3-D 以外的通用版本历史/任意历史浏览回滚/多人协作、技术标 editor-state 本地/mock 回退收口、商务 AI 反馈历史服务端化、P10K 以外的财务税务/审批/导出/预算/回款/版本与失败尝试/完整身份审计、P10I 以外的人力附件与真实证件核验、P10G 以外的投标人矩阵明细/版本/结果跟踪与其他合规数据域、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
 
 **响应矩阵相关（已接 vs 未扩）：** 多端冲突的版本写保护、409 与双浏览器上下文 E2E 主路径已接；「刷新来源」保留人工映射 E2E 已接；**智能建议人工确认后应用** E2E 已接；**来源超过 80 分页** 已推送（`1289c92`）；**字段级三方合并** MVP + E2E 已推送（`2c7b3e0`，`response-matrix-field-merge.spec.ts`）。仍未接：Word 失效引用在浏览器层的扩展（导出逻辑以后端单测为准）；包 9 交付增强。
 

@@ -7,10 +7,11 @@
 
 # P11B 商务标编辑态真实数据收口实施计划
 
-> **状态**：计划已冻结，等待前端受限实现。
+> **状态**：已完成、独立验收并推送。
 > **工作分支**：`collab/grok-code-codex-review`。
 > **验收起点**：后端串行全量 487 passed；前端 lint/build 通过、单 worker 串行全量 E2E 155 passed。
 > **执行顺序**：计划提交并推送 → Grok 前端实现/自测 → Codex 审查/返修/独立验收 → 中文文档闭环。
+> **交付提交**：计划=`6a3f4fe`，前端=`a99d8d4`。
 
 ## 1. 方案与不变量
 
@@ -68,3 +69,11 @@ git diff --check
 ```
 
 所有 Playwright 命令必须 Chromium headless、单 worker、逐条串行。所有 PowerShell 与 Grok 子进程后台静默运行，不弹终端、浏览器或前台应用。
+
+## 6. 实际执行记录
+
+1. Grok 在额度耗尽前完成四文件实现，但因 402 未能发送正式 `review_request` 或完成自测；未提交、未推送。
+2. Codex 独立审查确认生产 Hook 已删除 workspace 本地键与 `createDemoWorkspace` 路径，GET/PUT、计时器和错误均有项目会话隔离，失败卡与固定脱敏文案符合契约。
+3. P11B E2E 首轮的产品断言通过，Codex 只修复两处测试时序：在资格页稳定后再设置任务后 GET 失败，以及确认 A GET 已进入延迟路由后再切 B；重试成功后切回解析步核对 Markdown。
+4. 最终通过：lint、build、P11B 11、P11A 10、解析策略 6、导出图片告警 4、全量 166；全部 Playwright 使用 Chromium headless、单 worker 串行，差异和文件白名单检查通过。
+5. 实现提交 `a99d8d4` 已推送到 `origin/collab/grok-code-codex-review`；后端、技术标 Hook、商务 AI 反馈历史、解析/任务/export、认证/RBAC 与样式均未搭车修改。

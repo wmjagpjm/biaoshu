@@ -7,7 +7,7 @@
 
 # 标书制作者能力补全与角色化演进路线图
 
-> **状态**：阶段 0/1/2 已完成；阶段 3 M3-A=`5d37dba`、M3-B=`e2e5d04`、M3-C 计划=`c63310f`/实现=`b8ff605`、M3-D 计划=`d326c7d`/后端=`6a5f61f`/前端=`b89a387` 均已完成；阶段 4 **包 5** 已推送（`460097a`）；**包 6** 已推送（`1289c92`）；**包 7** 已推送（`2c7b3e0`）；**包 8/P8B/P8C** 均已完成（调度=`6db1586`，P8B 计划=`f662674`/后端=`0994cc8`/前端=`80d2579`，P8C 计划=`cabe99d`/后端=`af39ff8`/前端=`1cf5576`；MinerU 仍仅外置、Docling 未接）；包 9A 与 P9D 已完成。阶段 5 已完成 P10A 至 P10K；P10K 计划=`2e53007`、后端=`1eaa75e`、前端=`dbf301c`。P11A 核心项目真实数据收口已完成并推送（计划=`70a2dc7`、前端=`b0a86e4`）；P11B 商务标编辑态真实数据收口已完成只读审计并冻结契约/计划，等待纯前端受限实现。
+> **状态**：阶段 0/1/2 已完成；阶段 3 M3-A=`5d37dba`、M3-B=`e2e5d04`、M3-C 计划=`c63310f`/实现=`b8ff605`、M3-D 计划=`d326c7d`/后端=`6a5f61f`/前端=`b89a387` 均已完成；阶段 4 **包 5** 已推送（`460097a`）；**包 6** 已推送（`1289c92`）；**包 7** 已推送（`2c7b3e0`）；**包 8/P8B/P8C** 均已完成（调度=`6db1586`，P8B 计划=`f662674`/后端=`0994cc8`/前端=`80d2579`，P8C 计划=`cabe99d`/后端=`af39ff8`/前端=`1cf5576`；MinerU 仍仅外置、Docling 未接）；包 9A 与 P9D 已完成。阶段 5 已完成 P10A 至 P10K；P10K 计划=`2e53007`、后端=`1eaa75e`、前端=`dbf301c`。P11A 核心项目真实数据收口已完成（计划=`70a2dc7`、前端=`b0a86e4`）；P11B 商务标编辑态真实数据收口也已完成（计划=`6a3f4fe`、前端=`a99d8d4`）。
 > **当前分支**：`collab/grok-code-codex-review`
 > **协作方式**：Grok 负责限定范围的实现与测试；Codex 负责范围、审查、验收和提交授权。
 
@@ -26,7 +26,7 @@
 - 轻量解析和 MinerU Markdown 回传已经可用；包 8 MVP 可插拔调度已推送（`6db1586`：默认 `lightweight` + 测试 fake），P8B 已让 `parseStrategy` 驱动技术标/商务标的 `light/local/ask` 动作，P8C 已补 required 模式 10 分钟单项目单次回传票据；**真实 MinerU 仍仅外置 callback，Docling 未接**。
 - 当前已具备中标内容模板资产化、多模板/卡片融合、差异确认、有限持久恢复、统一卡片库和受限角色数据域。真实剩余缺口集中在通用版本历史/多人协作、真实 MinerU/Docling 生产部署、P9C 固定模型运行时门与真实语义调优、Word `structure`/整章布局、更多合法外部标讯来源及完整生产部署治理。导出版式模板与中标内容模板是两个不同概念，后续不得混用术语。
 - P11A 已把技术标/商务标列表、详情、创建与查重/废标选择器收口为 `/api/projects*` 单一真值；前端全量 E2E 由 145 增至 155。它未改 editor-state 本地备份、知识库降级、未挂载首页、后端或角色权限。
-- P11B 审计确认商务标 hook 仍读取/写入 `biaoshu.businessBid.workspace.*`，GET editor-state 失败后把本地/演示内容当作成功工作区，且 A→B 异步缺少完整代次隔离；本包只收紧商务 workspace，保留 AI 反馈 history 本地键，不触碰技术标大 Hook。
+- P11B 已让商务标 workspace 只认 `GET|PUT /api/projects/{id}/editor-state`：旧 `biaoshu.businessBid.workspace.*` 忽略保值，真实空态保持空，加载/保存失败固定脱敏，A→B 的迟到 GET/PUT 被项目会话隔离；AI 反馈 history 本地键保持非目标，技术标大 Hook 未改。前端全量 E2E 由 155 增至 166。
 
 ## 3. 阶段顺序
 
@@ -324,6 +324,6 @@
 
 ## 5. 当前下一步
 
-阶段 0/1/2、阶段 3 M3-A 至 M3-D、阶段 4 **包 5** 至 **包 8/P8B/P8C**、P9A/P9B/P9C/P9D、阶段 5 P10A 至 P10K 与 **P11A 核心项目真实数据收口**均保持已交付。后续只读审计已选择 **P11B 商务标编辑态真实数据收口**：既有 `GET|PUT /api/projects/{id}/editor-state` 是商务 workspace 唯一权威，真实空态保持空，失败显式且不得读取、写入、删除或迁移旧 workspace localStorage。完整契约见 `docs/p11b-business-editor-state-truth-contract.md`，四文件纯前端白名单与串行验收见 `docs/plans/2026-07-14-p11b-business-editor-state-truth-plan.md`。
+阶段 0/1/2、阶段 3 M3-A 至 M3-D、阶段 4 **包 5** 至 **包 8/P8B/P8C**、P9A/P9B/P9C/P9D、阶段 5 P10A 至 P10K、**P11A 核心项目真实数据收口**与 **P11B 商务标编辑态真实数据收口**均保持已交付。P11B 完整契约见 `docs/p11b-business-editor-state-truth-contract.md`，实施与独立验收记录见 `docs/plans/2026-07-14-p11b-business-editor-state-truth-plan.md`。
 
-下一动作是先提交并推送 P11B 契约/计划，再按 `docs/HANDOFF-next.md` §3.1 后台静默派发 Grok；Grok 只实现和自测，Codex 审查、独立验收、中文提交与文档闭环。P11B 不得搭车修改技术标 editor-state、商务 AI 反馈历史、P11A、后端、角色权限、解析/任务/export 或其他剩余主线。
+下一动作不是扩写 P11B，而是只读审计技术标 `useTechnicalPlanEditors` 的 editor-state 本地/mock 回退、失败态和跨项目异步边界；先盘清现状并冻结最小独立契约，再决定是否立 P11C。不得在审计前直接改技术标大 Hook，也不得把商务 AI 反馈历史、通用版本库、多人协作或其他剩余主线合包。
