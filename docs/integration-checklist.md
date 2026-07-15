@@ -173,7 +173,7 @@ npm run test:e2e:business-editor-state-truth
 npm run test:e2e:technical-editor-state-truth
 ```
 
-当前基线：后端串行全量 **570 passed**（1 条既有 Starlette/httpx 弃用警告）；P12B-C3/M3-D 专项 **62 passed**，生产文件 `py_compile` 通过。前端 `lint` / `build` 通过（仅既有大包体积提示），P12B-C3 相关四份规格 **48 passed**，Chromium headless、单 worker、零重试全量 E2E **212 passed**。P12B-C2 历史后端/前端全量为 562/207；P12A、P8C、M3-D、P10K、P9D 及其他既有专项继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
+当前基线：后端串行全量 **599 passed**（1 条既有 Starlette/httpx 弃用警告）；P12B-D1 恢复专项/受影响回归 **58/81 passed**，生产文件 `py_compile` 通过。前端 `lint` / `build` 通过（仅既有大包体积提示），P12B-D2 专项/受影响回归 **51/63 passed**，Chromium headless、单 worker、零重试全量 E2E **263 passed**。P12B-C3 历史后端/前端全量为 570/212；P12A、P8C、M3-D、P10K、P9D 及其他既有专项继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
 
 P8D/P8E 本机助手独立验收命令（仓库根；不安装或探测真实 MinerU/Docling）：
 
@@ -237,7 +237,25 @@ npx playwright test e2e/content-fuse-apply.spec.ts e2e/content-fuse-persistent-r
 npx playwright test --project=chromium --workers=1 --retries=0
 ```
 
-P12B-C 已实现并推送（冻结=`b5a9d90`、C1=`0c8fc77`、C2=`f3c05ae`、C3=`59fcd50`）。C1 验证任务/revise 创建时绑定版本、最终锁后 CAS；C2 验证个人 callback 原子零写以及 P8C 陈旧/空版本票据“消费但不写”；C3 验证 M3-D 全状态冲突优先、apply/consume 成功版本与独立算法一致、零恢复版本不变、两个 POST 严格等待普通 PUT 并使用其响应版本。网络 abort、成功响应缺失/非法/带空白版本均逐轮证明本地正文保留、零重试、两个防抖窗口零 PUT、零 pageerror/unhandled。最终结果为后端 **62 / 570 passed**、前端 **48 / 212 passed**；下一包 P12B-D 尚未冻结或实现，联调时不得出现 restore 端点或按钮。
+P12B-C 已实现并推送（冻结=`b5a9d90`、C1=`0c8fc77`、C2=`f3c05ae`、C3=`59fcd50`）。C1 验证任务/revise 创建时绑定版本、最终锁后 CAS；C2 验证个人 callback 原子零写以及 P8C 陈旧/空版本票据“消费但不写”；C3 验证 M3-D 全状态冲突优先、apply/consume 成功版本与独立算法一致、零恢复版本不变、两个 POST 严格等待普通 PUT并使用其响应版本。网络 abort、成功响应缺失/非法/带空白版本均逐轮证明本地正文保留、零重试、两个防抖窗口零 PUT、零 pageerror/unhandled。最终结果为后端 **62 / 570 passed**、前端 **48 / 212 passed**；其后 P12B-D 已完成。
+
+P12B-D 独立验收命令（后端、前端分别在各自目录；全部串行）：
+
+```powershell
+# D1 后端
+.\.venv\Scripts\python.exe -m pytest -q tests\test_editor_state_checkpoint_restore.py
+.\.venv\Scripts\python.exe -m pytest -q tests\test_editor_state_checkpoints.py tests\test_editor_state_full_version.py tests\test_p12b_delayed_writer_fences.py tests\test_content_fuse_applications.py
+.\.venv\Scripts\python.exe -m pytest -q
+
+# D2 前端；禁止并行
+npx playwright test e2e/editor-state-checkpoint-restore.spec.ts --project=chromium --workers=1 --retries=0
+npx playwright test e2e/technical-editor-state-truth.spec.ts e2e/business-editor-state-truth.spec.ts e2e/content-fuse-apply.spec.ts e2e/content-fuse-persistent-recovery.spec.ts e2e/response-matrix-conflict.spec.ts --project=chromium --workers=1 --retries=0
+npm run lint
+npm run build
+npm run test:e2e -- --workers=1 --retries=0
+```
+
+P12B-D 已实现并推送（冻结=`613818f`、D1=`551caba`、D2=`0f81dd6`）。D1 在同一项目锁和事务内完成当前 expected CAS、恢复前安全检查点、目标严格重验、共享 13 键写回、版本复核与最近 20 条裁剪，结果 **58 / 81 / 599 passed**。D2 只在面板展开时读最近 20 条元数据，创建先强制即时 PUT 再 POST `{}`，恢复二次确认后携带执行时最新 expected；成功唯一 editor-state GET，迟到 list/create/restore、折叠、项目切换与连点均隔离，ID/version/snapshot 不进入 DOM/存储/URL/console。四轮返修后结果 **51 / 63 / 263 passed**，lint/build/diff 通过；全量首跑单次纯白页后，精确用例 1 passed 且完整重跑 263 passed。联调不得把本包误扩展为自动检查点、每次 autosave 历史、任意版本浏览/回滚、删除、diff 或多人协作。
 
 ## 6. 已接 API 一览
 
