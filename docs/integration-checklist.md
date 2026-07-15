@@ -173,7 +173,7 @@ npm run test:e2e:business-editor-state-truth
 npm run test:e2e:technical-editor-state-truth
 ```
 
-当前基线：后端串行全量 **537 passed**（1 条既有 Starlette/httpx 弃用警告）；P12B-A 专项 **19 passed**、内容融合三项加财务整文件 **12 passed**、P12A/editor-state/矩阵/融合确认/callback/模板回归 **104 passed**。P12A 历史专项 **29 passed**、P8C/异步 callback **15 passed** 继续保留。前端 `lint` / `build` 通过（仅既有大包体积提示），技术 editor-state truth **28 passed**、商务 editor-state truth **18 passed**、P11A **10 passed**、认证/RBAC **11 passed**、解析策略 **6 passed**、响应矩阵 **8 passed**、HR 推荐 **4 passed**、融合确认 **6 passed**、持久恢复 **5 passed**、模板复用 **1 passed**，Chromium headless、单 worker 串行全量 E2E **201 passed**。M3-D、P10K、P8C、P9D 及其他既有专项继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
+当前基线：后端串行全量 **570 passed**（1 条既有 Starlette/httpx 弃用警告）；P12B-C3/M3-D 专项 **62 passed**，生产文件 `py_compile` 通过。前端 `lint` / `build` 通过（仅既有大包体积提示），P12B-C3 相关四份规格 **48 passed**，Chromium headless、单 worker、零重试全量 E2E **212 passed**。P12B-C2 历史后端/前端全量为 562/207；P12A、P8C、M3-D、P10K、P9D 及其他既有专项继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
 
 P8D/P8E 本机助手独立验收命令（仓库根；不安装或探测真实 MinerU/Docling）：
 
@@ -182,7 +182,7 @@ backend\.venv\Scripts\python.exe -m unittest discover -s tools\local-parser -p "
 backend\.venv\Scripts\python.exe -m unittest discover -s tools\local-parser -p "test_mineru_callback_helper.py" -v
 ```
 
-P8E 当前为 Docling **46 passed**、P8D MinerU **54 passed**；后端 P8E-A/P8C/P8B/解析受影响回归 **37 passed**，P8C E2E **9 passed**、P8B E2E **6 passed**。P8E 当时沿用后端全量 487；P12A 曾更新为 518，P12B-A 已将当前后端全量更新为 537，P12B-B 已将前端全量更新为 201。真实 Docling/模型未安装、未验收。
+P8E 当前为 Docling **46 passed**、P8D MinerU **54 passed**；后端 P8E-A/P8C/P8B/解析受影响回归 **37 passed**，P8C E2E **9 passed**、P8B E2E **6 passed**。P8E 当时沿用后端全量 487；P12A 更新为 518，P12B-A 为 537，P12B-C1/C2 依次为 552/562，P12B-C3 已更新为 570；P12B-B/C2/C3 将前端全量依次更新为 201/207/212。真实 Docling/模型未安装、未验收。
 
 P12A 独立验收命令（后端；全部串行）：
 
@@ -220,7 +220,24 @@ npm run test:e2e:fuse-persistent-recovery
 npm run test:e2e
 ```
 
-P12B-B 已实现并推送（契约/计划=`0636302`、实现=`473e823`）。验收已证明技术整包、guidance、矩阵合并和商务整包 PUT 都带最新 `expectedStateVersion`；同项目第二请求在第一响应前严格为 0，且 expected 精确等于第一响应版本；固定全状态 409 保留本地并阻断全部写入，只有显式全量 GET 才恢复。技术/商务 GET 缺失或非法版本、PUT 200 缺失/非法新版本均进入固定阻断；普通 409 无矩阵明细不得伪造空矩阵冲突。独立结果为 **28 / 18 / 8 / 4 / 6 / 5 / 201 passed**；下一包 P12B-C 尚未实现。
+P12B-B 已实现并推送（契约/计划=`0636302`、实现=`473e823`）。验收已证明技术整包、guidance、矩阵合并和商务整包 PUT 都带最新 `expectedStateVersion`；同项目第二请求在第一响应前严格为 0，且 expected 精确等于第一响应版本；固定全状态 409 保留本地并阻断全部写入，只有显式全量 GET 才恢复。技术/商务 GET 缺失或非法版本、PUT 200 缺失/非法新版本均进入固定阻断；普通 409 无矩阵明细不得伪造空矩阵冲突。独立结果为 **28 / 18 / 8 / 4 / 6 / 5 / 201 passed**；其后 P12B-C 已完成。
+
+P12B-C 独立验收命令（后端与前端分别在各自目录，全部串行）：
+
+```powershell
+# 后端 C3/M3-D 专项与全量
+.\.venv\Scripts\python.exe -m pytest tests\test_p12b_delayed_writer_fences.py tests\test_content_fuse_applications.py -q
+.\.venv\Scripts\python.exe -m py_compile app\api\schemas.py app\api\content_fuse_applications.py app\services\content_fuse_application_service.py
+.\.venv\Scripts\python.exe -m pytest -q
+
+# 前端 C3 相关与全量；禁止并行
+npm run lint
+npm run build
+npx playwright test e2e/content-fuse-apply.spec.ts e2e/content-fuse-persistent-recovery.spec.ts e2e/technical-editor-state-truth.spec.ts e2e/p12b-delayed-writer-fences.spec.ts --project=chromium --workers=1 --retries=0
+npx playwright test --project=chromium --workers=1 --retries=0
+```
+
+P12B-C 已实现并推送（冻结=`b5a9d90`、C1=`0c8fc77`、C2=`f3c05ae`、C3=`59fcd50`）。C1 验证任务/revise 创建时绑定版本、最终锁后 CAS；C2 验证个人 callback 原子零写以及 P8C 陈旧/空版本票据“消费但不写”；C3 验证 M3-D 全状态冲突优先、apply/consume 成功版本与独立算法一致、零恢复版本不变、两个 POST 严格等待普通 PUT 并使用其响应版本。网络 abort、成功响应缺失/非法/带空白版本均逐轮证明本地正文保留、零重试、两个防抖窗口零 PUT、零 pageerror/unhandled。最终结果为后端 **62 / 570 passed**、前端 **48 / 212 passed**；下一包 P12B-D 尚未冻结或实现，联调时不得出现 restore 端点或按钮。
 
 ## 6. 已接 API 一览
 

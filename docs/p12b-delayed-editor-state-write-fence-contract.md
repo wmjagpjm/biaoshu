@@ -7,7 +7,7 @@
 
 # P12B-C editor-state 延迟写入围栏契约
 
-> **状态**：契约已冻结，等待 Grok 分三批受限实现与 Codex 独立验收。
+> **状态**：C1/C2/C3 均已受限实现、独立验收并推送；冻结=`b5a9d90`，C1=`0c8fc77`，C2=`f3c05ae`，C3=`59fcd50`。P12B-D 仍须另行冻结，不在本契约内。
 
 ## 1. 目标与完成定义
 
@@ -18,7 +18,7 @@ P12B-A 已提供 13 键规范 `stateVersion` 与服务端 CAS，P12B-B 已让技
 3. disabled 个人兼容 `parse-callback`，以及 required 模式 P8C 一次性票据回调；
 4. M3-D `content-fuse-applications` 的确认写入与一次恢复。
 
-完成 P12B-C 必须保证：每条上述写入在开始时绑定一个服务端权威全状态版本，最终写入在同一数据库事务的锁后比较该版本；不匹配时整次迟到写零落库。三批全部验收前，P12B-D restore API/按钮继续禁止实现。
+完成 P12B-C 必须保证：每条上述写入在开始时绑定一个服务端权威全状态版本，最终写入在同一数据库事务的锁后比较该版本；不匹配时整次迟到写零落库。三批现已全部验收；这只解除 P12B-D 的规划前置门，不代表 restore API/按钮已经实现。
 
 ## 2. 共用版本原语与固定错误
 
@@ -121,6 +121,7 @@ P12B-A 已提供 13 键规范 `stateVersion` 与服务端 CAS，P12B-B 已让技
 10. `frontend/e2e/content-fuse-apply.spec.ts`
 11. `frontend/e2e/content-fuse-persistent-recovery.spec.ts`
 12. `frontend/e2e/p12b-delayed-writer-fences.spec.ts`
+13. `frontend/e2e/technical-editor-state-truth.spec.ts`（C3 首轮审查时由 Codex 根据既有 P11C M3-D 路由桩必须同步 expected/响应版本的真实证据追加授权）
 
 任何新增白名单必须由 Codex 根据真实失败证据另行授权。Grok 不得修改文档、依赖、配置、迁移框架、其他测试或 Git 历史，不得 commit/push。
 
@@ -141,3 +142,12 @@ P12B-A 已提供 13 键规范 `stateVersion` 与服务端 CAS，P12B-B 已让技
 ## 9. 提交门
 
 每批 Grok 只发 `review_request`，附精确文件、测试命令/计数、failure-first 证据和已知限制。Codex 独立读差异、受限返修、独立测试后才可中文提交并推送。C1/C2/C3 任一未完成时，路线图只能写“P12B-C 部分完成”，不得声称安全恢复门已闭合。
+
+## 10. 实际交付与验收闭环
+
+1. C1 提交 `0c8fc77`：九类任务 writer、商务 revise 与共用锁后校验原语完成；独立通过后端专项 15、受影响回归 37+42、后端全量 552，前端相关 E2E 4+18、lint/build。
+2. C2 提交 `f3c05ae`：disabled callback 与 P8C 票据版本围栏完成；独立通过后端专项/回归 40、Docling 46、MinerU 54、后端全量 562，C1+C2 E2E 15、前端全量 207、lint/build。
+3. C3 首轮真实红测为 `3 failed, 1 passed, 3 skipped`，明确暴露 apply 缺 expected 仍写入及 schema 未接版本；生产实现后，Codex 又发现成功重读后的 `skipNextAutosavePutRef` 会吞掉用户下一次真实编辑，要求第一次返修。第二次返修继续关闭跨导航只检查最后一轮 `unhandledrejection`、consume 未逐轮证明本地正文保留的测试假绿。
+4. C3 最终提交 `59fcd50`：apply/consume 全状态 CAS、合法响应版本与技术主版本化外部写队列完成。Codex 独立通过 C3/M3-D 后端 62、后端全量 570、C3 相关 E2E 48、前端单 worker 全量 212、lint/build、生产文件 `py_compile`、白名单与暂存区 `git diff --check`。
+5. C3 实际差异为 12 文件：原白名单中的 `p12b-delayed-writer-fences.spec.ts` 无需修改；追加授权的 `technical-editor-state-truth.spec.ts` 只机械同步既有 M3-D 桩与失败后全状态阻断真值。三批均无 Grok commit/push，Git 仍只由 Codex 操作。
+6. P12B-C 已闭合“旧异步/外部写绕过 CAS”前置门，但没有交付检查点 restore、恢复按钮、删除、历史浏览、自动检查点或强制覆盖。下一包只能先审计并冻结 P12B-D。

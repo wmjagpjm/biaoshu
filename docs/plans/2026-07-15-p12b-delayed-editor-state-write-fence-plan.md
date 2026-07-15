@@ -7,7 +7,7 @@
 
 # P12B-C editor-state 延迟写入围栏实施计划
 
-> **状态**：计划已冻结，待依次执行 C1、C2、C3。
+> **状态**：C1/C2/C3 已按顺序执行、独立验收并推送；实现分别为 `0c8fc77`、`f3c05ae`、`59fcd50`。下一包为另行冻结的 P12B-D。
 
 ## 1. 顺序与停线条件
 
@@ -15,7 +15,7 @@
 2. **C2 callback**：在 C1 共用原语上完成个人 callback 原子 CAS；给 P8C 票据加签发版本并实现“陈旧回调零写但消费票据”。
 3. **C3 M3-D**：apply/consume 请求强制 expected；后端全状态校验优先；技术主队列串行外部写并处理成功后重读/不确定结果阻断。
 4. 每批必须先由 Grok 提交 `review_request`，Codex 审查和独立定向测试通过后才进入下一批。跨批失败不得用扩大白名单、跳过用例或修改旧断言掩盖。
-5. 三批均完成后才跑后端与前端全量、更新中文闭环文档并提交；P12B-D 仍需另行冻结契约。
+5. 三批均完成后才跑后端与前端全量、更新中文闭环文档并提交；该门现已满足，但 P12B-D 仍需另行冻结契约。
 
 ## 2. C1 执行步骤
 
@@ -79,4 +79,16 @@ npx playwright test --project=chromium --workers=1
 
 ## 7. 提交与文档闭环
 
-计划/契约先由 Codex 中文提交并推送。C1、C2、C3 可各自形成中文实现提交，但只有全部独立验收通过后，才更新 `docs/HANDOFF-next.md`、`docs/integration-checklist.md`、路线图与本计划的真实测试计数，并由 Codex推送。Grok 不得 commit/push。
+计划/契约先由 Codex 中文提交并推送。C1、C2、C3 可各自形成中文实现提交，但只有全部独立验收通过后，才更新 `docs/HANDOFF-next.md`、`docs/integration-checklist.md`、路线图与本计划的真实测试计数，并由 Codex 推送。Grok 不得 commit/push。
+
+## 8. 实际执行记录
+
+| 批次 | 提交 | 审查与独立验收 |
+|------|------|----------------|
+| C1 | `0c8fc77` | 后端专项 15、回归 37+42、全量 552；前端相关 E2E 4+18；lint/build |
+| C2 | `f3c05ae` | 后端专项/回归 40、Docling 46、MinerU 54、全量 562；C1+C2 E2E 15；前端全量 207；lint/build |
+| C3 | `59fcd50` | 后端专项/M3-D 62、全量 570；C3 相关 E2E 48；前端全量 212；lint/build、`py_compile`、白名单与 diff 检查 |
+
+C3 首轮 review_request=`msg_1fa7294f13f8401c8d1772378ccd8150`；Codex 第一次返修修复重读后下一编辑被吞、补真实 PUT→POST 队列与不确定响应证据，回执=`msg_39aa0f6cb556447d8ef6845e74ce9768`；第二次返修把四种不确定模式的异常、正文保留、零重试与零 PUT 改为逐轮闭环，回执=`msg_8b0594aa3de540b49985deec40832b53`。C3 追加授权 `frontend/e2e/technical-editor-state-truth.spec.ts`，原因是既有 P11C M3-D 路由桩必须与强制 expected/成功响应版本同步；实际未修改原计划中的 `p12b-delayed-writer-fences.spec.ts`。
+
+最终命令均严格串行：后端 `62 passed` 与全量 `570 passed`；前端 Chromium headless、`workers=1`、`retries=0` 的相关 `48 passed` 与全量 `212 passed`。P12B-C 到此完成；P12B-D 尚无代码、API 或按钮。
