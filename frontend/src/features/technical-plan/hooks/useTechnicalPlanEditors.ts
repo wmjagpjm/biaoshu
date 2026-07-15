@@ -1,18 +1,26 @@
 /**
  * 模块：技术方案大纲 / 正文 / 全局事实 / 分析概述（P11C + P12B 全状态 CAS）
  * 用途：技术标编辑内容只认 GET|PUT /api/projects/{id}/editor-state；真实空态保持空；
- *       全部 editor-state PUT 携带服务端 expectedStateVersion，同项目串行队列。
+ *       全部 editor-state PUT 携带服务端 expectedStateVersion，同项目串行队列；
+ *       P12B-C3 受限「版本化外部写」runner：M3-D apply/consume 与 PUT 共用 matrixSaveChainRef。
  * 对接：editor-state API；页面 TechnicalPlanWorkspace；responseMatrixVersion 乐观锁；
  *       全状态 409 code=editor_state_version_conflict；矩阵 409 字段级三方合并；
- *       guidance 纳入主状态同一队列；getCsrfToken 内存 CSRF。
+ *       guidance 纳入主状态同一队列；getCsrfToken 内存 CSRF；ContentFuseDialog。
  * 明确非目标：
  *   - 禁止读写/删除/迁移 biaoshu.technicalPlan.editors.*（旧键忽略并保值）
  *   - 禁止生产路径导入 mock 或字段 fallback 伪装成功
  *   - 禁止本地计算 stateVersion；禁止版本落盘/URL/Cookie/console
  * 二次开发：矩阵 409 时禁止静默覆盖本地；须用户显式「重新载入远端矩阵」或「应用合并」；
  *       应用合并 PUT 仅含 responseMatrix + responseMatrixVersion + expectedStateVersion；
- *       全状态冲突时禁止矩阵旁路解除阻断；项目切换后须丢弃过期合并/409 异步结果。
+ *       全状态冲突时禁止矩阵旁路解除阻断；项目切换后须丢弃过期合并/409 异步结果；
+ *       M3-D 不得旁路 runner 直连 POST。
  */
+
+/** 用途：版本化外部写（M3-D apply/consume）结果；Dialog 据此分流文案。 */
+export type VersionedExternalWriteOutcome<T> =
+  | { status: "success"; data: T }
+  | { status: "post_failed"; blocked: boolean }
+  | { status: "reload_failed"; data: T };
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -1049,6 +1057,111 @@ export function useTechnicalPlanEditors(projectId: string) {
   );
 
   /**
+   * 用途：P12B-C3 受限版本化外部写 runner（M3-D apply/consume）。
+   * 规则：
+   *   - 进入 matrixSaveChainRef，与普通 PUT / 矩阵合并串行；
+   *   - 真正执行时才读 stateVersionRef 最新合法 expected；
+   *   - execute 返回必须含服务端 stateVersion；非法/409/网络不确定一律阻断；
+   *   - POST 成功后阻断自动保存，仅做唯一一次 reloadFromApi；GET 成功才解除；
+   *   - 禁止自动重试、拿 currentStateVersion 重发、旧 UI 带新版本自动 PUT。
+   */
+  const runVersionedExternalWrite = useCallback(
+    async <T extends { stateVersion: string }>(
+      execute: (expectedStateVersion: string) => Promise<T>,
+    ): Promise<VersionedExternalWriteOutcome<T>> => {
+      const requestProjectId = projectId;
+      const requestSession = projectSessionRef.current;
+      const requestEpoch = writeEpochRef.current;
+
+      const run = async (): Promise<VersionedExternalWriteOutcome<T>> => {
+        if (
+          !isCurrentWriteEpoch(requestProjectId, requestSession, requestEpoch)
+        ) {
+          return { status: "post_failed", blocked: false };
+        }
+        if (fullStateBlockedRef.current) {
+          return { status: "post_failed", blocked: true };
+        }
+        const expected = stateVersionRef.current;
+        if (!isValidStateVersion(expected)) {
+          enterFullStateBlock();
+          return { status: "post_failed", blocked: true };
+        }
+
+        let data: T;
+        try {
+          data = await execute(expected);
+        } catch {
+          if (
+            !isCurrentWriteEpoch(requestProjectId, requestSession, requestEpoch)
+          ) {
+            return { status: "post_failed", blocked: false };
+          }
+          // 409 / 网络不确定 / 其它失败：保守阻断，禁止旧 UI 自动保存
+          enterFullStateBlock();
+          return { status: "post_failed", blocked: true };
+        }
+
+        if (
+          !isCurrentWriteEpoch(requestProjectId, requestSession, requestEpoch)
+        ) {
+          return { status: "post_failed", blocked: false };
+        }
+
+        // 200/201 缺/非法版本：可能已写入但客户端版本未知
+        if (!isValidStateVersion(data.stateVersion)) {
+          enterFullStateBlock();
+          return { status: "post_failed", blocked: true };
+        }
+
+        // 接受服务端新版本并阻断，直到唯一 GET 成功
+        applyStateVersion(data.stateVersion);
+        fullStateBlockedRef.current = true;
+        setFullStateConflict(true);
+        // 清未发送的防抖 PUT，避免旧本地带新版本自动写
+        if (saveTimer.current) {
+          window.clearTimeout(saveTimer.current);
+          saveTimer.current = null;
+        }
+        // 禁止设 skipNextAutosavePutRef：reloadFromApi 水合已用 skipNextSave 吃掉一次
+        // effect；若再置本标志，会残留吞掉重读成功后用户的下一次真实编辑 PUT。
+        // 旧 epoch 飞行中/已排队 PUT 由 writeEpoch 递增 + isCurrentWriteEpoch 丢弃。
+
+        // reloadFromApi 会递增 writeEpoch；成功后仅校验项目会话，勿用入队 epoch
+        const reloaded = await reloadFromApi();
+        if (!isCurrentEditorSession(requestProjectId, requestSession)) {
+          return { status: "reload_failed", data };
+        }
+        if (!reloaded) {
+          // GET 失败：保留本地 UI 与阻断；业务已成功
+          enterFullStateBlock();
+          return { status: "reload_failed", data };
+        }
+        // 重读成功后 residual 标志必须清空，确保下一次用户编辑正常发 PUT
+        skipNextAutosavePutRef.current = false;
+        return { status: "success", data };
+      };
+
+      const queued = matrixSaveChainRef.current
+        .catch(() => undefined)
+        .then(run);
+      // 后续 PUT 等待本外部写；失败不卡死整条链
+      matrixSaveChainRef.current = queued
+        .then(() => undefined)
+        .catch(() => undefined);
+      return queued;
+    },
+    [
+      projectId,
+      isCurrentWriteEpoch,
+      isCurrentEditorSession,
+      enterFullStateBlock,
+      applyStateVersion,
+      reloadFromApi,
+    ],
+  );
+
+  /**
    * 用途：冲突后显式采用远端矩阵并恢复保存；不提供静默强制覆盖。
    * 对接：ResponseMatrixPanel「重新载入远端矩阵」
    * 二次开发：全状态阻断期间不得解除阻断或发 PUT。
@@ -1546,6 +1659,8 @@ export function useTechnicalPlanEditors(projectId: string) {
     guidance: state.guidance,
     updateGuidance,
     reloadFromApi,
+    /** P12B-C3：M3-D apply/consume 必须经此 runner，禁止 Dialog 旁路 */
+    runVersionedExternalWrite,
     loading,
     loadError,
     saveError,

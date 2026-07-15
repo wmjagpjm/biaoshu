@@ -1,10 +1,11 @@
 """
-模块：P12B-C 延迟写入围栏专项（C1 任务/revise + C2 个人 callback/P8C）
+模块：P12B-C 延迟写入围栏专项（C1 任务/revise + C2 个人 callback/P8C + C3 M3-D）
 用途：证明迟到任务零覆盖、版本不外泄、批量章节自推进、
   商务 revise 强制 expected 与陈旧 409 无正文回显；
-  C2：个人 callback 强制 expected、陈旧 409 原子零写；P8C 票据绑定版本。
+  C2：个人 callback 强制 expected、陈旧 409 原子零写；P8C 票据绑定版本；
+  C3：M3-D apply/consume 强制 expected、13 键漂移 409 零批次、成功返回新版本。
 对接：task_service / business_task_service / revise_service / editor_state_service /
-  parse_callback / local_parser_ticket_service。
+  parse_callback / local_parser_ticket_service / content_fuse_application_service。
 二次开发：禁止 or True、宽泛状态码、顺序调用冒充并发、修改旧断言迎合实现。
 """
 
@@ -1061,3 +1062,404 @@ def test_personal_callback_midway_failure_full_rollback(client: TestClient, monk
     assert all("应回滚" not in json.dumps(t, ensure_ascii=False) for t in tasks)
     # 项目 status/step/updated_at 精确零写
     assert _project_db_snapshot(pid) == before_proj
+
+
+# ---------- P12B-C3：M3-D 全状态围栏（failure-first） ----------
+
+_FS_CONFLICT = "editor_state_version_conflict"
+_FS_MSG = "编辑内容已被其他操作更新，请重新载入后再保存"
+
+
+def _c3_project(client: TestClient) -> str:
+    res = client.post("/api/projects", json={"name": "P12B-C3-M3D", "kind": "technical"})
+    assert res.status_code == 201, res.text
+    return res.json()["id"]
+
+
+def _c3_seed_chapters(client: TestClient, pid: str) -> dict:
+    put = client.put(
+        f"/api/projects/{pid}/editor-state",
+        json={
+            "outline": [{"id": "node_a", "title": "总体架构", "children": []}],
+            "chapters": [
+                {
+                    "id": "chap_a",
+                    "title": "总体架构",
+                    "body": "C3基线正文。",
+                    "status": "pending",
+                    "preview": "C3基线正文。",
+                    "wordCount": 6,
+                }
+            ],
+            "mode": "ALIGNED",
+            "guidance": {"notes": "c3-guide-v0"},
+            "facts": [{"id": "f1", "text": "事实0"}],
+        },
+    )
+    assert put.status_code == 200, put.text
+    return put.json()
+
+
+def _c3_seed_task(pid: str, body: str = "C3基线正文。") -> str:
+    from hashlib import sha1
+
+    from app.models.entities import ProjectTaskRow, utc_now
+
+    tid = f"task_c3_{pid[-8:]}"
+    base = {
+        "title": "总体架构",
+        "bodyHash": "bh_" + sha1(body.encode("utf-8")).hexdigest()[:20],
+        "bodyLength": len(body),
+    }
+    sugs = [
+        {
+            "suggestionId": "sug_c3_a",
+            "targetChapterId": "chap_a",
+            "action": "merge",
+            "proposedMarkdown": "C3融合后正文。",
+            "base": base,
+        }
+    ]
+    db = SessionLocal()
+    try:
+        row = ProjectTaskRow(
+            id=tid,
+            project_id=pid,
+            type="content_fuse",
+            status="success",
+            progress=100,
+            message="ok",
+            payload_json=json.dumps({"mode": "merge_suggest"}, ensure_ascii=False),
+            result_json=json.dumps(
+                {"model": "mock-c3", "suggestions": sugs, "quota": {}},
+                ensure_ascii=False,
+            ),
+            error=None,
+            created_at=utc_now(),
+            updated_at=utc_now(),
+        )
+        db.add(row)
+        db.commit()
+    finally:
+        db.close()
+    return tid
+
+
+def _c3_apply_url(pid: str) -> str:
+    return f"/api/projects/{pid}/content-fuse-applications"
+
+
+def _c3_consume_url(pid: str, batch_id: str) -> str:
+    return f"/api/projects/{pid}/content-fuse-applications/{batch_id}/consume"
+
+
+def _c3_assert_version_conflict(res) -> None:
+    assert res.status_code == 409, res.text
+    assert res.headers.get("Cache-Control") == "no-store"
+    detail = res.json().get("detail")
+    assert isinstance(detail, dict), res.text
+    assert set(detail.keys()) == {"code", "message", "currentStateVersion"}
+    assert detail["code"] == _FS_CONFLICT
+    assert detail["message"] == _FS_MSG
+    assert _STATE_VERSION_RE.fullmatch(detail["currentStateVersion"])
+    blob = res.text
+    assert "Traceback" not in blob
+    assert "sqlite" not in blob.lower()
+    assert "C3融合后正文" not in blob
+    assert "proposedMarkdown" not in blob
+
+
+def test_c3_apply_missing_expected_422_zero_write(client: TestClient):
+    """用途：apply 缺 expectedStateVersion 固定 422，章节/批次零写。"""
+    pid = _c3_project(client)
+    v0 = _c3_seed_chapters(client, pid)["stateVersion"]
+    tid = _c3_seed_task(pid)
+    res = client.post(
+        _c3_apply_url(pid),
+        json={"taskId": tid, "suggestionIds": ["sug_c3_a"]},
+    )
+    assert res.status_code == 422, res.text
+    state = _get_state(client, pid)
+    assert state["stateVersion"] == v0
+    assert state["chapters"][0]["body"] == "C3基线正文。"
+    listed = client.get(_c3_apply_url(pid)).json()
+    assert listed["items"] == []
+
+
+def test_c3_apply_snake_extra_bad_422(client: TestClient):
+    """用途：snake_case / 非法格式 / 额外键 均 422 零写。"""
+    pid = _c3_project(client)
+    v0 = _c3_seed_chapters(client, pid)["stateVersion"]
+    tid = _c3_seed_task(pid)
+    cases = [
+        {"taskId": tid, "suggestionIds": ["sug_c3_a"], "expected_state_version": v0},
+        {"taskId": tid, "suggestionIds": ["sug_c3_a"], "expectedStateVersion": "bad"},
+        {
+            "taskId": tid,
+            "suggestionIds": ["sug_c3_a"],
+            "expectedStateVersion": v0,
+            "extra": 1,
+        },
+    ]
+    for body in cases:
+        res = client.post(_c3_apply_url(pid), json=body)
+        assert res.status_code == 422, (body, res.text)
+    assert _get_state(client, pid)["stateVersion"] == v0
+    assert client.get(_c3_apply_url(pid)).json()["items"] == []
+
+
+def test_c3_apply_other_13key_drift_409_no_batch(client: TestClient):
+    """用途：章节 base 未变但 guidance 等 13 键漂移时 apply 固定全状态 409，零批次。"""
+    pid = _c3_project(client)
+    seed = _c3_seed_chapters(client, pid)
+    v0 = seed["stateVersion"]
+    tid = _c3_seed_task(pid)
+    # 仅改 guidance（不碰 chapters）→ 全状态版本变，章节 base 仍匹配
+    drifted = client.put(
+        f"/api/projects/{pid}/editor-state",
+        json={"guidance": {"notes": "c3-guide-DRIFT"}, "expectedStateVersion": v0},
+    )
+    assert drifted.status_code == 200, drifted.text
+    v1 = drifted.json()["stateVersion"]
+    assert v1 != v0
+    assert drifted.json()["chapters"][0]["body"] == "C3基线正文。"
+
+    res = client.post(
+        _c3_apply_url(pid),
+        json={
+            "taskId": tid,
+            "suggestionIds": ["sug_c3_a"],
+            "expectedStateVersion": v0,  # 陈旧
+        },
+    )
+    _c3_assert_version_conflict(res)
+    assert res.json()["detail"]["currentStateVersion"] == v1
+    state = _get_state(client, pid)
+    assert state["stateVersion"] == v1
+    assert state["chapters"][0]["body"] == "C3基线正文。"
+    assert state["guidance"]["notes"] == "c3-guide-DRIFT"
+    assert client.get(_c3_apply_url(pid)).json()["items"] == []
+
+
+def test_c3_apply_current_expected_success_new_version(client: TestClient):
+    """用途：当前 expected 成功 apply，返回合法新 stateVersion 且与 GET/算法一致。"""
+    from app.services.editor_state_service import compute_full_state_version
+
+    pid = _c3_project(client)
+    v0 = _c3_seed_chapters(client, pid)["stateVersion"]
+    tid = _c3_seed_task(pid)
+    res = client.post(
+        _c3_apply_url(pid),
+        json={
+            "taskId": tid,
+            "suggestionIds": ["sug_c3_a"],
+            "expectedStateVersion": v0,
+        },
+    )
+    assert res.status_code == 201, res.text
+    body = res.json()
+    assert set(body.keys()) == {
+        "batchId",
+        "appliedChapterCount",
+        "createdAt",
+        "stateVersion",
+    }
+    assert "stateVersion" in body
+    assert _STATE_VERSION_RE.fullmatch(body["stateVersion"])
+    assert body["stateVersion"] != v0
+    got = _get_state(client, pid)
+    assert got["stateVersion"] == body["stateVersion"]
+    # 独立算法核验：禁止仅比较 GET 自洽
+    assert body["stateVersion"] == compute_full_state_version(got)
+    assert got["chapters"][0]["body"] == "C3融合后正文。"
+    listed = client.get(_c3_apply_url(pid)).json()["items"]
+    assert len(listed) == 1
+    assert listed[0]["state"] == "active"
+
+
+def test_c3_consume_missing_bad_extra_422(client: TestClient):
+    """用途：consume 缺/坏/snake/extra 体 422，批次仍 active。"""
+    pid = _c3_project(client)
+    v0 = _c3_seed_chapters(client, pid)["stateVersion"]
+    tid = _c3_seed_task(pid)
+    applied = client.post(
+        _c3_apply_url(pid),
+        json={
+            "taskId": tid,
+            "suggestionIds": ["sug_c3_a"],
+            "expectedStateVersion": v0,
+        },
+    )
+    assert applied.status_code == 201, applied.text
+    assert _STATE_VERSION_RE.fullmatch(applied.json()["stateVersion"])
+    batch_id = applied.json()["batchId"]
+    v_after = applied.json()["stateVersion"]
+
+    cases = [
+        None,
+        {},
+        {"expected_state_version": v_after},
+        {"expectedStateVersion": "not-esv"},
+        {"expectedStateVersion": v_after, "foo": 1},
+    ]
+    for body in cases:
+        if body is None:
+            res = client.post(_c3_consume_url(pid, batch_id))
+        else:
+            res = client.post(_c3_consume_url(pid, batch_id), json=body)
+        assert res.status_code == 422, (body, res.text)
+    listed = client.get(_c3_apply_url(pid)).json()["items"][0]
+    assert listed["state"] == "active"
+    assert listed["batchId"] == batch_id
+
+
+def test_c3_consume_stale_409_batch_still_active(client: TestClient):
+    """用途：consume 全状态陈旧 409，批次不消费、章节不回滚。"""
+    pid = _c3_project(client)
+    v0 = _c3_seed_chapters(client, pid)["stateVersion"]
+    tid = _c3_seed_task(pid)
+    applied = client.post(
+        _c3_apply_url(pid),
+        json={
+            "taskId": tid,
+            "suggestionIds": ["sug_c3_a"],
+            "expectedStateVersion": v0,
+        },
+    )
+    assert applied.status_code == 201, applied.text
+    assert _STATE_VERSION_RE.fullmatch(applied.json()["stateVersion"])
+    batch_id = applied.json()["batchId"]
+    v_applied = applied.json()["stateVersion"]
+    # 外部改 facts → 版本前进，章节 after 仍匹配可恢复条件
+    external = client.put(
+        f"/api/projects/{pid}/editor-state",
+        json={
+            "facts": [{"id": "f1", "text": "事实漂移"}],
+            "expectedStateVersion": v_applied,
+        },
+    )
+    assert external.status_code == 200, external.text
+    v_ext = external.json()["stateVersion"]
+    assert external.json()["chapters"][0]["body"] == "C3融合后正文。"
+
+    res = client.post(
+        _c3_consume_url(pid, batch_id),
+        json={"expectedStateVersion": v_applied},  # 陈旧
+    )
+    _c3_assert_version_conflict(res)
+    assert res.json()["detail"]["currentStateVersion"] == v_ext
+    listed = client.get(_c3_apply_url(pid)).json()["items"][0]
+    assert listed["state"] == "active"
+    assert listed["consumedAt"] is None
+    assert _get_state(client, pid)["chapters"][0]["body"] == "C3融合后正文。"
+
+
+def test_c3_consume_current_success_and_zero_restore_version(client: TestClient):
+    """用途：当前 expected 成功 consume；零恢复时版本等于操作前。"""
+    from app.services.editor_state_service import compute_full_state_version
+
+    pid = _c3_project(client)
+    v0 = _c3_seed_chapters(client, pid)["stateVersion"]
+    tid = _c3_seed_task(pid)
+    applied = client.post(
+        _c3_apply_url(pid),
+        json={
+            "taskId": tid,
+            "suggestionIds": ["sug_c3_a"],
+            "expectedStateVersion": v0,
+        },
+    )
+    assert applied.status_code == 201, applied.text
+    assert _STATE_VERSION_RE.fullmatch(applied.json()["stateVersion"])
+    batch_id = applied.json()["batchId"]
+    v_applied = applied.json()["stateVersion"]
+    # apply 成功版本独立算法核验
+    got_after_apply = _get_state(client, pid)
+    assert v_applied == compute_full_state_version(got_after_apply)
+
+    # 手工漂移章 → 零恢复但仍消费
+    put = client.put(
+        f"/api/projects/{pid}/editor-state",
+        json={
+            "chapters": [
+                {
+                    "id": "chap_a",
+                    "title": "总体架构",
+                    "body": "用户已改不可恢复",
+                    "status": "needs_review",
+                }
+            ],
+            "expectedStateVersion": v_applied,
+        },
+    )
+    assert put.status_code == 200, put.text
+    v_before_consume = put.json()["stateVersion"]
+
+    res = client.post(
+        _c3_consume_url(pid, batch_id),
+        json={"expectedStateVersion": v_before_consume},
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert set(body.keys()) == {
+        "restoredChapterCount",
+        "skippedChapterCount",
+        "consumedAt",
+        "stateVersion",
+    }
+    assert body["restoredChapterCount"] == 0
+    assert body["skippedChapterCount"] == 1
+    assert body["stateVersion"] == v_before_consume
+    assert _STATE_VERSION_RE.fullmatch(body["stateVersion"])
+    got = _get_state(client, pid)
+    assert got["stateVersion"] == v_before_consume
+    # 零恢复：响应版本 = 请求前当前版本 = 独立算法
+    assert body["stateVersion"] == compute_full_state_version(got)
+    assert got["chapters"][0]["body"] == "用户已改不可恢复"
+    listed = client.get(_c3_apply_url(pid)).json()["items"][0]
+    assert listed["state"] == "consumed"
+
+
+def test_c3_consume_full_restore_version_matches_algorithm(client: TestClient):
+    """用途：完整恢复 consume 成功版本与独立 13 键算法/后续 GET 精确一致。"""
+    from app.services.editor_state_service import compute_full_state_version
+
+    pid = _c3_project(client)
+    v0 = _c3_seed_chapters(client, pid)["stateVersion"]
+    tid = _c3_seed_task(pid)
+    applied = client.post(
+        _c3_apply_url(pid),
+        json={
+            "taskId": tid,
+            "suggestionIds": ["sug_c3_a"],
+            "expectedStateVersion": v0,
+        },
+    )
+    assert applied.status_code == 201, applied.text
+    v_applied = applied.json()["stateVersion"]
+    assert _STATE_VERSION_RE.fullmatch(v_applied)
+    assert v_applied == compute_full_state_version(_get_state(client, pid))
+    batch_id = applied.json()["batchId"]
+
+    res = client.post(
+        _c3_consume_url(pid, batch_id),
+        json={"expectedStateVersion": v_applied},
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert set(body.keys()) == {
+        "restoredChapterCount",
+        "skippedChapterCount",
+        "consumedAt",
+        "stateVersion",
+    }
+    assert body["restoredChapterCount"] == 1
+    assert body["skippedChapterCount"] == 0
+    assert _STATE_VERSION_RE.fullmatch(body["stateVersion"])
+    assert body["stateVersion"] != v_applied
+    got = _get_state(client, pid)
+    assert got["stateVersion"] == body["stateVersion"]
+    assert body["stateVersion"] == compute_full_state_version(got)
+    assert got["chapters"][0]["body"] == "C3基线正文。"
+    listed = client.get(_c3_apply_url(pid)).json()["items"][0]
+    assert listed["state"] == "consumed"

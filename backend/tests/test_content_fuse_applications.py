@@ -42,13 +42,13 @@ _ROLE_PASSWORDS = {
     "bidder": "TestPass-M3D-Bidder-0001!",
 }
 
-_CREATE_KEYS = frozenset({"batchId", "appliedChapterCount", "createdAt"})
+_CREATE_KEYS = frozenset({"batchId", "appliedChapterCount", "createdAt", "stateVersion"})
 _LIST_TOP = frozenset({"items"})
 _LIST_ITEM_KEYS = frozenset(
     {"batchId", "chapterCount", "state", "createdAt", "consumedAt"}
 )
 _CONSUME_KEYS = frozenset(
-    {"restoredChapterCount", "skippedChapterCount", "consumedAt"}
+    {"restoredChapterCount", "skippedChapterCount", "consumedAt", "stateVersion"}
 )
 _SECRET = "SECRET_M3D_SHOULD_NOT_LEAK"
 _PATH_MARKER = "/api/projects/leaked/content-fuse"
@@ -318,6 +318,31 @@ def _chapter_bodies(client, pid: str) -> dict[str, str]:
     }
 
 
+def _state_version(client, pid: str) -> str:
+    """用途：读取当前服务端权威 stateVersion。"""
+    state = client.get(f"/api/projects/{pid}/editor-state").json()
+    sv = state.get("stateVersion")
+    assert isinstance(sv, str) and re.fullmatch(r"^esv_[0-9a-f]{32}$", sv), sv
+    return sv
+
+
+def _apply_json(client, pid: str, *, task_id: str, suggestion_ids: list[str], expected: str | None = None) -> dict:
+    """用途：带强制 expectedStateVersion 的 apply 请求体。"""
+    return {
+        "taskId": task_id,
+        "suggestionIds": suggestion_ids,
+        "expectedStateVersion": expected if expected is not None else _state_version(client, pid),
+    }
+
+
+def _consume_json(client, pid: str, *, expected: str | None = None) -> dict:
+    """用途：带强制 expectedStateVersion 的 consume 请求体。"""
+    return {
+        "expectedStateVersion": expected if expected is not None else _state_version(client, pid),
+    }
+
+
+
 # ---------- 表结构 ----------
 
 
@@ -384,6 +409,8 @@ def test_table_constraints_and_composite_index_exist(disabled_client):
 
 def test_apply_success_atomic_and_preview_status(disabled_client):
     """用途：merge+expand 原子写入、派生 preview/wordCount/status、建批次。"""
+    from app.services.editor_state_service import compute_full_state_version
+
     client = disabled_client
     pid = _create_project(client)
     before = _seed_chapters(client, pid)
@@ -392,7 +419,7 @@ def test_apply_success_atomic_and_preview_status(disabled_client):
 
     res = client.post(
         _apply_url(pid),
-        json={"taskId": tid, "suggestionIds": ["sug_a1", "sug_b1"]},
+        json=_apply_json(client, pid, task_id=tid, suggestion_ids=["sug_a1", "sug_b1"]),
     )
     assert res.status_code == 201, res.text
     _assert_no_store(res)
@@ -402,8 +429,12 @@ def test_apply_success_atomic_and_preview_status(disabled_client):
     assert str(body["batchId"]).startswith("cfab_")
     assert "taskId" not in body
     assert "suggestions" not in body
+    # P12B-C3：201 必含合法 stateVersion；与 GET 及独立 13 键算法一致
+    assert re.fullmatch(r"^esv_[0-9a-f]{32}$", body["stateVersion"]), body["stateVersion"]
 
     state = client.get(f"/api/projects/{pid}/editor-state").json()
+    assert state["stateVersion"] == body["stateVersion"]
+    assert body["stateVersion"] == compute_full_state_version(state)
     by_id = {c["id"]: c for c in state["chapters"]}
     assert by_id["chap_a"]["body"] == "融合后的架构正文。"
     assert by_id["chap_a"]["status"] == "needs_review"
@@ -443,6 +474,7 @@ def test_apply_rejects_extra_keys_and_forged_client_body(disabled_client):
         json={
             "taskId": tid,
             "suggestionIds": ["sug_a1"],
+            "expectedStateVersion": _state_version(client, pid),
             "proposedMarkdown": "客户端伪造正文",
             "base": {"bodyHash": "bh_dead"},
             "action": "merge",
@@ -463,10 +495,7 @@ def test_apply_task_authority_not_client_text(disabled_client):
     tid = _seed_success_task(pid, suggestions=sugs)
     res = client.post(
         _apply_url(pid),
-        json={
-            "taskId": tid,
-            "suggestionIds": ["sug_a1"],
-        },
+        json=_apply_json(client, pid, task_id=tid, suggestion_ids=["sug_a1"]),
     )
     assert res.status_code == 201, res.text
     bodies = _chapter_bodies(client, pid)
@@ -501,7 +530,7 @@ def test_apply_base_drift_and_unicode_hash_conflict(disabled_client):
     tid = _seed_success_task(pid, suggestions=sugs)
     res = client.post(
         _apply_url(pid),
-        json={"taskId": tid, "suggestionIds": ["sug_a1"]},
+        json=_apply_json(client, pid, task_id=tid, suggestion_ids=["sug_a1"]),
     )
     _assert_fixed_error(res, 409, "content_fuse_apply_conflict")
     assert _chapter_bodies(client, pid)["chap_a"] == "当前已改。"
@@ -515,7 +544,7 @@ def test_apply_same_chapter_two_suggestions_conflict(disabled_client):
     tid = _seed_success_task(pid, suggestions=_default_suggestions())
     res = client.post(
         _apply_url(pid),
-        json={"taskId": tid, "suggestionIds": ["sug_a1", "sug_a_rewrite"]},
+        json=_apply_json(client, pid, task_id=tid, suggestion_ids=["sug_a1", "sug_a_rewrite"]),
     )
     _assert_fixed_error(res, 409, "content_fuse_apply_conflict")
     assert _chapter_bodies(client, pid)["chap_a"] == "现有架构正文。"
@@ -542,7 +571,7 @@ def test_apply_zero_change_conflict(disabled_client):
     tid = _seed_success_task(pid, suggestions=sugs)
     res = client.post(
         _apply_url(pid),
-        json={"taskId": tid, "suggestionIds": ["sug_same"]},
+        json=_apply_json(client, pid, task_id=tid, suggestion_ids=["sug_same"]),
     )
     _assert_fixed_error(res, 409, "content_fuse_apply_conflict")
 
@@ -571,7 +600,7 @@ def test_apply_four_actions(disabled_client):
     tid = _seed_success_task(pid, suggestions=sugs)
     res = client.post(
         _apply_url(pid),
-        json={"taskId": tid, "suggestionIds": [s["suggestionId"] for s in sugs]},
+        json=_apply_json(client, pid, task_id=tid, suggestion_ids=[s["suggestionId"] for s in sugs]),
     )
     assert res.status_code == 201, res.text
     bodies = _chapter_bodies(client, pid)
@@ -588,10 +617,13 @@ def test_apply_unknown_task_business_cross_space_no_leak(disabled_client):
     _seed_chapters(client, tech)
     tid = _seed_success_task(tech, suggestions=_default_suggestions())
 
-    # 商务标
+    # 商务标：合法版本格式即可进 service；kind 校验固定 404
+    fake_sv = "esv_" + ("0" * 32)
     r1 = client.post(
         _apply_url(biz),
-        json={"taskId": tid, "suggestionIds": ["sug_a1"]},
+        json=_apply_json(
+            client, tech, task_id=tid, suggestion_ids=["sug_a1"], expected=fake_sv
+        ),
     )
     _assert_fixed_error(r1, 404, "project_not_found")
     assert tech not in r1.text and tid not in r1.text
@@ -599,7 +631,9 @@ def test_apply_unknown_task_business_cross_space_no_leak(disabled_client):
     # 未知任务
     r2 = client.post(
         _apply_url(tech),
-        json={"taskId": "task_missing_xxx", "suggestionIds": ["sug_a1"]},
+        json=_apply_json(
+            client, tech, task_id="task_missing_xxx", suggestion_ids=["sug_a1"]
+        ),
     )
     _assert_fixed_error(r2, 404, "content_fuse_task_not_found")
     assert "task_missing_xxx" not in r2.text
@@ -613,7 +647,7 @@ def test_apply_unknown_task_business_cross_space_no_leak(disabled_client):
     )
     r3 = client.post(
         _apply_url(tech),
-        json={"taskId": bad, "suggestionIds": ["sug_a1"]},
+        json=_apply_json(client, tech, task_id=bad, suggestion_ids=["sug_a1"]),
     )
     _assert_fixed_error(r3, 404, "content_fuse_task_not_found")
 
@@ -665,7 +699,7 @@ def test_list_trim_to_20_and_min_projection(disabled_client):
         )
         res = client.post(
             _apply_url(pid),
-            json={"taskId": tid, "suggestionIds": [sug_id]},
+            json=_apply_json(client, pid, task_id=tid, suggestion_ids=[sug_id]),
         )
         assert res.status_code == 201, res.text
 
@@ -697,7 +731,9 @@ def test_list_trim_to_20_and_min_projection(disabled_client):
         assert (
             client.post(
                 _apply_url(other),
-                json={"taskId": tid, "suggestionIds": ["sug_other"]},
+                json=_apply_json(
+                    client, other, task_id=tid, suggestion_ids=["sug_other"]
+                ),
             ).status_code
             == 201
         )
@@ -718,25 +754,35 @@ def test_list_trim_to_20_and_min_projection(disabled_client):
 
 
 def test_consume_full_partial_zero_and_once(disabled_client):
+    from app.services.editor_state_service import compute_full_state_version
+
     client = disabled_client
     pid = _create_project(client)
     _seed_chapters(client, pid)
     sugs = _default_suggestions()
     tid = _seed_success_task(pid, suggestions=sugs)
-    applied = client.post(
+    applied_res = client.post(
         _apply_url(pid),
-        json={"taskId": tid, "suggestionIds": ["sug_a1", "sug_b1"]},
-    ).json()
+        json=_apply_json(client, pid, task_id=tid, suggestion_ids=["sug_a1", "sug_b1"]),
+    )
+    assert applied_res.status_code == 201, applied_res.text
+    applied = applied_res.json()
+    assert re.fullmatch(r"^esv_[0-9a-f]{32}$", applied["stateVersion"])
     batch_id = applied["batchId"]
 
     # 完整恢复
-    c1 = client.post(_consume_url(pid, batch_id))
+    c1 = client.post(_consume_url(pid, batch_id), json=_consume_json(client, pid))
     assert c1.status_code == 200, c1.text
     _assert_no_store(c1)
     body = c1.json()
     assert set(body.keys()) == _CONSUME_KEYS
     assert body["restoredChapterCount"] == 2
     assert body["skippedChapterCount"] == 0
+    assert re.fullmatch(r"^esv_[0-9a-f]{32}$", body["stateVersion"]), body["stateVersion"]
+    state_after_full = client.get(f"/api/projects/{pid}/editor-state").json()
+    assert body["stateVersion"] == state_after_full["stateVersion"]
+    assert body["stateVersion"] == compute_full_state_version(state_after_full)
+    assert body["stateVersion"] != applied["stateVersion"]
     bodies = _chapter_bodies(client, pid)
     assert bodies["chap_a"] == "现有架构正文。"
     assert bodies["chap_b"] == "现有安全正文。"
@@ -745,7 +791,7 @@ def test_consume_full_partial_zero_and_once(disabled_client):
     assert listed["consumedAt"] is not None
 
     # 再次消费 409
-    c2 = client.post(_consume_url(pid, batch_id))
+    c2 = client.post(_consume_url(pid, batch_id), json=_consume_json(client, pid))
     _assert_fixed_error(c2, 409, "content_fuse_application_consumed")
 
     # 部分恢复：再应用，漂移一章
@@ -770,7 +816,7 @@ def test_consume_full_partial_zero_and_once(disabled_client):
     tid2 = _seed_success_task(pid, suggestions=sugs2, task_id="task_partial")
     batch2 = client.post(
         _apply_url(pid),
-        json={"taskId": tid2, "suggestionIds": ["sug_p_a", "sug_p_b"]},
+        json=_apply_json(client, pid, task_id=tid2, suggestion_ids=["sug_p_a", "sug_p_b"]),
     ).json()["batchId"]
     # 漂移 chap_a
     client.put(
@@ -792,10 +838,16 @@ def test_consume_full_partial_zero_and_once(disabled_client):
             ]
         },
     )
-    c3 = client.post(_consume_url(pid, batch2))
+    c3 = client.post(_consume_url(pid, batch2), json=_consume_json(client, pid))
     assert c3.status_code == 200, c3.text
-    assert c3.json()["restoredChapterCount"] == 1
-    assert c3.json()["skippedChapterCount"] == 1
+    c3_body = c3.json()
+    assert set(c3_body.keys()) == _CONSUME_KEYS
+    assert c3_body["restoredChapterCount"] == 1
+    assert c3_body["skippedChapterCount"] == 1
+    assert re.fullmatch(r"^esv_[0-9a-f]{32}$", c3_body["stateVersion"])
+    state_partial = client.get(f"/api/projects/{pid}/editor-state").json()
+    assert c3_body["stateVersion"] == state_partial["stateVersion"]
+    assert c3_body["stateVersion"] == compute_full_state_version(state_partial)
     bodies = _chapter_bodies(client, pid)
     assert bodies["chap_a"] == "用户手工改了A"  # 漂移不覆盖
     assert bodies["chap_b"] == body_b  # 恢复 before
@@ -822,7 +874,7 @@ def test_consume_full_partial_zero_and_once(disabled_client):
     tid3 = _seed_success_task(pid, suggestions=sugs3, task_id="task_zero")
     batch3 = client.post(
         _apply_url(pid),
-        json={"taskId": tid3, "suggestionIds": ["sug_z_a", "sug_z_b"]},
+        json=_apply_json(client, pid, task_id=tid3, suggestion_ids=["sug_z_a", "sug_z_b"]),
     ).json()["batchId"]
     client.put(
         f"/api/projects/{pid}/editor-state",
@@ -843,7 +895,7 @@ def test_consume_full_partial_zero_and_once(disabled_client):
             ]
         },
     )
-    c4 = client.post(_consume_url(pid, batch3))
+    c4 = client.post(_consume_url(pid, batch3), json=_consume_json(client, pid))
     assert c4.status_code == 200
     assert c4.json()["restoredChapterCount"] == 0
     assert c4.json()["skippedChapterCount"] == 2
@@ -857,7 +909,7 @@ def test_consume_missing_batch_no_leak(disabled_client):
     client = disabled_client
     pid = _create_project(client)
     _seed_chapters(client, pid)
-    res = client.post(_consume_url(pid, "cfab_missing_should_not_echo"))
+    res = client.post(_consume_url(pid, "cfab_missing_should_not_echo"), json=_consume_json(client, pid))
     _assert_fixed_error(res, 404, "content_fuse_application_not_found")
     assert "cfab_missing_should_not_echo" not in res.text
     assert _PATH_MARKER not in res.text
@@ -872,6 +924,10 @@ def test_concurrent_double_apply_at_most_one(disabled_client):
     barrier = threading.Barrier(2)
     outcomes: list[int] = []
 
+    from app.services import editor_state_service as _ess
+
+    expected = _state_version(client, pid)
+
     def worker():
         db = SessionLocal()
         try:
@@ -883,9 +939,14 @@ def test_concurrent_double_apply_at_most_one(disabled_client):
                     pid,
                     task_id=tid,
                     suggestion_ids=["sug_a1"],
+                    expected_state_version=expected,
                 )
                 return 201
+            except _ess.EditorStateVersionConflict:
+                db.rollback()
+                return 409
             except content_fuse_application_service.ContentFuseApplicationError as exc:
+                db.rollback()
                 return exc.status_code
         finally:
             db.close()
@@ -916,9 +977,12 @@ def test_concurrent_double_consume_at_most_one(disabled_client):
     tid = _seed_success_task(pid, suggestions=_default_suggestions())
     batch_id = client.post(
         _apply_url(pid),
-        json={"taskId": tid, "suggestionIds": ["sug_a1"]},
+        json=_apply_json(client, pid, task_id=tid, suggestion_ids=["sug_a1"]),
     ).json()["batchId"]
     barrier = threading.Barrier(2)
+    from app.services import editor_state_service as _ess
+
+    expected = _state_version(client, pid)
 
     def worker():
         db = SessionLocal()
@@ -926,10 +990,18 @@ def test_concurrent_double_consume_at_most_one(disabled_client):
             barrier.wait(timeout=5)
             try:
                 content_fuse_application_service.consume_content_fuse_application(
-                    db, "ws_local", pid, batch_id
+                    db,
+                    "ws_local",
+                    pid,
+                    batch_id,
+                    expected_state_version=expected,
                 )
                 return 200
+            except _ess.EditorStateVersionConflict:
+                db.rollback()
+                return 409
             except content_fuse_application_service.ContentFuseApplicationError as exc:
+                db.rollback()
                 return exc.status_code
         finally:
             db.close()
@@ -962,7 +1034,7 @@ def test_snapshot_over_2mib_rejected(disabled_client):
     tid = _seed_success_task(pid, suggestions=sugs, task_id="task_huge")
     res = client.post(
         _apply_url(pid),
-        json={"taskId": tid, "suggestionIds": ["sug_huge"]},
+        json=_apply_json(client, pid, task_id=tid, suggestion_ids=["sug_huge"]),
     )
     _assert_fixed_error(res, 409, "content_fuse_apply_conflict")
     assert _chapter_bodies(client, pid)["chap_a"] == "小"
@@ -988,7 +1060,7 @@ def test_failed_apply_leaves_no_half_batch(disabled_client):
     tid = _seed_success_task(pid, suggestions=sugs, task_id="task_half")
     res = client.post(
         _apply_url(pid),
-        json={"taskId": tid, "suggestionIds": ["sug_a1", "sug_b1"]},
+        json=_apply_json(client, pid, task_id=tid, suggestion_ids=["sug_a1", "sug_b1"]),
     )
     _assert_fixed_error(res, 409, "content_fuse_apply_conflict")
     assert _chapter_bodies(client, pid)["chap_a"] == "现有架构正文。"
@@ -1049,7 +1121,7 @@ def test_auth_required_bid_writer_only(required_client):
     )
     apply = client.post(
         _apply_url(pid),
-        json={"taskId": tid, "suggestionIds": ["sug_a1"]},
+        json=_apply_json(client, pid, task_id=tid, suggestion_ids=["sug_a1"]),
         headers={"X-CSRF-Token": csrf_w},
     )
     assert apply.status_code == 201, apply.text
@@ -1081,7 +1153,7 @@ def test_auth_required_bid_writer_only(required_client):
         db.close()
     no_csrf = client.post(
         _apply_url(pid),
-        json={"taskId": tid_csrf, "suggestionIds": ["sug_csrf_only"]},
+        json=_apply_json(client, pid, task_id=tid_csrf, suggestion_ids=["sug_csrf_only"]),
     )
     assert no_csrf.status_code == 403, no_csrf.text
     detail_csrf = no_csrf.json().get("detail")
@@ -1137,7 +1209,7 @@ def test_unicode_body_length_and_hash_match_fuse_context(disabled_client):
     assert (
         client.post(
             _apply_url(pid),
-            json={"taskId": tid, "suggestionIds": ["sug_u"]},
+            json=_apply_json(client, pid, task_id=tid, suggestion_ids=["sug_u"]),
         ).status_code
         == 201
     )
@@ -1183,7 +1255,7 @@ def test_snapshot_title_untrimmed_and_whitespace_title_skip(disabled_client):
     tid = _seed_success_task(pid, suggestions=sugs, task_id="task_title_ws")
     applied = client.post(
         _apply_url(pid),
-        json={"taskId": tid, "suggestionIds": ["sug_title_ws"]},
+        json=_apply_json(client, pid, task_id=tid, suggestion_ids=["sug_title_ws"]),
     )
     assert applied.status_code == 201, applied.text
     batch_id = applied.json()["batchId"]
@@ -1212,7 +1284,7 @@ def test_snapshot_title_untrimmed_and_whitespace_title_skip(disabled_client):
             ]
         },
     )
-    c = client.post(_consume_url(pid, batch_id))
+    c = client.post(_consume_url(pid, batch_id), json=_consume_json(client, pid))
     assert c.status_code == 200, c.text
     _assert_no_store(c)
     assert c.json()["restoredChapterCount"] == 0
@@ -1250,7 +1322,7 @@ def test_missing_status_pending_and_illegal_status_conflict(disabled_client):
     tid = _seed_success_task(pid, suggestions=sugs, task_id="task_miss_st")
     applied = client.post(
         _apply_url(pid),
-        json={"taskId": tid, "suggestionIds": ["sug_miss_st"]},
+        json=_apply_json(client, pid, task_id=tid, suggestion_ids=["sug_miss_st"]),
     )
     assert applied.status_code == 201, applied.text
     batch_id = applied.json()["batchId"]
@@ -1262,7 +1334,7 @@ def test_missing_status_pending_and_illegal_status_conflict(disabled_client):
     finally:
         db.close()
     # 完整恢复后 status 精确为 pending
-    c = client.post(_consume_url(pid, batch_id))
+    c = client.post(_consume_url(pid, batch_id), json=_consume_json(client, pid))
     assert c.status_code == 200
     state = client.get(f"/api/projects/{pid}/editor-state").json()
     by_id = {ch["id"]: ch for ch in state["chapters"]}
@@ -1295,7 +1367,7 @@ def test_missing_status_pending_and_illegal_status_conflict(disabled_client):
     tid2 = _seed_success_task(pid, suggestions=sugs2, task_id="task_bad_st")
     res = client.post(
         _apply_url(pid),
-        json={"taskId": tid2, "suggestionIds": ["sug_bad_st"]},
+        json=_apply_json(client, pid, task_id=tid2, suggestion_ids=["sug_bad_st"]),
     )
     _assert_fixed_error(res, 409, "content_fuse_apply_conflict")
     assert _chapter_bodies(client, pid)["chap_a"] == "非法状态正文"
@@ -1319,7 +1391,7 @@ def test_create_schema_camel_case_only_and_suggestion_id_bounds(disabled_client)
     too_long = "s" * 65
     long_id = client.post(
         _apply_url(pid),
-        json={"taskId": tid, "suggestionIds": [too_long]},
+        json=_apply_json(client, pid, task_id=tid, suggestion_ids=[too_long]),
     )
     assert long_id.status_code == 422, long_id.text
     assert client.get(_apply_url(pid)).json()["items"] == []
@@ -1409,7 +1481,7 @@ def test_result_structure_rejects_silent_coercion(disabled_client):
         req_id = sid if type(sug["suggestionId"]) is str else "sug_not_in_task"
         res = client.post(
             _apply_url(pid),
-            json={"taskId": tid, "suggestionIds": [req_id]},
+            json=_apply_json(client, pid, task_id=tid, suggestion_ids=[req_id]),
         )
         _assert_fixed_error(res, 409, "content_fuse_apply_conflict")
         assert _chapter_bodies(client, pid)["chap_a"] == body_a
@@ -1439,7 +1511,7 @@ def test_trim_exception_rolls_back_editor_and_batch(disabled_client, monkeypatch
     with pytest.raises(RuntimeError, match="simulated_trim_failure_m3d"):
         client.post(
             _apply_url(pid),
-            json={"taskId": tid, "suggestionIds": ["sug_a1"]},
+            json=_apply_json(client, pid, task_id=tid, suggestion_ids=["sug_a1"]),
         )
 
     # 新 Session 证明 editor-state 未变且批次为 0
@@ -1496,13 +1568,13 @@ def test_restore_exact_original_statuses(disabled_client):
     tid = _seed_success_task(pid, suggestions=_default_suggestions(), task_id="task_st_restore")
     batch_id = client.post(
         _apply_url(pid),
-        json={"taskId": tid, "suggestionIds": ["sug_a1", "sug_b1"]},
+        json=_apply_json(client, pid, task_id=tid, suggestion_ids=["sug_a1", "sug_b1"]),
     ).json()["batchId"]
     state_mid = client.get(f"/api/projects/{pid}/editor-state").json()
     mid = {c["id"]: c for c in state_mid["chapters"]}
     assert mid["chap_a"]["status"] == "needs_review"
     assert mid["chap_b"]["status"] == "needs_review"
-    c = client.post(_consume_url(pid, batch_id))
+    c = client.post(_consume_url(pid, batch_id), json=_consume_json(client, pid))
     assert c.status_code == 200
     assert c.json()["restoredChapterCount"] == 2
     state = client.get(f"/api/projects/{pid}/editor-state").json()
@@ -1572,7 +1644,7 @@ def test_apply_rejects_nondict_suggestion_beside_valid(disabled_client):
     before = _raw_chapters_json(pid)
     res = client.post(
         _apply_url(pid),
-        json={"taskId": tid, "suggestionIds": ["sug_ok"]},
+        json=_apply_json(client, pid, task_id=tid, suggestion_ids=["sug_ok"]),
     )
     _assert_fixed_error(res, 409, "content_fuse_apply_conflict")
     assert _raw_chapters_json(pid) == before
@@ -1613,7 +1685,7 @@ def test_apply_rejects_invalid_or_oversized_suggestion_id_items(disabled_client)
         before = _raw_chapters_json(pid)
         res = client.post(
             _apply_url(pid),
-            json={"taskId": tid, "suggestionIds": ["sug_ok_id"]},
+            json=_apply_json(client, pid, task_id=tid, suggestion_ids=["sug_ok_id"]),
         )
         _assert_fixed_error(res, 409, "content_fuse_apply_conflict")
         assert _raw_chapters_json(pid) == before
@@ -1647,7 +1719,7 @@ def test_apply_rejects_duplicate_suggestion_ids_in_task_result(disabled_client):
     before = _raw_chapters_json(pid)
     res = client.post(
         _apply_url(pid),
-        json={"taskId": tid, "suggestionIds": ["sug_dup"]},
+        json=_apply_json(client, pid, task_id=tid, suggestion_ids=["sug_dup"]),
     )
     _assert_fixed_error(res, 409, "content_fuse_apply_conflict")
     assert _raw_chapters_json(pid) == before
@@ -1691,7 +1763,7 @@ def test_apply_rejects_nondict_chapter_item_and_preserves_json(disabled_client):
     tid = _seed_success_task(pid, suggestions=sugs, task_id="task_ndc")
     res = client.post(
         _apply_url(pid),
-        json={"taskId": tid, "suggestionIds": ["sug_ndc"]},
+        json=_apply_json(client, pid, task_id=tid, suggestion_ids=["sug_ndc"]),
     )
     _assert_fixed_error(res, 409, "content_fuse_apply_conflict")
     after = _raw_chapters_json(pid)
@@ -1733,7 +1805,7 @@ def test_apply_rejects_duplicate_chapter_ids(disabled_client):
     tid = _seed_success_task(pid, suggestions=sugs, task_id="task_dup_chap")
     res = client.post(
         _apply_url(pid),
-        json={"taskId": tid, "suggestionIds": ["sug_dup_chap"]},
+        json=_apply_json(client, pid, task_id=tid, suggestion_ids=["sug_dup_chap"]),
     )
     _assert_fixed_error(res, 409, "content_fuse_apply_conflict")
     assert _raw_chapters_json(pid) == before
@@ -1772,7 +1844,7 @@ def test_apply_rejects_non_str_title_or_body_on_selected_chapter(disabled_client
     tid = _seed_success_task(pid, suggestions=sugs, task_id="task_title_int")
     res = client.post(
         _apply_url(pid),
-        json={"taskId": tid, "suggestionIds": ["sug_title_int"]},
+        json=_apply_json(client, pid, task_id=tid, suggestion_ids=["sug_title_int"]),
     )
     _assert_fixed_error(res, 409, "content_fuse_apply_conflict")
     assert _raw_chapters_json(pid) == before_title
@@ -1802,7 +1874,7 @@ def test_apply_rejects_non_str_title_or_body_on_selected_chapter(disabled_client
     tid2 = _seed_success_task(pid, suggestions=sugs2, task_id="task_body_list")
     res2 = client.post(
         _apply_url(pid),
-        json={"taskId": tid2, "suggestionIds": ["sug_body_list"]},
+        json=_apply_json(client, pid, task_id=tid2, suggestion_ids=["sug_body_list"]),
     )
     _assert_fixed_error(res2, 409, "content_fuse_apply_conflict")
     assert _raw_chapters_json(pid) == before_body
@@ -1827,7 +1899,7 @@ def test_consume_skips_non_str_live_title_body_and_does_not_overwrite(disabled_c
     tid = _seed_success_task(pid, suggestions=sugs, task_id="task_cons_ns")
     applied = client.post(
         _apply_url(pid),
-        json={"taskId": tid, "suggestionIds": ["sug_cons_ns"]},
+        json=_apply_json(client, pid, task_id=tid, suggestion_ids=["sug_cons_ns"]),
     )
     assert applied.status_code == 201, applied.text
     batch_id = applied.json()["batchId"]
@@ -1852,7 +1924,7 @@ def test_consume_skips_non_str_live_title_body_and_does_not_overwrite(disabled_c
     ]
     before_consume = _set_raw_chapters_json(pid, corrupted)
 
-    c = client.post(_consume_url(pid, batch_id))
+    c = client.post(_consume_url(pid, batch_id), json=_consume_json(client, pid))
     assert c.status_code == 200, c.text
     _assert_no_store(c)
     assert c.json()["restoredChapterCount"] == 0
@@ -1870,7 +1942,7 @@ def test_consume_skips_non_str_live_title_body_and_does_not_overwrite(disabled_c
     assert by_id["chap_a"]["title"] == {"broken": True}
     assert by_id["chap_a"]["body"] == 999
     # 二次 consume 固定已消费
-    again = client.post(_consume_url(pid, batch_id))
+    again = client.post(_consume_url(pid, batch_id), json=_consume_json(client, pid))
     _assert_fixed_error(again, 409, "content_fuse_application_consumed")
 
 
@@ -1899,7 +1971,7 @@ def test_consume_skips_duplicate_chapter_ids_as_drift(disabled_client):
     tid = _seed_success_task(pid, suggestions=sugs, task_id="task_dup_cons")
     applied = client.post(
         _apply_url(pid),
-        json={"taskId": tid, "suggestionIds": ["sug_dup_cons"]},
+        json=_apply_json(client, pid, task_id=tid, suggestion_ids=["sug_dup_cons"]),
     )
     assert applied.status_code == 201, applied.text
     batch_id = applied.json()["batchId"]
@@ -1930,7 +2002,7 @@ def test_consume_skips_duplicate_chapter_ids_as_drift(disabled_client):
     ]
     before_consume = _set_raw_chapters_json(pid, drifted)
 
-    c = client.post(_consume_url(pid, batch_id))
+    c = client.post(_consume_url(pid, batch_id), json=_consume_json(client, pid))
     assert c.status_code == 200, c.text
     _assert_no_store(c)
     assert c.json()["restoredChapterCount"] == 0
@@ -1952,5 +2024,5 @@ def test_consume_skips_duplicate_chapter_ids_as_drift(disabled_client):
     assert parsed[1]["id"] == "chap_a"
     assert parsed[0]["id"] == "chap_a"
 
-    again = client.post(_consume_url(pid, batch_id))
+    again = client.post(_consume_url(pid, batch_id), json=_consume_json(client, pid))
     _assert_fixed_error(again, 409, "content_fuse_application_consumed")

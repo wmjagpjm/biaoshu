@@ -1,11 +1,11 @@
 /**
- * 模块：模板/卡片融合建议对话框（阶段3 M3-A/M3-B/M3-D）
+ * 模块：模板/卡片融合建议对话框（阶段3 M3-A/M3-B/M3-D + P12B-C3）
  * 用途：多选模板与 active 文本卡片、目标章节，发起 content_fuse 只读建议；
  *      M3-B 双栏差异预览；M3-D 服务端原子确认写入与持久恢复批次一次消费。
- * 对接：useProjectPipeline.runTask("content_fuse")；editors.reloadFromApi；
+ * 对接：useProjectPipeline.runTask("content_fuse")；editors.runVersionedExternalWrite；
  *      contentFuseApplications 三接口；/api/templates；/api/cards；TechnicalPlanWorkspace。
- * 二次开发：确认前零本地写章节；POST/consume 成功后只调用一次 onReloadFromApi；
- *       据其 boolean 判定刷新成败，禁止再直连 apiFetch(editor-state)；
+ * 二次开发：确认前零本地写章节；apply/consume 必须经 onVersionedExternalWrite，禁止旁路；
+ *       runner 内部负责 expected 注入、单次重读与阻断；
  *       taskId/batchId 仅 Dialog 实例内存，禁止 URL/存储/console/剪贴板；
  *       关闭或切项目立即使在途请求失效；错误固定中文，不回显服务端原文。
  */
@@ -33,8 +33,11 @@ import {
   consumeContentFuseApplication,
   createContentFuseApplication,
   listContentFuseApplications,
+  type ContentFuseApplicationConsumeResult,
+  type ContentFuseApplicationCreateResult,
   type ContentFuseApplicationListItem,
 } from "../lib/contentFuseApplications";
+import type { VersionedExternalWriteOutcome } from "../hooks/useTechnicalPlanEditors";
 
 export type ContentFuseDialogProps = {
   open: boolean;
@@ -46,11 +49,13 @@ export type ContentFuseDialogProps = {
   onRun: (payload: Record<string, unknown>) => Promise<PipelineTask>;
   onCancelTask: () => Promise<PipelineTask | null>;
   /**
-   * 用途：原子确认/恢复成功后唯一一次 GET editor-state 并写父级状态。
-   * 对接：useTechnicalPlanEditors.reloadFromApi（返回 Promise boolean）。
-   * true=重载成功可刷批次；false=保持本地并显示“已完成但刷新失败”。
+   * 用途：P12B-C3 版本化外部写 runner；apply/consume 必须经此入队。
+   * 对接：useTechnicalPlanEditors.runVersionedExternalWrite。
+   * 真正执行时 runner 注入 expected；成功后 runner 内单次 GET。
    */
-  onReloadFromApi: () => Promise<boolean>;
+  onVersionedExternalWrite: <T extends { stateVersion: string }>(
+    execute: (expectedStateVersion: string) => Promise<T>,
+  ) => Promise<VersionedExternalWriteOutcome<T>>;
 };
 
 const TEXT_TYPES = new Set(["document", "qualification", "performance"]);
@@ -127,7 +132,7 @@ export function ContentFuseDialog({
   onClose,
   onRun,
   onCancelTask,
-  onReloadFromApi,
+  onVersionedExternalWrite,
 }: ContentFuseDialogProps) {
   const [templates, setTemplates] = useState<BidTemplateSummary[]>([]);
   const [cards, setCards] = useState<KnowledgeCardSummary[]>([]);
@@ -414,40 +419,43 @@ export function ContentFuseDialog({
     setRestoreMessage(null);
     setApplyBusy(true);
 
-    // 区分业务 POST 失败 与 POST 已成功后的刷新失败
-    let created: Awaited<ReturnType<typeof createContentFuseApplication>>;
-    try {
-      created = await createContentFuseApplication(pid, {
-        taskId: applyTaskId,
-        suggestionIds: validIds,
-      });
-    } catch {
-      if (session !== sessionRef.current) return;
+    // 经版本化外部写队列：禁止 Dialog 直连 POST 旁路 matrixSaveChainRef
+    const outcome = await onVersionedExternalWrite(
+      (expectedStateVersion) =>
+        createContentFuseApplication(pid, {
+          taskId: applyTaskId,
+          suggestionIds: validIds,
+          expectedStateVersion,
+        }),
+    );
+    if (session !== sessionRef.current) return;
+
+    if (outcome.status === "post_failed") {
       setLocalError(MSG_APPLY_FAIL);
       setApplyMessage(null);
       setApplyBusy(false);
       return;
     }
-    if (session !== sessionRef.current) return;
 
     // POST 已成功：立即标记已应用并清空勾选，阻止同 Dialog 重复 POST
+    const created: ContentFuseApplicationCreateResult = outcome.data;
     setAppliedIds((prev) => [...new Set([...prev, ...validIds])]);
     setSelectedIds((prev) => prev.filter((id) => !validIds.includes(id)));
 
+    if (outcome.status === "reload_failed") {
+      setLocalError(MSG_APPLY_RELOAD_FAIL);
+      setApplyMessage(null);
+      setApplyBusy(false);
+      return;
+    }
+
     try {
-      // 唯一一次实际重载：父级 GET + setState；禁止再直连 apiFetch(editor-state)
-      const reloaded = await onReloadFromApi();
-      if (session !== sessionRef.current) return;
-      if (!reloaded) {
-        setLocalError(MSG_APPLY_RELOAD_FAIL);
-        setApplyMessage(null);
-        return;
-      }
+      // runner 已完成唯一 editor-state GET；此处仅刷批次列表
       await refreshBatches(session, pid);
       if (session !== sessionRef.current) return;
       setApplyMessage(`已写入 ${created.appliedChapterCount} 章`);
     } catch {
-      // refreshBatches 等后续失败：业务已写入，仍按刷新失败处理
+      // 列表刷新失败：业务已写入，仍按刷新失败处理
       if (session !== sessionRef.current) return;
       setLocalError(MSG_APPLY_RELOAD_FAIL);
       setApplyMessage(null);
@@ -466,7 +474,7 @@ export function ContentFuseDialog({
     selectedIds,
     chapters,
     appliedSet,
-    onReloadFromApi,
+    onVersionedExternalWrite,
     refreshBatches,
   ]);
 
@@ -483,20 +491,24 @@ export function ContentFuseDialog({
     setRestoreMessage(null);
     setApplyMessage(null);
 
-    // 区分业务 consume 失败 与 consume 已成功后的刷新失败
-    let res: Awaited<ReturnType<typeof consumeContentFuseApplication>>;
-    try {
-      res = await consumeContentFuseApplication(pid, batchId);
-    } catch {
-      if (session !== sessionRef.current) return;
+    // 经版本化外部写队列；consume body 仅 expectedStateVersion
+    const outcome = await onVersionedExternalWrite(
+      (expectedStateVersion) =>
+        consumeContentFuseApplication(pid, batchId, {
+          expectedStateVersion,
+        }),
+    );
+    if (session !== sessionRef.current) return;
+
+    if (outcome.status === "post_failed") {
       setLocalError(MSG_RESTORE_FAIL);
       setPendingRestoreBatchId(null);
       setRestoreBusy(false);
       return;
     }
-    if (session !== sessionRef.current) return;
 
     // consume 已成功：立即清空二次确认，并在内存把该批标为 consumed，阻止再次 consume
+    const res: ContentFuseApplicationConsumeResult = outcome.data;
     setPendingRestoreBatchId(null);
     setBatches((prev) =>
       prev.map((b) =>
@@ -510,15 +522,15 @@ export function ContentFuseDialog({
       ),
     );
 
+    if (outcome.status === "reload_failed") {
+      setLocalError(MSG_RESTORE_RELOAD_FAIL);
+      setRestoreMessage(null);
+      setRestoreBusy(false);
+      return;
+    }
+
     try {
-      // 唯一一次实际重载；禁止再直连 apiFetch(editor-state)
-      const reloaded = await onReloadFromApi();
-      if (session !== sessionRef.current) return;
-      if (!reloaded) {
-        setLocalError(MSG_RESTORE_RELOAD_FAIL);
-        setRestoreMessage(null);
-        return;
-      }
+      // runner 已完成唯一 editor-state GET；此处仅刷批次列表
       await refreshBatches(session, pid);
       if (session !== sessionRef.current) return;
       setRestoreMessage(
@@ -540,7 +552,7 @@ export function ContentFuseDialog({
     applyBusy,
     busy,
     projectId,
-    onReloadFromApi,
+    onVersionedExternalWrite,
     refreshBatches,
   ]);
 

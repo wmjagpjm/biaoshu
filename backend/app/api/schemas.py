@@ -1880,18 +1880,25 @@ class HrCredentialExpiryOut(BaseModel):
 class ContentFuseApplicationCreate(BaseModel):
     """
     模块：M3-D 原子确认请求
-    用途：仅接受 camelCase 的 taskId 与 suggestionIds；拒绝客户端正文/base/action 等伪造键。
+    用途：仅接受 camelCase 的 taskId、suggestionIds、expectedStateVersion；
+      拒绝客户端正文/base/action 等伪造键。
     对接：POST /api/projects/{projectId}/content-fuse-applications。
     二次开发：
       - extra=forbid；禁止 populate_by_name，snake_case 必须 422；
+      - expectedStateVersion 强制合法 esv_ 格式；
       - 建议正文必须仅来自服务端成功 content_fuse 任务结果。
     """
 
-    # 故意不设 populate_by_name：只接受 JSON 键 taskId / suggestionIds
+    # 故意不设 populate_by_name：只接受 JSON 键 taskId / suggestionIds / expectedStateVersion
     model_config = ConfigDict(extra="forbid")
 
     task_id: str = Field(alias="taskId", min_length=1, max_length=64)
     suggestion_ids: list[str] = Field(alias="suggestionIds")
+    expected_state_version: str = Field(
+        alias="expectedStateVersion",
+        pattern=r"^esv_[0-9a-f]{32}$",
+        min_length=1,
+    )
 
     @field_validator("task_id")
     @classmethod
@@ -1925,10 +1932,27 @@ class ContentFuseApplicationCreate(BaseModel):
         return out
 
 
+class ContentFuseApplicationConsume(BaseModel):
+    """
+    模块：M3-D 一次性恢复请求
+    用途：仅接受 camelCase expectedStateVersion；无 body 其它键。
+    对接：POST .../content-fuse-applications/{batchId}/consume。
+    二次开发：extra=forbid；禁止 populate_by_name；snake_case/缺失/非法/额外键 422。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_state_version: str = Field(
+        alias="expectedStateVersion",
+        pattern=r"^esv_[0-9a-f]{32}$",
+        min_length=1,
+    )
+
+
 class ContentFuseApplicationCreateOut(BaseModel):
     """
     模块：M3-D 原子确认成功响应
-    用途：仅返回 batchId/appliedChapterCount/createdAt。
+    用途：返回 batchId/appliedChapterCount/createdAt/stateVersion。
     对接：POST /api/projects/{projectId}/content-fuse-applications。
     二次开发：禁止回显 taskId、正文、快照或冲突章节细节。
     """
@@ -1938,6 +1962,10 @@ class ContentFuseApplicationCreateOut(BaseModel):
     batch_id: str = Field(serialization_alias="batchId")
     applied_chapter_count: int = Field(serialization_alias="appliedChapterCount")
     created_at: datetime = Field(serialization_alias="createdAt")
+    state_version: str = Field(
+        serialization_alias="stateVersion",
+        pattern=r"^esv_[0-9a-f]{32}$",
+    )
 
 
 class ContentFuseApplicationListItemOut(BaseModel):
@@ -1974,9 +2002,9 @@ class ContentFuseApplicationListOut(BaseModel):
 class ContentFuseApplicationConsumeOut(BaseModel):
     """
     模块：M3-D 一次性恢复响应
-    用途：仅 restoredChapterCount/skippedChapterCount/consumedAt。
+    用途：restoredChapterCount/skippedChapterCount/consumedAt/stateVersion。
     对接：POST .../content-fuse-applications/{batchId}/consume。
-    二次开发：禁止回显正文、快照、路径或批次详情。
+    二次开发：禁止回显正文、快照、路径或批次详情；零恢复时版本等于操作前。
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -1984,6 +2012,10 @@ class ContentFuseApplicationConsumeOut(BaseModel):
     restored_chapter_count: int = Field(serialization_alias="restoredChapterCount")
     skipped_chapter_count: int = Field(serialization_alias="skippedChapterCount")
     consumed_at: datetime = Field(serialization_alias="consumedAt")
+    state_version: str = Field(
+        serialization_alias="stateVersion",
+        pattern=r"^esv_[0-9a-f]{32}$",
+    )
 
 
 class EditorStateCheckpointCreate(BaseModel):

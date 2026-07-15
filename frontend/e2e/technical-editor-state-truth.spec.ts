@@ -1290,6 +1290,44 @@ async function installP11cRoutes(page: Page, state: ProbeState) {
         }
         state.fuseCreatePosts.push({ projectId: pid, body });
         state.orderLog.push(`fuse-create:${pid}`);
+        // P12B-C3：缺/坏 expected 固定 422；陈旧 409；成功返回新 stateVersion
+        const expected = body.expectedStateVersion;
+        const cur =
+          state.editorById[pid] ?? emptyTechnicalEditor(pid);
+        state.editorById[pid] = cur;
+        if (!isValidStateVersion(expected)) {
+          await json(
+            route,
+            {
+              detail: [
+                {
+                  type: "missing",
+                  loc: ["body", "expectedStateVersion"],
+                  msg: "Field required",
+                },
+              ],
+            },
+            422,
+          );
+          return;
+        }
+        if (expected !== cur.stateVersion) {
+          await json(
+            route,
+            {
+              detail: {
+                code: "editor_state_version_conflict",
+                message:
+                  "编辑内容已被其他操作更新，请重新载入后再保存",
+                currentStateVersion: cur.stateVersion,
+              },
+            },
+            409,
+          );
+          return;
+        }
+        const nextVersion = allocateStateVersion(state);
+        cur.stateVersion = nextVersion;
         await json(
           route,
           {
@@ -1298,6 +1336,7 @@ async function installP11cRoutes(page: Page, state: ProbeState) {
               ? body.suggestionIds.length
               : 1,
             createdAt: "2026-07-15T12:30:00.000Z",
+            stateVersion: nextVersion,
           },
           201,
         );
@@ -1318,10 +1357,54 @@ async function installP11cRoutes(page: Page, state: ProbeState) {
       const pid = fuseConsumeMatch[1];
       state.fuseConsumePosts.push(pid);
       state.orderLog.push(`fuse-consume:${pid}`);
+      let body: Record<string, unknown> = {};
+      try {
+        body = JSON.parse(req.postData() || "{}") as Record<string, unknown>;
+      } catch {
+        body = {};
+      }
+      const expected = body.expectedStateVersion;
+      const cur =
+        state.editorById[pid] ?? emptyTechnicalEditor(pid);
+      state.editorById[pid] = cur;
+      if (!isValidStateVersion(expected)) {
+        await json(
+          route,
+          {
+            detail: [
+              {
+                type: "missing",
+                loc: ["body", "expectedStateVersion"],
+                msg: "Field required",
+              },
+            ],
+          },
+          422,
+        );
+        return;
+      }
+      if (expected !== cur.stateVersion) {
+        await json(
+          route,
+          {
+            detail: {
+              code: "editor_state_version_conflict",
+              message: "编辑内容已被其他操作更新，请重新载入后再保存",
+              currentStateVersion: cur.stateVersion,
+            },
+          },
+          409,
+        );
+        return;
+      }
+      // 本桩默认有恢复则推进版本
+      const nextVersion = allocateStateVersion(state);
+      cur.stateVersion = nextVersion;
       await json(route, {
         restoredChapterCount: 1,
         skippedChapterCount: 0,
         consumedAt: "2026-07-15T12:31:00.000Z",
+        stateVersion: nextVersion,
       });
       return;
     }
@@ -2301,11 +2384,19 @@ test.describe("P11C 技术标编辑态真实数据收口", () => {
       .toBe(fuseBefore + 1);
     expect(state.fuseCreatePosts.length).toBe(1);
     expect(state.fuseConsumePosts.length).toBe(0);
+    // P12B-C3：create body 必须含合法 expectedStateVersion
+    const createBody = state.fuseCreatePosts[0].body;
+    expect(Object.keys(createBody).sort()).toEqual(
+      ["expectedStateVersion", "suggestionIds", "taskId"].sort(),
+    );
+    expect(String(createBody.expectedStateVersion)).toMatch(
+      /^esv_[0-9a-f]{32}$/,
+    );
 
     await expect(dialog.getByTestId("content-fuse-local-error")).toContainText(
       MSG_APPLY_RELOAD_FAIL,
     );
-    // 对话框仍打开；P11C 失败卡不得提前卸载对话框
+    // 对话框仍打开；失败卡/全状态冲突横幅不得提前卸载对话框
     await expect(dialog).toBeVisible();
     await expect(page.getByTestId("technical-editor-load-error")).toHaveCount(0);
 
@@ -2316,20 +2407,26 @@ test.describe("P11C 技术标编辑态真实数据收口", () => {
       )
       .toBe(getsBeforeApply + 1);
 
-    // 关闭后出现 P11C 固定加载失败卡
+    // P12B-C3 runner：POST 成功但 reload 失败进入全状态阻断；关闭后见冲突横幅（非卸载式 load-error 卡）
     await dialog.getByRole("button", { name: "关闭", exact: true }).click();
     await expect(dialog).toHaveCount(0);
-    await expectLoadErrorCard(page);
+    await expect(
+      page.getByTestId("technical-editor-state-conflict"),
+    ).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("technical-editor-load-error")).toHaveCount(0);
 
-    // 显式重试精确 +1 GET 后恢复
+    // 显式重载精确 +1 GET 后恢复
     const getsBeforeRetry = state.getLog.filter((id) => id === REAL_TECH_A)
       .length;
     state.editorById[REAL_TECH_A] = realTechnicalEditor(
       REAL_TECH_A,
       "M3D后恢复概述",
     );
-    await page.getByTestId("technical-editor-retry").click();
+    await page.getByTestId("technical-editor-state-reload").click();
     await expectWorkspaceReady(page, "P11CM3D兼容");
+    await expect(
+      page.getByTestId("technical-editor-state-conflict"),
+    ).toHaveCount(0);
     const getsAfterRetry = state.getLog.filter((id) => id === REAL_TECH_A)
       .length;
     expect(getsAfterRetry).toBe(getsBeforeRetry + 1);

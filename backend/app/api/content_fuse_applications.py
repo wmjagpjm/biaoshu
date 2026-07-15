@@ -6,18 +6,20 @@
 二次开发：
   - 复用 get_workspace_id（disabled 兼容，required 仅 bid_writer）；
   - CSRF 由既有中间件处理；
-  - 所有响应 Cache-Control: no-store；错误固定 code/message，不反射 ID/正文。
+  - 所有响应 Cache-Control: no-store；错误固定 code/message，不反射 ID/正文；
+  - P12B-C3：apply/consume 强制 expectedStateVersion；全状态冲突映射固定 409。
 """
 
 from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_workspace_id
 from app.api.schemas import (
+    ContentFuseApplicationConsume,
     ContentFuseApplicationConsumeOut,
     ContentFuseApplicationCreate,
     ContentFuseApplicationCreateOut,
@@ -25,7 +27,7 @@ from app.api.schemas import (
     ContentFuseApplicationListOut,
 )
 from app.core.database import get_db
-from app.services import content_fuse_application_service
+from app.services import content_fuse_application_service, editor_state_service
 from app.services.content_fuse_application_service import ContentFuseApplicationError
 
 router = APIRouter(prefix="/projects", tags=["content-fuse-applications"])
@@ -49,6 +51,26 @@ def _raise_app_error(exc: ContentFuseApplicationError) -> None:
     ) from None
 
 
+def _raise_version_conflict(
+    db: Session, exc: editor_state_service.EditorStateVersionConflict
+) -> None:
+    """
+    用途：P12B-C3 全状态冲突固定 409 最小 detail。
+    二次开发：仅 code/message/currentStateVersion；rollback 后映射；
+      禁止正文/任务/批次/路径/异常原文。
+    """
+    db.rollback()
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "code": editor_state_service.CODE_FULL_STATE_VERSION_CONFLICT,
+            "message": exc.message,
+            "currentStateVersion": exc.current_state_version,
+        },
+        headers={"Cache-Control": "no-store"},
+    ) from None
+
+
 @router.post(
     "/{project_id}/content-fuse-applications",
     response_model=ContentFuseApplicationCreateOut,
@@ -64,7 +86,8 @@ def create_content_fuse_application(
     """
     用途：原子确认所选 content_fuse 建议并写有限恢复批次。
     对接：ContentFuseDialog 确认写入；服务层 apply_content_fuse_application。
-    二次开发：请求仅 taskId/suggestionIds；成功后前端须强制重读 editor-state。
+    二次开发：请求强制 taskId/suggestionIds/expectedStateVersion；
+      成功后前端须经版本化外部写队列单次重读 editor-state。
     """
     _no_store(response)
     try:
@@ -74,13 +97,17 @@ def create_content_fuse_application(
             project_id,
             task_id=body.task_id,
             suggestion_ids=list(body.suggestion_ids),
+            expected_state_version=body.expected_state_version,
         )
+    except editor_state_service.EditorStateVersionConflict as exc:
+        _raise_version_conflict(db, exc)
     except ContentFuseApplicationError as exc:
         _raise_app_error(exc)
     return ContentFuseApplicationCreateOut(
         batch_id=data["batch_id"],
         applied_chapter_count=data["applied_chapter_count"],
         created_at=data["created_at"],
+        state_version=data["state_version"],
     )
 
 
@@ -126,6 +153,7 @@ def list_content_fuse_applications(
 def consume_content_fuse_application(
     project_id: str,
     batch_id: str,
+    body: ContentFuseApplicationConsume,
     response: Response,
     db: Annotated[Session, Depends(get_db)],
     workspace_id: Annotated[str, Depends(get_workspace_id)],
@@ -133,16 +161,24 @@ def consume_content_fuse_application(
     """
     用途：对 active 批次执行一次恢复尝试；完整/部分/零恢复均消费。
     对接：ContentFuseDialog 二次确认恢复。
+    二次开发：请求体仅 expectedStateVersion；全状态冲突不消费批次。
     """
     _no_store(response)
     try:
         data = content_fuse_application_service.consume_content_fuse_application(
-            db, workspace_id, project_id, batch_id
+            db,
+            workspace_id,
+            project_id,
+            batch_id,
+            expected_state_version=body.expected_state_version,
         )
+    except editor_state_service.EditorStateVersionConflict as exc:
+        _raise_version_conflict(db, exc)
     except ContentFuseApplicationError as exc:
         _raise_app_error(exc)
     return ContentFuseApplicationConsumeOut(
         restored_chapter_count=data["restored_chapter_count"],
         skipped_chapter_count=data["skipped_chapter_count"],
         consumed_at=data["consumed_at"],
+        state_version=data["state_version"],
     )

@@ -626,14 +626,18 @@ test.describe("模板卡片融合原子确认 M3-D", () => {
         dialog.getByTestId("content-fuse-apply-summary"),
       ).toContainText(/已写入 1 章/, { timeout: 20_000 });
 
-      // POST 精确 1 次，键集与值精确
+      // POST 精确 1 次，键集与值精确（P12B-C3 强制 expectedStateVersion）
       expect(probe.applyPosts.length).toBe(1);
       const postBody = probe.applyPosts[0].body as Record<string, unknown>;
       expect(Object.keys(postBody).sort()).toEqual(
-        ["suggestionIds", "taskId"].sort(),
+        ["expectedStateVersion", "suggestionIds", "taskId"].sort(),
       );
       expect(postBody.taskId).toBe(capturedTaskId);
       expect(postBody.suggestionIds).toEqual([suggestionIdA]);
+      expect(typeof postBody.expectedStateVersion).toBe("string");
+      expect(postBody.expectedStateVersion as string).toMatch(
+        /^esv_[0-9a-f]{32}$/,
+      );
       // 不得含客户端伪造字段
       expect(postBody).not.toHaveProperty("title");
       expect(postBody).not.toHaveProperty("proposedMarkdown");
@@ -975,10 +979,13 @@ test.describe("模板卡片融合原子确认 M3-D", () => {
       expect(probe.applyPosts.length).toBe(1);
       const body409 = probe.applyPosts[0].body as Record<string, unknown>;
       expect(Object.keys(body409).sort()).toEqual(
-        ["suggestionIds", "taskId"].sort(),
+        ["expectedStateVersion", "suggestionIds", "taskId"].sort(),
       );
       expect(body409.taskId).toBe(capturedTaskId);
       expect(body409.suggestionIds).toEqual([suggestionIdA]);
+      expect(body409.expectedStateVersion as string).toMatch(
+        /^esv_[0-9a-f]{32}$/,
+      );
       expect(probe.editorPuts.length).toBe(putsBefore);
       await expect(page.getByLabel(`正文：${TITLE_A}`)).toHaveValue(BODY_A);
       expect(await fetchBatchCount(request, projectId)).toBe(0);
@@ -1003,20 +1010,53 @@ test.describe("模板卡片融合原子确认 M3-D", () => {
         expect(line).not.toContain("content_fuse_apply_conflict");
       }
 
-      // 再测 500
+      // P12B-C3：409 后全状态阻断，再次确认不得再发 POST
+      const postsWhileBlocked = probe.applyPosts.length;
+      await dialog.getByRole("button", { name: "确认写入所选" }).click();
+      await expect(dialog.getByTestId("content-fuse-local-error")).toHaveText(
+        "融合确认失败，请刷新后重试",
+        { timeout: 10_000 },
+      );
+      expect(probe.applyPosts.length).toBe(postsWhileBlocked);
+
+      // 关闭 Dialog 后显式重载解除阻断，再测 500
+      await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+      await expect(dialog).toBeHidden();
+      await page.getByTestId("technical-editor-state-reload").click();
+      await expect(page.getByTestId("technical-editor-state-conflict")).toHaveCount(
+        0,
+        { timeout: 15_000 },
+      );
+
+      // 重新打开并生成，独立测 500 体
+      const dialog2 = await generateSuggestions(page, templateTitle, cardTitle, [
+        TITLE_A,
+      ]);
+      await expect
+        .poll(() => taskCapture.getTaskId(), { timeout: 15_000 })
+        .toBeTruthy();
+      const capturedTaskId2 = taskCapture.getTaskId() as string;
+      const suggestionIdA2 = await readSuggestionIdFromDom(dialog2, TITLE_A);
+      await dialog2.getByLabel(`勾选写入建议 ${TITLE_A}`).check();
       failStatus = 500;
       const putsBefore500 = probe.editorPuts.length;
       const postsBefore500 = probe.applyPosts.length;
-      await dialog.getByRole("button", { name: "确认写入所选" }).click();
-      await expect(dialog.getByTestId("content-fuse-local-error")).toHaveText(
+      await dialog2.getByRole("button", { name: "确认写入所选" }).click();
+      await expect(dialog2.getByTestId("content-fuse-local-error")).toHaveText(
         "融合确认失败，请刷新后重试",
         { timeout: 10_000 },
       );
       expect(probe.applyPosts.length).toBe(postsBefore500 + 1);
       const body500 = probe.applyPosts[postsBefore500]
         .body as Record<string, unknown>;
-      expect(body500.taskId).toBe(capturedTaskId);
-      expect(body500.suggestionIds).toEqual([suggestionIdA]);
+      expect(Object.keys(body500).sort()).toEqual(
+        ["expectedStateVersion", "suggestionIds", "taskId"].sort(),
+      );
+      expect(body500.taskId).toBe(capturedTaskId2);
+      expect(body500.suggestionIds).toEqual([suggestionIdA2]);
+      expect(body500.expectedStateVersion as string).toMatch(
+        /^esv_[0-9a-f]{32}$/,
+      );
       expect(probe.editorPuts.length).toBe(putsBefore500);
       await expect(page.getByLabel(`正文：${TITLE_A}`)).toHaveValue(BODY_A);
       expect(await fetchBatchCount(request, projectId)).toBe(0);
@@ -1129,8 +1169,14 @@ test.describe("模板卡片融合原子确认 M3-D", () => {
 
       expect(probe.applyPosts.length).toBe(1);
       const postBody = probe.applyPosts[0].body as Record<string, unknown>;
+      expect(Object.keys(postBody).sort()).toEqual(
+        ["expectedStateVersion", "suggestionIds", "taskId"].sort(),
+      );
       expect(postBody.taskId).toBe(capturedTaskId);
       expect(postBody.suggestionIds).toEqual([suggestionIdA]);
+      expect(postBody.expectedStateVersion as string).toMatch(
+        /^esv_[0-9a-f]{32}$/,
+      );
 
       // 服务端批次已变化
       await expect
@@ -1278,4 +1324,516 @@ test.describe("模板卡片融合原子确认 M3-D", () => {
       await mock.close();
     }
   });
+
+  test("P12B-C3 队列：PUT 挂起时 apply POST 严格 0，释放后 expected 精确等于 PUT 响应版本", async ({
+    page,
+    request,
+  }) => {
+    const mock = await startMockLlmServer();
+    try {
+      const pageErrors: string[] = [];
+      page.on("pageerror", (err) => {
+        pageErrors.push(String(err?.message || err));
+      });
+      await page.addInitScript(() => {
+        window.addEventListener("unhandledrejection", (ev) => {
+          const reason = (ev as PromiseRejectionEvent).reason;
+          const text =
+            reason instanceof Error
+              ? reason.message
+              : typeof reason === "string"
+                ? reason
+                : String(reason);
+          const w = window as unknown as { __p12bc3Unhandled?: string[] };
+          w.__p12bc3Unhandled = w.__p12bc3Unhandled || [];
+          w.__p12bc3Unhandled.push(text);
+        });
+      });
+
+      const { projectId, templateTitle, cardTitle } =
+        await seedFuseApplyFixtures(request, mock.baseUrl, {
+          twoChapters: true,
+        });
+
+      await openContentStep(page, projectId);
+      // 仅生成 A 建议；稍后改 B 章触发 PUT，避免破坏 A 的 base 匹配导致确认禁用
+      const dialog = await generateSuggestions(page, templateTitle, cardTitle, [
+        TITLE_A,
+      ]);
+      const suggestionIdA = await readSuggestionIdFromDom(dialog, TITLE_A);
+      await dialog.getByLabel(`勾选写入建议 ${TITLE_A}`).check();
+      await expect(
+        dialog.getByTestId("content-fuse-confirm-apply"),
+      ).toBeEnabled();
+
+      const putGate = createHoldGate();
+      let putEntered = false;
+      let applyArrivedWhilePutHeld = false;
+      const putLog: Array<{
+        body: Record<string, unknown>;
+        responseVersion: string;
+      }> = [];
+      const applyLog: Array<Record<string, unknown>> = [];
+
+      await page.route("**/api/projects/**/editor-state**", async (route) => {
+        const method = route.request().method().toUpperCase();
+        if (method === "PUT") {
+          putEntered = true;
+          if (!putGate.released) {
+            await putGate.wait();
+          }
+          const response = await route.fetch();
+          const json = (await response.json()) as { stateVersion?: string };
+          let body: Record<string, unknown> = {};
+          try {
+            body = route.request().postDataJSON() as Record<string, unknown>;
+          } catch {
+            body = {};
+          }
+          putLog.push({
+            body,
+            responseVersion: String(json.stateVersion || ""),
+          });
+          await route.fulfill({
+            status: response.status(),
+            contentType: "application/json",
+            body: JSON.stringify(json),
+          });
+          return;
+        }
+        await route.continue();
+      });
+
+      await page.route(
+        "**/api/projects/**/content-fuse-applications**",
+        async (route) => {
+          const method = route.request().method().toUpperCase();
+          const path = new URL(route.request().url()).pathname;
+          if (
+            method === "POST" &&
+            /\/content-fuse-applications\/?$/.test(path) &&
+            !path.includes("/consume")
+          ) {
+            if (!putGate.released) {
+              applyArrivedWhilePutHeld = true;
+            }
+            let body: Record<string, unknown> = {};
+            try {
+              body = route.request().postDataJSON() as Record<string, unknown>;
+            } catch {
+              body = {};
+            }
+            applyLog.push(body);
+          }
+          await route.continue();
+        },
+      );
+
+      await page.clock.install();
+      // 改 B 章正文触发普通 editor PUT（不破坏 A 建议 base）
+      await selectChapterByTitle(page, TITLE_B, true);
+      await forceSetChapterBody(page, `${BODY_B}\n队列挂起编辑`);
+      await page.clock.fastForward(TECH_AUTOSAVE_ADVANCE_MS);
+      await expect.poll(() => (putEntered ? 1 : 0), { timeout: 5_000 }).toBe(1);
+      expect(putLog.length).toBe(0);
+      // A 建议仍可选、确认仍可用
+      await expect(
+        dialog.getByTestId("content-fuse-confirm-apply"),
+      ).toBeEnabled();
+
+      await dialog.getByTestId("content-fuse-confirm-apply").click();
+      // release 前推进两个防抖窗口：旁路若绕过 saveChain 会在此打到 apply
+      await page.clock.fastForward(TECH_AUTOSAVE_ADVANCE_MS * 2);
+      expect(applyArrivedWhilePutHeld).toBe(false);
+      expect(applyLog.length).toBe(0);
+
+      putGate.release();
+      await expect.poll(() => putLog.length, { timeout: 10_000 }).toBe(1);
+      await expect.poll(() => applyLog.length, { timeout: 15_000 }).toBe(1);
+
+      expect(applyArrivedWhilePutHeld).toBe(false);
+      const putVersion = putLog[0].responseVersion;
+      expect(putVersion).toMatch(/^esv_[0-9a-f]{32}$/);
+      expect(Object.keys(applyLog[0]).sort()).toEqual(
+        ["expectedStateVersion", "suggestionIds", "taskId"].sort(),
+      );
+      expect(applyLog[0].expectedStateVersion).toBe(putVersion);
+      expect(applyLog[0].suggestionIds).toEqual([suggestionIdA]);
+
+      const unhandled = await page.evaluate(
+        () =>
+          (window as unknown as { __p12bc3Unhandled?: string[] })
+            .__p12bc3Unhandled || [],
+      );
+      expect(pageErrors).toEqual([]);
+      expect(unhandled).toEqual([]);
+    } finally {
+      await mock.close();
+    }
+  });
+
+  test("P12B-C3 成功后 GET 挂起零自动 PUT；重读后下一编辑必发 1 次 PUT 用重读版本", async ({
+    page,
+    request,
+  }) => {
+    const mock = await startMockLlmServer();
+    try {
+      const pageErrors: string[] = [];
+      page.on("pageerror", (err) => {
+        pageErrors.push(String(err?.message || err));
+      });
+      await page.addInitScript(() => {
+        window.addEventListener("unhandledrejection", (ev) => {
+          const reason = (ev as PromiseRejectionEvent).reason;
+          const text =
+            reason instanceof Error
+              ? reason.message
+              : typeof reason === "string"
+                ? reason
+                : String(reason);
+          const w = window as unknown as { __p12bc3Unhandled?: string[] };
+          w.__p12bc3Unhandled = w.__p12bc3Unhandled || [];
+          w.__p12bc3Unhandled.push(text);
+        });
+      });
+
+      const { projectId, templateTitle, cardTitle } =
+        await seedFuseApplyFixtures(request, mock.baseUrl, {
+          twoChapters: false,
+        });
+
+      await openContentStep(page, projectId);
+      const dialog = await generateSuggestions(page, templateTitle, cardTitle, [
+        TITLE_A,
+      ]);
+      await dialog.getByLabel(`勾选写入建议 ${TITLE_A}`).check();
+
+      const getGate = createHoldGate();
+      let createDone = false;
+      let applyResponseVersion = "";
+      let reloadGetVersion = "";
+      const putAfterCreate: Array<{
+        body: Record<string, unknown>;
+        responseVersion: string;
+      }> = [];
+      let postCreatePutCount = 0;
+      let reloadGetEntered = false;
+
+      await page.route(
+        "**/api/projects/**/content-fuse-applications**",
+        async (route) => {
+          const method = route.request().method().toUpperCase();
+          const path = new URL(route.request().url()).pathname;
+          if (
+            method === "POST" &&
+            /\/content-fuse-applications\/?$/.test(path) &&
+            !path.includes("/consume")
+          ) {
+            const response = await route.fetch();
+            const json = (await response.json()) as { stateVersion?: string };
+            applyResponseVersion = String(json.stateVersion || "");
+            createDone = response.status() === 201;
+            await route.fulfill({
+              status: response.status(),
+              contentType: "application/json",
+              body: JSON.stringify(json),
+            });
+            return;
+          }
+          await route.continue();
+        },
+      );
+
+      await page.route("**/api/projects/**/editor-state**", async (route) => {
+        const method = route.request().method().toUpperCase();
+        if (method === "GET" && createDone && !getGate.released) {
+          reloadGetEntered = true;
+          await getGate.wait();
+          const response = await route.fetch();
+          const json = (await response.json()) as { stateVersion?: string };
+          reloadGetVersion = String(json.stateVersion || "");
+          await route.fulfill({
+            status: response.status(),
+            contentType: "application/json",
+            body: JSON.stringify(json),
+          });
+          return;
+        }
+        if (method === "PUT" && createDone) {
+          postCreatePutCount += 1;
+          const response = await route.fetch();
+          const json = (await response.json()) as { stateVersion?: string };
+          let body: Record<string, unknown> = {};
+          try {
+            body = route.request().postDataJSON() as Record<string, unknown>;
+          } catch {
+            body = {};
+          }
+          putAfterCreate.push({
+            body,
+            responseVersion: String(json.stateVersion || ""),
+          });
+          await route.fulfill({
+            status: response.status(),
+            contentType: "application/json",
+            body: JSON.stringify(json),
+          });
+          return;
+        }
+        await route.continue();
+      });
+
+      await page.clock.install();
+      await dialog.getByRole("button", { name: "确认写入所选" }).click();
+
+      await expect
+        .poll(() => (createDone && reloadGetEntered ? 1 : 0), {
+          timeout: 20_000,
+        })
+        .toBe(1);
+      expect(applyResponseVersion).toMatch(/^esv_[0-9a-f]{32}$/);
+
+      // GET 挂起期间推进至少两个 800ms 防抖窗口：必须零自动 PUT
+      await page.clock.fastForward(TECH_AUTOSAVE_ADVANCE_MS * 2);
+      expect(postCreatePutCount).toBe(0);
+      expect(putAfterCreate.length).toBe(0);
+
+      getGate.release();
+      await expect
+        .poll(() => (reloadGetVersion ? 1 : 0), { timeout: 15_000 })
+        .toBe(1);
+      expect(reloadGetVersion).toMatch(/^esv_[0-9a-f]{32}$/);
+      expect(reloadGetVersion).toBe(applyResponseVersion);
+
+      await expect(
+        dialog.getByTestId("content-fuse-apply-summary"),
+      ).toContainText(/已写入 1 章/, { timeout: 15_000 });
+
+      // 关闭 Dialog 后用户下一编辑必须正常发 1 次 PUT，expected=重读版本（捕获 P1-1）
+      await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+      await expect(dialog).toBeHidden();
+      const putsBeforeEdit = putAfterCreate.length;
+      await forceSetChapterBody(page, `${PROPOSED_A}\n重读后用户编辑`);
+      await page.clock.fastForward(TECH_AUTOSAVE_ADVANCE_MS);
+      await expect
+        .poll(() => putAfterCreate.length, { timeout: 10_000 })
+        .toBe(putsBeforeEdit + 1);
+      const nextPut = putAfterCreate[putAfterCreate.length - 1];
+      expect(nextPut.body.expectedStateVersion).toBe(reloadGetVersion);
+      expect(String(nextPut.body.expectedStateVersion)).toMatch(
+        /^esv_[0-9a-f]{32}$/,
+      );
+
+      const unhandled = await page.evaluate(
+        () =>
+          (window as unknown as { __p12bc3Unhandled?: string[] })
+            .__p12bc3Unhandled || [],
+      );
+      expect(pageErrors).toEqual([]);
+      expect(unhandled).toEqual([]);
+    } finally {
+      await mock.close();
+    }
+  });
+
+  test("P12B-C3 apply 网络不确定与缺/非法/带空白 stateVersion：阻断、零重试、零 PUT、零 unhandled", async ({
+    page,
+    request,
+  }) => {
+    const mock = await startMockLlmServer();
+    try {
+      const pageErrors: string[] = [];
+      page.on("pageerror", (err) => {
+        pageErrors.push(String(err?.message || err));
+      });
+      await page.addInitScript(() => {
+        window.addEventListener("unhandledrejection", (ev) => {
+          const reason = (ev as PromiseRejectionEvent).reason;
+          const text =
+            reason instanceof Error
+              ? reason.message
+              : typeof reason === "string"
+                ? reason
+                : String(reason);
+          const w = window as unknown as { __p12bc3Unhandled?: string[] };
+          w.__p12bc3Unhandled = w.__p12bc3Unhandled || [];
+          w.__p12bc3Unhandled.push(text);
+        });
+      });
+
+      const { projectId, templateTitle, cardTitle } =
+        await seedFuseApplyFixtures(request, mock.baseUrl, {
+          twoChapters: false,
+        });
+
+      type Mode = "abort" | "missing" | "illegal" | "whitespace";
+      // 单轮覆盖 4 类：route.abort / 201 缺版本 / 非法 / 带空白；每 mode 独立生成
+      // 跨导航：window 上 unhandled 会随 page.goto 丢失，必须逐轮在下次 goto 前读取断言
+      const modes: Mode[] = ["abort", "missing", "illegal", "whitespace"];
+
+      for (const m of modes) {
+        const applyPosts: unknown[] = [];
+        const putLog: unknown[] = [];
+        // pageerror 挂在 Node 侧可跨导航累计；本轮用增量切片证明零错误
+        const pageErrorAtStart = pageErrors.length;
+        await page.unroute("**/api/projects/**/content-fuse-applications**").catch(
+          () => undefined,
+        );
+        await page.unroute("**/api/projects/**/editor-state**").catch(
+          () => undefined,
+        );
+
+        await page.route(
+          "**/api/projects/**/content-fuse-applications**",
+          async (route) => {
+            const method = route.request().method().toUpperCase();
+            const path = new URL(route.request().url()).pathname;
+            if (
+              method === "POST" &&
+              /\/content-fuse-applications\/?$/.test(path) &&
+              !path.includes("/consume")
+            ) {
+              applyPosts.push(route.request().postData());
+              if (m === "abort") {
+                await route.abort("failed");
+                return;
+              }
+              const base = {
+                batchId: `cfab_fake_${m}`,
+                appliedChapterCount: 1,
+                createdAt: "2026-07-15T12:00:00.000Z",
+              };
+              const payload =
+                m === "missing"
+                  ? base
+                  : m === "illegal"
+                    ? { ...base, stateVersion: "not-a-version" }
+                    : {
+                        ...base,
+                        stateVersion:
+                          " esv_0123456789abcdef0123456789abcdef",
+                      };
+              await route.fulfill({
+                status: 201,
+                contentType: "application/json",
+                body: JSON.stringify(payload),
+              });
+              return;
+            }
+            await route.continue();
+          },
+        );
+        await page.route("**/api/projects/**/editor-state**", async (route) => {
+          if (route.request().method().toUpperCase() === "PUT") {
+            putLog.push(route.request().postData());
+          }
+          await route.continue();
+        });
+
+        // 每 mode 新导航（会重建 window，清空上一轮 __p12bc3Unhandled）
+        await page.goto(`/technical-plan/${projectId}/content`);
+        await expect(
+          page.getByRole("heading", { name: "E2E 融合写入目标项目" }),
+        ).toBeVisible({ timeout: 20_000 });
+        await expect(page.getByLabel(`正文：${TITLE_A}`)).toBeVisible({
+          timeout: 15_000,
+        });
+
+        // 点击确认前记录可见正文；失败后必须精确保留（闭环，非仅末 mode）
+        const retainedBodyA = await page
+          .getByLabel(`正文：${TITLE_A}`)
+          .inputValue();
+        expect(retainedBodyA).toBe(BODY_A);
+
+        const dialog = await generateSuggestions(
+          page,
+          templateTitle,
+          cardTitle,
+          [TITLE_A],
+        );
+        await dialog.getByLabel(`勾选写入建议 ${TITLE_A}`).check();
+
+        await dialog.getByRole("button", { name: "确认写入所选" }).click();
+        await expect(dialog.getByTestId("content-fuse-local-error")).toHaveText(
+          "融合确认失败，请刷新后重试",
+          { timeout: 10_000 },
+        );
+        // 本 mode 闭环：固定错误 + POST 精确 1 + 本地正文保留
+        expect(applyPosts.length).toBe(1);
+        await expect(page.getByLabel(`正文：${TITLE_A}`)).toHaveValue(
+          retainedBodyA,
+        );
+        // 两防抖窗口内 PUT 计数保持 0（真实时间窗口 + poll，非 waitForTimeout）
+        await expectStableCount(
+          () => putLog.length,
+          0,
+          TECH_AUTOSAVE_ADVANCE_MS * 2,
+        );
+        // 再次确认不得新增 POST
+        await dialog.getByRole("button", { name: "确认写入所选" }).click();
+        expect(applyPosts.length).toBe(1);
+
+        // 必须在下一次 page.goto 前读取本轮 unhandled（导航会丢 window 累加器）
+        const unhandled = await page.evaluate(
+          () =>
+            (window as unknown as { __p12bc3Unhandled?: string[] })
+              .__p12bc3Unhandled || [],
+        );
+        expect(unhandled).toEqual([]);
+        expect(pageErrors.slice(pageErrorAtStart)).toEqual([]);
+      }
+
+      // pageerror 跨导航累计终检
+      expect(pageErrors).toEqual([]);
+    } finally {
+      await mock.close();
+    }
+  });
 });
+
+/** 技术标编辑 autosave 防抖 800ms；时钟推进须严格超过该窗口 */
+const TECH_AUTOSAVE_DEBOUNCE_MS = 800;
+const TECH_AUTOSAVE_ADVANCE_MS = TECH_AUTOSAVE_DEBOUNCE_MS + 100;
+
+function createHoldGate() {
+  let released = false;
+  const waiters: Array<() => void> = [];
+  return {
+    wait: () =>
+      released
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+            waiters.push(resolve);
+          }),
+    release: () => {
+      released = true;
+      while (waiters.length > 0) {
+        waiters.shift()?.();
+      }
+    },
+    get released() {
+      return released;
+    },
+  };
+}
+
+/**
+ * 用途：在 windowMs 真实时间内计数保持 expected；漂移立即失败。
+ * 禁止 waitForTimeout；用于阻断后零 PUT 证据（队列测试仍用 clock.fastForward）。
+ */
+async function expectStableCount(
+  getCount: () => number,
+  expected: number,
+  windowMs: number,
+) {
+  const start = Date.now();
+  await expect
+    .poll(
+      () => {
+        if (getCount() !== expected) return "drift";
+        return Date.now() - start >= windowMs ? "stable" : "waiting";
+      },
+      { timeout: windowMs + 5_000 },
+    )
+    .toBe("stable");
+}

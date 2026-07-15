@@ -28,6 +28,7 @@ from app.models.entities import (
     ProjectTaskRow,
     utc_now,
 )
+from app.services import editor_state_service
 
 ALLOWED_ACTIONS = frozenset({"merge", "expand", "rewrite", "merge_suggest"})
 # 与前端 ChapterContent.status 对齐；缺失按 M3-C 语义落 pending，禁止 draft
@@ -471,20 +472,32 @@ def apply_content_fuse_application(
     *,
     task_id: str,
     suggestion_ids: list[str],
+    expected_state_version: str,
 ) -> dict[str, Any]:
     """
     用途：原子确认所选融合建议；整批成功或零写。
     对接：POST /api/projects/{projectId}/content-fuse-applications。
-    二次开发：不得部分写入；不得调用 upsert_editor_state。
+    二次开发：
+      - 锁后先全状态 CAS，再章节 base 校验；不得部分写入；
+      - 不得调用会自行 commit 的 upsert_editor_state；
+      - 全状态冲突抛 EditorStateVersionConflict，由路由映射固定 409。
     """
     if not suggestion_ids or len(suggestion_ids) > MAX_SUGGESTIONS:
         raise _conflict()
 
-    _require_technical_project(db, workspace_id, project_id, lock=True)
+    _require_technical_project(db, workspace_id, project_id, lock=False)
+    # 共用原语：项目级锁 + 锁后规范视图比较 expected（全状态优先）
+    state_row, _current_state = (
+        editor_state_service.lock_and_assert_expected_state_version(
+            db, workspace_id, project_id, expected_state_version
+        )
+    )
+
     raw_suggestions = _load_task_suggestions(db, project_id, task_id)
     by_id = _index_task_suggestions(raw_suggestions)
 
-    state_row, chapters = _read_chapters_locked(db, project_id)
+    raw_chapters = _loads(state_row.chapters_json) if state_row is not None else None
+    chapters: list[Any] = raw_chapters if isinstance(raw_chapters, list) else []
     if state_row is None or not chapters:
         raise _conflict()
     # 严格校验：禁止过滤非 dict / 空白 ID / 重复 ID 后再写回
@@ -573,12 +586,16 @@ def apply_content_fuse_application(
     db.add(batch)
     db.flush()
     _trim_batches(db, workspace_id, project_id)
+    # commit 前由规范视图独立计算新版本，禁止客户端自报
+    new_state = editor_state_service.get_editor_state(db, workspace_id, project_id)
+    new_version = new_state["stateVersion"]
     db.commit()
     db.refresh(batch)
     return {
         "batch_id": batch.id,
         "applied_chapter_count": len(snapshot_chapters),
         "created_at": batch.created_at,
+        "state_version": new_version,
     }
 
 
@@ -630,12 +647,26 @@ def consume_content_fuse_application(
     workspace_id: str,
     project_id: str,
     batch_id: str,
+    *,
+    expected_state_version: str,
 ) -> dict[str, Any]:
     """
     用途：对 active 批次执行一次漂移安全恢复；0/部分/全部均消费。
     对接：POST .../content-fuse-applications/{batchId}/consume。
+    二次开发：
+      - 锁后先全状态 CAS；冲突时批次不消费、章节零写；
+      - 全状态匹配后仍执行原 after 漂移规则；
+      - 零恢复时版本等于操作前（批次消费不进 13 键）。
     """
-    _require_technical_project(db, workspace_id, project_id, lock=True)
+    _require_technical_project(db, workspace_id, project_id, lock=False)
+    # 全状态优先：不匹配则抛 EditorStateVersionConflict，不消费批次
+    state_row, current_state = (
+        editor_state_service.lock_and_assert_expected_state_version(
+            db, workspace_id, project_id, expected_state_version
+        )
+    )
+    pre_version = current_state["stateVersion"]
+
     batch = db.get(ContentFuseApplicationBatchRow, batch_id)
     if (
         batch is None
@@ -653,7 +684,8 @@ def consume_content_fuse_application(
     if not isinstance(snap_chapters, list):
         snap_chapters = []
 
-    state_row, chapters = _read_chapters_locked(db, project_id)
+    raw_chapters = _loads(state_row.chapters_json) if state_row is not None else None
+    chapters: list[Any] = raw_chapters if isinstance(raw_chapters, list) else []
     # 只建查找表，不清洗原始 chapters；写回时保持原序与非 dict 项
     chap_map = _lookup_chapter_map(chapters)
     restored = 0
@@ -718,10 +750,19 @@ def consume_content_fuse_application(
         state_row.updated_at = now
     batch.state = "consumed"
     batch.consumed_at = now
+    # 零恢复：批次消费不进 13 键，版本等于操作前；有恢复则 commit 前重算
+    if restored > 0:
+        new_state = editor_state_service.get_editor_state(
+            db, workspace_id, project_id
+        )
+        new_version = new_state["stateVersion"]
+    else:
+        new_version = pre_version
     db.commit()
     db.refresh(batch)
     return {
         "restored_chapter_count": restored,
         "skipped_chapter_count": skipped,
         "consumed_at": batch.consumed_at,
+        "state_version": new_version,
     }
