@@ -7,9 +7,9 @@
 
 # P12C-B-B 任务与 revise 修订账本接入契约
 
-> **状态**：只读审计完成；P12C-B-B1 九类任务接入已冻结，B2 商务 revise 尚未冻结实现。
+> **状态**：只读审计与 P12C-B-B1 九类任务接入均已完成、独立验收并推送；B2 商务 revise 尚未实现。
 > **前置**：P12C-B-A 冻结=`fbf93c0`、实现=`acf3139`、闭环=`a45b2da`，后端/前端全量基线 **680/263 passed**。
-> **固定拆包**：B1 九类任务来源 `task` → B2 五类商务 revise 来源 `revise`。两包必须分别实现、验收、提交和闭环。
+> **固定拆包**：B1 九类任务来源 `task`（冻结=`05864f6`、实现=`5a0d1c0`，已完成）→ B2 五类商务 revise 来源 `revise`。两包必须分别实现、验收、提交和闭环。
 
 ## 1. 只读审计结论
 
@@ -73,8 +73,16 @@ Grok 至少运行：
 .\.venv\Scripts\python.exe -m pytest -q tests\test_p12b_delayed_writer_fences.py tests\test_editor_state_revisions.py tests\test_p12c_browser_put_revisions.py
 ```
 
-Codex 将独立执行专项、任务/商务/revise/修订受影响回归、后端串行全量、`py_compile`、精确三文件白名单和暂存区检查。所有通过后才可中文提交实现并推送。
+Codex 已独立执行专项、任务/商务/revise/修订受影响回归、后端串行全量、`py_compile`、精确三文件白名单和暂存区检查，并以 `5a0d1c0` 中文提交推送。
 
-## 6. 后续 B2 闸门
+## 6. B1 实现与验收记录
+
+Grok failure-first 为 **8 failed / 2 passed**；首版实现后专项 10、受影响回归 109 passed。Codex 审查发现 recorder/commit 内部异常原文会经任务 `error=str(exc)` 泄露，并发现章间漂移 `A and B or A` 只要存在任意浏览器行即可假绿；同时要求把单写/双写增量改为精确等式、来源匹配拒绝空集合。
+
+第一次受限返修在两个生产服务各自新增私有任务 upsert 包装器：固定来源 `task`，`EditorStateVersionConflict` 原样上抛，其他 upsert 异常仅返回固定中文“编辑内容写入失败，请重试”。九类 writer 全部经包装器，非 writer 不接入；逐章提交、任务 payload/REST/SSE 和既有 commit 顺序不变。
+
+Codex 独立验收：专项 **10 passed**、扩展受影响回归 **126 passed**、后端串行全量 **690 passed**；只有 1 条既有 Starlette/httpx 弃用警告。`py_compile`、精确三文件白名单、工作树与暂存区 diff 检查全部通过。Grok 最终回执=`msg_ae20abfe8407452fa80e3af03f534791`，Codex 确认=`msg_7dac7f967d6e408597e4b4e0a73819d7`。
+
+## 7. 后续 B2 闸门
 
 B1 闭环后才冻结 B2。B2 只能修改 `revise_service.py` 与独立新测试：两个真实写点传固定 `revise`，五类商务成功写回产生修订；结构解析失败/空正文的“只校验版本”200、普通技术 revise 和陈旧 409 均为零修订。B2 不得借机修改 LLM 提示词、返回 Schema、历史 API 或前端。

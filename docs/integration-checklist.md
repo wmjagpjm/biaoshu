@@ -173,7 +173,7 @@ npm run test:e2e:business-editor-state-truth
 npm run test:e2e:technical-editor-state-truth
 ```
 
-当前基线：后端串行全量 **680 passed**（1 条既有 Starlette/httpx 弃用警告）；P12C-B-A 专项/受影响回归 **14/107 passed**，生产与测试文件 `py_compile` 通过。P12C-A 历史基线为 67/77/666。前端 `lint` / `build` 通过（仅既有大包体积提示），P12B-D2 专项/受影响回归 **51/63 passed**，Chromium headless、单 worker、零重试全量 E2E **263 passed**。P12B-D1 历史恢复专项/受影响回归/全量为 58/81/599；P12B-C3 历史后端/前端全量为 570/212；P12A、P8C、M3-D、P10K、P9D 及其他既有专项继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
+当前基线：后端串行全量 **690 passed**（1 条既有 Starlette/httpx 弃用警告）；P12C-B-B1 专项/扩展受影响回归 **10/126 passed**，生产与测试文件 `py_compile` 通过。P12C-B-A 历史基线为 14/107/680，P12C-A 为 67/77/666。前端 `lint` / `build` 通过（仅既有大包体积提示），P12B-D2 专项/受影响回归 **51/63 passed**，Chromium headless、单 worker、零重试全量 E2E **263 passed**。P12B-D1 历史恢复专项/受影响回归/全量为 58/81/599；P12B-C3 历史后端/前端全量为 570/212；P12A、P8C、M3-D、P10K、P9D 及其他既有专项继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
 
 P8D/P8E 本机助手独立验收命令（仓库根；不安装或探测真实 MinerU/Docling）：
 
@@ -277,6 +277,16 @@ P12C-B-A 独立验收命令（后端；全部串行）：
 ```
 
 P12C-B-A 已实现并推送（冻结=`fbf93c0`、实现=`acf3139`）。公开浏览器 PUT 唯一传服务端字面量 `browser_put`，请求体额外来源键被忽略；服务默认来源为 `None`，不会改变其他调用者。来源存在时先取得项目写锁，锁后构造 before，写后构造 after，并在唯一 commit 前同事务记录。空账本、连续、相邻去重、断链、回退、矩阵版本、省略字段保留、真实跨空间 404、冲突、记录 flush 失败和 commit 失败均已覆盖。Codex 独立结果为 **14 / 107 / 680 passed**；本包没有接入 task/revise、callback、content-fuse 或 checkpoint restore，也没有新增历史列表、详情、恢复、Schema 或前端。
+
+P12C-B-B1 独立验收命令（后端；全部串行）：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q tests\test_p12c_task_revisions.py
+.\.venv\Scripts\python.exe -m pytest -q tests\test_p12b_delayed_writer_fences.py tests\test_editor_state_revisions.py tests\test_p12c_browser_put_revisions.py tests\test_task_cancel.py tests\test_task_sse.py tests\test_settings_and_revise.py tests\test_business_bid_mvp.py
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+P12C-B-B1 已实现并推送（冻结=`05864f6`、实现=`5a0d1c0`）。九类 writer 任务每次真实 editor-state upsert 固定记录 `task`；批量章节逐章迁移、逐章修订与成功前缀语义不变。两个私有包装器保留版本冲突的固定 stale 流程，并把其他 upsert 内部异常收敛为固定中文任务错误，禁止 SQL、路径、表名、异常类型、正文或版本进入 REST/SSE。Codex 独立结果为 **10 / 126 / 690 passed**；B2 商务 revise、callback、content-fuse apply/consume、checkpoint restore、历史 API 与前端仍未实现。
 
 ## 6. 已接 API 一览
 
