@@ -327,4 +327,4 @@
 
 阶段 0/1/2、阶段 3 M3-A 至 M3-D、阶段 4 **包 5** 至 **包 8/P8B/P8C/P8D**、P9A/P9B/P9C/P9D、阶段 5 P10A 至 P10K，以及 **P11A/P11B/P11C 三个真实数据收口包**均保持已交付。P8D 完整契约见 `docs/p8d-mineru-local-helper-contract.md`，实施与独立验收记录见 `docs/plans/2026-07-15-p8d-mineru-local-helper-plan.md`。
 
-P8D 本机 MinerU 外置解析助手已完成并推送（计划=`30d066f`、实现=`e1fe316`）：纯标准库、显式单文件、离线本地模型、TTY 单次票据、回环无代理/无重定向回传，以及进程/输出/响应硬上限均有 54 项单测。下一动作是 **P8E Docling 本机外置助手与 P8C 来源枚举扩展的只读审计**；先确认 `source`、本地插件/远程服务关闭、输出格式、CLI 版本和与 MinerU 共用边界，禁止直接把 Docling 冒充 `source=mineru` 或与自动安装合包。后续仍由 Grok 只实现和自测，Codex 负责计划、审查、独立验收、中文提交与闭环。
+P8D 本机 MinerU 外置解析助手已完成并推送（计划=`30d066f`、实现=`e1fe316`、闭环=`38b9318`）：纯标准库、显式单文件、离线本地模型、TTY 单次票据、回环无代理/无重定向回传，以及进程/输出/响应硬上限均有 54 项单测。P8E 只读审计已完成，契约=`docs/p8e-docling-local-helper-contract.md`、计划=`docs/plans/2026-07-15-p8e-docling-local-helper-plan.md`；下一动作先派发 **P8E-A 两文件后端精确来源枚举**，Codex 独立验收推送后才派发 **P8E-B 四文件本机 Docling 助手**。禁止直接把 Docling 冒充 `source=mineru`、自动安装/下载、远程转换或合并两个实现包；后续仍由 Grok 只实现和自测，Codex 负责计划、审查、独立验收、中文提交与闭环。

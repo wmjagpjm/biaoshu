@@ -6,7 +6,7 @@
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
 > **协作分支已推送功能基线**：P8D 计划=`30d066f`、助手=`e1fe316`；P11C 计划/契约=`24b7ba8`、安全细化=`c5b3eec`、前端=`1441509`；P11B 计划=`6a3f4fe`、前端=`a99d8d4`；P11A 计划=`70a2dc7`、前端=`b0a86e4`；M3-D 计划=`d326c7d`、后端=`6a5f61f`、前端=`b89a387`；P10K 计划=`2e53007`、后端=`1eaa75e`、前端=`dbf301c`；P8C 计划=`cabe99d`、后端=`af39ff8`、前端=`1cf5576`；P10J 计划=`701c946`、后端=`4e662d6`、前端=`fce6cb6`；P9D 计划=`4925a51`、实现=`e5adad7`；M3-C 计划=`c63310f`、实现=`b8ff605`；P10I 计划=`ddc1807`、后端=`d5201e9`、前端=`49daa16`；P10H 计划=`7694843`、后端=`6c76d80`、前端=`4eb8a14`；P8B 计划=`f662674`、后端=`0994cc8`、前端=`80d2579`；P10F 计划=`12e067f`、后端=`3dc600a`、前端=`254f8c7`；P10E 计划=`26f7e40`、后端=`1b6ccf3`、前端=`37cf835`；P10G 计划=`26b43ea`、后端=`c3cf8b4`、前端=`d5656cc`。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **本地状态**：P8D 助手=`e1fe316` 已推送且实现差异已核验；本文档闭环提交位于其后。新会话仍须重新核对本地 HEAD、远端 SHA 与工作区。
+> **本地状态**：P8D 文档闭环=`38b9318` 已推送；P8E 只读审计、契约和计划位于其后。新会话仍须重新核对本地 HEAD、远端 SHA 与工作区。
 > **验收基线**：后端 M3-D 专项 **34 passed**、受影响回归 **71 passed**、串行全量 **487 passed**（1 条既有 Starlette/httpx 弃用警告）；前端 P11C **18 passed**、P11B **11 passed**、P11A **10 passed**、认证/RBAC **11 passed**、解析策略 **6 passed**、响应矩阵 **8 passed**、融合确认 **6 passed**、持久恢复 **5 passed**、模板 **1 passed**、单 worker 串行全量 E2E **184 passed**；`frontend npm run lint` 零问题，`build` 通过（仅既有大包体积提示）。**所有 Playwright E2E 共用 SQLite 重置库，必须逐条串行运行，禁止并行。**
 
 ---
@@ -19,8 +19,8 @@
 完整阅读 docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/plans/2026-07-13-package-9-delivery-enhancement-plan.md、docs/integration-checklist.md。
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
 当前进度：P9D、M3-A 至 M3-D、P8B/P8C/P8D、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。P8D 计划=`30d066f`、助手=`e1fe316`，助手单测 54、受影响后端 35、P8C E2E 9、P8B E2E 6 passed；后端/前端全量仍沿用 487/184。
-当前执行包：P8D 已完成两轮受限返修、独立验收和推送，契约=`docs/p8d-mineru-local-helper-contract.md`，计划=`docs/plans/2026-07-15-p8d-mineru-local-helper-plan.md`。
-下一步：对 P8E Docling 本机外置助手与 P8C `source` 枚举扩展做只读审计；先冻结 CLI 本地模式、插件/远程服务关闭、输出和回调边界，再派发 Grok。不得冒用 `source=mineru`、自动安装/下载模型或与常驻服务合包。
+当前执行包：P8E 只读审计已完成并冻结为两个顺序实现包，契约=`docs/p8e-docling-local-helper-contract.md`，计划=`docs/plans/2026-07-15-p8e-docling-local-helper-plan.md`。
+下一步：先提交推送 P8E 契约/计划，再只派发 P8E-A 两文件后端来源枚举；独立验收推送后才派发 P8E-B 四文件本机助手。不得冒用 `source=mineru`、自动安装/下载模型、运行远程转换或合包。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -406,7 +406,7 @@ frontend/src/features/
 
 1. 阶段 4 **功能包 8** MVP=`6db1586`、P8B/P8C 与 **P8D 本机 MinerU 助手**（计划=`30d066f`、实现=`e1fe316`）均已验收并推送；MinerU CLI/模型仍需人工准备，Docling 与自动部署仍须独立安全契约。
 2. 阶段 4 **P9A/P9B/P9C/P9D** 与阶段 5 **P10A/P10B/P10C/P10D/P10F/P10E/P10G/P10H/P10I/P10J/P10K** 均已实现、独立验收并文档闭环。P9C 的真实模型门仍是运行时前置：固定依赖和模型缓存就绪后，用户显式构建索引，再运行固定预检；未通过前继续关键词降级。
-3. P8C/P8D、P10K、M3-D、P11A、P11B 与 P11C 均已完成。Grok Build 当前可用；下一包 P8E 只先审计 Docling 与 P8C 来源枚举，继续保持 P8B/P8C/P8D 的策略、票据、回环和正文出域边界。
+3. P8C/P8D、P10K、M3-D、P11A、P11B 与 P11C 均已完成。P8E 审计已冻结为后端精确 `mineru|docling` 枚举和独立本机助手两个顺序包；继续保持 P8B/P8C/P8D 的策略、票据、回环和正文出域边界。
 
 资源同步后续只可由管理员配置新的签名发布方，绝不可放开浏览器 URL 或外网抓取。图片管线已冻结项目内资源引用协议，后续扩展不得放开外链或客户端路径。SSE 的多工作空间鉴权、事件游标和项目级总线不在当前范围。
 
@@ -427,6 +427,8 @@ frontend/src/features/
 | **docs/HANDOFF-next.md** | **当前有效交接（本文件）** |
 | docs/CONTRIBUTING.md | 注释与目录强制规范 |
 | docs/integration-checklist.md | 联调步骤 |
+| docs/p8e-docling-local-helper-contract.md | P8E 后端来源枚举与本机 Docling 助手冻结契约 |
+| docs/plans/2026-07-15-p8e-docling-local-helper-plan.md | P8E 两阶段受限实施与验收计划 |
 | docs/agent-collaboration.md | Grok-Codex 本地消息箱协议与接入命令 |
 | docs/diagrams/ | 架构图 + 目标图 |
 | docs/HANDOFF-backend.md | 历史，过时 |
@@ -467,7 +469,8 @@ frontend/src/features/
 - **P11B 已完成并推送**：计划=`6a3f4fe`、前端=`a99d8d4`。商务 workspace 只认既有 editor-state GET/PUT；旧 workspace 键忽略保值，真实空态保持空，GET/PUT 固定脱敏失败，任务后刷新失败与 A→B 迟到均有显式边界；AI 反馈 history 仍为非目标。Grok 因 402 未发正式审查消息，Codex 依据现有差异完成独立审查，仅修正 E2E 测试时序后验收。
 - **P11C 已完成并推送**：契约=`docs/p11c-technical-editor-state-truth-contract.md`，计划=`docs/plans/2026-07-15-p11c-technical-editor-state-truth-plan.md`，前端=`1441509`。技术标 editor-state 只认服务端；旧本地键忽略保值，真实空态不补 mock，失败固定脱敏；普通与合并 PUT 使用同源 Cookie/内存 CSRF；409/M3-D 保持兼容；A 的迟到或挂起保存不污染、阻塞 B；生产演示入口已移除。
 - **P8D 已完成并推送**：契约=`docs/p8d-mineru-local-helper-contract.md`，计划=`docs/plans/2026-07-15-p8d-mineru-local-helper-plan.md`，实现=`e1fe316`。纯标准库助手只从交互 TTY 读取 P8C 单次票据，Windows 只认 `mineru.exe`，强制本地离线模型、环境白名单、临时输出和回环无代理/无重定向单次回调；真实 CLI/模型由用户人工准备。
-- **Grok 当前状态**：额度已恢复，P8D 通过消息箱完成首版和两次返修并发送正式 `review_request`。协作方式仍是 Grok 只实现/自测、不提交推送，Codex 独立审查、验收、中文提交与推送；后续不得因额度可用而跳过任务包和审查门。
+- **P8E 已冻结、尚未实现**：契约=`docs/p8e-docling-local-helper-contract.md`，计划=`docs/plans/2026-07-15-p8e-docling-local-helper-plan.md`。P8E-A 只改 P8C service/test，精确扩为 `mineru|docling`；P8E-B 才新增 Docling CLI 并复用 P8D 安全原语。当前 PATH 无 `docling/docling-tools`，禁止声称真实模型就绪。
+- **Grok 当前状态**：额度与连接零改动探测回执=`msg_4951ee80c0fc406c96e7d8d8cae7f54c`，明确“额度可用”；模型会话已能读取消息箱、执行只读 Git 并回复。协作方式仍是 Grok 只实现/自测、不提交推送，Codex 独立审查、验收、中文提交与推送；后续不得因额度可用而跳过任务包和审查门。
 - 当前分支仍为 `collab/grok-code-codex-review`；P8D、P11C、P11B、P11A、M3-D、P10K、P8C、P10J、P9D、M3-C、P10I、P10H、P10G、P10F、P10E 与 P8B 基线均已推送，本文档闭环提交位于其后。新会话第一步必须用 `git status -sb`、`git rev-parse HEAD`、`git rev-parse origin/collab/grok-code-codex-review` 重新核验，不可只信本文静态 SHA。
 - 阶段 3 **已完成并推送**：M3-A 只读融合建议、M3-B 差异预览与浏览器确认、M3-C 会话内单批撤销、M3-D 服务端原子确认与最近 20 批持久恢复。
 - 阶段 4 **包 5** 已推送：`460097a` 智能建议人工确认 E2E。
@@ -503,4 +506,4 @@ frontend/src/features/
 - 新任务分工不变：Grok 只负责限定实现与自测，未经 Codex 审查确认不得提交；Codex 负责计划、范围冻结、差异审查、独立测试、验收、中文提交、文档闭环和 GitHub 状态核验。每一包仍按“计划提交 → 实现提交 → 文档闭环提交 → 推送协作分支”执行，禁止合包。
 - GitHub 若出现连接重置，可在当前 PowerShell 进程临时配置 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY=http://127.0.0.1:7890` 与 `NO_PROXY=localhost,127.0.0.1` 后重试；不得把代理或凭据写入仓库。
 
-**换会话可直接：核验分支、HEAD/远端与工作区 → 读本文 §0～§3.1、§5、§6、§11、P8D 契约/计划及路线图 → 确认 P8D 计划 `30d066f`、实现 `e1fe316` 与本文档闭环均已推送 → 对 P8E Docling 与 P8C 来源枚举做只读审计。禁止重新实现 P8D/P11A/P11B/P11C/M3-D、自动安装/下载解析器、冒用 `source=mineru`、让 Grok commit/push，或由 Codex 冒充 Grok 完成主实现。**
+**换会话可直接：核验分支、HEAD/远端与工作区 → 读本文 §0～§3.1、§5、§6、§11、P8E 契约/计划及路线图 → 确认 P8D 闭环 `38b9318` 与 P8E 计划提交均已推送 → 只派发 P8E-A 两文件后端来源枚举，验收推送后再派发 P8E-B。禁止重新实现 P8D/P11A/P11B/P11C/M3-D、合并两个 P8E 实现包、自动安装/下载解析器、冒用 `source=mineru`、让 Grok commit/push，或由 Codex 冒充 Grok 完成主实现。**
