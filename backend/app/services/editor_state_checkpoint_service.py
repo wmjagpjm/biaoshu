@@ -1,14 +1,15 @@
 """
-模块：P12A editor-state 手动检查点只读库服务
-用途：在项目锁内读取权威 editor-state，生成规范快照并有限保留最近 20 条。
-对接：api.editor_state_checkpoints；editor_state_service（共享全状态版本算法）；
+模块：P12A/P12B-D1 editor-state 检查点服务
+用途：手动创建/列表/详情；以及锁后 CAS 的原子安全恢复。
+对接：api.editor_state_checkpoints；editor_state_service（共享全状态版本算法与写回原语）；
   EditorStateCheckpointRow。
 二次开发：
   - 禁止接受客户端 snapshot/版本/计数/名称；
-  - 创建与裁剪同事务；失败必须 rollback；
+  - 创建与裁剪同事务；恢复与安全检查点/写回/裁剪同事务；失败必须 rollback；
   - 列表 SQL 只投影元数据列，绝不 select snapshot_json；
-  - 13 键/规范 JSON/stateVersion 必须委托 editor_state_service，禁止第二套算法；
-  - 不实现恢复、删除、自动历史或修改当前 editor-state。
+  - 13 键/规范 JSON/stateVersion/ORM 映射必须委托 editor_state_service，禁止第二套算法；
+  - 禁止调用会自行 commit 的 create_editor_state_checkpoint 或 upsert_editor_state 做嵌套恢复；
+  - 不实现删除、自动历史或客户端 force。
 """
 
 from __future__ import annotations
@@ -239,15 +240,22 @@ def _insert_checkpoint_row(
     return row
 
 
-def _trim_checkpoints(db: Session, workspace_id: str, project_id: str) -> None:
+def _trim_checkpoints(
+    db: Session,
+    workspace_id: str,
+    project_id: str,
+    *,
+    protect_id: str | None = None,
+) -> None:
     """
     用途：同事务内仅保留本项目最近 20 条（created_at DESC, id DESC）。
     二次开发：
       - 只 SELECT id，禁止加载 snapshot_json 正文；
       - DELETE 必须带 workspace_id/project_id/id 范围约束；
-      - 禁止跨项目/跨空间删除。
+      - 禁止跨项目/跨空间删除；
+      - protect_id（恢复前安全检查点）绝不可因并列时间戳/随机 ID 被本轮裁掉。
     """
-    keep_ids = (
+    keep_ids = list(
         db.execute(
             select(EditorStateCheckpointRow.id)
             .where(
@@ -262,7 +270,14 @@ def _trim_checkpoints(db: Session, workspace_id: str, project_id: str) -> None:
         .scalars()
         .all()
     )
-    drop_ids = list(keep_ids[MAX_CHECKPOINTS_PER_PROJECT:])
+    if not keep_ids:
+        return
+    if protect_id and protect_id in keep_ids:
+        others = [cid for cid in keep_ids if cid != protect_id]
+        retain = {protect_id, *others[: MAX_CHECKPOINTS_PER_PROJECT - 1]}
+    else:
+        retain = set(keep_ids[:MAX_CHECKPOINTS_PER_PROJECT])
+    drop_ids = [cid for cid in keep_ids if cid not in retain]
     if not drop_ids:
         return
     db.execute(
@@ -521,3 +536,125 @@ def get_editor_state_checkpoint(
     meta = _meta_from_row(row)
     meta["snapshot"] = snapshot
     return meta
+
+
+def restore_editor_state_checkpoint(
+    db: Session,
+    workspace_id: str,
+    project_id: str,
+    checkpoint_id: str,
+    expected_state_version: str,
+) -> dict[str, Any]:
+    """
+    用途：锁后 CAS + 恢复前安全检查点 + 13 键写回 + 保护裁剪，一次原子 commit。
+    对接：POST .../editor-state-checkpoints/{checkpointId}/restore。
+    二次开发：
+      - 禁止嵌套调用 create_editor_state_checkpoint / upsert_editor_state；
+      - 禁止复制 ORM 映射/13 键哈希/矩阵收敛；写回只走 apply_canonical_snapshot_to_locked_row；
+      - 目标读取必须 id+workspace_id+project_id 三重 SQL；
+      - 409 必须在任何安全插入之前；失败 editor-state 与安全检查点双零写；
+      - commit 前构造响应；commit 后禁止 refresh / get_editor_state。
+    """
+    try:
+        # 1) 项目写锁 + 全状态 CAS（陈旧 expected 在此抛 EditorStateVersionConflict）
+        row, current_state = (
+            editor_state_service.lock_and_assert_expected_state_version(
+                db, workspace_id, project_id, expected_state_version
+            )
+        )
+
+        # 2) 目标检查点：id/workspace/project 三重 SQL，禁止先全局 get
+        target_row = db.execute(
+            select(EditorStateCheckpointRow).where(
+                EditorStateCheckpointRow.id == checkpoint_id,
+                EditorStateCheckpointRow.workspace_id == workspace_id,
+                EditorStateCheckpointRow.project_id == project_id,
+            )
+        ).scalar_one_or_none()
+        if target_row is None:
+            raise EditorStateCheckpointError(
+                404, CODE_CHECKPOINT_NOT_FOUND, MSG_CHECKPOINT_NOT_FOUND
+            )
+
+        # 3) P12A 严格重验目标快照
+        target_snapshot = _validate_snapshot_payload(
+            snapshot_json=target_row.snapshot_json,
+            state_version=target_row.state_version,
+            snapshot_bytes=target_row.snapshot_bytes,
+            outline_node_count=target_row.outline_node_count,
+            chapter_count=target_row.chapter_count,
+        )
+        target_version = target_row.state_version
+
+        # 4) 从锁后当前权威状态构造恢复前安全快照（1–2 MiB）
+        safety_snapshot = extract_canonical_snapshot(current_state)
+        safety_json = _canonical_snapshot_json(safety_snapshot)
+        safety_bytes = len(safety_json.encode("utf-8"))
+        if safety_bytes < MIN_SNAPSHOT_BYTES or safety_bytes > MAX_SNAPSHOT_BYTES:
+            raise EditorStateCheckpointError(
+                413, CODE_CHECKPOINT_TOO_LARGE, MSG_CHECKPOINT_TOO_LARGE
+            )
+        safety_version = compute_state_version(safety_json)
+        # 安全检查点版本必须等于锁后当前 stateVersion
+        if safety_version != current_state["stateVersion"]:
+            raise _corrupt()
+        safety_outline = count_outline_nodes(safety_snapshot.get("outline"))
+        safety_chapters = count_chapter_dicts(safety_snapshot.get("chapters"))
+        safety_id = _new_checkpoint_id()
+
+        # 5) 插入恢复前安全检查点（以落库行实际 id 为准，便于测试强制并列时间戳）
+        safety_row = _insert_checkpoint_row(
+            db,
+            checkpoint_id=safety_id,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            snapshot_json=safety_json,
+            state_version=safety_version,
+            snapshot_bytes=safety_bytes,
+            outline_node_count=safety_outline,
+            chapter_count=safety_chapters,
+        )
+        safety_id = safety_row.id
+
+        # 6) 通过共享无提交原语写回精确 13 键
+        row = editor_state_service.apply_canonical_snapshot_to_locked_row(
+            db, project_id, row, target_snapshot
+        )
+
+        # 7) 写回后重算版本，必须精确等于目标检查点版本
+        result_state = editor_state_service._state_from_row(project_id, row)
+        result_version = result_state["stateVersion"]
+        if result_version != target_version:
+            raise _corrupt()
+
+        # 8) 保护新安全记录地裁剪到最多 20
+        _trim_checkpoints(
+            db, workspace_id, project_id, protect_id=safety_id
+        )
+
+        # 9) commit 前构造响应（restoredAt 对齐本轮 updatedAt 字符串）
+        restored_at = result_state.get("updatedAt")
+        if not isinstance(restored_at, str) or not restored_at:
+            raise _corrupt()
+        response = {
+            "restored_checkpoint_id": checkpoint_id,
+            "safety_checkpoint_id": safety_id,
+            "state_version": target_version,
+            "restored_at": restored_at,
+        }
+        db.commit()
+        return response
+    except editor_state_service.EditorStateVersionConflict:
+        db.rollback()
+        raise
+    except EditorStateCheckpointError:
+        db.rollback()
+        raise
+    except ProjectNotFoundError:
+        db.rollback()
+        raise EditorStateCheckpointError(
+            404, CODE_PROJECT_NOT_FOUND, MSG_PROJECT_NOT_FOUND
+        ) from None
+    except Exception:
+        db.rollback()
+        raise

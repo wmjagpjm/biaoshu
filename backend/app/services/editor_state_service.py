@@ -571,6 +571,112 @@ def lock_and_assert_expected_state_version(
     return row, current_state
 
 
+def apply_canonical_snapshot_to_locked_row(
+    db: Session,
+    project_id: str,
+    row: ProjectEditorStateRow | None,
+    snapshot: dict[str, Any],
+) -> ProjectEditorStateRow:
+    """
+    用途：对已持锁的 editor-state ORM 行写回精确 13 键规范快照（无锁/无项目查询/无 commit）。
+    对接：P12B-D1 restore_editor_state_checkpoint；与 upsert 共用序列化与矩阵收敛。
+    二次开发：
+      - 入口复用 CANONICAL_STATE_KEY_SET：拒绝非 dict、缺键或额外键；校验必须在新建/修改 ORM 行之前；
+      - 仅操作调用方传入的已持锁 row；row 为 None 时新建内存行并 add，不得自行锁或 SELECT 项目；
+      - 禁止 commit/refresh/get_editor_state；调用方负责版本复核与事务边界；
+      - analysis 与 analysisOverview 双写；商务字段合并进 business_json；矩阵写后 reconcile。
+      - 禁止本地复刻 13 键字面量集合；键集防御只引用 CANONICAL_STATE_KEY_SET。
+    """
+    # 精确键集防御：未来误调用时不得静默接受缺键/多键并清空字段
+    if not isinstance(snapshot, dict):
+        raise ValueError(
+            "apply_canonical_snapshot_to_locked_row 要求 snapshot 为精确键集 dict"
+        )
+    if frozenset(snapshot.keys()) != CANONICAL_STATE_KEY_SET:
+        raise ValueError(
+            "apply_canonical_snapshot_to_locked_row 要求 snapshot 键集精确等于 "
+            "CANONICAL_STATE_KEY_SET"
+        )
+
+    if row is None:
+        row = ProjectEditorStateRow(project_id=project_id, mode="ALIGNED")
+        db.add(row)
+
+    outline = snapshot["outline"]
+    chapters = snapshot["chapters"]
+    facts = snapshot["facts"]
+    mode = snapshot["mode"]
+    analysis = snapshot["analysis"]
+    response_matrix = snapshot["responseMatrix"]
+    guidance = snapshot["guidance"]
+    parsed_markdown = snapshot["parsedMarkdown"]
+    business_qualify = snapshot["businessQualify"]
+    business_toc = snapshot["businessToc"]
+    business_quote = snapshot["businessQuote"]
+    business_commit = snapshot["businessCommit"]
+    analysis_overview = snapshot["analysisOverview"]
+
+    row.outline_json = _dumps(outline)
+    row.chapters_json = _dumps(chapters)
+    row.facts_json = _dumps(facts)
+    row.mode = mode if mode in ("ALIGNED", "FREE") else "ALIGNED"
+
+    # analysis 与 analysisOverview 双写，保证 _state_from_row 重读与检查点 13 键一致
+    norm = normalize_analysis(analysis)
+    if isinstance(analysis_overview, str):
+        norm = {**norm, "overview": analysis_overview}
+        row.analysis_overview = analysis_overview
+    elif analysis_overview is None:
+        # 空态：overview 可能为 ""，analysisOverview 规范为 None
+        overview = norm.get("overview") or ""
+        if overview:
+            row.analysis_overview = overview
+        else:
+            row.analysis_overview = None
+            norm = {**norm, "overview": ""}
+    else:
+        # 非字符串非 None：收敛为字符串，避免第二套语义
+        text = str(analysis_overview)
+        norm = {**norm, "overview": text}
+        row.analysis_overview = text
+    row.analysis_json = _dumps(norm)
+
+    if response_matrix is not None:
+        row.response_matrix_json = _dumps(normalize_response_matrix(response_matrix))
+    else:
+        row.response_matrix_json = _dumps(empty_response_matrix())
+
+    row.guidance_json = _dumps(guidance)
+    row.parsed_markdown = parsed_markdown
+
+    if isinstance(business_quote, dict):
+        quote_rows = business_quote.get("rows")
+        quote = {
+            "rows": quote_rows if isinstance(quote_rows, list) else [],
+            "notes": str(business_quote.get("notes") or ""),
+        }
+    else:
+        quote = {"rows": [], "notes": ""}
+    biz = {
+        "qualify": business_qualify if isinstance(business_qualify, list) else [],
+        "toc": business_toc if isinstance(business_toc, list) else [],
+        "quote": quote,
+        "commit": business_commit if isinstance(business_commit, list) else [],
+    }
+    row.business_json = _dumps(normalize_business(biz))
+
+    # 与 upsert 相同：写后按 outline/chapters 收敛矩阵，禁止第二套映射
+    row.response_matrix_json = _dumps(
+        reconcile_response_matrix(
+            _loads(getattr(row, "response_matrix_json", None)),
+            _loads(row.outline_json),
+            _loads(row.chapters_json),
+        )
+    )
+    row.updated_at = datetime.now(timezone.utc)
+    return row
+
+
 def upsert_editor_state(
     db: Session,
     workspace_id: str,

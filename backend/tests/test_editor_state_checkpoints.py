@@ -1319,8 +1319,11 @@ def test_project_not_found_and_missing_project(disabled_client):
     _assert_fixed_error(listed, 404, "project_not_found")
 
 
-def test_unimplemented_methods_not_pseudo_success(disabled_client):
-    """用途：锁定未实现方法的精确状态码，禁止宽泛 404/405 或伪成功。"""
+def test_disallowed_methods_405_and_restore_missing_expected_is_422(disabled_client):
+    """
+    用途：集合/详情 PUT/PATCH/DELETE 仍精确 405；
+      /restore 已注册但空体缺 expectedStateVersion 时精确 422（不得宽泛 404/2xx）。
+    """
     client = disabled_client
     pid = _create_project(client)
     cid_res = client.post(_url(pid), json={})
@@ -1349,9 +1352,17 @@ def test_unimplemented_methods_not_pseudo_success(disabled_client):
         res = fn(path, json={}) if with_json else fn(path)
         assert res.status_code == 405, (method, path, res.status_code, res.text)
 
-    # 未注册 /restore 子路由 → 精确 404
+    # /restore 已注册：空体缺 expectedStateVersion → 精确 422，错误位置 body.expectedStateVersion
     restore = client.post(f"{_url(pid, cid)}/restore", json={})
-    assert restore.status_code == 404, (restore.status_code, restore.text)
+    assert restore.status_code == 422, (restore.status_code, restore.text)
+    detail = restore.json().get("detail")
+    assert isinstance(detail, list), restore.text
+    locs = [
+        tuple(item.get("loc", ()))
+        for item in detail
+        if isinstance(item, dict)
+    ]
+    assert ("body", "expectedStateVersion") in locs, (locs, restore.text)
 
 
 # ---------- 权限 / CSRF ----------

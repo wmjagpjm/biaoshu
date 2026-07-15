@@ -2076,3 +2076,40 @@ class EditorStateCheckpointDetailOut(BaseModel):
     chapter_count: int = Field(serialization_alias="chapterCount")
     created_at: datetime = Field(serialization_alias="createdAt")
     snapshot: dict[str, Any]
+
+
+class EditorStateCheckpointRestore(BaseModel):
+    """
+    模块：P12B-D1 检查点安全恢复请求
+    用途：仅接受 camelCase expectedStateVersion；无 body 其它键。
+    对接：POST .../editor-state-checkpoints/{checkpointId}/restore。
+    二次开发：extra=forbid；禁止 populate_by_name；snake_case/缺失/非法/额外键 422。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_state_version: str = Field(
+        alias="expectedStateVersion",
+        pattern=r"^esv_[0-9a-f]{32}$",
+        min_length=1,
+    )
+
+
+class EditorStateCheckpointRestoreOut(BaseModel):
+    """
+    模块：P12B-D1 检查点安全恢复响应
+    用途：仅 restoredCheckpointId/safetyCheckpointId/stateVersion/restoredAt。
+    对接：POST .../editor-state-checkpoints/{checkpointId}/restore。
+    二次开发：stateVersion 必须等于目标检查点已验证版本；restoredAt 对齐本轮 editor-state updatedAt；
+      禁止回显正文、快照、标题、矩阵、路径或异常细节。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    restored_checkpoint_id: str = Field(serialization_alias="restoredCheckpointId")
+    safety_checkpoint_id: str = Field(serialization_alias="safetyCheckpointId")
+    state_version: str = Field(
+        serialization_alias="stateVersion",
+        pattern=r"^esv_[0-9a-f]{32}$",
+    )
+    restored_at: str = Field(serialization_alias="restoredAt")

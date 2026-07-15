@@ -1,12 +1,12 @@
 """
-模块：P12A editor-state 手动检查点只读库路由
-用途：显式创建、有限列表、按需只读详情；不提供恢复/删除/下载。
+模块：P12A/P12B-D1 editor-state 检查点路由
+用途：显式创建、有限列表、按需只读详情、锁后原子安全恢复。
 对接：/api/projects/{projectId}/editor-state-checkpoints*；
   editor_state_checkpoint_service；deps.get_workspace_id。
 二次开发：
   - 复用 get_workspace_id（disabled 兼容，required 仅 bid_writer）；
   - POST 继续既有 CSRF；所有成功/业务错误 Cache-Control: no-store；
-  - 错误固定 code/message，不反射 ID/正文/路径/SQL。
+  - 错误固定 code/message（409 另含 currentStateVersion），不反射 ID/正文/路径/SQL。
 """
 
 from __future__ import annotations
@@ -22,16 +22,18 @@ from app.api.schemas import (
     EditorStateCheckpointDetailOut,
     EditorStateCheckpointListOut,
     EditorStateCheckpointMetaOut,
+    EditorStateCheckpointRestore,
+    EditorStateCheckpointRestoreOut,
 )
 from app.core.database import get_db
-from app.services import editor_state_checkpoint_service
+from app.services import editor_state_checkpoint_service, editor_state_service
 from app.services.editor_state_checkpoint_service import EditorStateCheckpointError
 
 router = APIRouter(prefix="/projects", tags=["editor-state-checkpoints"])
 
 
 def _no_store(response: Response) -> None:
-    """用途：P12A 响应固定禁止缓存。"""
+    """用途：P12A/P12B-D 响应固定禁止缓存。"""
     response.headers["Cache-Control"] = "no-store"
 
 
@@ -144,4 +146,51 @@ def get_editor_state_checkpoint(
         chapter_count=data["chapter_count"],
         created_at=data["created_at"],
         snapshot=data["snapshot"],
+    )
+
+
+@router.post(
+    "/{project_id}/editor-state-checkpoints/{checkpoint_id}/restore",
+    response_model=EditorStateCheckpointRestoreOut,
+    status_code=200,
+)
+def restore_editor_state_checkpoint(
+    project_id: str,
+    checkpoint_id: str,
+    body: EditorStateCheckpointRestore,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    workspace_id: Annotated[str, Depends(get_workspace_id)],
+) -> EditorStateCheckpointRestoreOut:
+    """
+    用途：原子恢复目标检查点；先写恢复前安全检查点，再覆盖当前 13 键。
+    对接：P12B-D1；服务层 restore_editor_state_checkpoint。
+    二次开发：body 仅 expectedStateVersion；409 复用全状态冲突协议；成功/业务错误 no-store。
+    """
+    _no_store(response)
+    try:
+        data = editor_state_checkpoint_service.restore_editor_state_checkpoint(
+            db,
+            workspace_id,
+            project_id,
+            checkpoint_id,
+            body.expected_state_version,
+        )
+    except editor_state_service.EditorStateVersionConflict as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": editor_state_service.CODE_FULL_STATE_VERSION_CONFLICT,
+                "message": exc.message,
+                "currentStateVersion": exc.current_state_version,
+            },
+            headers={"Cache-Control": "no-store"},
+        ) from None
+    except EditorStateCheckpointError as exc:
+        _raise_app_error(exc)
+    return EditorStateCheckpointRestoreOut(
+        restored_checkpoint_id=data["restored_checkpoint_id"],
+        safety_checkpoint_id=data["safety_checkpoint_id"],
+        state_version=data["state_version"],
+        restored_at=data["restored_at"],
     )
