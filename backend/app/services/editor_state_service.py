@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from hashlib import sha1, sha256
 from datetime import datetime, timezone
 from typing import Any
@@ -51,8 +52,20 @@ CANONICAL_STATE_KEYS: tuple[str, ...] = (
 )
 CANONICAL_STATE_KEY_SET = frozenset(CANONICAL_STATE_KEYS)
 
+# 全状态版本格式：esv_ + 32 位小写 hex（P12A 算法产出；C1/C2 共用校验）
+STATE_VERSION_PATTERN = re.compile(r"^esv_[0-9a-f]{32}$")
+
 MSG_FULL_STATE_VERSION_CONFLICT = "编辑内容已被其他操作更新，请重新载入后再保存"
 CODE_FULL_STATE_VERSION_CONFLICT = "editor_state_version_conflict"
+
+
+def is_valid_state_version(value: object) -> bool:
+    """
+    用途：唯一后端版本格式 helper；严格 ^esv_[0-9a-f]{32}$。
+    对接：P12B-C 任务内部版本门、revise/callback 入参与成功响应校验。
+    二次开发：C2 票据/个人回调必须复用本函数，禁止复制正则。
+    """
+    return isinstance(value, str) and STATE_VERSION_PATTERN.fullmatch(value) is not None
 
 
 class ResponseMatrixVersionConflict(Exception):
@@ -533,6 +546,31 @@ def get_editor_state(db: Session, workspace_id: str, project_id: str) -> dict:
     return _state_from_row(project_id, row)
 
 
+def lock_and_assert_expected_state_version(
+    db: Session,
+    workspace_id: str,
+    project_id: str,
+    expected_state_version: str,
+) -> tuple[ProjectEditorStateRow | None, dict]:
+    """
+    用途：公开锁后全状态版本校验原语（不自行 commit）。
+    对接：P12B-A upsert CAS；P12B-C 任务/revise/callback 共用。
+    二次开发：
+      - 取得与 upsert 相同的项目级写锁；只读一次 editor-state ORM 行；
+      - 以 _state_from_row 规范视图重算 stateVersion，禁止复制 13 键算法或信任 updatedAt；
+      - 不匹配抛 EditorStateVersionConflict；调用方负责同事务业务写与 rollback。
+    """
+    row = _lock_for_versioned_write(db, workspace_id, project_id)
+    current_state = _state_from_row(project_id, row)
+    current_sv = current_state["stateVersion"]
+    if expected_state_version != current_sv:
+        raise EditorStateVersionConflict(
+            message=MSG_FULL_STATE_VERSION_CONFLICT,
+            current_state_version=current_sv,
+        )
+    return row, current_state
+
+
 def upsert_editor_state(
     db: Session,
     workspace_id: str,
@@ -578,19 +616,11 @@ def upsert_editor_state(
     needs_version_lock = expected_sv is not None or versioned_matrix_write
 
     try:
-        if needs_version_lock:
-            # 一次锁 + 一次锁后 row；纯内存算版本；先全状态 CAS 再矩阵，均在同一 Session 事务
-            row = _lock_for_versioned_write(db, workspace_id, project_id)
-            current_state = _state_from_row(project_id, row)
-
-            if expected_sv is not None:
-                current_sv = current_state["stateVersion"]
-                if expected_sv != current_sv:
-                    raise EditorStateVersionConflict(
-                        message=MSG_FULL_STATE_VERSION_CONFLICT,
-                        current_state_version=current_sv,
-                    )
-
+        if expected_sv is not None:
+            # 共用锁后原语：一次锁 + 一次规范版本比对；再在同一事务比矩阵
+            row, current_state = lock_and_assert_expected_state_version(
+                db, workspace_id, project_id, expected_sv
+            )
             if versioned_matrix_write:
                 current_matrix = current_state["responseMatrix"]
                 current_matrix_version = current_state["responseMatrixVersion"]
@@ -601,6 +631,18 @@ def upsert_editor_state(
                         current_version=current_matrix_version,
                     )
             # 禁止再次 get_editor_state / db.get；写入复用锁后同一 row
+        elif needs_version_lock:
+            # 仅矩阵版本写：仍走同一项目锁
+            row = _lock_for_versioned_write(db, workspace_id, project_id)
+            current_state = _state_from_row(project_id, row)
+            current_matrix = current_state["responseMatrix"]
+            current_matrix_version = current_state["responseMatrixVersion"]
+            if client_matrix_version != current_matrix_version:
+                raise ResponseMatrixVersionConflict(
+                    message="响应矩阵已被其他终端更新，请重新载入后再保存",
+                    current_matrix=current_matrix,
+                    current_version=current_matrix_version,
+                )
         else:
             get_project(db, workspace_id, project_id)
             row = db.get(ProjectEditorStateRow, project_id)

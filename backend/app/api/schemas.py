@@ -12,7 +12,15 @@
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictInt,
+    field_validator,
+    model_validator,
+)
 
 
 # 与前端 ProjectStatus 字面量一致
@@ -592,7 +600,9 @@ class LlmTestOut(BaseModel):
 class ReviseIn(BaseModel):
     """
     用途：定向修订请求。
-    对接：docs/ai-feedback-loop.md；前端 submitRevise
+    对接：docs/ai-feedback-loop.md；前端 submitRevise；P12B-C1 商务写阶段强制版本。
+    二次开发：business_parse|qualify|toc|quote|commit 强制合法 expectedStateVersion；
+      仅预览的技术修订 stage 保持兼容。
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -604,11 +614,33 @@ class ReviseIn(BaseModel):
     guidance: dict | None = None
     target_id: str | None = Field(default=None, alias="targetId")
     target_label: str | None = Field(default=None, alias="targetLabel")
+    expected_state_version: str | None = Field(
+        default=None,
+        alias="expectedStateVersion",
+        pattern=r"^esv_[0-9a-f]{32}$",
+    )
+
+    @model_validator(mode="after")
+    def _require_expected_for_business_writers(self) -> "ReviseIn":
+        """用途：会写 editor-state 的商务 stage 强制合法 expected。"""
+        write_stages = {
+            "business_parse",
+            "business_qualify",
+            "business_toc",
+            "business_quote",
+            "business_commit",
+        }
+        if self.stage in write_stages and not self.expected_state_version:
+            raise ValueError(
+                "business_parse/qualify/toc/quote/commit 阶段必须提供合法 expectedStateVersion"
+            )
+        return self
 
 
 class ReviseOut(BaseModel):
     """
     用途：修订结果；兼容前端 AiFeedbackRecord 字段 + 可选修订正文。
+    二次开发：商务写阶段成功时含服务端新 stateVersion。
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -626,6 +658,11 @@ class ReviseOut(BaseModel):
     artifact_id: str | None = Field(default=None, serialization_alias="artifactId")
     preserve_structure: bool | None = Field(
         default=None, serialization_alias="preserveStructure"
+    )
+    state_version: str | None = Field(
+        default=None,
+        serialization_alias="stateVersion",
+        pattern=r"^esv_[0-9a-f]{32}$",
     )
     project_id: str | None = Field(default=None, serialization_alias="projectId")
 

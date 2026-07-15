@@ -152,9 +152,12 @@ def test_biz_qualify_with_mocked_llm(client, monkeypatch):
 
 
 def test_business_qualify_revise_writes_editor_state(client, monkeypatch):
-    """用途：mock LLM 后 business_qualify revise 写回资格表。"""
+    """用途：mock LLM 后 business_qualify revise 写回资格表（对齐 P12B-C1 expected）。"""
+    import re
+
     from app.services import llm_service
 
+    _STATE_VERSION_RE = re.compile(r"^esv_[0-9a-f]{32}$")
     revised_items = [
         {
             "id": "q1",
@@ -191,6 +194,11 @@ def test_business_qualify_revise_writes_editor_state(client, monkeypatch):
             ]
         },
     )
+    # 先 GET 当前 stateVersion，POST 合法 expectedStateVersion
+    cur = client.get(f"/api/projects/{pid}/editor-state")
+    assert cur.status_code == 200, cur.text
+    v0 = cur.json()["stateVersion"]
+    assert isinstance(v0, str) and _STATE_VERSION_RE.fullmatch(v0)
 
     res = client.post(
         f"/api/projects/{pid}/artifacts/workspace/revise",
@@ -198,6 +206,7 @@ def test_business_qualify_revise_writes_editor_state(client, monkeypatch):
             "stage": "business_qualify",
             "message": "强化法人响应说明",
             "preserveStructure": True,
+            "expectedStateVersion": v0,
             "baseContent": json.dumps(
                 [
                     {
@@ -216,10 +225,14 @@ def test_business_qualify_revise_writes_editor_state(client, monkeypatch):
     data = res.json()
     assert data["status"] == "applied"
     assert data.get("revisedContent")
+    new_sv = data.get("stateVersion")
+    assert isinstance(new_sv, str) and _STATE_VERSION_RE.fullmatch(new_sv)
+    assert new_sv != v0
 
     state = client.get(f"/api/projects/{pid}/editor-state").json()
     assert len(state["businessQualify"]) == 1
     assert "修订" in state["businessQualify"][0]["requirement"]
+    assert state["stateVersion"] == new_sv
 
 
 def test_apply_business_struct_revise_unit():

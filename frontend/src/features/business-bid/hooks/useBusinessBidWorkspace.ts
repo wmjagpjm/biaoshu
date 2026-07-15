@@ -426,40 +426,130 @@ export function useBusinessBidWorkspace(projectId: string) {
       };
       setHistory((prev) => [applying, ...prev]);
 
-      try {
-        let baseContent = workspace.parseMarkdown;
+      const writesState =
+        input.stage === "business_parse" ||
+        input.stage === "business_qualify" ||
+        input.stage === "business_toc" ||
+        input.stage === "business_quote" ||
+        input.stage === "business_commit";
+
+      /**
+       * 用途：商务 revise 进入既有 saveChainRef；真正执行时读最新 expected；
+       * 成功后阻断旧本地写并单次 refresh；409/非法版本/网络不确定均保留本地并阻断。
+       */
+      const runRevise = async () => {
+        const session = sessionRef.current;
+        const pid = projectId;
+        if (!isCurrentSession(session, pid)) {
+          throw new Error("修订已取消");
+        }
+
+        const ws = workspaceRef.current;
+        let baseContent = ws.parseMarkdown;
         if (input.stage === "business_qualify") {
-          baseContent = JSON.stringify(workspace.qualifyItems, null, 2);
+          baseContent = JSON.stringify(ws.qualifyItems, null, 2);
         } else if (input.stage === "business_toc") {
-          baseContent = JSON.stringify(workspace.tocItems, null, 2);
+          baseContent = JSON.stringify(ws.tocItems, null, 2);
         } else if (input.stage === "business_quote") {
           baseContent = JSON.stringify(
-            { rows: workspace.quoteRows, notes: workspace.quoteNotes },
+            { rows: ws.quoteRows, notes: ws.quoteNotes },
             null,
             2,
           );
         } else if (input.stage === "business_commit") {
-          baseContent = JSON.stringify(workspace.commitBlocks, null, 2);
+          baseContent = JSON.stringify(ws.commitBlocks, null, 2);
         }
 
-        const res = await apiFetch<{
+        const body: Record<string, unknown> = {
+          stage: input.stage,
+          message: input.message,
+          preserveStructure: input.preserveStructure,
+          baseContent,
+          targetId: input.targetId,
+          targetLabel: input.targetLabel,
+        };
+
+        if (writesState) {
+          if (fullStateBlockedRef.current) {
+            const err = new Error(BUSINESS_EDITOR_STATE_CONFLICT_MESSAGE) as Error & {
+              status?: number;
+              code?: string;
+            };
+            err.status = 409;
+            err.code = "editor_state_version_conflict";
+            throw err;
+          }
+          const expected = stateVersionRef.current;
+          if (!isValidStateVersion(expected)) {
+            enterFullStateBlock();
+            throw new Error(BUSINESS_EDITOR_STATE_CONFLICT_MESSAGE);
+          }
+          body.expectedStateVersion = expected;
+        }
+
+        let res: {
           resultSummary?: string;
           revisedContent?: string | null;
           status?: string;
-        }>(
-          `/projects/${encodeURIComponent(projectId)}/artifacts/workspace/revise`,
-          {
-            method: "POST",
-            body: JSON.stringify({
-              stage: input.stage,
-              message: input.message,
-              preserveStructure: input.preserveStructure,
-              baseContent,
-              targetId: input.targetId,
-              targetLabel: input.targetLabel,
-            }),
-          },
-        );
+          stateVersion?: string | null;
+        };
+        try {
+          res = await apiFetch(
+            `/projects/${encodeURIComponent(pid)}/artifacts/workspace/revise`,
+            {
+              method: "POST",
+              body: JSON.stringify(body),
+            },
+          );
+        } catch (err) {
+          if (!isCurrentSession(session, pid)) throw err;
+          if (writesState) {
+            const status = (err as { status?: number })?.status;
+            const code = (err as { code?: string })?.code;
+            if (
+              status === 409 &&
+              code === "editor_state_version_conflict"
+            ) {
+              // 陈旧：保留本地，阻断旧自动 PUT
+              enterFullStateBlock();
+            } else {
+              // 网络不确定 / 其它失败：保守阻断，禁止旧 UI 自动保存
+              enterFullStateBlock();
+            }
+          }
+          throw err;
+        }
+
+        if (!isCurrentSession(session, pid)) return res;
+
+        if (writesState) {
+          // 成功响应必须带合法新版本；否则阻断且不自动覆盖本地
+          if (!isValidStateVersion(res.stateVersion)) {
+            enterFullStateBlock();
+            setHistory((prev) =>
+              prev.map((h) =>
+                h.id === id
+                  ? {
+                      ...h,
+                      status: "failed" as const,
+                      resultSummary: "修订响应缺少有效版本，已停止自动保存",
+                    }
+                  : h,
+              ),
+            );
+            throw new Error(BUSINESS_EDITOR_STATE_CONFLICT_MESSAGE);
+          }
+          // 先接受服务端新版本并阻断，再单次 refresh；成功才解除阻断
+          stateVersionRef.current = res.stateVersion;
+          fullStateBlockedRef.current = true;
+          setFullStateConflict(true);
+          const ok = await refreshFromApi();
+          if (!isCurrentSession(session, pid)) return res;
+          if (!ok) {
+            // 重读失败：保持本地与阻断
+            enterFullStateBlock();
+          }
+        }
 
         setHistory((prev) =>
           prev.map((h) =>
@@ -475,20 +565,26 @@ export function useBusinessBidWorkspace(projectId: string) {
               : h,
           ),
         );
-
-        // 业务成功事实不反转；刷新失败进入固定加载失败态，不把旧内容当最新
-        if (
-          input.stage === "business_parse" ||
-          input.stage === "business_qualify" ||
-          input.stage === "business_toc" ||
-          input.stage === "business_quote" ||
-          input.stage === "business_commit"
-        ) {
-          await refreshFromApi();
-        }
         return res;
-      } catch (err) {
-        const msg = (err as { message?: string })?.message || "修订失败";
+      };
+
+      const queued = saveChainRef.current
+        .catch(() => undefined)
+        .then(runRevise);
+      // 后续保存等待 revise 完成；revise 失败不卡死整条链（链上仅 void）
+      saveChainRef.current = queued
+        .then(() => undefined)
+        .catch(() => undefined);
+
+      try {
+        return await queued;
+      } catch {
+        // 页面以 void 调用 submitRevise；此处不得再抛，避免 unhandled rejection
+        // 固定脱敏失败摘要，禁止把异常正文写入 UI/history/console
+        const msg =
+          writesState && fullStateBlockedRef.current
+            ? BUSINESS_EDITOR_STATE_CONFLICT_MESSAGE
+            : "修订失败";
         setHistory((prev) =>
           prev.map((h) =>
             h.id === id
@@ -496,10 +592,15 @@ export function useBusinessBidWorkspace(projectId: string) {
               : h,
           ),
         );
-        throw err;
+        return undefined;
       }
     },
-    [projectId, refreshFromApi, workspace],
+    [
+      enterFullStateBlock,
+      isCurrentSession,
+      projectId,
+      refreshFromApi,
+    ],
   );
 
   return {

@@ -49,6 +49,9 @@ BUSINESS_STRUCT_STAGES = frozenset(
     }
 )
 
+# 会写 editor-state 的商务阶段（含解析 Markdown）
+BUSINESS_WRITE_STAGES = BUSINESS_STRUCT_STAGES | frozenset({"business_parse"})
+
 _STRUCT_JSON_HINTS: dict[str, str] = {
     "business_qualify": (
         "JSON 数组，每项：id, requirement, response, evidence, "
@@ -227,16 +230,25 @@ def revise_artifact(
     guidance: dict | None = None,
     target_id: str | None = None,
     target_label: str | None = None,
+    expected_state_version: str | None = None,
 ) -> dict:
     """
     用途：执行一次定向修订（同步）。
-    返回：前端 AiFeedbackRecord 兼容字段 + revisedContent / model。
-    商务结构化阶段成功时写回 editor-state。
-    异常：ProjectNotFoundError / LlmConfigError / LlmCallError / ValueError
+    返回：前端 AiFeedbackRecord 兼容字段 + revisedContent / model；
+      商务写阶段成功时含新 stateVersion。
+    商务结构化/解析阶段：LLM 期间不持锁；最终写用请求 expected 锁后 CAS。
+    异常：ProjectNotFoundError / LlmConfigError / LlmCallError / ValueError /
+      EditorStateVersionConflict（冲突时不写字段、不回显模型正文）
     """
     get_project(db, workspace_id, project_id)
     if not (message or "").strip():
         raise ValueError("反馈意见不能为空")
+
+    writes_state = stage in BUSINESS_WRITE_STAGES
+    if writes_state:
+        # schema 层已强制合法 esv_；此处再兜底拒绝空值
+        if not (expected_state_version or "").strip():
+            raise ValueError("expectedStateVersion 为必填")
 
     fb_id = f"fb_{secrets.token_hex(6)}"
     created_at = datetime.now(timezone.utc).isoformat()
@@ -250,6 +262,7 @@ def revise_artifact(
         target_label=target_label,
     )
 
+    # LLM 调用期间不得持有 SQLite 写锁
     try:
         result = llm_service.chat_completion(
             db, workspace_id, messages=messages, temperature=0.35
@@ -259,32 +272,67 @@ def revise_artifact(
 
     has_base = bool(base_content and base_content.strip())
     summary, revised = _split_summary_and_body(result.content, has_base)
+    new_state_version: str | None = None
+    wrote_business_field = False
 
-    # —— 商务结构化写回 ——
+    # —— 商务结构化写回（CAS）——
     if stage in BUSINESS_STRUCT_STAGES and revised:
         applied = apply_business_struct_revise(stage, revised)
         if applied:
             kwargs, revised_json = applied
-            editor_state_service.upsert_editor_state(
-                db, workspace_id, project_id, **kwargs
-            )
+            try:
+                written = editor_state_service.upsert_editor_state(
+                    db,
+                    workspace_id,
+                    project_id,
+                    expected_state_version=expected_state_version,
+                    **kwargs,
+                )
+            except editor_state_service.EditorStateVersionConflict:
+                # 禁止返回已生成的模型正文
+                raise
             revised = revised_json
+            new_state_version = written.get("stateVersion")
+            wrote_business_field = True
         else:
             summary = (
                 (summary or "")
                 + "（摘要已生成，但未能解析为表格 JSON，未写回工作区，请重试或改意见。）"
             ).strip()
 
-    # —— 商务解析 Markdown 写回 ——
+    # —— 商务解析 Markdown 写回（CAS）——
     if stage == "business_parse" and revised and revised.strip():
-        editor_state_service.upsert_editor_state(
+        try:
+            written = editor_state_service.upsert_editor_state(
+                db,
+                workspace_id,
+                project_id,
+                parsed_markdown=revised.strip(),
+                expected_state_version=expected_state_version,
+            )
+        except editor_state_service.EditorStateVersionConflict:
+            raise
+        new_state_version = written.get("stateVersion")
+        wrote_business_field = True
+
+    # 商务写阶段 HTTP 200 必须含合法 stateVersion：无业务字段写入时仍锁后校验请求 expected
+    if writes_state and not wrote_business_field:
+        # LLM 期间若已漂移 → 409；匹配则返回当前权威版本（等于 expected），不得谎报
+        _row, current_state = editor_state_service.lock_and_assert_expected_state_version(
             db,
             workspace_id,
             project_id,
-            parsed_markdown=revised.strip(),
+            str(expected_state_version),
         )
+        # 无字段变更：显式结束事务释放锁，返回锁后同一当前版本
+        db.commit()
+        new_state_version = current_state["stateVersion"]
 
-    return {
+    if writes_state:
+        if not editor_state_service.is_valid_state_version(new_state_version):
+            raise ValueError("修订成功响应缺少合法 stateVersion")
+
+    out = {
         "id": fb_id,
         "stage": stage,
         "message": message.strip(),
@@ -299,3 +347,6 @@ def revise_artifact(
         "preserve_structure": preserve_structure,
         "project_id": project_id,
     }
+    if new_state_version:
+        out["state_version"] = new_state_version
+    return out

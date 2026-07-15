@@ -10,13 +10,13 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_workspace_id
 from app.api.schemas import ReviseIn, ReviseOut
 from app.core.database import get_db
-from app.services import revise_service
+from app.services import editor_state_service, revise_service
 from app.services.llm_service import LlmCallError, LlmConfigError
 from app.services.project_service import ProjectNotFoundError
 
@@ -37,6 +37,7 @@ def revise_artifact(
     """
     用途：对指定项目产物做一次「按反馈调整」。
     artifact_id：前端可传阶段名或章节 id（产物表未建前仅作追踪标识）。
+    二次开发：商务写阶段陈旧 expected → 固定 409，禁止回显模型正文。
     """
     try:
         data = revise_service.revise_artifact(
@@ -51,9 +52,20 @@ def revise_artifact(
             guidance=body.guidance,
             target_id=body.target_id,
             target_label=body.target_label,
+            expected_state_version=body.expected_state_version,
         )
     except ProjectNotFoundError:
         raise HTTPException(status_code=404, detail="项目不存在") from None
+    except editor_state_service.EditorStateVersionConflict as exc:
+        # 固定最小 detail；不得回显 revisedContent / 版本外敏感字段
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": editor_state_service.CODE_FULL_STATE_VERSION_CONFLICT,
+                "message": exc.message,
+                "currentStateVersion": exc.current_state_version,
+            },
+        ) from None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
     except LlmConfigError as exc:

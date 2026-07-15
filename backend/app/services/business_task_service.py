@@ -169,10 +169,12 @@ def run_biz_qualify(
     *,
     set_task,
     assert_not_cancelled,
+    expected_state_version: str,
 ) -> None:
     """
     用途：从解析文生成资格响应条目列表。
-    对接：任务类型 biz_qualify → businessQualify
+    对接：任务类型 biz_qualify → businessQualify；最终写 CAS。
+    二次开发：expected 必填合法版本，禁止默认 None 静默兼容写。
     """
     assert_not_cancelled(db, task)
     set_task(db, task, progress=20, message="读取解析文本…")
@@ -207,7 +209,11 @@ def run_biz_qualify(
         raise ValueError("模型未返回有效资格条目")
     assert_not_cancelled(db, task)
     editor_state_service.upsert_editor_state(
-        db, workspace_id, project_id, business_qualify=items
+        db,
+        workspace_id,
+        project_id,
+        business_qualify=items,
+        expected_state_version=expected_state_version,
     )
     update_project(
         db, workspace_id, project_id, status="writing", technical_plan_step=2
@@ -230,8 +236,12 @@ def run_biz_toc(
     *,
     set_task,
     assert_not_cancelled,
+    expected_state_version: str,
 ) -> None:
-    """用途：生成商务递交材料目录清单。对接：biz_toc → businessToc"""
+    """
+    用途：生成商务递交材料目录清单。对接：biz_toc → businessToc；最终写 CAS。
+    二次开发：expected 必填合法版本，禁止默认 None 静默兼容写。
+    """
     assert_not_cancelled(db, task)
     set_task(db, task, progress=20, message="读取解析文本…")
     source = _source_markdown(db, workspace_id, project_id)
@@ -263,7 +273,11 @@ def run_biz_toc(
         raise ValueError("模型未返回有效目录条目")
     assert_not_cancelled(db, task)
     editor_state_service.upsert_editor_state(
-        db, workspace_id, project_id, business_toc=items
+        db,
+        workspace_id,
+        project_id,
+        business_toc=items,
+        expected_state_version=expected_state_version,
     )
     update_project(
         db, workspace_id, project_id, status="writing", technical_plan_step=3
@@ -286,8 +300,12 @@ def run_biz_quote(
     *,
     set_task,
     assert_not_cancelled,
+    expected_state_version: str,
 ) -> None:
-    """用途：生成报价分项表骨架。对接：biz_quote → businessQuote"""
+    """
+    用途：生成报价分项表骨架。对接：biz_quote → businessQuote；最终写 CAS。
+    二次开发：expected 必填合法版本，禁止默认 None 静默兼容写。
+    """
     assert_not_cancelled(db, task)
     set_task(db, task, progress=20, message="读取解析文本…")
     source = _source_markdown(db, workspace_id, project_id)
@@ -319,7 +337,11 @@ def run_biz_quote(
         raise ValueError("模型未返回有效报价内容")
     assert_not_cancelled(db, task)
     editor_state_service.upsert_editor_state(
-        db, workspace_id, project_id, business_quote=quote
+        db,
+        workspace_id,
+        project_id,
+        business_quote=quote,
+        expected_state_version=expected_state_version,
     )
     update_project(
         db, workspace_id, project_id, status="writing", technical_plan_step=4
@@ -342,8 +364,12 @@ def run_biz_commit(
     *,
     set_task,
     assert_not_cancelled,
+    expected_state_version: str,
 ) -> None:
-    """用途：生成授权与承诺正文块。对接：biz_commit → businessCommit"""
+    """
+    用途：生成授权与承诺正文块。对接：biz_commit → businessCommit；最终写 CAS。
+    二次开发：expected 必填合法版本，禁止默认 None 静默兼容写。
+    """
     assert_not_cancelled(db, task)
     set_task(db, task, progress=20, message="读取解析文本…")
     source = _source_markdown(db, workspace_id, project_id)
@@ -373,7 +399,11 @@ def run_biz_commit(
         raise ValueError("模型未返回有效承诺正文")
     assert_not_cancelled(db, task)
     editor_state_service.upsert_editor_state(
-        db, workspace_id, project_id, business_commit=blocks
+        db,
+        workspace_id,
+        project_id,
+        business_commit=blocks,
+        expected_state_version=expected_state_version,
     )
     update_project(
         db, workspace_id, project_id, status="writing", technical_plan_step=5

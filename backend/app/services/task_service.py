@@ -56,6 +56,28 @@ ALLOWED_TYPES = frozenset(
     }
 )
 
+# 真实写 editor-state 的九类任务：创建时捕获内部基准版本
+EDITOR_WRITER_TASK_TYPES = frozenset(
+    {
+        "parse",
+        "analyze",
+        "outline",
+        "chapter",
+        "chapters",
+        "biz_qualify",
+        "biz_toc",
+        "biz_quote",
+        "biz_commit",
+    }
+)
+
+# 任务 payload 保留内部键：仅服务端覆盖写入，禁止出现在 task_to_dict/SSE/error/result
+_PAYLOAD_EXPECTED_STATE_VERSION = "_expectedStateVersion"
+
+# 版本冲突固定脱敏终态（不得含版本/异常类型/正文）
+MSG_TASK_RESULT_STALE = "任务结果已过期"
+ERR_TASK_BASE_CHANGED = "任务基于的编辑内容已变化，请重新载入后重试"
+
 # 进行中状态：取消与防重入共用
 ACTIVE_STATUSES = frozenset({"pending", "running"})
 TERMINAL_STATUSES = frozenset({"success", "failed", "cancelled"})
@@ -233,6 +255,53 @@ def fail_interrupted_tasks(db: Session) -> int:
     return len(rows)
 
 
+def _payload_expected_version(payload: dict | None) -> str | None:
+    """
+    用途：从任务 payload 读取创建时内部基准版本。
+    二次开发：仅返回严格合法 esv_ 格式；缺失/损坏/旧 pre-upgrade 一律 None。
+    """
+    if not isinstance(payload, dict):
+        return None
+    raw = payload.get(_PAYLOAD_EXPECTED_STATE_VERSION)
+    if isinstance(raw, str):
+        text = raw.strip()
+        if editor_state_service.is_valid_state_version(text):
+            return text
+    return None
+
+
+def _require_payload_expected_version(payload: dict | None) -> str:
+    """
+    用途：writer 内部路径强制合法 expected，禁止默认 None 静默降级为兼容写。
+    对接：_run_parse/_run_analyze/_run_outline/_run_chapter/_run_chapters/_run_business。
+    """
+    expected = _payload_expected_version(payload)
+    if expected is None:
+        raise ValueError("任务内部基准版本缺失或非法")
+    return expected
+
+
+def _fail_task_stale_version(db: Session, task: ProjectTaskRow) -> None:
+    """
+    用途：版本冲突/缺失固定脱敏 failed；result 清空；禁止写版本/异常类型。
+    对接：契约 §2.5 / §3.1；缺内部版本与 CAS 冲突共用同一终态。
+    """
+    try:
+        db.refresh(task)
+        if task.status == "cancelled":
+            raise TaskCancelled()
+        task.status = "failed"
+        task.progress = 100
+        task.message = MSG_TASK_RESULT_STALE
+        task.error = ERR_TASK_BASE_CHANGED
+        task.result_json = None
+        task.updated_at = _now()
+        db.commit()
+        db.refresh(task)
+    except TaskCancelled:
+        raise
+
+
 def create_task_record(
     db: Session,
     workspace_id: str,
@@ -244,18 +313,24 @@ def create_task_record(
     """
     用途：仅创建 pending 任务行，不执行。
     content_fuse：创建阶段做 shape/配额/目标章节 400 校验并写入归一化 payload。
+    九类 writer：同事务捕获服务端权威 stateVersion 覆盖内部键，客户端同名投稿被覆盖。
     """
     if task_type not in ALLOWED_TYPES:
         raise ValueError(f"不支持的任务类型: {task_type}")
     get_project(db, workspace_id, project_id)
     if _has_running_same_type(db, project_id, task_type):
         raise ValueError(f"已有进行中的「{task_type}」任务，请等待完成或稍后重试")
-    normalized_payload: dict = payload or {}
+    normalized_payload: dict = dict(payload or {})
     if task_type == "content_fuse":
         # 仅 shape/配额/目标章；来源可用性留给 worker，避免跨 workspace 探测
         normalized_payload = fuse_context_service.validate_create_payload(
             db, workspace_id, project_id, payload
         )
+    if task_type in EDITOR_WRITER_TASK_TYPES:
+        # 操作开始绑定：服务端权威版本覆盖保留键；禁止 worker 启动时重捕获
+        state = editor_state_service.get_editor_state(db, workspace_id, project_id)
+        normalized_payload = dict(normalized_payload)
+        normalized_payload[_PAYLOAD_EXPECTED_STATE_VERSION] = state["stateVersion"]
     task = ProjectTaskRow(
         id=f"task_{secrets.token_hex(8)}",
         project_id=project_id,
@@ -274,7 +349,11 @@ def create_task_record(
 
 
 def _execute_task(db: Session, workspace_id: str, task: ProjectTaskRow) -> None:
-    """用途：在给定 Session 上执行任务体；支持协作式取消。"""
+    """
+    用途：在给定 Session 上执行任务体；支持协作式取消；精确捕获版本冲突。
+    二次开发：九类 writer 在分发前必须有合法内部版本；缺失/损坏固定 stale failed，
+      禁止 LLM/解析器调用与 editor-state 写入，禁止用当前版本补捕获。
+    """
     payload: dict = {}
     if task.payload_json:
         try:
@@ -285,12 +364,18 @@ def _execute_task(db: Session, workspace_id: str, task: ProjectTaskRow) -> None:
     try:
         _assert_not_cancelled(db, task)
         _set_task(db, task, status="running", progress=5, message="任务开始…")
+        # 九类 writer：分发前严格校验内部版本，堵住 payload 空/坏时 upsert(None) 兼容旁路
+        if task.type in EDITOR_WRITER_TASK_TYPES:
+            expected = _payload_expected_version(payload)
+            if expected is None:
+                _fail_task_stale_version(db, task)
+                return
         if task.type == "parse":
             _run_parse(db, workspace_id, project_id, task, payload)
         elif task.type == "analyze":
-            _run_analyze(db, workspace_id, project_id, task)
+            _run_analyze(db, workspace_id, project_id, task, payload)
         elif task.type == "outline":
-            _run_outline(db, workspace_id, project_id, task)
+            _run_outline(db, workspace_id, project_id, task, payload)
         elif task.type == "chapter":
             _run_chapter(db, workspace_id, project_id, task, payload)
         elif task.type == "chapters":
@@ -302,7 +387,7 @@ def _execute_task(db: Session, workspace_id: str, task: ProjectTaskRow) -> None:
         elif task.type == "content_fuse":
             _run_content_fuse(db, workspace_id, project_id, task, payload)
         elif task.type in ("biz_qualify", "biz_toc", "biz_quote", "biz_commit"):
-            _run_business(db, workspace_id, project_id, task)
+            _run_business(db, workspace_id, project_id, task, payload)
         else:
             raise ValueError(f"未知任务类型: {task.type}")
     except TaskCancelled:
@@ -314,6 +399,11 @@ def _execute_task(db: Session, workspace_id: str, task: ProjectTaskRow) -> None:
             task.updated_at = _now()
             db.commit()
         return
+    except editor_state_service.EditorStateVersionConflict:
+        try:
+            _fail_task_stale_version(db, task)
+        except TaskCancelled:
+            return
     except (LlmConfigError, LlmCallError, ValueError, RuntimeError, KeyError) as exc:
         try:
             _set_task(
@@ -436,10 +526,15 @@ def _run_parse(
         engine_name, path, files[0].filename
     )
 
-    state = _ensure_state(db, project_id)
-    state.parsed_markdown = md
-    state.updated_at = _now()
-    db.commit()
+    expected = _require_payload_expected_version(payload)
+    # 禁止直接 ORM 覆盖；最终写走带 expected 的 upsert CAS
+    editor_state_service.upsert_editor_state(
+        db,
+        workspace_id,
+        project_id,
+        parsed_markdown=md,
+        expected_state_version=expected,
+    )
     update_project(
         db, workspace_id, project_id, status="analyzing", technical_plan_step=1
     )
@@ -459,7 +554,11 @@ def _run_parse(
 
 
 def _run_analyze(
-    db: Session, workspace_id: str, project_id: str, task: ProjectTaskRow
+    db: Session,
+    workspace_id: str,
+    project_id: str,
+    task: ProjectTaskRow,
+    payload: dict | None = None,
 ) -> None:
     from app.services.editor_state_service import normalize_analysis
 
@@ -506,12 +605,14 @@ def _run_analyze(
     else:
         analysis = normalize_analysis(parsed)
         msg = "招标分析完成（结构化）"
+    expected = _require_payload_expected_version(payload)
     editor_state_service.upsert_editor_state(
         db,
         workspace_id,
         project_id,
         analysis=analysis,
         analysis_overview=analysis.get("overview") or "",
+        expected_state_version=expected,
     )
     update_project(
         db, workspace_id, project_id, status="analyzing", technical_plan_step=2
@@ -985,7 +1086,11 @@ def _run_content_fuse(
 
 
 def _run_outline(
-    db: Session, workspace_id: str, project_id: str, task: ProjectTaskRow
+    db: Session,
+    workspace_id: str,
+    project_id: str,
+    task: ProjectTaskRow,
+    payload: dict | None = None,
 ) -> None:
     state = _ensure_state(db, project_id)
     guidance = {}
@@ -1065,6 +1170,7 @@ def _run_outline(
             }
         )
     _set_task(db, task, progress=80, message="写入大纲…")
+    expected = _require_payload_expected_version(payload)
     editor_state_service.upsert_editor_state(
         db,
         workspace_id,
@@ -1072,6 +1178,7 @@ def _run_outline(
         outline=outline,
         chapters=chapters,
         mode="ALIGNED",
+        expected_state_version=expected,
     )
     update_project(
         db, workspace_id, project_id, status="writing", technical_plan_step=3
@@ -1324,8 +1431,13 @@ def _run_chapter(
             )
         else:
             new_chapters.append(c)
+    expected = _require_payload_expected_version(payload)
     editor_state_service.upsert_editor_state(
-        db, workspace_id, project_id, chapters=new_chapters
+        db,
+        workspace_id,
+        project_id,
+        chapters=new_chapters,
+        expected_state_version=expected,
     )
     update_project(
         db, workspace_id, project_id, status="writing", technical_plan_step=5
@@ -1355,6 +1467,8 @@ def _run_chapters(
     """
     用途：串行生成全部（或仅空）章节；progress 按章递增。
     payload.onlyEmpty 默认 true。
+    二次开发：每次成功写后仅用本任务成功响应的新 stateVersion 推进 expected；
+      章间外部改动使下一章 CAS 失败，已成功章保留。
     """
     only_empty = payload.get("onlyEmpty", payload.get("only_empty", True))
     if isinstance(only_empty, str):
@@ -1394,8 +1508,9 @@ def _run_chapters(
             if isinstance(f, dict) and f.get("content")
         )
 
-    # 工作用可变副本
+    # 工作用可变副本；expected 从创建时基准起步，仅按本任务成功响应推进
     working = [dict(c) if isinstance(c, dict) else c for c in chapters]
+    expected = _require_payload_expected_version(payload)
     done = 0
     total = len(targets)
     all_cites: list = []
@@ -1432,9 +1547,18 @@ def _run_chapters(
                     "status": "needs_review",
                 }
                 break
-        editor_state_service.upsert_editor_state(
-            db, workspace_id, project_id, chapters=working
+        written = editor_state_service.upsert_editor_state(
+            db,
+            workspace_id,
+            project_id,
+            chapters=working,
+            expected_state_version=expected,
         )
+        # 仅推进本任务版本；不得重读“当前权威”绕过外部改动
+        next_sv = written.get("stateVersion")
+        if not editor_state_service.is_valid_state_version(next_sv):
+            raise ValueError("章节写入响应缺少合法 stateVersion")
+        expected = next_sv
         done += 1
         time.sleep(0.6)  # 轻微限流，避免打爆上游
 
@@ -1456,9 +1580,13 @@ def _run_chapters(
 
 
 def _run_business(
-    db: Session, workspace_id: str, project_id: str, task: ProjectTaskRow
+    db: Session,
+    workspace_id: str,
+    project_id: str,
+    task: ProjectTaskRow,
+    payload: dict | None = None,
 ) -> None:
-    """用途：分发商务标 biz_* 任务到 business_task_service。"""
+    """用途：分发商务标 biz_* 任务到 business_task_service；透传创建时合法 expected。"""
     from app.services import business_task_service
 
     runners = {
@@ -1470,6 +1598,7 @@ def _run_business(
     runner = runners.get(task.type)
     if runner is None:
         raise ValueError(f"未知商务任务类型: {task.type}")
+    expected = _require_payload_expected_version(payload)
     runner(
         db,
         workspace_id,
@@ -1477,6 +1606,7 @@ def _run_business(
         task,
         set_task=_set_task,
         assert_not_cancelled=_assert_not_cancelled,
+        expected_state_version=expected,
     )
 
 
