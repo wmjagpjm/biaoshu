@@ -2,15 +2,15 @@
 模块：P11C 技术标编辑态真实数据收口实施计划
 用途：把技术标 editor-state 服务端权威、required 保存和生产演示入口清理拆成七文件纯前端实现包。
 对接：docs/p11c-technical-editor-state-truth-contract.md；docs/HANDOFF-next.md；Grok-Codex 协作消息箱。
-二次开发：Grok 只改白名单文件并自测；Codex 独立审查、验收、提交和推送；额度恢复前不得假装已派发。
+二次开发：Grok 只改白名单文件并自测；Codex 独立审查、验收、提交和推送；后续不得扩大本包边界。
 -->
 
 # P11C 技术标编辑态真实数据收口实施计划
 
-> **状态**：计划已冻结；Grok 当前因 402 使用额度耗尽，尚未派发实现。
+> **状态**：已完成、独立验收并推送。计划/契约=`24b7ba8`，安全细化=`c5b3eec`，前端实现=`1441509`。
 > **工作分支**：`collab/grok-code-codex-review`。
-> **验收起点**：后端串行全量 487 passed；前端 lint/build 通过、Chromium headless 单 worker 串行全量 E2E 166 passed。
-> **执行顺序**：计划提交并推送 → Grok 额度恢复后实现/自测 → Codex 审查/返修/独立验收 → 中文文档闭环。
+> **验收结果**：后端未改，沿用串行全量 487 passed；前端 lint/build 通过，P11C 18 passed，Chromium headless 单 worker 串行全量 E2E 184 passed。
+> **执行结果**：计划提交并推送 → Grok 实现/自测 → Codex 两轮退回返修 → 独立验收 → 中文文档闭环。
 
 ## 1. 精确前端文件白名单
 
@@ -79,7 +79,7 @@
 
 ## 6. 独立验收
 
-Grok 额度恢复后只发送 `review_request`，报告原任务 ID、精确七文件、失败先测、真实/空/失败/重试/required/409/M3-D/A→B/演示入口/网络存储证据与风险；不得 git add、commit 或 push。
+Grok 只发送 `review_request`，报告原任务 ID、精确七文件、失败先测、真实/空/失败/重试/required/409/M3-D/A→B/演示入口/网络存储证据与风险；不得 git add、commit 或 push。
 
 Codex 审查通过后依次串行运行：
 
@@ -101,3 +101,12 @@ git diff --check
 ```
 
 所有 PowerShell 与 Grok 子进程必须后台静默，Playwright 只用 Chromium headless、单 worker、逐条串行，不弹终端、浏览器或前台应用。后端未改，不重复把前端回归冒充后端新验收；沿用 487 passed 基线。
+
+## 7. 实施、审查与验收闭环
+
+1. Grok 按七文件白名单完成首版后，Codex 退回缺失的 required 真实登录 Cookie/CSRF、M3-D、合并 PUT、401/403、A→B、存储/剪贴板/IndexedDB 与精确网络白名单证据。
+2. 第二轮审查确认登录场景仍伪造 `/auth/me`，且跨项目共用保存 Promise 链会让 A 的挂起 PUT 阻塞 B；再次退回后，Grok 改为登录页真实 `POST /api/auth/login` + HttpOnly Cookie + 内存 CSRF，并在项目切换时重置保存链。
+3. 最终实现严格保持七文件边界：技术标编辑态只认服务端 GET/PUT；合法空态不补 mock；旧键忽略保值；加载/保存失败固定脱敏；普通/合并 PUT 均使用同源凭据与内存 CSRF；409、响应矩阵与 M3-D 兼容；A 的迟到和挂起保存不污染或阻塞 B；生产演示入口已移除。
+4. Codex 独立验收：lint 通过；build 通过（仅既有大 chunk 提示）；P11C 18、P11B 11、P11A 10、认证/RBAC 11、解析策略 6、响应矩阵 8、M3-D 确认 6、M3-D 持久恢复 5、模板 1，全部 passed；单 worker 串行全量 E2E 184 passed；`git diff --check` 通过。
+5. 解析策略第一次组合回归出现一次 5/6 的刷新时序波动，随后立即隔离重跑 6/6，Grok 自测同为 6/6，全量 184/184 再次覆盖通过；记录为一次性测试时序波动，不隐去也不把首轮失败冒充通过。
+6. 前端实现提交 `1441509` 已推送到 `origin/collab/grok-code-codex-review`。本包不包含后端、通用版本历史、多人协作、guidance 历史服务端化或真实 MinerU/Docling 部署。
