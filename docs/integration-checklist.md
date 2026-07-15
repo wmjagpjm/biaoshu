@@ -173,7 +173,7 @@ npm run test:e2e:business-editor-state-truth
 npm run test:e2e:technical-editor-state-truth
 ```
 
-当前基线：后端串行全量 **537 passed**（1 条既有 Starlette/httpx 弃用警告）；P12B-A 专项 **19 passed**、内容融合三项加财务整文件 **12 passed**、P12A/editor-state/矩阵/融合确认/callback/模板回归 **104 passed**。P12A 历史专项 **29 passed**、P8C/异步 callback **15 passed** 继续保留。前端 `lint` / `build` 通过（仅既有大包体积提示），P11C **18 passed**、P11B **11 passed**、P11A **10 passed**、认证/RBAC **11 passed**、解析策略 **6 passed**、响应矩阵 **8 passed**、融合确认 **6 passed**、持久恢复 **5 passed**、模板复用 **1 passed**，Chromium headless、单 worker 串行全量 E2E **184 passed**。M3-D、P10K、P8C、P9D 及其他既有专项继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
+当前基线：后端串行全量 **537 passed**（1 条既有 Starlette/httpx 弃用警告）；P12B-A 专项 **19 passed**、内容融合三项加财务整文件 **12 passed**、P12A/editor-state/矩阵/融合确认/callback/模板回归 **104 passed**。P12A 历史专项 **29 passed**、P8C/异步 callback **15 passed** 继续保留。前端 `lint` / `build` 通过（仅既有大包体积提示），技术 editor-state truth **28 passed**、商务 editor-state truth **18 passed**、P11A **10 passed**、认证/RBAC **11 passed**、解析策略 **6 passed**、响应矩阵 **8 passed**、HR 推荐 **4 passed**、融合确认 **6 passed**、持久恢复 **5 passed**、模板复用 **1 passed**，Chromium headless、单 worker 串行全量 E2E **201 passed**。M3-D、P10K、P8C、P9D 及其他既有专项继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
 
 P8D/P8E 本机助手独立验收命令（仓库根；不安装或探测真实 MinerU/Docling）：
 
@@ -182,7 +182,7 @@ backend\.venv\Scripts\python.exe -m unittest discover -s tools\local-parser -p "
 backend\.venv\Scripts\python.exe -m unittest discover -s tools\local-parser -p "test_mineru_callback_helper.py" -v
 ```
 
-P8E 当前为 Docling **46 passed**、P8D MinerU **54 passed**；后端 P8E-A/P8C/P8B/解析受影响回归 **37 passed**，P8C E2E **9 passed**、P8B E2E **6 passed**。P8E 当时沿用后端全量 487；P12A 曾更新为 518，P12B-A 已将当前后端全量更新为 537，前端全量仍为 184。真实 Docling/模型未安装、未验收。
+P8E 当前为 Docling **46 passed**、P8D MinerU **54 passed**；后端 P8E-A/P8C/P8B/解析受影响回归 **37 passed**，P8C E2E **9 passed**、P8B E2E **6 passed**。P8E 当时沿用后端全量 487；P12A 曾更新为 518，P12B-A 已将当前后端全量更新为 537，P12B-B 已将前端全量更新为 201。真实 Docling/模型未安装、未验收。
 
 P12A 独立验收命令（后端；全部串行）：
 
@@ -206,7 +206,7 @@ P12B-A 独立验收命令（后端；全部串行）：
 
 结果依次为 **19 / 12 / 104 / 537 passed**，均只有 1 条既有 Starlette/httpx 弃用警告。CAS 同时带全状态与矩阵版本时必须只有一次项目锁和一次锁后 editor-state 读取；提交成功后不得 `refresh` 或重读；全状态 409 detail 只能含 `code/message/currentStateVersion`。`updatedAt` 提交前后字符串必须稳定；持久 JSON 中的非有限 float 收敛为 `null`，但 P12A 直接伪造非有限规范快照仍必须失败。
 
-P12B-B 冻结验收命令（前端；实现后必须逐条串行）：
+P12B-B 独立验收命令（前端；必须逐条串行）：
 
 ```powershell
 npm run lint
@@ -214,12 +214,13 @@ npm run build
 npm run test:e2e:technical-editor-state-truth
 npm run test:e2e:business-editor-state-truth
 npm run test:e2e:matrix
+npx playwright test e2e/hr-team-recommendations.spec.ts --workers=1
 npm run test:e2e:fuse-apply
 npm run test:e2e:fuse-persistent-recovery
 npm run test:e2e
 ```
 
-P12B-B 必须证明技术整包、guidance、矩阵合并和商务整包 PUT 都带最新 `expectedStateVersion`；同项目第二请求在第一响应前严格为 0；固定全状态 409 保留本地并阻断全部写入，只有显式全量 GET 才恢复。技术/商务 GET 缺失或非法版本、PUT 200 缺失新版本均不得进入可继续自动保存的假成功态。P12B-B 尚未实现，以上不是当前验收基线。
+P12B-B 已实现并推送（契约/计划=`0636302`、实现=`473e823`）。验收已证明技术整包、guidance、矩阵合并和商务整包 PUT 都带最新 `expectedStateVersion`；同项目第二请求在第一响应前严格为 0，且 expected 精确等于第一响应版本；固定全状态 409 保留本地并阻断全部写入，只有显式全量 GET 才恢复。技术/商务 GET 缺失或非法版本、PUT 200 缺失/非法新版本均进入固定阻断；普通 409 无矩阵明细不得伪造空矩阵冲突。独立结果为 **28 / 18 / 8 / 4 / 6 / 5 / 201 passed**；下一包 P12B-C 尚未实现。
 
 ## 6. 已接 API 一览
 
