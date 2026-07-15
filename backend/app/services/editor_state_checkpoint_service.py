@@ -1,18 +1,18 @@
 """
 模块：P12A editor-state 手动检查点只读库服务
 用途：在项目锁内读取权威 editor-state，生成规范快照并有限保留最近 20 条。
-对接：api.editor_state_checkpoints；editor_state_service.get_editor_state；
+对接：api.editor_state_checkpoints；editor_state_service（共享全状态版本算法）；
   EditorStateCheckpointRow。
 二次开发：
   - 禁止接受客户端 snapshot/版本/计数/名称；
   - 创建与裁剪同事务；失败必须 rollback；
   - 列表 SQL 只投影元数据列，绝不 select snapshot_json；
+  - 13 键/规范 JSON/stateVersion 必须委托 editor_state_service，禁止第二套算法；
   - 不实现恢复、删除、自动历史或修改当前 editor-state。
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import secrets
 from typing import Any
@@ -33,22 +33,8 @@ MAX_CHECKPOINTS_PER_PROJECT = 20
 MAX_SNAPSHOT_BYTES = 2 * 1024 * 1024  # 2 MiB
 MIN_SNAPSHOT_BYTES = 1
 
-# 契约精确 13 键（排序序列化时由 sort_keys 决定字节序）
-SNAPSHOT_KEYS: tuple[str, ...] = (
-    "outline",
-    "chapters",
-    "facts",
-    "mode",
-    "analysis",
-    "responseMatrix",
-    "guidance",
-    "parsedMarkdown",
-    "businessQualify",
-    "businessToc",
-    "businessQuote",
-    "businessCommit",
-    "analysisOverview",
-)
+# 与 editor_state_service 共享精确 13 键（薄兼容常量，禁止本地另起一套）
+SNAPSHOT_KEYS: tuple[str, ...] = editor_state_service.CANONICAL_STATE_KEYS
 SNAPSHOT_KEY_SET = frozenset(SNAPSHOT_KEYS)
 
 CODE_PROJECT_NOT_FOUND = "project_not_found"
@@ -85,24 +71,17 @@ def _new_checkpoint_id() -> str:
 def _canonical_snapshot_json(snapshot: dict[str, Any]) -> str:
     """
     用途：紧凑 sort_keys UTF-8 标准 JSON（规范快照序列化）。
-    二次开发：必须 allow_nan=False，禁止写出 NaN/Infinity 非标准常量。
+    二次开发：薄包装，委托 editor_state_service 权威实现。
     """
-    return json.dumps(
-        snapshot,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    )
+    return editor_state_service.canonical_snapshot_json(snapshot)
 
 
 def compute_state_version(snapshot_json: str) -> str:
     """
     用途：对规范快照 JSON 字节做 SHA-256，取前 32 hex 并加 esv_ 前缀。
-    二次开发：必须对独立序列化字节重算，禁止复用其它哈希字段。
+    二次开发：薄包装，委托 editor_state_service 权威实现。
     """
-    digest = hashlib.sha256(snapshot_json.encode("utf-8")).hexdigest()
-    return "esv_" + digest[:32]
+    return editor_state_service.compute_state_version_from_canonical_json(snapshot_json)
 
 
 def count_outline_nodes(outline: Any) -> int:
@@ -140,9 +119,9 @@ def count_chapter_dicts(chapters: Any) -> int:
 def extract_canonical_snapshot(state: dict[str, Any]) -> dict[str, Any]:
     """
     用途：从 get_editor_state 规范输出抽取精确 13 键。
-    二次开发：不得写入 projectId/updatedAt/responseMatrixVersion 等派生/敏感字段。
+    二次开发：薄包装，委托 editor_state_service 权威实现。
     """
-    return {key: state.get(key) for key in SNAPSHOT_KEYS}
+    return editor_state_service.extract_canonical_snapshot(state)
 
 
 def _lock_project_for_checkpoint(

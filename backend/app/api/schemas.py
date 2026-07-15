@@ -634,7 +634,9 @@ class EditorStateOut(BaseModel):
     """
     用途：编辑器整包状态（技术标 outline/chapters/responseMatrix + 商务标 business*）。
     对接：useTechnicalPlanEditors / useProjectGuidance / useBusinessBidWorkspace
-    二次开发：responseMatrixVersion 仅表示收敛后的矩阵内容版本，与 updatedAt 无关。
+    二次开发：
+      - responseMatrixVersion 仅表示收敛后的矩阵内容版本，与 updatedAt 无关。
+      - stateVersion 为全状态 13 键规范哈希，与 P12A 检查点版本算法一致。
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -652,6 +654,7 @@ class EditorStateOut(BaseModel):
     response_matrix_version: str = Field(
         default="", serialization_alias="responseMatrixVersion"
     )
+    state_version: str = Field(default="", serialization_alias="stateVersion")
     guidance: dict | None = None
     parsed_markdown: str | None = Field(default=None, serialization_alias="parsedMarkdown")
     business_qualify: list | None = Field(
@@ -670,7 +673,10 @@ class EditorStateOut(BaseModel):
 class EditorStateUpdate(BaseModel):
     """
     用途：PUT 部分字段；未传的键不覆盖。
-    二次开发：同时传 responseMatrix + responseMatrixVersion 时启用乐观锁；仅矩阵 null 不更新。
+    二次开发：
+      - 同时传 responseMatrix + responseMatrixVersion 时启用矩阵乐观锁；仅矩阵 null 不更新。
+      - 可选 expectedStateVersion 启用全状态 CAS；格式非法固定 422 且不进 service。
+      - 缺 expected 保持兼容写入，非最终安全恢复门。
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -684,6 +690,11 @@ class EditorStateUpdate(BaseModel):
     response_matrix: list | None = Field(default=None, alias="responseMatrix")
     response_matrix_version: str | None = Field(
         default=None, alias="responseMatrixVersion"
+    )
+    expected_state_version: str | None = Field(
+        default=None,
+        alias="expectedStateVersion",
+        pattern=r"^esv_[0-9a-f]{32}$",
     )
     guidance: dict | None = None
     parsed_markdown: str | None = Field(default=None, alias="parsedMarkdown")

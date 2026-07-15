@@ -225,8 +225,11 @@ def put_editor_state(
     说明：Pydantic 未传字段为 None 时：outline/chapters/facts/guidance/analysis
     若客户端显式传 null 会清空；前端应只发需要更新的键（见 exclude_unset）。
     responseMatrix 例外：null 视为未更新，只有 [] 清空，避免整包回写误删映射。
-    二次开发：同时带 responseMatrix 与 responseMatrixVersion 时乐观锁；
-    版本不匹配返回 409 且整包不写。
+    二次开发：
+      - 可选 expectedStateVersion 全状态 CAS；冲突固定 409 最小 detail。
+      - 同时带 responseMatrix 与 responseMatrixVersion 时矩阵乐观锁；
+        与全状态共用一次锁，全状态冲突优先。
+      - 缺 expected 保持兼容写入（非最终安全门）。
     """
     # exclude_unset：未出现在 JSON 的字段不覆盖
     payload = body.model_dump(by_alias=False, exclude_unset=True)
@@ -247,6 +250,8 @@ def put_editor_state(
         kwargs["response_matrix"] = payload["response_matrix"]
     if "response_matrix_version" in payload and payload["response_matrix_version"] is not None:
         kwargs["response_matrix_version"] = payload["response_matrix_version"]
+    if "expected_state_version" in payload and payload["expected_state_version"] is not None:
+        kwargs["expected_state_version"] = payload["expected_state_version"]
     if "guidance" in payload:
         kwargs["guidance"] = payload["guidance"]
     if "parsed_markdown" in payload:
@@ -266,6 +271,15 @@ def put_editor_state(
         )
     except ProjectNotFoundError:
         raise HTTPException(status_code=404, detail="项目不存在") from None
+    except editor_state_service.EditorStateVersionConflict as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": editor_state_service.CODE_FULL_STATE_VERSION_CONFLICT,
+                "message": exc.message,
+                "currentStateVersion": exc.current_state_version,
+            },
+        ) from None
     except editor_state_service.ResponseMatrixVersionConflict as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -280,7 +294,7 @@ def put_editor_state(
 
 
 def _editor_out(data: dict) -> EditorStateOut:
-    """用途：service dict → EditorStateOut（含 analysis / 商务字段 / 矩阵版本）。"""
+    """用途：service dict → EditorStateOut（含 analysis / 商务字段 / 矩阵与全状态版本）。"""
     return EditorStateOut.model_validate(
         {
             "project_id": data["projectId"],
@@ -292,6 +306,7 @@ def _editor_out(data: dict) -> EditorStateOut:
             "analysis": data.get("analysis"),
             "response_matrix": data.get("responseMatrix"),
             "response_matrix_version": data.get("responseMatrixVersion") or "",
+            "state_version": data.get("stateVersion") or "",
             "guidance": data["guidance"],
             "parsed_markdown": data.get("parsedMarkdown"),
             "business_qualify": data.get("businessQualify"),

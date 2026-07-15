@@ -1,16 +1,24 @@
 """
 模块：项目编辑器状态服务
-用途：读写大纲/章节/事实/结构化分析/guidance/解析文/商务标字段；响应矩阵乐观版本防多端覆盖。
-对接：GET|PUT /api/projects/{id}/editor-state
-二次开发：商务字段整包存 business_json，API 拆成 businessQualify 等 camelCase。
-  responseMatrixVersion 由收敛后的矩阵内容哈希得出，勿绑 updated_at；冲突时整包不写。
-  版本化矩阵写入前必须取得 DB 写锁后再比对，禁止纯 Python 竞态窗口。
+用途：读写大纲/章节/事实/结构化分析/guidance/解析文/商务标字段；
+  全状态规范版本（stateVersion）与可选 CAS；响应矩阵乐观版本防多端覆盖。
+对接：GET|PUT /api/projects/{id}/editor-state；P12A 检查点共享版本算法。
+二次开发：
+  - business 字段整包存 business_json，API 拆成 businessQualify 等 camelCase。
+  - responseMatrixVersion 由收敛后矩阵内容哈希得出，勿绑 updated_at。
+  - stateVersion 由精确 13 键规范 JSON 的 SHA-256 得出；P12A 必须委托本模块，禁止双实现。
+  - expectedStateVersion 为兼容期可选 CAS，缺失时仍允许覆盖（非最终安全门）。
+  - 全状态 CAS 与矩阵版本共用一次项目锁与一次锁后 row；先比全状态再比矩阵；冲突显式 rollback。
+  - commit 前构造成功响应；commit 后禁止 refresh/重读，避免写成功但客户端假失败。
+  - updatedAt 经 _format_updated_at 去时区后缀，保证 commit 前与后续 GET 字符串一致。
+  - 持久 JSON 读写经 _sanitize_json_value 将非有限 float 收敛为 None；规范序列化仍 allow_nan=False。
 """
 
 from __future__ import annotations
 
 import json
-from hashlib import sha1
+import math
+from hashlib import sha1, sha256
 from datetime import datetime, timezone
 from typing import Any
 
@@ -24,6 +32,27 @@ from app.services.project_service import ProjectNotFoundError, get_project
 _BIZ_KEYS = ("qualify", "toc", "quote", "commit")
 _MATRIX_KINDS = frozenset({"requirement", "scoring"})
 _MATRIX_STATUSES = frozenset({"uncovered", "partial", "covered", "waived"})
+
+# P12A/P12B 精确 13 键（排序序列化由 sort_keys 决定字节序）
+CANONICAL_STATE_KEYS: tuple[str, ...] = (
+    "outline",
+    "chapters",
+    "facts",
+    "mode",
+    "analysis",
+    "responseMatrix",
+    "guidance",
+    "parsedMarkdown",
+    "businessQualify",
+    "businessToc",
+    "businessQuote",
+    "businessCommit",
+    "analysisOverview",
+)
+CANONICAL_STATE_KEY_SET = frozenset(CANONICAL_STATE_KEYS)
+
+MSG_FULL_STATE_VERSION_CONFLICT = "编辑内容已被其他操作更新，请重新载入后再保存"
+CODE_FULL_STATE_VERSION_CONFLICT = "editor_state_version_conflict"
 
 
 class ResponseMatrixVersionConflict(Exception):
@@ -46,11 +75,61 @@ class ResponseMatrixVersionConflict(Exception):
         self.current_version = current_version
 
 
+class EditorStateVersionConflict(Exception):
+    """
+    用途：PUT 携带陈旧 expectedStateVersion 时拒绝整包写入。
+    对接：projects.put_editor_state → HTTP 409 固定最小 detail。
+    二次开发：detail 仅 code/message/currentStateVersion；禁止回显正文或矩阵。
+    """
+
+    def __init__(
+        self,
+        *,
+        message: str,
+        current_state_version: str,
+    ) -> None:
+        super().__init__(message)
+        self.message = message
+        self.current_state_version = current_state_version
+
+
+def _sanitize_json_value(value: Any) -> Any:
+    """
+    用途：确定性 JSON 安全收敛——嵌套 dict/list 中非有限 float（NaN/±Inf）→ None。
+    对接：_loads/_dumps 与权威状态组装，使写入与读取得到相同安全值。
+    二次开发：只收敛非有限 float；循环/不可序列化对象仍由上层序列化失败并 rollback。
+      不得在此吞异常；不得改写 canonical_snapshot_json 的 allow_nan=False 严格性。
+    """
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {key: _sanitize_json_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_json_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [_sanitize_json_value(item) for item in value]
+    return value
+
+
+def _format_updated_at(value: datetime | None) -> str | None:
+    """
+    用途：跨方言稳定的 updatedAt 序列化——commit 前响应与任意后续 GET 字符串完全一致。
+    对接：_state_from_row（新行/内存行与数据库重读行共用）。
+    二次开发：aware 转 UTC 后去 tzinfo 再 isoformat；naive 按既有 UTC 语义直接 isoformat。
+      禁止依赖 commit 后 refresh；禁止输出 +00:00 后缀以免 SQLite 重读漂移。
+    """
+    if value is None:
+        return None
+    if value.tzinfo is not None:
+        value = value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value.isoformat()
+
+
 def _loads(raw: str | None) -> Any:
     if not raw:
         return None
     try:
-        return json.loads(raw)
+        return _sanitize_json_value(json.loads(raw))
     except json.JSONDecodeError:
         return None
 
@@ -58,7 +137,8 @@ def _loads(raw: str | None) -> Any:
 def _dumps(value: Any) -> str | None:
     if value is None:
         return None
-    return json.dumps(value, ensure_ascii=False)
+    # 写入前收敛非有限 float，避免落非标准 JSON；规范版本仍走 allow_nan=False
+    return json.dumps(_sanitize_json_value(value), ensure_ascii=False)
 
 
 def empty_analysis() -> dict:
@@ -92,6 +172,48 @@ def compute_response_matrix_version(matrix: Any) -> str:
         separators=(",", ":"),
     )
     return "rmv_" + sha1(payload.encode("utf-8")).hexdigest()[:20]
+
+
+def extract_canonical_snapshot(state: dict[str, Any]) -> dict[str, Any]:
+    """
+    用途：从服务端规范 editor-state 抽取精确 13 键快照。
+    对接：全状态 stateVersion；P12A 检查点 snapshot。
+    二次开发：不得写入 projectId/updatedAt/responseMatrixVersion 等派生/敏感字段。
+    """
+    return {key: state.get(key) for key in CANONICAL_STATE_KEYS}
+
+
+def canonical_snapshot_json(snapshot: dict[str, Any]) -> str:
+    """
+    用途：紧凑 sort_keys UTF-8 标准 JSON（全状态规范序列化）。
+    二次开发：必须 allow_nan=False，禁止写出 NaN/Infinity。
+    """
+    return json.dumps(
+        snapshot,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
+
+def compute_state_version_from_canonical_json(snapshot_json: str) -> str:
+    """
+    用途：对规范快照 JSON 字节做 SHA-256，取前 32 hex 并加 esv_ 前缀。
+    对接：stateVersion；P12A checkpoint state_version。
+    二次开发：必须对独立序列化字节重算，禁止复用矩阵哈希或 updatedAt。
+    """
+    digest = sha256(snapshot_json.encode("utf-8")).hexdigest()
+    return "esv_" + digest[:32]
+
+
+def compute_full_state_version(state: dict[str, Any]) -> str:
+    """
+    用途：由规范 13 键内容计算全状态版本（权威入口）。
+    对接：GET/PUT EditorStateOut.stateVersion；CAS 锁后比对。
+    """
+    snapshot = extract_canonical_snapshot(state)
+    return compute_state_version_from_canonical_json(canonical_snapshot_json(snapshot))
 
 
 def empty_business() -> dict:
@@ -290,16 +412,83 @@ def _current_response_matrix(row: ProjectEditorStateRow | None) -> list[dict]:
     )
 
 
-def _lock_for_versioned_matrix_write(
+def _state_from_row(project_id: str, row: ProjectEditorStateRow | None) -> dict:
+    """
+    用途：纯内存从 ORM 行构造 editor-state 响应（含 stateVersion），不访问数据库。
+    对接：get_editor_state；CAS 锁后版本比对；commit 前成功响应构造。
+    二次开发：禁止在此函数内 db.get/SELECT/commit；CAS 必须复用锁后同一 row，禁止漂移快照。
+    """
+    if row is None:
+        biz = empty_business()
+        empty_matrix = empty_response_matrix()
+        state = {
+            "projectId": project_id,
+            "outline": None,
+            "chapters": None,
+            "facts": None,
+            "mode": "ALIGNED",
+            "analysisOverview": None,
+            "analysis": empty_analysis(),
+            "responseMatrix": empty_matrix,
+            "responseMatrixVersion": compute_response_matrix_version(empty_matrix),
+            "guidance": None,
+            "parsedMarkdown": None,
+            "businessQualify": biz["qualify"],
+            "businessToc": biz["toc"],
+            "businessQuote": biz["quote"],
+            "businessCommit": biz["commit"],
+            "updatedAt": None,
+        }
+        state["stateVersion"] = compute_full_state_version(state)
+        return state
+
+    analysis = normalize_analysis(
+        _loads(row.analysis_json),
+        fallback_overview=row.analysis_overview or "",
+    )
+    # 若 JSON 空但有 overview 字段，回填
+    if not analysis.get("overview") and row.analysis_overview:
+        analysis["overview"] = row.analysis_overview
+    outline = _loads(row.outline_json)
+    chapters = _loads(row.chapters_json)
+    biz = _read_business_blob(row)
+    response_matrix = reconcile_response_matrix(
+        _loads(getattr(row, "response_matrix_json", None)),
+        outline,
+        chapters,
+    )
+    state = {
+        "projectId": project_id,
+        "outline": outline,
+        "chapters": chapters,
+        "facts": _loads(row.facts_json),
+        "mode": row.mode or "ALIGNED",
+        "analysisOverview": analysis.get("overview") or row.analysis_overview,
+        "analysis": analysis,
+        "responseMatrix": response_matrix,
+        "responseMatrixVersion": compute_response_matrix_version(response_matrix),
+        "guidance": _loads(row.guidance_json),
+        "parsedMarkdown": row.parsed_markdown,
+        "businessQualify": biz["qualify"],
+        "businessToc": biz["toc"],
+        "businessQuote": biz["quote"],
+        "businessCommit": biz["commit"],
+        "updatedAt": _format_updated_at(row.updated_at),
+    }
+    state["stateVersion"] = compute_full_state_version(state)
+    return state
+
+
+def _lock_for_versioned_write(
     db: Session, workspace_id: str, project_id: str
 ) -> ProjectEditorStateRow | None:
     """
-    用途：版本化矩阵写入前取得项目级写锁，使「读版本→比对→写」在事务内串行。
-    对接：upsert_editor_state 带 responseMatrixVersion 的路径。
+    用途：全状态 CAS / 矩阵版本写入前取得项目级写锁，使「读版本→比对→写」在事务内串行。
+    对接：upsert_editor_state 带 expectedStateVersion 或 responseMatrixVersion 的路径。
     二次开发：
       - SQLite：对 projects 行做无副作用 UPDATE（与图片上传锁同策略），依赖文件库写锁串行。
       - PostgreSQL 等：SELECT projects / project_editor_states FOR UPDATE。
-      - 禁止仅依赖进程内锁或 GIL。
+      - 全状态与矩阵共用一次锁；禁止仅依赖进程内锁或 GIL。
     """
     dialect = db.get_bind().dialect.name
     if dialect == "sqlite":
@@ -336,64 +525,12 @@ def _lock_for_versioned_matrix_write(
 
 def get_editor_state(db: Session, workspace_id: str, project_id: str) -> dict:
     """
-    用途：返回编辑器状态字典（camelCase），含 responseMatrixVersion。
+    用途：返回编辑器状态字典（camelCase），含 responseMatrixVersion 与 stateVersion。
+    二次开发：仅项目校验 + 一次 db.get，序列化委托 _state_from_row，禁止重复读行。
     """
     get_project(db, workspace_id, project_id)
     row = db.get(ProjectEditorStateRow, project_id)
-    if row is None:
-        biz = empty_business()
-        empty_matrix = empty_response_matrix()
-        return {
-            "projectId": project_id,
-            "outline": None,
-            "chapters": None,
-            "facts": None,
-            "mode": "ALIGNED",
-            "analysisOverview": None,
-            "analysis": empty_analysis(),
-            "responseMatrix": empty_matrix,
-            "responseMatrixVersion": compute_response_matrix_version(empty_matrix),
-            "guidance": None,
-            "parsedMarkdown": None,
-            "businessQualify": biz["qualify"],
-            "businessToc": biz["toc"],
-            "businessQuote": biz["quote"],
-            "businessCommit": biz["commit"],
-            "updatedAt": None,
-        }
-    analysis = normalize_analysis(
-        _loads(row.analysis_json),
-        fallback_overview=row.analysis_overview or "",
-    )
-    # 若 JSON 空但有 overview 字段，回填
-    if not analysis.get("overview") and row.analysis_overview:
-        analysis["overview"] = row.analysis_overview
-    outline = _loads(row.outline_json)
-    chapters = _loads(row.chapters_json)
-    biz = _read_business_blob(row)
-    response_matrix = reconcile_response_matrix(
-        _loads(getattr(row, "response_matrix_json", None)),
-        outline,
-        chapters,
-    )
-    return {
-        "projectId": project_id,
-        "outline": outline,
-        "chapters": chapters,
-        "facts": _loads(row.facts_json),
-        "mode": row.mode or "ALIGNED",
-        "analysisOverview": analysis.get("overview") or row.analysis_overview,
-        "analysis": analysis,
-        "responseMatrix": response_matrix,
-        "responseMatrixVersion": compute_response_matrix_version(response_matrix),
-        "guidance": _loads(row.guidance_json),
-        "parsedMarkdown": row.parsed_markdown,
-        "businessQualify": biz["qualify"],
-        "businessToc": biz["toc"],
-        "businessQuote": biz["quote"],
-        "businessCommit": biz["commit"],
-        "updatedAt": row.updated_at.isoformat() if row.updated_at else None,
-    }
+    return _state_from_row(project_id, row)
 
 
 def upsert_editor_state(
@@ -409,6 +546,7 @@ def upsert_editor_state(
     analysis: Any = ...,
     response_matrix: Any = ...,
     response_matrix_version: Any = ...,
+    expected_state_version: Any = ...,
     guidance: Any = ...,
     parsed_markdown: str | None = ...,
     business_qualify: Any = ...,
@@ -418,91 +556,134 @@ def upsert_editor_state(
 ) -> dict:
     """
     用途：部分更新；analysis 与 analysis_overview 双写；商务字段合并进 business_json。
-    二次开发：同时带 responseMatrix + responseMatrixVersion 时先 DB 写锁再比对；冲突则整包不写。
+    二次开发：
+      - 可选 expectedStateVersion：锁后仅用同一 ORM 行重算全状态版本，不等则固定冲突整包零写。
+      - 同时带 responseMatrix + responseMatrixVersion 时矩阵乐观锁；与全状态共用一次锁与一次锁后读取。
+      - 先比全状态再比矩阵；任一冲突显式 rollback。
+      - commit 前构造成功响应；commit 后禁止 refresh/重读/再序列化，避免假失败。
+      - 缺 expected 时保持兼容覆盖（非最终安全门）。
     """
     writing_matrix = response_matrix is not ... and response_matrix is not None
-    client_version = (
+    client_matrix_version = (
         None
         if response_matrix_version is ... or response_matrix_version is None
         else str(response_matrix_version).strip() or None
     )
-    versioned_matrix_write = writing_matrix and client_version is not None
-
-    if versioned_matrix_write:
-        # 锁 → 再读 → 比对 → 写入，均在同一 Session 事务内至 commit
-        row = _lock_for_versioned_matrix_write(db, workspace_id, project_id)
-        current_matrix = _current_response_matrix(row)
-        current_version = compute_response_matrix_version(current_matrix)
-        if client_version != current_version:
-            raise ResponseMatrixVersionConflict(
-                message="响应矩阵已被其他终端更新，请重新载入后再保存",
-                current_matrix=current_matrix,
-                current_version=current_version,
-            )
-    else:
-        get_project(db, workspace_id, project_id)
-        row = db.get(ProjectEditorStateRow, project_id)
-
-    if row is None:
-        row = ProjectEditorStateRow(project_id=project_id, mode="ALIGNED")
-        db.add(row)
-
-    if outline is not ...:
-        row.outline_json = _dumps(outline)
-    if chapters is not ...:
-        row.chapters_json = _dumps(chapters)
-    if facts is not ...:
-        row.facts_json = _dumps(facts)
-    if mode is not None:
-        row.mode = mode if mode in ("ALIGNED", "FREE") else "ALIGNED"
-    if analysis is not ...:
-        norm = normalize_analysis(analysis)
-        row.analysis_json = _dumps(norm)
-        row.analysis_overview = norm.get("overview") or ""
-    elif analysis_overview is not ...:
-        row.analysis_overview = analysis_overview
-        # 合并进 analysis_json
-        prev = normalize_analysis(_loads(row.analysis_json), analysis_overview or "")
-        prev["overview"] = analysis_overview or ""
-        row.analysis_json = _dumps(prev)
-    if response_matrix is not ... and response_matrix is not None:
-        row.response_matrix_json = _dumps(normalize_response_matrix(response_matrix))
-    if guidance is not ...:
-        row.guidance_json = _dumps(guidance)
-    if parsed_markdown is not ...:
-        row.parsed_markdown = parsed_markdown
-
-    biz_touched = any(
-        x is not ...
-        for x in (business_qualify, business_toc, business_quote, business_commit)
+    versioned_matrix_write = writing_matrix and client_matrix_version is not None
+    expected_sv = (
+        None
+        if expected_state_version is ... or expected_state_version is None
+        else str(expected_state_version).strip() or None
     )
-    if biz_touched:
-        biz = _read_business_blob(row)
-        if business_qualify is not ...:
-            biz["qualify"] = business_qualify if isinstance(business_qualify, list) else []
-        if business_toc is not ...:
-            biz["toc"] = business_toc if isinstance(business_toc, list) else []
-        if business_quote is not ...:
-            if isinstance(business_quote, dict):
-                rows = business_quote.get("rows")
-                biz["quote"] = {
-                    "rows": rows if isinstance(rows, list) else [],
-                    "notes": str(business_quote.get("notes") or ""),
-                }
-            else:
-                biz["quote"] = {"rows": [], "notes": ""}
-        if business_commit is not ...:
-            biz["commit"] = business_commit if isinstance(business_commit, list) else []
-        row.business_json = _dumps(normalize_business(biz))
+    needs_version_lock = expected_sv is not None or versioned_matrix_write
 
-    row.response_matrix_json = _dumps(
-        reconcile_response_matrix(
-            _loads(getattr(row, "response_matrix_json", None)),
-            _loads(row.outline_json),
-            _loads(row.chapters_json),
+    try:
+        if needs_version_lock:
+            # 一次锁 + 一次锁后 row；纯内存算版本；先全状态 CAS 再矩阵，均在同一 Session 事务
+            row = _lock_for_versioned_write(db, workspace_id, project_id)
+            current_state = _state_from_row(project_id, row)
+
+            if expected_sv is not None:
+                current_sv = current_state["stateVersion"]
+                if expected_sv != current_sv:
+                    raise EditorStateVersionConflict(
+                        message=MSG_FULL_STATE_VERSION_CONFLICT,
+                        current_state_version=current_sv,
+                    )
+
+            if versioned_matrix_write:
+                current_matrix = current_state["responseMatrix"]
+                current_matrix_version = current_state["responseMatrixVersion"]
+                if client_matrix_version != current_matrix_version:
+                    raise ResponseMatrixVersionConflict(
+                        message="响应矩阵已被其他终端更新，请重新载入后再保存",
+                        current_matrix=current_matrix,
+                        current_version=current_matrix_version,
+                    )
+            # 禁止再次 get_editor_state / db.get；写入复用锁后同一 row
+        else:
+            get_project(db, workspace_id, project_id)
+            row = db.get(ProjectEditorStateRow, project_id)
+
+        if row is None:
+            row = ProjectEditorStateRow(project_id=project_id, mode="ALIGNED")
+            db.add(row)
+
+        if outline is not ...:
+            row.outline_json = _dumps(outline)
+        if chapters is not ...:
+            row.chapters_json = _dumps(chapters)
+        if facts is not ...:
+            row.facts_json = _dumps(facts)
+        if mode is not None:
+            row.mode = mode if mode in ("ALIGNED", "FREE") else "ALIGNED"
+        if analysis is not ...:
+            norm = normalize_analysis(analysis)
+            row.analysis_json = _dumps(norm)
+            row.analysis_overview = norm.get("overview") or ""
+        elif analysis_overview is not ...:
+            row.analysis_overview = analysis_overview
+            # 合并进 analysis_json
+            prev = normalize_analysis(_loads(row.analysis_json), analysis_overview or "")
+            prev["overview"] = analysis_overview or ""
+            row.analysis_json = _dumps(prev)
+        if response_matrix is not ... and response_matrix is not None:
+            row.response_matrix_json = _dumps(normalize_response_matrix(response_matrix))
+        if guidance is not ...:
+            row.guidance_json = _dumps(guidance)
+        if parsed_markdown is not ...:
+            row.parsed_markdown = parsed_markdown
+
+        biz_touched = any(
+            x is not ...
+            for x in (business_qualify, business_toc, business_quote, business_commit)
         )
-    )
-    row.updated_at = datetime.now(timezone.utc)
-    db.commit()
-    db.refresh(row)
-    return get_editor_state(db, workspace_id, project_id)
+        if biz_touched:
+            biz = _read_business_blob(row)
+            if business_qualify is not ...:
+                biz["qualify"] = (
+                    business_qualify if isinstance(business_qualify, list) else []
+                )
+            if business_toc is not ...:
+                biz["toc"] = business_toc if isinstance(business_toc, list) else []
+            if business_quote is not ...:
+                if isinstance(business_quote, dict):
+                    rows = business_quote.get("rows")
+                    biz["quote"] = {
+                        "rows": rows if isinstance(rows, list) else [],
+                        "notes": str(business_quote.get("notes") or ""),
+                    }
+                else:
+                    biz["quote"] = {"rows": [], "notes": ""}
+            if business_commit is not ...:
+                biz["commit"] = (
+                    business_commit if isinstance(business_commit, list) else []
+                )
+            row.business_json = _dumps(normalize_business(biz))
+
+        row.response_matrix_json = _dumps(
+            reconcile_response_matrix(
+                _loads(getattr(row, "response_matrix_json", None)),
+                _loads(row.outline_json),
+                _loads(row.chapters_json),
+            )
+        )
+        row.updated_at = datetime.now(timezone.utc)
+        # 提交前基于本轮内存赋值构造完整成功响应；失败则同域 rollback，库不变
+        response = _state_from_row(project_id, row)
+        db.commit()
+    except EditorStateVersionConflict:
+        db.rollback()
+        raise
+    except ResponseMatrixVersionConflict:
+        db.rollback()
+        raise
+    except ProjectNotFoundError:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+
+    # commit 成功后直接返回；禁止 refresh / 再次 GET / 再算哈希
+    return response
