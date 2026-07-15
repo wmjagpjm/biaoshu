@@ -173,7 +173,7 @@ npm run test:e2e:business-editor-state-truth
 npm run test:e2e:technical-editor-state-truth
 ```
 
-当前基线：后端串行全量 **690 passed**（1 条既有 Starlette/httpx 弃用警告）；P12C-B-B1 专项/扩展受影响回归 **10/126 passed**，生产与测试文件 `py_compile` 通过。P12C-B-A 历史基线为 14/107/680，P12C-A 为 67/77/666。前端 `lint` / `build` 通过（仅既有大包体积提示），P12B-D2 专项/受影响回归 **51/63 passed**，Chromium headless、单 worker、零重试全量 E2E **263 passed**。P12B-D1 历史恢复专项/受影响回归/全量为 58/81/599；P12B-C3 历史后端/前端全量为 570/212；P12A、P8C、M3-D、P10K、P9D 及其他既有专项继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
+当前基线：后端串行全量 **701 passed**（1 条既有 Starlette/httpx 弃用警告）；P12C-B-B2 专项/扩展受影响回归 **11/147 passed**，生产与测试文件 `py_compile` 通过。P12C-B-B1 历史基线为 10/126/690，P12C-B-A 为 14/107/680，P12C-A 为 67/77/666。前端 `lint` / `build` 通过（仅既有大包体积提示），P12B-D2 专项/受影响回归 **51/63 passed**，Chromium headless、单 worker、零重试全量 E2E **263 passed**。P12B-D1 历史恢复专项/受影响回归/全量为 58/81/599；P12B-C3 历史后端/前端全量为 570/212；P12A、P8C、M3-D、P10K、P9D 及其他既有专项继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
 
 P8D/P8E 本机助手独立验收命令（仓库根；不安装或探测真实 MinerU/Docling）：
 
@@ -286,7 +286,18 @@ P12C-B-B1 独立验收命令（后端；全部串行）：
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-P12C-B-B1 已实现并推送（冻结=`05864f6`、实现=`5a0d1c0`）。九类 writer 任务每次真实 editor-state upsert 固定记录 `task`；批量章节逐章迁移、逐章修订与成功前缀语义不变。两个私有包装器保留版本冲突的固定 stale 流程，并把其他 upsert 内部异常收敛为固定中文任务错误，禁止 SQL、路径、表名、异常类型、正文或版本进入 REST/SSE。Codex 独立结果为 **10 / 126 / 690 passed**；B2 商务 revise、callback、content-fuse apply/consume、checkpoint restore、历史 API 与前端仍未实现。
+P12C-B-B1 已实现并推送（冻结=`05864f6`、实现=`5a0d1c0`）。九类 writer 任务每次真实 editor-state upsert 固定记录 `task`；批量章节逐章迁移、逐章修订与成功前缀语义不变。两个私有包装器保留版本冲突的固定 stale 流程，并把其他 upsert 内部异常收敛为固定中文任务错误，禁止 SQL、路径、表名、异常类型、正文或版本进入 REST/SSE。Codex 独立结果为 **10 / 126 / 690 passed**；该实现提交没有接入当时尚待后包的商务 revise、callback、content-fuse apply/consume、checkpoint restore、历史 API 或前端。
+
+P12C-B-B2 独立验收命令（后端；全部串行）：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q tests\test_p12c_revise_revisions.py
+.\.venv\Scripts\python.exe -m pytest -q tests\test_p12b_delayed_writer_fences.py tests\test_settings_and_revise.py tests\test_editor_state_revisions.py tests\test_p12c_browser_put_revisions.py tests\test_p12c_task_revisions.py tests\test_business_bid_mvp.py tests\test_async_and_callback.py tests\test_local_parser_callback_tickets.py tests\test_content_fuse_applications.py tests\test_editor_state_checkpoint_restore.py
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m py_compile app\services\revise_service.py tests\test_p12c_revise_revisions.py
+```
+
+P12C-B-B2 已实现并推送（冻结=`3a30c03`、实现=`5149385`）。商务 `business_parse` 与四类结构化 revise 的真实 editor-state 迁移固定记录 `revise`；结构解析失败、空 revised、普通技术 revise、陈旧 expected 与 LLM 期间漂移不伪造本次修订。recorder/commit 失败均由真实 ASGI 脱敏 500 返回并证明 editor-state/revision 双零；外部并发浏览器修订按来源和精确版本排除。Codex 独立结果为 **11 / 147 / 701 passed**；个人 callback、P8C 一次性本地解析 callback、content-fuse apply/consume、checkpoint restore、历史 API 与前端仍未实现。
 
 ## 6. 已接 API 一览
 

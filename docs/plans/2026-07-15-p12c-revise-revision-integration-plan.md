@@ -7,7 +7,7 @@
 
 # P12C-B-B2 商务 revise 修订账本接入实施计划
 
-> **状态**：已冻结，尚未实现。
+> **状态**：已完成、独立验收并推送；冻结=`3a30c03`、实现=`5149385`。
 > **顺序**：冻结提交推送 → Grok 两文件 failure-first/实现/自测 → Codex 受限审查与返修 → 独立验收 → 中文实现提交推送 → 文档闭环。
 
 ## 1. 目标与范围
@@ -45,3 +45,11 @@ cd C:\Users\Administrator\biaoshu\backend
 ## 5. 完成条件
 
 专项、扩展受影响回归、后端串行全量、审查、编译、白名单与暂存区检查全部通过后，Codex 才能中文提交并推送实现。随后更新本契约/计划、P12C 总契约、HANDOFF、路线图和联调清单；明确 B2 只覆盖商务 revise，callback/content-fuse/restore 与历史浏览仍未实现。
+
+## 6. 实际交付与独立验收
+
+Grok 在生产修改前运行新专项，得到 **6 failed / 5 passed**；最终专项 **11 passed**、受影响回归 **122 passed**。实现只在 `revise_service.py` 的两个真实 upsert 写点传入固定 `revision_source_kind="revise"`，未新增包装器，也未改动无字段变化、技术 revise、Schema、API 或前端。
+
+Codex 独立通过专项 **11 passed**、扩展受影响回归 **147 passed**、后端串行全量 **701 passed**；只有 1 条既有 Starlette/httpx 弃用警告。`py_compile`、精确双文件白名单、工作树与暂存区 diff 检查均通过。实现已以 `5149385` 中文提交并推送；Grok 最终回执=`msg_1f7714f97a9b4255985e55d3789ab5fd`，Codex 确认=`msg_10bf04a7dcde47428782ac75faac7389`。
+
+本包没有交付个人 callback、P8C 一次性本地解析 callback、content-fuse apply/consume、checkpoint restore、历史列表/详情/恢复或前端入口；后续必须先只读审计各自锁、CAS、票据消费与 commit 边界。
