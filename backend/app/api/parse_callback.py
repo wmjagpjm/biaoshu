@@ -3,8 +3,8 @@
 用途：个人兼容旧回调写入 parsed_markdown；P8C 签发一次性票据与精确公开回调。
 对接：POST /api/projects/{id}/parse-callback；POST /api/projects/{id}/parse-callback-ticket；
       POST /api/local-parser/callback；local_parser_ticket_service；require_strict_bid_writer。
-二次开发：旧回调语义不变；公开回调仅认 X-Local-Parse-Ticket，禁止 X-Local-Token 回退；
-      手工校验 body，避免 Pydantic 422 回显敏感输入。
+二次开发：个人回调强制 expectedStateVersion 同事务 CAS；公开回调仅认 X-Local-Parse-Ticket；
+      禁止调用会自行 commit 的 upsert/update_project；手工校验 body 防 422 回显敏感输入。
 """
 
 import json
@@ -19,7 +19,8 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_workspace_id, require_strict_bid_writer
 from app.core.config import Settings, get_settings
 from app.core.database import get_db
-from app.models.entities import ProjectEditorStateRow, ProjectTaskRow
+from app.models.entities import Project, ProjectEditorStateRow, ProjectTaskRow
+from app.services import editor_state_service
 from app.services.local_parser_ticket_service import (
     CODE_TICKET_INVALID,
     MSG_TICKET_INVALID,
@@ -29,20 +30,29 @@ from app.services.local_parser_ticket_service import (
     issue_callback_ticket,
     normalize_callback_body,
 )
-from app.services.project_service import ProjectNotFoundError, get_project, update_project
+from app.services.project_service import ProjectNotFoundError, get_project
 
 router = APIRouter(prefix="/projects", tags=["parse-callback"])
 public_router = APIRouter(tags=["parse-callback-public"])
 
 
 class ParseCallbackIn(BaseModel):
-    """用途：MinerU / 本地助手回传体（旧路径，个人兼容）。"""
+    """
+    用途：MinerU / 本地助手回传体（旧路径，个人兼容）。
+    二次开发：P12B-C2 强制合法 expectedStateVersion；缺失/非法格式固定 422 零写。
+    """
 
     model_config = ConfigDict(populate_by_name=True)
 
     markdown: str = Field(min_length=1, description="解析后的 Markdown 全文")
     source: str = "mineru"
     filename: str | None = None
+    expected_state_version: str = Field(
+        ...,
+        alias="expectedStateVersion",
+        pattern=r"^esv_[0-9a-f]{32}$",
+        description="服务端权威全状态版本（须先 GET editor-state）",
+    )
 
 
 @router.post("/{project_id}/parse-callback")
@@ -55,7 +65,8 @@ def parse_callback(
     x_local_token: Annotated[str | None, Header(alias="X-Local-Token")] = None,
 ) -> dict:
     """
-    用途：写入解析 Markdown；可选 Token 校验。
+    用途：写入解析 Markdown；可选 Token 校验；P12B-C2 锁后全状态 CAS 同事务落库。
+    二次开发：禁止先 upsert 再补任务/项目；陈旧固定 409 + currentStateVersion；成功返回 stateVersion。
     """
     expected = (settings.local_parser_token or "").strip()
     if expected and (x_local_token or "").strip() != expected:
@@ -70,38 +81,75 @@ def parse_callback(
     if body.filename:
         md = f"# 解析结果：{body.filename}\n\n> 来源：{body.source}\n\n" + md
 
-    state = db.get(ProjectEditorStateRow, project_id)
-    if state is None:
-        state = ProjectEditorStateRow(project_id=project_id, mode="ALIGNED")
-        db.add(state)
-    state.parsed_markdown = md
-    state.updated_at = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)
+    try:
+        # 共用锁后原语：版本不匹配抛冲突；不自行 commit
+        row, _current = editor_state_service.lock_and_assert_expected_state_version(
+            db,
+            workspace_id,
+            project_id,
+            body.expected_state_version,
+        )
+        if row is None:
+            row = ProjectEditorStateRow(project_id=project_id, mode="ALIGNED")
+            db.add(row)
+        row.parsed_markdown = md
+        row.updated_at = now
 
-    # 记一条成功 parse 任务，便于工作区「最近任务」
-    task = ProjectTaskRow(
-        id=f"task_{secrets.token_hex(8)}",
-        project_id=project_id,
-        type="parse",
-        status="success",
-        progress=100,
-        message=f"本地回传完成（{body.source}）",
-        result_json=json.dumps(
-            {
-                "source": body.source,
-                "filename": body.filename,
-                "chars": len(md),
+        task = ProjectTaskRow(
+            id=f"task_{secrets.token_hex(8)}",
+            project_id=project_id,
+            type="parse",
+            status="success",
+            progress=100,
+            message=f"本地回传完成（{body.source}）",
+            result_json=json.dumps(
+                {
+                    "source": body.source,
+                    "filename": body.filename,
+                    "chars": len(md),
+                },
+                ensure_ascii=False,
+            ),
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(task)
+
+        # 同事务更新项目步骤；禁止调用会自行 commit 的 update_project
+        project = db.get(Project, project_id)
+        if project is None or project.workspace_id != workspace_id:
+            raise ProjectNotFoundError(project_id)
+        project.status = "analyzing"
+        project.technical_plan_step = 1
+        project.updated_at = now
+
+        # commit 前基于内存行构造新版本，保证与落库一致
+        new_state = editor_state_service._state_from_row(project_id, row)
+        new_sv = new_state["stateVersion"]
+        db.commit()
+    except editor_state_service.EditorStateVersionConflict as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": editor_state_service.CODE_FULL_STATE_VERSION_CONFLICT,
+                "message": editor_state_service.MSG_FULL_STATE_VERSION_CONFLICT,
+                "currentStateVersion": exc.current_state_version,
             },
-            ensure_ascii=False,
-        ),
-        created_at=datetime.now(timezone.utc),
-        updated_at=datetime.now(timezone.utc),
-    )
-    db.add(task)
-    db.commit()
-
-    update_project(
-        db, workspace_id, project_id, status="analyzing", technical_plan_step=1
-    )
+        ) from None
+    except ProjectNotFoundError:
+        db.rollback()
+        raise HTTPException(status_code=404, detail="项目不存在") from None
+    except HTTPException:
+        raise
+    except Exception:
+        # 中途异常完整 rollback；固定 500，不回显异常原文
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "parse_callback_failed", "message": "回传处理失败"},
+        ) from None
 
     return {
         "ok": True,
@@ -109,6 +157,7 @@ def parse_callback(
         "chars": len(md),
         "source": body.source,
         "taskId": task.id,
+        "stateVersion": new_sv,
     }
 
 
@@ -157,7 +206,7 @@ async def local_parser_public_callback(
     用途：无会话消费一次性票据并同事务写入解析结果；仅认 X-Local-Parse-Ticket。
     对接：auth_middleware POST-only 精确公开；local_parser_ticket_service。
     二次开发：禁止 X-Local-Token 回退；缺/空票据须在读正文前 401；正文用 stream 硬限 2MiB；
-          固定错误不反射输入；响应仅 ok/chars/taskId。
+          固定错误不反射输入；响应仅 ok/chars/taskId；版本冲突 409 不返回 currentStateVersion。
     """
     # 缺票/空票先拒绝，避免无授权请求消耗大正文读取
     raw_ticket = (request.headers.get("X-Local-Parse-Ticket") or "").strip()

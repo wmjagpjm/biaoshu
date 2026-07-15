@@ -173,6 +173,8 @@ def ensure_schema_columns(target_engine=None) -> None:
             SELECT RAISE(ABORT, '资源来源与工作空间不一致');
         END
         """,
+        # P12B-C2：P8C 票据绑定签发时权威全状态版本；旧行允许 NULL
+        "ALTER TABLE local_parser_callback_tickets ADD COLUMN expected_state_version VARCHAR(64)",
     ]
     active_engine = target_engine or engine
     with active_engine.begin() as conn:

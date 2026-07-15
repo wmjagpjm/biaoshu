@@ -1327,6 +1327,10 @@ class LocalParserCallbackTicketRow(Base):
     consumed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # P12B-C2：签发时服务端权威全状态版本；旧行可 NULL（不得写 editor-state）
+    expected_state_version: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now
     )

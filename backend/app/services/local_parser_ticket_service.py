@@ -1,8 +1,10 @@
 """
 模块：P8C/P8E 本地解析一次性回传票据服务
 用途：签发短期单项目单次票据，并在公共回调中原子消费后同事务写入解析结果；来源精确 mineru|docling。
-对接：parse_callback 签发/回调路由；LocalParserCallbackTicketRow；auth_service.record_audit。
-二次开发：禁止保存/日志输出原始票据；禁止调用会中途 commit 的 service；不启动 MinerU/Docling 解析器。
+对接：parse_callback 签发/回调路由；LocalParserCallbackTicketRow；auth_service.record_audit；
+      editor_state_service 锁后全状态版本校验（P12B-C2）。
+二次开发：禁止保存/日志输出原始票据；禁止调用会中途 commit 的 service；不启动 MinerU/Docling 解析器；
+      版本冲突必须提交票据消费且零写正文；非版本异常完整 rollback 保持票据可重试。
 """
 
 from __future__ import annotations
@@ -24,8 +26,8 @@ from app.models.entities import (
     ProjectTaskRow,
     utc_now,
 )
-from app.services import auth_service
-from app.services.project_service import ProjectNotFoundError, get_project
+from app.services import auth_service, editor_state_service
+from app.services.project_service import ProjectNotFoundError
 
 # 固定契约常量
 TICKET_TTL = timedelta(minutes=10)
@@ -39,6 +41,9 @@ CODE_BAD_REQUEST = "local_parser_callback_bad_request"
 MSG_BAD_REQUEST = "回传请求体无效"
 CODE_PAYLOAD_TOO_LARGE = "local_parser_callback_payload_too_large"
 MSG_PAYLOAD_TOO_LARGE = "回传请求体过大"
+# P12B-C2：公共回调陈旧/空版本固定码与文案（绝不返回 currentStateVersion）
+CODE_STATE_VERSION_CONFLICT = "local_parser_state_version_conflict"
+MSG_STATE_VERSION_CONFLICT = "编辑内容已变化，请重新签发回传票据后重试"
 # 固定来源枚举：精确小写成员校验，禁止 strip/lower/客户端扩展
 ALLOWED_CALLBACK_SOURCES = frozenset({"mineru", "docling"})
 
@@ -109,14 +114,20 @@ def issue_callback_ticket(
 ) -> dict[str, str]:
     """
     模块：签发一次性回传票据
-    用途：为当前空间项目签发固定 10 分钟、单次消费票据；库内只存摘要。
+    用途：为当前空间项目签发固定 10 分钟、单次消费票据；库内只存摘要与签发时权威版本。
     对接：POST /api/projects/{projectId}/parse-callback-ticket。
-    二次开发：禁止客户端指定 TTL/workspace/user；审计不得记录票据/摘要/项目/正文。
+    二次开发：禁止客户端指定 TTL/workspace/user/版本；审计不得记录票据/摘要/项目/正文。
     """
     try:
-        get_project(db, workspace_id, project_id)
+        # 服务端捕获当前权威全状态版本；同时校验项目存在
+        state = editor_state_service.get_editor_state(db, workspace_id, project_id)
     except ProjectNotFoundError as exc:
         raise ProjectNotFoundError(project_id) from exc
+
+    expected_sv = state.get("stateVersion")
+    if not editor_state_service.is_valid_state_version(expected_sv):
+        # 规范算法产出应始终合法；防御性拒绝而非落坏票据
+        raise ProjectNotFoundError(project_id)
 
     raw = mint_raw_ticket()
     now = utc_now()
@@ -129,6 +140,7 @@ def issue_callback_ticket(
         issued_by_user_id=issued_by_user_id,
         expires_at=expires_at,
         consumed_at=None,
+        expected_state_version=expected_sv,
         created_at=now,
     )
     db.add(row)
@@ -155,6 +167,7 @@ def normalize_callback_body(raw_body: bytes) -> tuple[str, str, str | None]:
     用途：手工解析 JSON，限制键与长度，避免框架 422 回显敏感输入。
     对接：POST /api/local-parser/callback。
     二次开发：只允许 markdown/source/filename；source 仅 mineru|docling 精确成员；超限 413，其余非法 400。
+      禁止客户端投稿 expectedStateVersion。
     """
     if len(raw_body) > MAX_BODY_BYTES:
         raise TicketServiceError(413, CODE_PAYLOAD_TOO_LARGE, MSG_PAYLOAD_TOO_LARGE)
@@ -252,6 +265,7 @@ def _finalize_success_writes(
     用途：写 parsed_markdown、成功 parse task、项目步骤，并记固定审计（不 commit）。
     对接：apply_one_time_callback。
     二次开发：不得调用 update_project 等会中途 commit 的路径；测试可 monkeypatch 本函数验证回滚。
+      调用前须已通过锁后版本校验。
     """
     project = db.get(Project, ticket.project_id)
     if project is None or project.workspace_id != ticket.workspace_id:
@@ -318,13 +332,44 @@ def apply_one_time_callback(
 ) -> dict[str, Any]:
     """
     模块：一次性票据回调应用
-    用途：原子消费 + 解析结果/任务/项目步骤/审计同一事务提交。
+    用途：原子消费 + 锁后版本 CAS + 解析结果/任务/项目步骤/审计同一事务提交。
     对接：POST /api/local-parser/callback。
-    二次开发：中途失败必须 rollback；不得接受 X-Local-Token 作为回退。
+    二次开发：
+      - 版本陈旧或票据版本 NULL：正文/任务/项目/成功审计零写，但必须单独提交消费 → 409；
+      - 再次同票 → 401；绝不返回 currentStateVersion；
+      - 非版本中途失败必须完整 rollback，票据保持可重用；
+      - 不得接受 X-Local-Token 作为回退。
     """
     now = utc_now()
+    # 版本冲突路径会先 commit 消费再抛 409，避免 except 误 rollback
+    consumption_committed = False
     try:
         ticket = _atomic_consume_ticket(db, raw_ticket=raw_ticket, now=now)
+
+        expected = ticket.expected_state_version
+        # 旧库空版本票据：绝不写 editor-state，但必须消费
+        if not editor_state_service.is_valid_state_version(expected):
+            db.commit()
+            consumption_committed = True
+            raise TicketServiceError(
+                409, CODE_STATE_VERSION_CONFLICT, MSG_STATE_VERSION_CONFLICT
+            )
+
+        try:
+            editor_state_service.lock_and_assert_expected_state_version(
+                db,
+                ticket.workspace_id,
+                ticket.project_id,
+                expected,  # type: ignore[arg-type]
+            )
+        except editor_state_service.EditorStateVersionConflict:
+            # 陈旧：仅提交消费，零写正文/任务/项目/成功审计
+            db.commit()
+            consumption_committed = True
+            raise TicketServiceError(
+                409, CODE_STATE_VERSION_CONFLICT, MSG_STATE_VERSION_CONFLICT
+            ) from None
+
         payload = _finalize_success_writes(
             db,
             ticket,
@@ -336,7 +381,8 @@ def apply_one_time_callback(
         db.commit()
         return payload
     except TicketServiceError:
-        db.rollback()
+        if not consumption_committed:
+            db.rollback()
         raise
     except Exception:
         db.rollback()

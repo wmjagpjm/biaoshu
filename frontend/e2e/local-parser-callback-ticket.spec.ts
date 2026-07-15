@@ -43,6 +43,14 @@ const EMPTY_PID_MSG = "请填写项目 ID";
 const RESUME_CSRF = "e2e-p8c-resume-csrf";
 const SECRET_LEAK =
   "SECRET-LEAK detail=ticket_fail path=/api/projects/proj_x/parse-callback-ticket projectId=proj_secret ticket=REAL_TICKET_SHOULD_NOT_SHOW";
+/** P12B-C2：disabled 路径固定假版本（合法格式，非真实秘密） */
+const FAKE_STATE_VERSION = "esv_" + "c".repeat(32);
+const CURL_VERSION_PLACEHOLDER = "esv_替换为当前服务端版本";
+const STATE_VERSION_RE = /^esv_[0-9a-f]{32}$/;
+/** 与页面 FIXED_VERSION_ERROR 一致：GET 版本非法时固定失败文案 */
+const FIXED_VERSION_ERROR = "获取编辑版本失败，请稍后重试";
+/** 统一请求顺序标记：显式点击后必须 GET→POST */
+type DisabledOrderHit = "GET_EDITOR_STATE" | "POST_PARSE_CALLBACK";
 /**
  * 主路径编码用固定项目 ID：至少含空格与 `/`（可含中文）。
  * 若生产删掉 encodeURIComponent，pathname 将无 %20/%2F，本用例必须红。
@@ -58,6 +66,10 @@ type P8cState = {
   forbiddenHits: string[];
   issueHits: RequestHit[];
   oldCallbackHits: RequestHit[];
+  /** disabled 提交前 GET editor-state 观测 */
+  editorStateGetHits: RequestHit[];
+  /** disabled 显式点击后的请求顺序（精确 GET→POST） */
+  disabledRequestOrder: DisabledOrderHit[];
   publicCallbackHits: string[];
   externalHits: string[];
   forceIssueError?: boolean;
@@ -66,6 +78,20 @@ type P8cState = {
   issueExpiresAt?: string;
   /** 故意返回不可信 callbackPath，页面不得用它拼 URL */
   issueCallbackPath?: string;
+  /**
+   * disabled 模式 GET editor-state 的 stateVersion：
+   * - undefined → 合法假版本
+   * - null → 响应体省略该字段
+   * - 其它字符串 → 原样返回（含空白/非法，禁止页面 trim 后接受）
+   */
+  editorStateVersion?: string | null;
+  /**
+   * disabled POST parse-callback 200 响应的 stateVersion：
+   * - undefined → 与 GET 合法假版本一致
+   * - null → 响应体省略该字段（页面不得伪成功）
+   * - 其它字符串 → 原样返回
+   */
+  callbackResponseVersion?: string | null;
 };
 
 /**
@@ -194,15 +220,44 @@ async function installP8cRoutes(page: Page, state: P8cState) {
     }
 
     if (!state.authRequired) {
-      // disabled：允许旧 parse-callback；签发/公共回调仅观测后 403
+      // disabled：GET editor-state（取版本）+ 旧 parse-callback；签发/公共回调仅观测后 403
+      const editorGet = path.match(/^\/api\/projects\/([^/]+)\/editor-state$/);
+      if (editorGet && method === "GET") {
+        state.editorStateGetHits.push(captureHit(req));
+        state.disabledRequestOrder.push("GET_EDITOR_STATE");
+        const getBody: Record<string, unknown> = {
+          projectId: decodeURIComponent(editorGet[1]!),
+          parsedMarkdown: null,
+          outline: null,
+          chapters: null,
+          mode: "ALIGNED",
+        };
+        // null = 省略字段；undefined = 合法假版本；字符串原样（含空白）
+        if (state.editorStateVersion !== null) {
+          getBody.stateVersion =
+            state.editorStateVersion === undefined
+              ? FAKE_STATE_VERSION
+              : state.editorStateVersion;
+        }
+        await json(route, getBody);
+        return;
+      }
       const oldCb = path.match(/^\/api\/projects\/([^/]+)\/parse-callback$/);
       if (oldCb && method === "POST") {
         state.oldCallbackHits.push(captureHit(req));
-        await json(route, {
+        state.disabledRequestOrder.push("POST_PARSE_CALLBACK");
+        const postBody: Record<string, unknown> = {
           ok: true,
           chars: 12,
           taskId: "task_e2e_old_cb",
-        });
+        };
+        if (state.callbackResponseVersion !== null) {
+          postBody.stateVersion =
+            state.callbackResponseVersion === undefined
+              ? FAKE_STATE_VERSION
+              : state.callbackResponseVersion;
+        }
+        await json(route, postBody);
         return;
       }
       if (path.match(/^\/api\/projects\/[^/]+\/parse-callback-ticket$/)) {
@@ -441,8 +496,11 @@ function baseState(
     forbiddenHits: [],
     issueHits: [],
     oldCallbackHits: [],
+    editorStateGetHits: [],
+    disabledRequestOrder: [],
     publicCallbackHits: [],
     externalHits: [],
+    editorStateVersion: FAKE_STATE_VERSION,
     ...rest,
   };
 }
@@ -690,7 +748,7 @@ test.describe("P8C 本地解析一次性回传票据前端", () => {
     expect(state.externalHits).toEqual([]);
   });
 
-  test("disabled：无需一次性票据；旧表单精确 POST 一次；签发与公共回调 0", async ({
+  test("disabled：无需一次性票据；GET→POST 顺序；curl 占位；零存储零日志", async ({
     page,
   }) => {
     const state: P8cState = {
@@ -700,10 +758,18 @@ test.describe("P8C 本地解析一次性回传票据前端", () => {
       forbiddenHits: [],
       issueHits: [],
       oldCallbackHits: [],
+      editorStateGetHits: [],
+      disabledRequestOrder: [],
       publicCallbackHits: [],
       externalHits: [],
+      editorStateVersion: FAKE_STATE_VERSION,
     };
     await installP8cRoutes(page, state);
+
+    const consoleLines: string[] = [];
+    page.on("console", (msg) => {
+      consoleLines.push(msg.text());
+    });
 
     await page.goto("/local-parser");
     await expect(page.getByTestId("local-parser-page")).toBeVisible({
@@ -717,6 +783,15 @@ test.describe("P8C 本地解析一次性回传票据前端", () => {
     ).toHaveCount(0);
     expect(state.issueHits).toEqual([]);
     expect(state.publicCallbackHits).toEqual([]);
+    // 挂载不自动 GET 版本
+    expect(state.editorStateGetHits).toEqual([]);
+    expect(state.disabledRequestOrder).toEqual([]);
+
+    // curl 示例含 expectedStateVersion 占位，不得含真实假版本
+    const curlText = await page.getByTestId("lp-legacy-curl").innerText();
+    expect(curlText).toContain("expectedStateVersion");
+    expect(curlText).toContain(CURL_VERSION_PLACEHOLDER);
+    expect(curlText).not.toContain(FAKE_STATE_VERSION);
 
     await page.getByLabel("项目 ID").fill("proj_disabled_old");
     await page
@@ -728,30 +803,159 @@ test.describe("P8C 本地解析一次性回传票据前端", () => {
       .poll(() => state.oldCallbackHits.length, { timeout: 15_000 })
       .toBe(1);
 
+    // 统一顺序数组：显式点击后精确 GET→POST（禁止顺序无关假绿）
+    expect(state.disabledRequestOrder).toEqual([
+      "GET_EDITOR_STATE",
+      "POST_PARSE_CALLBACK",
+    ]);
+    expect(state.editorStateGetHits).toHaveLength(1);
+    const getHit = state.editorStateGetHits[0]!;
+    expect(getHit.method).toBe("GET");
+    expect(getHit.path).toBe(
+      "/api/projects/proj_disabled_old/editor-state",
+    );
+
     const hit = state.oldCallbackHits[0]!;
     expect(hit.method).toBe("POST");
     expect(hit.path).toBe(
       "/api/projects/proj_disabled_old/parse-callback",
     );
     expect(hit.headers["x-local-token"]).toBe("e2e-local-token-fake");
-    expect(hit.postData).toBeTruthy();
+    expect(hit.postData).not.toBeNull();
+    expect(hit.postData).not.toBe("");
     const body = JSON.parse(hit.postData!) as {
       markdown: string;
       source: string;
       filename: string;
+      expectedStateVersion: string;
     };
     expect(body).toEqual({
       markdown: "# E2E\n正文",
       source: "mineru",
       filename: "local-mineru.md",
+      expectedStateVersion: FAKE_STATE_VERSION,
     });
+    // 精确正则，禁止 toBeTruthy 版本假绿
+    expect(body.expectedStateVersion).toMatch(STATE_VERSION_RE);
 
     expect(state.issueHits).toEqual([]);
     expect(state.publicCallbackHits).toEqual([]);
     await expect(page.getByText(/回传成功/)).toBeVisible();
+    // 版本不得进 console/URL
+    expect(consoleLines.some((l) => l.includes(FAKE_STATE_VERSION))).toBeFalsy();
+    expect(page.url()).not.toContain(FAKE_STATE_VERSION);
     expect(state.forbiddenHits).toEqual([]);
     expect(state.externalHits).toEqual([]);
     await assertStorageExactlyEmpty(page);
+  });
+
+  test("disabled：GET 缺失/非法/带空白版本时零 POST 且固定失败", async ({
+    page,
+  }) => {
+    const cases: Array<{
+      label: string;
+      editorStateVersion: string | null;
+    }> = [
+      { label: "缺失", editorStateVersion: null },
+      { label: "非法", editorStateVersion: "not-a-version" },
+      {
+        label: "带空白",
+        editorStateVersion: ` ${FAKE_STATE_VERSION} `,
+      },
+    ];
+
+    for (const c of cases) {
+      const state: P8cState = {
+        bootstrapped: true,
+        authRequired: false,
+        session: null,
+        forbiddenHits: [],
+        issueHits: [],
+        oldCallbackHits: [],
+        editorStateGetHits: [],
+        disabledRequestOrder: [],
+        publicCallbackHits: [],
+        externalHits: [],
+        editorStateVersion: c.editorStateVersion,
+      };
+      await installP8cRoutes(page, state);
+
+      await page.goto("/local-parser");
+      await expect(page.getByTestId("local-parser-page")).toBeVisible({
+        timeout: 15_000,
+      });
+      await page.getByLabel("项目 ID").fill(`proj_bad_ver_${c.label}`);
+      await page.getByLabel("解析 Markdown").fill("# bad version body");
+      await page.getByRole("button", { name: "回传到项目" }).click();
+
+      // GET 发生后不得 POST
+      await expect
+        .poll(() => state.editorStateGetHits.length, { timeout: 15_000 })
+        .toBe(1);
+      expect(state.oldCallbackHits, `case=${c.label} 必须零 POST`).toEqual([]);
+      expect(state.disabledRequestOrder).toEqual(["GET_EDITOR_STATE"]);
+      await expect(page.getByText(FIXED_VERSION_ERROR)).toBeVisible();
+      await expect(page.getByText(/回传成功/)).toHaveCount(0);
+      expect(state.forbiddenHits).toEqual([]);
+      expect(state.externalHits).toEqual([]);
+      await assertStorageExactlyEmpty(page);
+
+      // 卸掉路由，避免下轮 case 叠加
+      await page.unroute("**/*");
+    }
+  });
+
+  test("disabled：POST 200 但响应缺失/非法版本时不伪成功", async ({ page }) => {
+    const cases: Array<{
+      label: string;
+      callbackResponseVersion: string | null;
+    }> = [
+      { label: "缺失", callbackResponseVersion: null },
+      { label: "非法", callbackResponseVersion: "not-a-version" },
+      { label: "带空白", callbackResponseVersion: ` ${FAKE_STATE_VERSION}` },
+    ];
+
+    for (const c of cases) {
+      const state: P8cState = {
+        bootstrapped: true,
+        authRequired: false,
+        session: null,
+        forbiddenHits: [],
+        issueHits: [],
+        oldCallbackHits: [],
+        editorStateGetHits: [],
+        disabledRequestOrder: [],
+        publicCallbackHits: [],
+        externalHits: [],
+        editorStateVersion: FAKE_STATE_VERSION,
+        callbackResponseVersion: c.callbackResponseVersion,
+      };
+      await installP8cRoutes(page, state);
+
+      await page.goto("/local-parser");
+      await expect(page.getByTestId("local-parser-page")).toBeVisible({
+        timeout: 15_000,
+      });
+      await page.getByLabel("项目 ID").fill(`proj_bad_resp_${c.label}`);
+      await page.getByLabel("解析 Markdown").fill("# resp version body");
+      await page.getByRole("button", { name: "回传到项目" }).click();
+
+      await expect
+        .poll(() => state.oldCallbackHits.length, { timeout: 15_000 })
+        .toBe(1);
+      expect(state.disabledRequestOrder).toEqual([
+        "GET_EDITOR_STATE",
+        "POST_PARSE_CALLBACK",
+      ]);
+      // 绝不能显示回传成功
+      await expect(page.getByText(/回传成功/)).toHaveCount(0);
+      await expect(page.getByText("回传失败")).toBeVisible();
+      expect(state.forbiddenHits).toEqual([]);
+      expect(state.externalHits).toEqual([]);
+      await assertStorageExactlyEmpty(page);
+
+      await page.unroute("**/*");
+    }
   });
 
   for (const role of ["finance", "hr", "bidder"] as AuthRole[]) {

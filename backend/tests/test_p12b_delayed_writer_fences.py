@@ -1,9 +1,10 @@
 """
-模块：P12B-C1 延迟写入围栏专项（后台任务 + 商务 revise）
+模块：P12B-C 延迟写入围栏专项（C1 任务/revise + C2 个人 callback/P8C）
 用途：证明迟到任务零覆盖、版本不外泄、批量章节自推进、
   商务 revise 强制 expected 与陈旧 409 无正文回显；
-  审查返修：缺内部版本旁路关闭、LLM 期间并发 409、200 必含合法版本。
-对接：task_service / business_task_service / revise_service / editor_state_service。
+  C2：个人 callback 强制 expected、陈旧 409 原子零写；P8C 票据绑定版本。
+对接：task_service / business_task_service / revise_service / editor_state_service /
+  parse_callback / local_parser_ticket_service。
 二次开发：禁止 or True、宽泛状态码、顺序调用冒充并发、修改旧断言迎合实现。
 """
 
@@ -18,7 +19,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.database import SessionLocal
-from app.models.entities import ProjectTaskRow
+from app.models.entities import Project, ProjectTaskRow
 from app.services import editor_state_service, llm_service, task_service
 from app.services.llm_service import ChatResult
 
@@ -871,3 +872,192 @@ def test_is_valid_state_version_helper():
     assert editor_state_service.is_valid_state_version("esv_short") is False
     assert editor_state_service.is_valid_state_version(None) is False
     assert editor_state_service.is_valid_state_version(123) is False
+
+
+# ---------- P12B-C2：个人兼容 callback ----------
+
+
+def _project_db_snapshot(project_id: str) -> tuple:
+    """用途：直接读库快照 Project.status / technical_plan_step / updated_at。"""
+    db = SessionLocal()
+    try:
+        proj = db.get(Project, project_id)
+        assert proj is not None
+        return (proj.status, proj.technical_plan_step, proj.updated_at)
+    finally:
+        db.close()
+
+
+def test_personal_callback_missing_expected_422_zero_write(client: TestClient):
+    """用途：缺 expectedStateVersion 固定 422，editor-state/任务/项目零写。"""
+    pid = _create_project(client, name="C2缺版本")
+    before = _get_state(client, pid)
+    before_proj = _project_db_snapshot(pid)
+    res = client.post(
+        f"/api/projects/{pid}/parse-callback",
+        json={
+            "markdown": "# 缺版本\n\nSECRET_NO_WRITE",
+            "source": "mineru",
+            "filename": "x.pdf",
+        },
+    )
+    assert res.status_code == 422, res.text
+    after = _get_state(client, pid)
+    assert after["stateVersion"] == before["stateVersion"]
+    assert after.get("parsedMarkdown") == before.get("parsedMarkdown")
+    tasks = client.get(f"/api/projects/{pid}/tasks").json()
+    assert tasks == [] or all(
+        "SECRET_NO_WRITE" not in json.dumps(t, ensure_ascii=False) for t in tasks
+    )
+    # 项目步骤/状态/更新时间精确不变
+    assert _project_db_snapshot(pid) == before_proj
+
+
+def test_personal_callback_invalid_expected_422_zero_write(client: TestClient):
+    """用途：非法格式 expected 固定 422 零写。"""
+    pid = _create_project(client, name="C2非法版本")
+    before = _get_state(client, pid)
+    before_proj = _project_db_snapshot(pid)
+    for bad in ("esv_SHORT", "ESV_" + "a" * 32, "esv_" + "A" * 32, "", "not-a-version"):
+        res = client.post(
+            f"/api/projects/{pid}/parse-callback",
+            json={
+                "markdown": "# 非法\n\nEVIL",
+                "source": "mineru",
+                "expectedStateVersion": bad,
+            },
+        )
+        assert res.status_code == 422, f"{bad!r}: {res.text}"
+    after = _get_state(client, pid)
+    assert after["stateVersion"] == before["stateVersion"]
+    assert "EVIL" not in (after.get("parsedMarkdown") or "")
+    assert _project_db_snapshot(pid) == before_proj
+
+
+def test_personal_callback_stale_409_atomic_zero_write(client: TestClient):
+    """用途：陈旧 expected 固定登录态 409，editor-state/任务/项目步骤全部不变。"""
+    pid = _create_project(client, name="C2陈旧个人")
+    seed = _put_state(client, pid, {"parsedMarkdown": "个人-基线-A"})
+    v0 = seed["stateVersion"]
+    # 外部推进版本
+    advanced = _put_state(
+        client,
+        pid,
+        {"parsedMarkdown": "个人-外部已改-B", "expectedStateVersion": v0},
+    )
+    v1 = advanced["stateVersion"]
+    assert v1 != v0
+
+    before_proj = _project_db_snapshot(pid)
+
+    res = client.post(
+        f"/api/projects/{pid}/parse-callback",
+        json={
+            "markdown": "# 迟到个人回传\n\nSECRET_STALE",
+            "source": "mineru",
+            "filename": "late.pdf",
+            "expectedStateVersion": v0,
+        },
+    )
+    assert res.status_code == 409, res.text
+    detail = res.json()["detail"]
+    assert detail["code"] == "editor_state_version_conflict"
+    assert detail["message"] == "编辑内容已被其他操作更新，请重新载入后再保存"
+    assert detail["currentStateVersion"] == v1
+    assert _STATE_VERSION_RE.fullmatch(detail["currentStateVersion"])
+    blob = json.dumps(res.json(), ensure_ascii=False)
+    assert "SECRET_STALE" not in blob
+    assert "迟到个人回传" not in blob
+
+    state = _get_state(client, pid)
+    assert state["parsedMarkdown"] == "个人-外部已改-B"
+    assert state["stateVersion"] == v1
+    tasks = client.get(f"/api/projects/{pid}/tasks").json()
+    assert all("SECRET_STALE" not in json.dumps(t, ensure_ascii=False) for t in tasks)
+    # 项目 status/step/updated_at 直接读库精确相等
+    assert _project_db_snapshot(pid) == before_proj
+    proj = client.get(f"/api/projects/{pid}").json()
+    assert "SECRET_STALE" not in json.dumps(proj, ensure_ascii=False)
+
+
+def test_personal_callback_success_returns_new_state_version(client: TestClient):
+    """用途：当前 expected 成功写 parsedMarkdown 并返回合法新 stateVersion。"""
+    pid = _create_project(client, name="C2个人成功")
+    seed = _put_state(client, pid, {"parsedMarkdown": "个人-成功前"})
+    v0 = seed["stateVersion"]
+
+    res = client.post(
+        f"/api/projects/{pid}/parse-callback",
+        json={
+            "markdown": "# 个人成功\n\n正文段落",
+            "source": "mineru",
+            "filename": "ok.pdf",
+            "expectedStateVersion": v0,
+        },
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["ok"] is True
+    new_sv = body["stateVersion"]
+    assert isinstance(new_sv, str) and _STATE_VERSION_RE.fullmatch(new_sv)
+    assert new_sv != v0
+
+    state = _get_state(client, pid)
+    assert "个人成功" in (state.get("parsedMarkdown") or "")
+    assert state["stateVersion"] == new_sv
+    # 独立算法一致
+    from app.services.editor_state_service import compute_full_state_version
+
+    assert new_sv == compute_full_state_version(state)
+
+    tasks = client.get(f"/api/projects/{pid}/tasks").json()
+    assert any(t.get("type") == "parse" and t.get("status") == "success" for t in tasks)
+    proj = client.get(f"/api/projects/{pid}").json()
+    assert proj["status"] == "analyzing"
+    assert proj.get("technicalPlanStep") == 1
+
+
+def test_personal_callback_midway_failure_full_rollback(client: TestClient, monkeypatch):
+    """用途：中途异常完整 rollback，editor-state/任务/项目零写；精确 500 不回显原文。"""
+    pid = _create_project(client, name="C2中途回滚")
+    seed = _put_state(client, pid, {"parsedMarkdown": "回滚前基线"})
+    v0 = seed["stateVersion"]
+    before_proj = _project_db_snapshot(pid)
+    boom_marker = "simulated-personal-callback-midway"
+
+    real_from_row = editor_state_service._state_from_row
+    calls = {"n": 0}
+
+    def boom_from_row(*args, **kwargs):
+        # 第一次：锁后比对；第二次：commit 前构造成功响应时抛错；之后恢复正常供后续 GET
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError(boom_marker)
+        return real_from_row(*args, **kwargs)
+
+    monkeypatch.setattr(editor_state_service, "_state_from_row", boom_from_row)
+    res = client.post(
+        f"/api/projects/{pid}/parse-callback",
+        json={
+            "markdown": "# 应回滚\n\nNOPE",
+            "source": "mineru",
+            "expectedStateVersion": v0,
+        },
+    )
+    # 精确 500；禁止 >=400；异常原文/正文不得回显
+    assert res.status_code == 500, res.text
+    assert boom_marker not in res.text
+    assert "应回滚" not in res.text
+    assert "NOPE" not in res.text
+    detail = res.json().get("detail") or {}
+    if isinstance(detail, dict):
+        assert detail.get("code") == "parse_callback_failed"
+        assert boom_marker not in json.dumps(detail, ensure_ascii=False)
+
+    state = _get_state(client, pid)
+    assert state["parsedMarkdown"] == "回滚前基线"
+    assert state["stateVersion"] == v0
+    tasks = client.get(f"/api/projects/{pid}/tasks").json()
+    assert all("应回滚" not in json.dumps(t, ensure_ascii=False) for t in tasks)
+    # 项目 status/step/updated_at 精确零写
+    assert _project_db_snapshot(pid) == before_proj

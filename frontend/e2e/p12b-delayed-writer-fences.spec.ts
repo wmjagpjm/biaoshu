@@ -1,11 +1,12 @@
 /**
- * 模块：P12B-C1 延迟写入围栏前端 E2E（商务 revise 队列）
+ * 模块：P12B-C 延迟写入围栏前端 E2E（C1 商务 revise 队列；C2 见 local-parser-callback-ticket）
  * 用途：证明 revise 进入 saveChainRef、执行时读最新 expected、
  *       成功后单次 refresh；409/缺版本阻断自动 PUT 且保留本地；
  *       冲突/缺版本路径零 pageerror/unhandledrejection。
  * 对接：useBusinessBidWorkspace；Playwright chromium headless workers=1。
  * 二次开发：禁止 .or(...)、waitForTimeout 作完成证据、宽泛状态码、toBeTruthy 版本断言。
  * 时钟：必须 page.clock.install + fastForward 跨过 600ms autosave 防抖，禁止 poll 假绿。
+ * C2 个人 callback GET→POST 版本围栏由 e2e/local-parser-callback-ticket.spec.ts 覆盖。
  */
 import {
   expect,

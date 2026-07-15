@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import secrets
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -16,10 +17,10 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import inspect, select, text
+from sqlalchemy import create_engine, inspect, select, text
 
 from app.core.config import get_settings
-from app.core.database import SessionLocal
+from app.core.database import SessionLocal, ensure_schema_columns
 from app.main import app
 from app.models.entities import (
     AuthAuditEventRow,
@@ -31,6 +32,8 @@ from app.models.entities import (
 )
 from app.services import auth_service, project_service
 from app.services.local_parser_ticket_service import MAX_BODY_BYTES
+
+_STATE_VERSION_RE = re.compile(r"^esv_[0-9a-f]{32}$")
 
 # 固定合成口令：仅测试夹具
 _OWNER_USER = "admin_p8c_ticket"
@@ -326,7 +329,7 @@ def test_issue_stores_digest_only_and_audit_desensitized(required_client):
         row = rows[0]
         assert row.ticket_digest == digest
         assert ticket not in (row.ticket_digest or "")
-        # 表字段必须精确等于契约八字段，不得多列
+        # 表字段必须精确等于契约九字段（含 expected_state_version），不得多列
         cols = {c["name"] for c in inspect(db.bind).get_columns(row.__tablename__)}
         assert cols == {
             "id",
@@ -336,8 +339,12 @@ def test_issue_stores_digest_only_and_audit_desensitized(required_client):
             "issued_by_user_id",
             "expires_at",
             "consumed_at",
+            "expected_state_version",
             "created_at",
         }
+        # 新签发行必须绑定合法服务端版本
+        assert row.expected_state_version
+        assert re.fullmatch(r"^esv_[0-9a-f]{32}$", row.expected_state_version)
 
         audits = list(
             db.scalars(
@@ -734,27 +741,37 @@ def test_success_writes_state_task_step_and_audit(required_client):
 
 
 def test_atomic_consume_and_midway_rollback(required_client, monkeypatch):
-    """原子单次消费；monkeypatch 中途异常整体回滚。"""
+    """
+    原子单次消费；中途异常整体回滚后同一票据可重用。
+    二次开发：异常首次精确 500、不回显原文；monkeypatch 恢复后原 ticket 原正文 200。
+    """
     csrf = _login_role(required_client, "bid_writer")
     project = _create_project(name="回滚项目")
     ticket = _issue(required_client, csrf, project.id).json()["ticket"]
     digest = hashlib.sha256(ticket.encode("utf-8")).hexdigest()
+    fail_body = {"markdown": "# fail\n\nbody", "source": "mineru"}
+    boom_marker = "simulated-midway-failure"
 
     # 中途异常：原子消费后写入阶段抛错，整单事务回滚
     from app.services import local_parser_ticket_service as svc
 
     def boom(*args, **kwargs):
-        raise RuntimeError("simulated-midway-failure")
+        raise RuntimeError(boom_marker)
 
     monkeypatch.setattr(svc, "_finalize_success_writes", boom)
     required_client.cookies.clear()
     res = _public_callback(
         required_client,
         ticket=ticket,
-        body={"markdown": "# fail\n\nbody", "source": "mineru"},
+        body=fail_body,
     )
-    # 路由应转为 500 或受控错误，但不得部分提交
-    assert res.status_code >= 400
+    # 精确 500：禁止 >=400 假绿；异常原文不得回显
+    assert res.status_code == 500, res.text
+    assert boom_marker not in res.text
+    detail = res.json().get("detail") or {}
+    if isinstance(detail, dict):
+        assert boom_marker not in json.dumps(detail, ensure_ascii=False)
+        assert detail.get("code") == "local_parser_callback_failed"
 
     db = SessionLocal()
     try:
@@ -783,8 +800,38 @@ def test_atomic_consume_and_midway_rollback(required_client, monkeypatch):
     finally:
         db.close()
 
-    # 恢复写入函数后做并发单次成功断言
+    # 恢复写入函数后：同一票据 + 原正文必须可重试并精确 200
     monkeypatch.undo()
+    retry = _public_callback(
+        required_client,
+        ticket=ticket,
+        body=fail_body,
+    )
+    assert retry.status_code == 200, retry.text
+    assert set(retry.json().keys()) == _SUCCESS_KEYS
+
+    db = SessionLocal()
+    try:
+        row = db.scalars(
+            select(LocalParserCallbackTicketRow).where(
+                LocalParserCallbackTicketRow.ticket_digest == digest
+            )
+        ).one()
+        assert row.consumed_at is not None
+        state = db.get(ProjectEditorStateRow, project.id)
+        assert state is not None
+        assert "fail" in (state.parsed_markdown or "")
+        tasks = list(
+            db.scalars(
+                select(ProjectTaskRow).where(ProjectTaskRow.project_id == project.id)
+            ).all()
+        )
+        assert len(tasks) == 1
+        assert tasks[0].status == "success"
+    finally:
+        db.close()
+
+    # 保留并发单次消费：另一项目新票，两线程仅一次 200 + 一次 401
     csrf = _login_role(required_client, "bid_writer")
     project2 = _create_project(name="并发项目")
     ticket2 = _issue(required_client, csrf, project2.id).json()["ticket"]
@@ -1029,3 +1076,326 @@ def test_docling_success_real_transaction_and_illegal_does_not_consume(required_
     detail_replay = replay.json().get("detail") or {}
     if isinstance(detail_replay, dict):
         assert detail_replay.get("code") == "local_parser_ticket_invalid"
+
+
+# ---------- P12B-C2：票据版本围栏 ----------
+
+
+def test_p12bc2_issue_binds_server_state_version(required_client):
+    """用途：签发时服务端捕获权威版本写入 expected_state_version，与 GET 一致。"""
+    csrf = _login_role(required_client, "bid_writer")
+    project = _create_project(name="C2签发版本")
+    # 先写一点内容使版本非空壳
+    put = required_client.put(
+        f"/api/projects/{project.id}/editor-state",
+        json={"parsedMarkdown": "C2-签发前正文"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert put.status_code == 200, put.text
+    v0 = put.json()["stateVersion"]
+    assert _STATE_VERSION_RE.fullmatch(v0)
+
+    issued = _issue(required_client, csrf, project.id)
+    assert issued.status_code == 201, issued.text
+    ticket = issued.json()["ticket"]
+    digest = hashlib.sha256(ticket.encode("utf-8")).hexdigest()
+
+    db = SessionLocal()
+    try:
+        row = db.scalars(
+            select(LocalParserCallbackTicketRow).where(
+                LocalParserCallbackTicketRow.ticket_digest == digest
+            )
+        ).one()
+        assert row.expected_state_version == v0
+    finally:
+        db.close()
+
+
+def _project_field_snapshot(project_id: str) -> tuple:
+    """用途：回调前精确快照 Project.status / technical_plan_step / updated_at。"""
+    db = SessionLocal()
+    try:
+        proj = db.get(Project, project_id)
+        assert proj is not None
+        return (proj.status, proj.technical_plan_step, proj.updated_at)
+    finally:
+        db.close()
+
+
+def test_p12bc2_stale_ticket_409_consumes_zero_writes_replay_401(required_client):
+    """
+    用途：签发后外部改状态再回调 → 固定 409、消费、正文/任务/项目/成功审计零写；再放 401。
+    二次开发：响应不得含 currentStateVersion / 正文 / 票据；项目三字段必须前后精确相等。
+    """
+    csrf = _login_role(required_client, "bid_writer")
+    project = _create_project(name="C2陈旧票据")
+    seed = required_client.put(
+        f"/api/projects/{project.id}/editor-state",
+        json={"parsedMarkdown": "C2-签发基线"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert seed.status_code == 200, seed.text
+    v0 = seed.json()["stateVersion"]
+
+    issued = _issue(required_client, csrf, project.id)
+    ticket = issued.json()["ticket"]
+    digest = hashlib.sha256(ticket.encode("utf-8")).hexdigest()
+
+    # 签发后外部并发改写
+    concurrent = required_client.put(
+        f"/api/projects/{project.id}/editor-state",
+        json={
+            "parsedMarkdown": "C2-外部已改-禁止覆盖",
+            "expectedStateVersion": v0,
+        },
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert concurrent.status_code == 200, concurrent.text
+    concurrent_sv = concurrent.json()["stateVersion"]
+    assert concurrent_sv != v0
+
+    # 回调前精确快照项目字段（禁止 status!=analyzing or ... 假绿）
+    before_proj = _project_field_snapshot(project.id)
+
+    required_client.cookies.clear()
+    res = _public_callback(
+        required_client,
+        ticket=ticket,
+        body={
+            "markdown": "# 迟到回传\n\nSECRET_SHOULD_NOT_WRITE",
+            "source": "mineru",
+            "filename": "stale.pdf",
+        },
+    )
+    assert res.status_code == 409, res.text
+    detail = res.json().get("detail") or {}
+    assert detail.get("code") == "local_parser_state_version_conflict"
+    assert detail.get("message") == "编辑内容已变化，请重新签发回传票据后重试"
+    # 公共回调不得返回 currentStateVersion
+    assert "currentStateVersion" not in detail
+    assert "currentStateVersion" not in res.text
+    assert "SECRET_SHOULD_NOT_WRITE" not in res.text
+    assert ticket not in res.text
+
+    db = SessionLocal()
+    try:
+        row = db.scalars(
+            select(LocalParserCallbackTicketRow).where(
+                LocalParserCallbackTicketRow.ticket_digest == digest
+            )
+        ).one()
+        assert row.consumed_at is not None
+
+        # 正文零写：保持外部已改内容
+        state = db.get(ProjectEditorStateRow, project.id)
+        assert state is not None
+        assert state.parsed_markdown == "C2-外部已改-禁止覆盖"
+        assert "SECRET_SHOULD_NOT_WRITE" not in (state.parsed_markdown or "")
+
+        # 任务零写
+        tasks = list(
+            db.scalars(
+                select(ProjectTaskRow).where(ProjectTaskRow.project_id == project.id)
+            ).all()
+        )
+        assert tasks == []
+
+        # 项目三字段精确相等
+        proj = db.get(Project, project.id)
+        assert proj is not None
+        assert (
+            proj.status,
+            proj.technical_plan_step,
+            proj.updated_at,
+        ) == before_proj
+
+        # 成功审计精确为零
+        apply_audits = list(
+            db.scalars(
+                select(AuthAuditEventRow).where(
+                    AuthAuditEventRow.action == "local_parser_callback_apply"
+                )
+            ).all()
+        )
+        assert apply_audits == []
+    finally:
+        db.close()
+
+    # 再次同票 401
+    again = _public_callback(
+        required_client,
+        ticket=ticket,
+        body={"markdown": "# again\n\nok", "source": "mineru"},
+    )
+    assert again.status_code == 401, again.text
+    d2 = again.json().get("detail") or {}
+    if isinstance(d2, dict):
+        assert d2.get("code") == "local_parser_ticket_invalid"
+
+
+def test_p12bc2_null_expected_version_ticket_never_writes(required_client):
+    """用途：旧空版本票据绝不写 editor-state/项目/成功审计，但必须消费并 409；再放 401。"""
+    csrf = _login_role(required_client, "bid_writer")
+    project = _create_project(name="C2空版本票据")
+    # 先有基线正文
+    put = required_client.put(
+        f"/api/projects/{project.id}/editor-state",
+        json={"parsedMarkdown": "C2-空版本基线-不得被写"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert put.status_code == 200, put.text
+    baseline = put.json()["parsedMarkdown"]
+
+    issued = _issue(required_client, csrf, project.id)
+    ticket = issued.json()["ticket"]
+    digest = hashlib.sha256(ticket.encode("utf-8")).hexdigest()
+
+    # 模拟升级前遗留：清空 expected_state_version
+    db = SessionLocal()
+    try:
+        row = db.scalars(
+            select(LocalParserCallbackTicketRow).where(
+                LocalParserCallbackTicketRow.ticket_digest == digest
+            )
+        ).one()
+        row.expected_state_version = None
+        db.commit()
+    finally:
+        db.close()
+
+    before_proj = _project_field_snapshot(project.id)
+
+    required_client.cookies.clear()
+    res = _public_callback(
+        required_client,
+        ticket=ticket,
+        body={"markdown": "# null-ticket-write\n\nEVIL", "source": "mineru"},
+    )
+    assert res.status_code == 409, res.text
+    detail = res.json().get("detail") or {}
+    assert detail.get("code") == "local_parser_state_version_conflict"
+    assert "currentStateVersion" not in res.text
+
+    db = SessionLocal()
+    try:
+        row = db.scalars(
+            select(LocalParserCallbackTicketRow).where(
+                LocalParserCallbackTicketRow.ticket_digest == digest
+            )
+        ).one()
+        assert row.consumed_at is not None
+        state = db.get(ProjectEditorStateRow, project.id)
+        assert state is not None
+        assert state.parsed_markdown == baseline
+        assert "EVIL" not in (state.parsed_markdown or "")
+        tasks = list(
+            db.scalars(
+                select(ProjectTaskRow).where(ProjectTaskRow.project_id == project.id)
+            ).all()
+        )
+        assert tasks == []
+        # 项目三字段精确零写
+        proj = db.get(Project, project.id)
+        assert proj is not None
+        assert (
+            proj.status,
+            proj.technical_plan_step,
+            proj.updated_at,
+        ) == before_proj
+        # 成功审计精确为零
+        apply_audits = list(
+            db.scalars(
+                select(AuthAuditEventRow).where(
+                    AuthAuditEventRow.action == "local_parser_callback_apply"
+                )
+            ).all()
+        )
+        assert apply_audits == []
+    finally:
+        db.close()
+
+    again = _public_callback(
+        required_client,
+        ticket=ticket,
+        body={"markdown": "# again\n\nok", "source": "mineru"},
+    )
+    assert again.status_code == 401, again.text
+
+
+def test_p12bc2_fresh_ticket_success_after_current_version(required_client):
+    """用途：当前版本新票据成功写正文/任务/步骤。"""
+    csrf = _login_role(required_client, "bid_writer")
+    project = _create_project(name="C2新票成功")
+    put = required_client.put(
+        f"/api/projects/{project.id}/editor-state",
+        json={"parsedMarkdown": "C2-成功前"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert put.status_code == 200, put.text
+
+    issued = _issue(required_client, csrf, project.id)
+    ticket = issued.json()["ticket"]
+    required_client.cookies.clear()
+
+    res = _public_callback(
+        required_client,
+        ticket=ticket,
+        body={"markdown": "# C2成功正文\n\nok", "source": "docling", "filename": "ok.pdf"},
+    )
+    assert res.status_code == 200, res.text
+    assert set(res.json().keys()) == _SUCCESS_KEYS
+
+    db = SessionLocal()
+    try:
+        state = db.get(ProjectEditorStateRow, project.id)
+        assert state is not None
+        assert "C2成功正文" in (state.parsed_markdown or "")
+        tasks = list(
+            db.scalars(
+                select(ProjectTaskRow).where(ProjectTaskRow.project_id == project.id)
+            ).all()
+        )
+        assert len(tasks) == 1
+        assert tasks[0].status == "success"
+        proj = db.get(Project, project.id)
+        assert proj is not None
+        assert proj.status == "analyzing"
+        assert proj.technical_plan_step == 1
+    finally:
+        db.close()
+
+
+def test_p12bc2_ticket_column_idempotent_migration(tmp_path):
+    """用途：旧库幂等加 expected_state_version 列；列集含该列。"""
+    old_engine = create_engine(f"sqlite:///{tmp_path / 'p8c_old.db'}")
+    with old_engine.begin() as conn:
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE local_parser_callback_tickets (
+              id VARCHAR(64) PRIMARY KEY,
+              ticket_digest VARCHAR(64) NOT NULL UNIQUE,
+              workspace_id VARCHAR(64) NOT NULL,
+              project_id VARCHAR(64) NOT NULL,
+              issued_by_user_id VARCHAR(64) NOT NULL,
+              expires_at DATETIME NOT NULL,
+              consumed_at DATETIME,
+              created_at DATETIME NOT NULL
+            )
+            """
+        )
+        cols_before = {
+            row[1]
+            for row in conn.execute(text("PRAGMA table_info(local_parser_callback_tickets)"))
+        }
+        assert "expected_state_version" not in cols_before
+
+    ensure_schema_columns(old_engine)
+    ensure_schema_columns(old_engine)  # 幂等再跑
+
+    with old_engine.connect() as conn:
+        cols = {
+            row[1]
+            for row in conn.execute(text("PRAGMA table_info(local_parser_callback_tickets)"))
+        }
+    assert "expected_state_version" in cols

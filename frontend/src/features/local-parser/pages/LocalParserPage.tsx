@@ -5,12 +5,13 @@
  *   - AUTH_MODE=disabled 个人兼容：保留 X-Local-Token + 旧 parse-callback 手工表单
  * 对接：
  *   - POST /api/projects/{id}/parse-callback-ticket（仅显式点击，无 body）
- *   - POST /api/projects/{id}/parse-callback（disabled 旧路径）
+ *   - GET /api/projects/{id}/editor-state → POST /api/projects/{id}/parse-callback（disabled，带 expectedStateVersion）
  *   - 公共回调固定路径 /api/local-parser/callback + 头 X-Local-Parse-Ticket（仅 curl 文案，页面绝不自动 POST）
  *   - P8B local 跳转 `/local-parser?projectId=` 仅预填
  * 二次开发：
  *   - 禁止挂载/项目 ID 变化/计时器/刷新自动签发、轮询或重试
- *   - 票据禁止写入 localStorage/sessionStorage/IndexedDB/URL/模块全局/日志/剪贴板 API
+ *   - 票据/版本禁止写入 localStorage/sessionStorage/IndexedDB/URL/模块全局/日志/剪贴板 API
+ *   - 禁止本地计算 stateVersion；禁用时显式提交才 GET 服务端版本
  *   - 禁止自动启动 MinerU/Docling、禁止外网、禁止读本地文件、禁止新增依赖
  *   - 签发错误只显示固定中文，不拼接服务端 detail/code/path/projectId/票据
  */
@@ -31,6 +32,12 @@ const FIXED_ISSUE_ERROR = "生成一次性回传票据失败，请稍后重试";
 const EMPTY_PROJECT_ID_MSG = "请填写项目 ID";
 /** disabled 个人兼容说明关键字 */
 const COMPAT_NOTICE = "无需一次性票据";
+/** 服务端版本格式：与 P12B-A 一致 */
+const STATE_VERSION_RE = /^esv_[0-9a-f]{32}$/;
+/** 获取版本失败固定中文（不得拼接服务端 detail） */
+const FIXED_VERSION_ERROR = "获取编辑版本失败，请稍后重试";
+/** curl 中版本占位符（禁止写入真实版本） */
+const CURL_VERSION_PLACEHOLDER = "esv_替换为当前服务端版本";
 
 const steps = [
   {
@@ -87,10 +94,11 @@ export function LocalParserPage() {
   }, [searchParams]);
 
   const base = getApiBase();
+  // curl 示例必须含 expectedStateVersion 明确占位，禁止真实版本或本地计算
   const curlSample = `curl -X POST "${base}/projects/PROJ_ID/parse-callback" ^
   -H "Content-Type: application/json" ^
   -H "X-Local-Token: 可选" ^
-  -d "{\\"markdown\\":\\"# 标题\\\\n正文...\\",\\"source\\":\\"mineru\\"}"`;
+  -d "{\\"markdown\\":\\"# 标题\\\\n正文...\\",\\"source\\":\\"mineru\\",\\"expectedStateVersion\\":\\"${CURL_VERSION_PLACEHOLDER}\\"}"`;
 
   /**
    * 固定路径 + 内存票据的可执行 Windows curl。
@@ -150,8 +158,11 @@ export function LocalParserPage() {
   }
 
   /**
-   * 用途：disabled 旧手工 Markdown 回传。
-   * 对接：POST /projects/{id}/parse-callback + 可选 X-Local-Token。
+   * 用途：disabled 旧手工 Markdown 回传（P12B-C2）。
+   * 对接：显式提交时先 GET editor-state 取服务端 stateVersion，再 POST expectedStateVersion。
+   * 二次开发：只接受服务端原始字符串精确匹配 ^esv_[0-9a-f]{32}$（禁止 trim 容忍空白）；
+   *           POST 200 必须校验响应 stateVersion 原始合法，否则固定失败、禁止伪成功；
+   *           禁止本地哈希/缓存/重试；禁止写 console/URL/Cookie/存储。
    */
   async function handleSubmit() {
     setBusy(true);
@@ -169,20 +180,47 @@ export function LocalParserPage() {
       return;
     }
     try {
+      // 提交前读服务端权威版本，禁止本地计算或持久化
+      const state = await apiFetch<{ stateVersion?: unknown }>(
+        `/projects/${encodeURIComponent(pid)}/editor-state`,
+        { method: "GET" },
+      );
+      // 禁止 .trim()：带空白的版本字符串必须拒绝，只接受原始合法串
+      const expected =
+        typeof state?.stateVersion === "string" ? state.stateVersion : "";
+      if (!STATE_VERSION_RE.test(expected)) {
+        setErr(FIXED_VERSION_ERROR);
+        return;
+      }
+
       const headers: Record<string, string> = {};
       if (token.trim()) headers["X-Local-Token"] = token.trim();
-      const res = await apiFetch<{ ok: boolean; chars: number; taskId: string }>(
-        `/projects/${encodeURIComponent(pid)}/parse-callback`,
-        {
-          method: "POST",
-          headers,
-          body: JSON.stringify({
-            markdown: markdown.trim(),
-            source: "mineru",
-            filename: "local-mineru.md",
-          }),
-        },
-      );
+      const res = await apiFetch<{
+        ok: boolean;
+        chars: number;
+        taskId: string;
+        stateVersion?: unknown;
+      }>(`/projects/${encodeURIComponent(pid)}/parse-callback`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          markdown: markdown.trim(),
+          source: "mineru",
+          filename: "local-mineru.md",
+          expectedStateVersion: expected,
+        }),
+      });
+      if (!res?.ok) {
+        setErr("回传失败");
+        return;
+      }
+      // POST 200 也必须校验响应原始 stateVersion；缺失/非法一律固定失败，绝不能显示回传成功
+      const respVersion =
+        typeof res.stateVersion === "string" ? res.stateVersion : "";
+      if (!STATE_VERSION_RE.test(respVersion)) {
+        setErr("回传失败");
+        return;
+      }
       setMsg(
         `回传成功（${res.chars} 字）。可打开工作区文档解析步查看。任务 ${res.taskId}`,
       );
@@ -426,6 +464,7 @@ export function LocalParserPage() {
             <strong>curl 示例（Windows）</strong>
             <pre
               className="mono"
+              data-testid="lp-legacy-curl"
               style={{
                 marginTop: 10,
                 fontSize: 12,

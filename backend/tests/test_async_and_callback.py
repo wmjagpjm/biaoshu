@@ -1,14 +1,18 @@
 """
 模块：异步任务与 parse-callback 测试
 用途：异步创建后轮询 success；MinerU 回传写入 parsedMarkdown；Token 开关契约。
-对接：parse-callback；settings.local_parser_token（默认空=不校验）。
-二次开发：默认空 token 不校验是部署风险，须在文档与计划中明示，勿擅自改为强制非空。
+对接：parse-callback；settings.local_parser_token（默认空=不校验）；P12B-C2 expectedStateVersion。
+二次开发：默认空 token 不校验是部署风险，须在文档与计划中明示，勿擅自改为强制非空；
+      回传必须携带合法 expectedStateVersion。
 """
 
 import os
+import re
 import time
 
 from app.core.config import get_settings
+
+_STATE_VERSION_RE = re.compile(r"^esv_[0-9a-f]{32}$")
 
 
 def test_async_parse_poll(client):
@@ -49,19 +53,26 @@ def test_parse_callback(client):
 
     proj = client.post("/api/projects", json={"name": "回传测试"}).json()
     pid = proj["id"]
+    state0 = client.get(f"/api/projects/{pid}/editor-state").json()
+    v0 = state0["stateVersion"]
+    assert _STATE_VERSION_RE.fullmatch(v0)
+
     res = client.post(
         f"/api/projects/{pid}/parse-callback",
         json={
             "markdown": "# MinerU\n\n扫描件解析结果。",
             "source": "mineru",
             "filename": "scan.pdf",
+            "expectedStateVersion": v0,
         },
     )
     assert res.status_code == 200
     body = res.json()
     assert body["ok"] is True
+    assert _STATE_VERSION_RE.fullmatch(body["stateVersion"])
     state = client.get(f"/api/projects/{pid}/editor-state").json()
     assert "扫描件解析结果" in (state.get("parsedMarkdown") or "")
+    assert state["stateVersion"] == body["stateVersion"]
 
 
 def test_parse_callback_token_required_when_configured(client, monkeypatch):
@@ -73,10 +84,12 @@ def test_parse_callback_token_required_when_configured(client, monkeypatch):
 
         proj = client.post("/api/projects", json={"name": "回传鉴权"}).json()
         pid = proj["id"]
+        v0 = client.get(f"/api/projects/{pid}/editor-state").json()["stateVersion"]
         payload = {
             "markdown": "# MinerU\n\n鉴权后的扫描件结果。",
             "source": "mineru",
             "filename": "scan.pdf",
+            "expectedStateVersion": v0,
         }
 
         no_header = client.post(f"/api/projects/{pid}/parse-callback", json=payload)
@@ -96,6 +109,7 @@ def test_parse_callback_token_required_when_configured(client, monkeypatch):
         )
         assert ok.status_code == 200
         assert ok.json()["ok"] is True
+        assert _STATE_VERSION_RE.fullmatch(ok.json()["stateVersion"])
         state = client.get(f"/api/projects/{pid}/editor-state").json()
         assert "鉴权后的扫描件结果" in (state.get("parsedMarkdown") or "")
     finally:
