@@ -7,7 +7,7 @@
 
 # P12C-B-B 任务与 revise 修订账本接入契约
 
-> **状态**：只读审计与 P12C-B-B1 九类任务接入均已完成、独立验收并推送；B2 商务 revise 尚未实现。
+> **状态**：只读审计与 P12C-B-B1 九类任务接入均已完成、独立验收并推送；B2 商务 revise 已冻结、尚未实现。
 > **前置**：P12C-B-A 冻结=`fbf93c0`、实现=`acf3139`、闭环=`a45b2da`，后端/前端全量基线 **680/263 passed**。
 > **固定拆包**：B1 九类任务来源 `task`（冻结=`05864f6`、实现=`5a0d1c0`，已完成）→ B2 五类商务 revise 来源 `revise`。两包必须分别实现、验收、提交和闭环。
 
@@ -86,3 +86,18 @@ Codex 独立验收：专项 **10 passed**、扩展受影响回归 **126 passed**
 ## 7. 后续 B2 闸门
 
 B1 闭环后才冻结 B2。B2 只能修改 `revise_service.py` 与独立新测试：两个真实写点传固定 `revise`，五类商务成功写回产生修订；结构解析失败/空正文的“只校验版本”200、普通技术 revise 和陈旧 409 均为零修订。B2 不得借机修改 LLM 提示词、返回 Schema、历史 API 或前端。
+
+## 8. B2 冻结实现边界
+
+P12C-B-B2 只允许 Grok 修改 `backend/app/services/revise_service.py`，并新增 `backend/tests/test_p12c_revise_revisions.py`。两个真实 `upsert_editor_state` 写点固定传服务端字面量 `revision_source_kind="revise"`；不得修改 `editor_state_service.py`、revision 服务、Schema、API 路由、既有测试、前端或文档。
+
+必须证明：
+
+1. `business_parse` 和至少一个结构化商务阶段真实成功写回各新增精确一条 `revise` after，最终 `stateVersion`、字段和 snapshot 精确一致；AST 补充证明两个写点覆盖五个商务阶段。
+2. 四类结构化阶段全部使用同一个结构化写点，`business_parse` 使用另一个写点；客户端不能投稿来源。
+3. 结构化解析失败、空 revised 的只校验版本 200 不发生 editor-state 迁移，revision 增量精确为 0；普通技术 revise 仍不写 editor-state/revision。
+4. 陈旧 expected 与 LLM 期间并发漂移均 409、模型正文不回显、本次 revision 零增量；外部并发浏览器 PUT 自身的 `browser_put` 修订不算 revise 增量。
+5. recorder flush 后失败和 commit 失败均返回脱敏 HTTP 500，editor-state/revision 双零；响应不得含注入 marker、正文、版本、SQL、路径、表名、异常类型或来源内部键。commit 失败必须用同一 Session 证明 revision 在 commit 前已 flush。
+6. 浏览器与任务来源保持 `browser_put/task`，无来源直写仍不记账；不得假定随机 ID 等于插入顺序。
+
+B2 不新增任务包装器：revise 是同步 HTTP 路径，未处理异常由既有全局 500 脱敏；不得把失败伪装成 HTTP 200 applied。无字段变化分支只做版本校验并 commit 释放锁，不得为了“有历史”而伪造状态迁移。
