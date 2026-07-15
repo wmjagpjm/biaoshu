@@ -173,7 +173,7 @@ npm run test:e2e:business-editor-state-truth
 npm run test:e2e:technical-editor-state-truth
 ```
 
-当前基线：后端串行全量 **599 passed**（1 条既有 Starlette/httpx 弃用警告）；P12B-D1 恢复专项/受影响回归 **58/81 passed**，生产文件 `py_compile` 通过。前端 `lint` / `build` 通过（仅既有大包体积提示），P12B-D2 专项/受影响回归 **51/63 passed**，Chromium headless、单 worker、零重试全量 E2E **263 passed**。P12B-C3 历史后端/前端全量为 570/212；P12A、P8C、M3-D、P10K、P9D 及其他既有专项继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
+当前基线：后端串行全量 **666 passed**（1 条既有 Starlette/httpx 弃用警告）；P12C-A 专项/受影响回归 **67/77 passed**，生产与测试文件 `py_compile` 通过。前端 `lint` / `build` 通过（仅既有大包体积提示），P12B-D2 专项/受影响回归 **51/63 passed**，Chromium headless、单 worker、零重试全量 E2E **263 passed**。P12B-D1 历史恢复专项/受影响回归/全量为 58/81/599；P12B-C3 历史后端/前端全量为 570/212；P12A、P8C、M3-D、P10K、P9D 及其他既有专项继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
 
 P8D/P8E 本机助手独立验收命令（仓库根；不安装或探测真实 MinerU/Docling）：
 
@@ -256,6 +256,17 @@ npm run test:e2e -- --workers=1 --retries=0
 ```
 
 P12B-D 已实现并推送（冻结=`613818f`、D1=`551caba`、D2=`0f81dd6`）。D1 在同一项目锁和事务内完成当前 expected CAS、恢复前安全检查点、目标严格重验、共享 13 键写回、版本复核与最近 20 条裁剪，结果 **58 / 81 / 599 passed**。D2 只在面板展开时读最近 20 条元数据，创建先强制即时 PUT 再 POST `{}`，恢复二次确认后携带执行时最新 expected；成功唯一 editor-state GET，迟到 list/create/restore、折叠、项目切换与连点均隔离，ID/version/snapshot 不进入 DOM/存储/URL/console。四轮返修后结果 **51 / 63 / 263 passed**，lint/build/diff 通过；全量首跑单次纯白页后，精确用例 1 passed 且完整重跑 263 passed。联调不得把本包误扩展为自动检查点、每次 autosave 历史、任意版本浏览/回滚、删除、diff 或多人协作。
+
+P12C-A 独立验收命令（后端；全部串行）：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q tests\test_editor_state_revisions.py
+.\.venv\Scripts\python.exe -m pytest -q tests\test_editor_state_checkpoints.py tests\test_editor_state_checkpoint_restore.py tests\test_editor_state_full_version.py
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m py_compile app\models\entities.py app\services\editor_state_revision_service.py tests\test_editor_state_revisions.py
+```
+
+P12C-A 已实现并推送（冻结=`daa8c43`、实现=`226e1c1`）。独立 `editor_state_revisions` 与检查点 20 条域完全分离，每项目最近 10 条；内部 transition 原语验证 before/after 的 13 个权威键与匹配版本，只 flush、不 commit/rollback/refresh/查询项目/加锁。最新与裁剪 SELECT 不加载 `snapshot_json`，DELETE 同时限定 workspace/project/行 ID，跨项目与跨空间旁路行不受影响。Codex 独立结果为 **67 / 77 / 666 passed**，编译、三文件白名单与工作树/暂存 diff 检查通过。A 包没有生产调用、API、Schema、前端、历史列表或恢复入口；联调不得把“表和原语存在”误报成自动历史已可用。P12C-B 必须按不同事务边界逐包接入并证明业务写/历史写同成同败。
 
 ## 6. 已接 API 一览
 
