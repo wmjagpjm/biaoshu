@@ -173,7 +173,7 @@ npm run test:e2e:business-editor-state-truth
 npm run test:e2e:technical-editor-state-truth
 ```
 
-当前基线：后端串行全量 **487 passed**（1 条既有 Starlette/httpx 弃用警告）；M3-D 专项 **34 passed**、M3-A/editor-state/响应矩阵/认证受影响回归 **71 passed**。前端 `lint` / `build` 通过（仅既有大包体积提示），P11C **18 passed**、P11B **11 passed**、P11A **10 passed**、认证/RBAC **11 passed**、解析策略 **6 passed**、响应矩阵 **8 passed**、融合确认 **6 passed**、持久恢复 **5 passed**、模板复用 **1 passed**，Chromium headless、单 worker 串行全量 E2E **184 passed**。M3-D、P10K、P8C、P9D 及其他既有专项继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
+当前基线：后端串行全量 **518 passed**（1 条既有 Starlette/httpx 弃用警告）；P12A 专项 **29 passed**、editor-state/认证/项目/M3-D/模板受影响回归 **97 passed**、P8C/异步 callback **15 passed**。前端 `lint` / `build` 通过（仅既有大包体积提示），P11C **18 passed**、P11B **11 passed**、P11A **10 passed**、认证/RBAC **11 passed**、解析策略 **6 passed**、响应矩阵 **8 passed**、融合确认 **6 passed**、持久恢复 **5 passed**、模板复用 **1 passed**，Chromium headless、单 worker 串行全量 E2E **184 passed**。M3-D、P10K、P8C、P9D 及其他既有专项继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
 
 P8D/P8E 本机助手独立验收命令（仓库根；不安装或探测真实 MinerU/Docling）：
 
@@ -182,7 +182,18 @@ backend\.venv\Scripts\python.exe -m unittest discover -s tools\local-parser -p "
 backend\.venv\Scripts\python.exe -m unittest discover -s tools\local-parser -p "test_mineru_callback_helper.py" -v
 ```
 
-P8E 当前为 Docling **46 passed**、P8D MinerU **54 passed**；后端 P8E-A/P8C/P8B/解析受影响回归 **37 passed**，P8C E2E **9 passed**、P8B E2E **6 passed**。后端全量 487、前端全量 184 继续沿用最近一次真实全量结果，不冒充本包重跑；真实 Docling/模型未安装、未验收。
+P8E 当前为 Docling **46 passed**、P8D MinerU **54 passed**；后端 P8E-A/P8C/P8B/解析受影响回归 **37 passed**，P8C E2E **9 passed**、P8B E2E **6 passed**。P8E 当时沿用后端全量 487；P12A 已将当前后端全量更新为 518，前端全量仍为 184。真实 Docling/模型未安装、未验收。
+
+P12A 独立验收命令（后端；全部串行）：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_editor_state_checkpoints.py -q
+.\.venv\Scripts\python.exe -m pytest tests/test_editor_state.py tests/test_auth_rbac.py tests/test_health_and_projects.py tests/test_content_fuse_applications.py tests/test_content_fuse.py tests/test_bid_templates.py -q
+.\.venv\Scripts\python.exe -m pytest tests/test_async_and_callback.py tests/test_local_parser_callback_tickets.py -q
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+结果依次为 **29 / 97 / 15 / 518 passed**，均只有 1 条既有 Starlette/httpx 弃用警告。P12A 只提供空对象 POST 创建、元数据列表和单条只读详情；不应出现 restore/PUT/PATCH/DELETE/download/search 伪成功。列表与淘汰 SQL 不得投影 `snapshot_json`，跨项目详情必须在 SQL 中同时限定 `id/workspace_id/project_id`。
 
 ## 6. 已接 API 一览
 

@@ -7,7 +7,7 @@
 
 # P12A editor-state 手动检查点只读库契约
 
-> **状态**：只读审计完成，契约已冻结；尚未实现。
+> **状态**：已实现、独立验收并推送；实现提交=`9f53d92`。
 > **工作分支**：`collab/grok-code-codex-review`。
 > **前置基线**：P11B/P11C 已让商务标、技术标工作区只认服务端 editor-state；M3-D 只覆盖融合写入有限恢复，明确不是通用版本库。
 
@@ -107,3 +107,11 @@ P12A 后端只允许 Grok 修改/新增以下七文件：
 - 不做命名版本、标签、发布、审批、分支、合并、协作者身份、跨项目浏览、搜索、导出、下载或无限保留。
 - 不修改响应矩阵现有版本语义；`stateVersion` 只描述检查点规范快照，不能冒充当前 PUT 的全状态乐观锁。
 - P12B 若实现恢复，必须先覆盖普通 PUT 与后台/回调写入的并发顺序，冻结 expected current state version、恢复前安全检查点、原子写入和迟到 autosave 防护；不得直接复用本包 `stateVersion` 静默覆盖。
+
+## 8. 实现与独立验收结论
+
+P12A 严格按七文件白名单落地，新增独立 `editor_state_checkpoints` 表以及 POST 创建、GET 元数据列表、GET 单条详情三条路由。服务端只从锁内 `get_editor_state()` 权威输出抽取精确 13 键，使用 UTF-8 紧凑排序标准 JSON、2 MiB 上限和 `esv_` 摘要；同项目创建、裁剪最近 20 条与提交保持同一事务。列表和淘汰查询均不加载历史正文，跨项目详情在 SQL 中同时限定检查点、工作空间与项目。
+
+Grok 首版经 Codex 两轮拒绝后修复：首轮消除淘汰加载完整正文、提交后 `refresh` 假失败、非规范 JSON 放行、错误元数据异常泄漏和跨项目先加载正文；第二轮把项目锁、权威读取、序列化、计数、插入、裁剪与提交全部纳入统一显式回滚域，并以 `allow_nan=False` 拒绝 `NaN/Infinity` 非标准 JSON。正式协作回执依次为原任务 `msg_b1d4a03f493e4edc909eea632b60133a`、首轮返修 `msg_2248b407df6a4747aca0b0860e93bcf0`、第二轮返修 `msg_38b36fcf84284344b59407d28b153aa4`、Codex 验收 `msg_2d76b0ced0c749fca11edbccdf4dc20c`。
+
+Codex 独立验收：P12A 专项 **29 passed**、editor-state/认证/项目/M3-D/模板受影响回归 **97 passed**、P8C 与异步 callback 链 **15 passed**、后端串行全量 **518 passed**；均只有 1 条既有 Starlette/httpx 弃用警告。`git diff --check` 与暂存区 whitespace 检查通过。P12A 没有前端改动，也没有实现恢复、删除、下载、自动历史或并发版本。

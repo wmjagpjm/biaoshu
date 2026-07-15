@@ -7,7 +7,7 @@
 
 # P12A editor-state 手动检查点只读库实施计划
 
-> **状态**：契约已冻结，等待后端受限实现。
+> **状态**：已完成受限实现、两轮返修、Codex 独立验收、实现提交与推送；实现=`9f53d92`。
 > **执行顺序**：计划提交推送 → Grok 后端实现/自测 → Codex 独立审查/返修/验收/提交 → 中文文档闭环。
 
 ## 1. 只读审计结论
@@ -61,3 +61,11 @@ cd C:\Users\Administrator\biaoshu\backend
 ## 5. 提交与闭环
 
 通过后由 Codex 单独中文提交后端并推送协作分支，再更新本契约/计划、路线图、联调清单和 HANDOFF。文档必须写明“手动、最多 20、只读、无恢复、非完整历史”，并保留 P12B 并发恢复闸门；长期目标继续 active。
+
+## 6. 实际审查与验收记录
+
+Grok 原实现任务为 `msg_b1d4a03f493e4edc909eea632b60133a`。Codex 首轮审查发现淘汰路径加载全部 `snapshot_json`、提交后 `refresh` 可制造已写入却报错、详情允许同步篡改后的非规范 JSON、损坏元数据可能泄漏类型异常、跨项目详情先按全局主键加载正文，遂下发 `msg_2248b407df6a4747aca0b0860e93bcf0`。首轮真实红测为 4 failed，返修后专项升至 24 passed。
+
+第二轮审查发现创建函数仅保护插入后的步骤，项目锁、权威读取和序列化失败仍依赖 Session 关闭时被动回滚，且默认 `json.dumps` 接受 `NaN/Infinity`。返修任务 `msg_38b36fcf84284344b59407d28b153aa4` 先得到 5 项真实失败，再把完整创建链收进统一回滚域并启用 `allow_nan=False`。Codex 最终回执为 `msg_2d76b0ced0c749fca11edbccdf4dc20c`。
+
+独立验收结果：专项 **29 passed**；editor-state、认证、项目、M3-D、模板受影响回归 **97 passed**；P8C/异步 callback **15 passed**；后端串行全量 **518 passed**，只有 1 条既有 Starlette/httpx 弃用警告。实现严格为七文件，提交 `9f53d92` 已推送 `origin/collab/grok-code-codex-review`。下一步只能先审计 P12B 的全状态并发版本、恢复前安全检查点、原子恢复和迟到 autosave 防护，不得直接增加恢复端点。
