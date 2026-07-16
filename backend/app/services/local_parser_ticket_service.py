@@ -26,7 +26,7 @@ from app.models.entities import (
     ProjectTaskRow,
     utc_now,
 )
-from app.services import auth_service, editor_state_service
+from app.services import auth_service, editor_state_revision_service, editor_state_service
 from app.services.project_service import ProjectNotFoundError
 
 # 固定契约常量
@@ -259,13 +259,15 @@ def _finalize_success_writes(
     source: str,
     filename: str | None,
     now: datetime,
+    locked_state_row: ProjectEditorStateRow | None,
+    before_state: dict[str, Any],
 ) -> dict[str, Any]:
     """
     模块：同事务落库解析结果
-    用途：写 parsed_markdown、成功 parse task、项目步骤，并记固定审计（不 commit）。
+    用途：写 parsed_markdown、成功 parse task、项目步骤、成功审计与 local_parser 修订（不 commit）。
     对接：apply_one_time_callback。
-    二次开发：不得调用 update_project 等会中途 commit 的路径；测试可 monkeypatch 本函数验证回滚。
-      调用前须已通过锁后版本校验。
+    二次开发：不得调用 update_project 等会中途 commit 的路径；复用锁后行，禁止 db.get editor-state；
+      调用前须已通过锁后版本校验；revision 来源固定字面量 local_parser，禁止客户端 source 控制。
     """
     project = db.get(Project, ticket.project_id)
     if project is None or project.workspace_id != ticket.workspace_id:
@@ -275,7 +277,8 @@ def _finalize_success_writes(
     if filename:
         md = f"# 解析结果：{filename}\n\n> 来源：{source}\n\n" + md
 
-    state = db.get(ProjectEditorStateRow, ticket.project_id)
+    # 复用锁后行；原行为空才按既有语义创建，不再 db.get editor-state
+    state = locked_state_row
     if state is None:
         state = ProjectEditorStateRow(project_id=ticket.project_id, mode="ALIGNED")
         db.add(state)
@@ -314,6 +317,17 @@ def _finalize_success_writes(
         workspace_id=ticket.workspace_id,
         target="one_time_ticket",
         commit=False,
+    )
+
+    # 业务与成功审计暂存后：同一内存行构造 after，无提交记录修订
+    after_state = editor_state_service._state_from_row(ticket.project_id, state)
+    editor_state_revision_service.record_editor_state_transition(
+        db,
+        ticket.workspace_id,
+        ticket.project_id,
+        before_state=before_state,
+        after_state=after_state,
+        source_kind="local_parser",
     )
     return {
         "ok": True,
@@ -356,14 +370,17 @@ def apply_one_time_callback(
             )
 
         try:
-            editor_state_service.lock_and_assert_expected_state_version(
-                db,
-                ticket.workspace_id,
-                ticket.project_id,
-                expected,  # type: ignore[arg-type]
+            # 保存同一次锁后权威 before 与锁后行，仅 fresh 分支传入 finalize
+            locked_state_row, before_state = (
+                editor_state_service.lock_and_assert_expected_state_version(
+                    db,
+                    ticket.workspace_id,
+                    ticket.project_id,
+                    expected,  # type: ignore[arg-type]
+                )
             )
         except editor_state_service.EditorStateVersionConflict:
-            # 陈旧：仅提交消费，零写正文/任务/项目/成功审计
+            # 陈旧：仅提交消费，零写正文/任务/项目/成功审计/修订
             db.commit()
             consumption_committed = True
             raise TicketServiceError(
@@ -377,6 +394,8 @@ def apply_one_time_callback(
             source=source,
             filename=filename,
             now=now,
+            locked_state_row=locked_state_row,
+            before_state=before_state,
         )
         db.commit()
         return payload

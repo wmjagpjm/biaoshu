@@ -807,8 +807,10 @@ def test_commit_failure_pending_flush_then_full_rollback(
 
 def test_p8c_public_callback_does_not_record_callback_source(client: TestClient):
     """
-    用途：P8C 真实公开路由不得产生 source=callback 修订；C1 不提前接入 local_parser。
+    用途：P8C 真实公开路由绝不产生 source=callback 修订。
+      C2 已接入 local_parser：成功后精确 +1 local_parser after，且 state_version=最终版本。
     二次开发：服务层签发票据可接受；消费必须走 TestClient POST /api/local-parser/callback。
+      禁止只删旧断言或改成宽松 >=。
     """
     pid = _create_project(client, name="P8C不误接")
     base = _put_state(client, pid, {"parsedMarkdown": "P8C基线"})
@@ -817,6 +819,12 @@ def test_p8c_public_callback_does_not_record_callback_source(client: TestClient)
     cb0 = _callback_count(_db_rev_rows(pid))
     assert cb0 == 0
     tasks0 = _db_success_parse_task_count(pid)
+    # 既有 browser_put 基线必须保留
+    rows0 = _db_rev_rows(pid)
+    browser0 = _rows_by_version(rows0, v0)
+    assert len(browser0) == 1
+    assert browser0[0].source_kind == _SOURCE_BROWSER
+    browser0_id = browser0[0].id
 
     db = SessionLocal()
     try:
@@ -873,22 +881,31 @@ def test_p8c_public_callback_does_not_record_callback_source(client: TestClient)
     assert "projectId" not in raw
     assert "project_id" not in raw
 
-    rows = _db_rev_rows(pid)
-    # C1 未接入 local_parser：callback/local_parser 修订均精确为零
-    assert _callback_count(rows) == 0
-    assert all(r.source_kind != _SOURCE_CALLBACK for r in rows)
-    assert all(r.source_kind != _SOURCE_LOCAL_PARSER for r in rows)
-    # revision 总数：P8C 未接 revision 时保持 n0；若误接会增加
-    assert _db_rev_count(pid) == n0
-    browser = _rows_by_version(rows, v0)
-    assert len(browser) == 1
-    assert browser[0].source_kind == _SOURCE_BROWSER
-
-    # 真实 SQLite：editor-state 与成功 parse 任务确实写入
+    # 成功后先取得最终 stateVersion，再断言账本
     state = _get_state(client, pid)
+    after_ver = _assert_state_version(state["stateVersion"])
+    assert after_ver != v0
     assert "P8C成功" in (state.get("parsedMarkdown") or "")
     assert _SECRET in (state.get("parsedMarkdown") or "")
-    assert state["stateVersion"] != v0
+
+    rows = _db_rev_rows(pid)
+    # P8C 绝不产生 callback（个人 callback 来源隔离）
+    assert _callback_count(rows) == 0
+    assert all(r.source_kind != _SOURCE_CALLBACK for r in rows)
+    # C2 已接 local_parser：修订总数精确 n0+1（有浏览器基线 → 仅 after）
+    assert len(rows) == n0 + 1, [(r.state_version, r.source_kind) for r in rows]
+    lp_rows = [r for r in rows if r.source_kind == _SOURCE_LOCAL_PARSER]
+    assert len(lp_rows) == 1, [(r.state_version, r.source_kind) for r in rows]
+    assert lp_rows[0].state_version == after_ver
+    assert _REVISION_ID_RE.fullmatch(lp_rows[0].id)
+
+    # 既有 browser_put 基线不变
+    still_browser = _rows_by_version(rows, v0)
+    assert len(still_browser) == 1
+    assert still_browser[0].source_kind == _SOURCE_BROWSER
+    assert still_browser[0].id == browser0_id
+
+    # 真实 SQLite：editor-state 与成功 parse 任务确实写入
     assert _db_success_parse_task_count(pid) == tasks0 + 1
     assert _db_editor_parsed_markdown(pid) is not None
     assert "P8C成功" in (_db_editor_parsed_markdown(pid) or "")
