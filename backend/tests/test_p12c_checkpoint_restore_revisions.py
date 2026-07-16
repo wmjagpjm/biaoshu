@@ -551,25 +551,59 @@ def _prepare_diff_restore(
 
 def test_ast_restore_conditional_literal_source_no_get_reread():
     """
-    用途：AST 补充 restore 内唯一 recorder、字面量 checkpoint_restore、
-      无 get_editor_state 重读；不能替代 HTTP 证据。
+    用途：AST 补充 checkpoint 编排以字面量 checkpoint_restore 调共享原语，
+      且共享原语唯一调用 recorder；无 get_editor_state 重读；不能替代 HTTP 证据。
+    二次开发：C2 抽取 stage_locked_canonical_restore 后，不得再要求 restore 函数
+      内直接 recorder；D3 行为断言保持不变。
     """
     restore_fn = _find_function_def(_SERVICE_PATH, "restore_editor_state_checkpoint")
+    stage_fn = _find_function_def(_SERVICE_PATH, "stage_locked_canonical_restore")
     assert restore_fn is not None
-    records = [
+    assert stage_fn is not None, "共享恢复原语 stage_locked_canonical_restore 必须存在"
+
+    # 编排函数：禁止直接 recorder；必须唯一调用共享原语且字面量 checkpoint_restore
+    restore_records = [
         n
         for n in ast.walk(restore_fn)
         if isinstance(n, ast.Call)
         and _call_func_name(n) == "record_editor_state_transition"
     ]
-    gets = [
+    assert restore_records == [], "checkpoint restore 编排禁止直接 recorder"
+
+    stage_calls = [
+        n
+        for n in ast.walk(restore_fn)
+        if isinstance(n, ast.Call)
+        and _call_func_name(n) == "stage_locked_canonical_restore"
+    ]
+    assert len(stage_calls) == 1, (
+        f"restore 应唯一调用 stage_locked_canonical_restore，实际 {len(stage_calls)}"
+    )
+    assert _source_kind_literal_on_call(stage_calls[0]) == _SOURCE_RESTORE
+
+    restore_gets = [
         n
         for n in ast.walk(restore_fn)
         if isinstance(n, ast.Call) and _call_func_name(n) == "get_editor_state"
     ]
-    assert len(records) == 1, f"restore 应唯一一次 record，实际 {len(records)}"
-    assert gets == [], "restore 禁止 get_editor_state 重读"
-    assert _source_kind_literal_on_call(records[0]) == _SOURCE_RESTORE
+    assert restore_gets == [], "restore 禁止 get_editor_state 重读"
+
+    # 共享原语：唯一 recorder；禁止 get_editor_state
+    stage_records = [
+        n
+        for n in ast.walk(stage_fn)
+        if isinstance(n, ast.Call)
+        and _call_func_name(n) == "record_editor_state_transition"
+    ]
+    assert len(stage_records) == 1, (
+        f"共享原语应唯一一次 record，实际 {len(stage_records)}"
+    )
+    stage_gets = [
+        n
+        for n in ast.walk(stage_fn)
+        if isinstance(n, ast.Call) and _call_func_name(n) == "get_editor_state"
+    ]
+    assert stage_gets == [], "共享原语禁止 get_editor_state 重读"
 
 
 # ---------- 成功路径 ----------

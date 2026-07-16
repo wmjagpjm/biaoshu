@@ -48,6 +48,7 @@ _ALL_SOURCES = frozenset(
         "content_fuse_apply",
         "content_fuse_consume",
         "checkpoint_restore",
+        "revision_restore",
     }
 )
 _MAX_BYTES = 2 * 1024 * 1024

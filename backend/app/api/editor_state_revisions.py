@@ -1,12 +1,13 @@
 """
-模块：P12C-C1 editor-state 修订历史只读路由
-用途：项目最近 10 条修订元数据列表与单条按需详情。
+模块：P12C-C1/C2 editor-state 修订历史只读与受限恢复路由
+用途：项目最近 10 条修订元数据列表、单条按需详情、单条受限恢复。
 对接：/api/projects/{projectId}/editor-state-revisions*；
-  editor_state_revision_history_service；deps.get_workspace_id。
+  editor_state_revision_history_service；
+  editor_state_revision_restore_service；deps.get_workspace_id。
 二次开发：
   - 复用 get_workspace_id（disabled 兼容，required 仅 bid_writer）；
-  - 仅 GET；所有成功/业务错误 Cache-Control: no-store；
-  - 错误固定 code/message，不反射 ID/正文/路径/SQL；
+  - POST 继续既有 CSRF；所有成功/业务错误 Cache-Control: no-store；
+  - 错误固定 code/message（409 另含 currentStateVersion），不反射 ID/正文/路径/SQL；
   - 未知查询参数不得改变固定排序/上限/来源全集/正文不可搜索边界。
 """
 
@@ -22,26 +23,44 @@ from app.api.schemas import (
     EditorStateRevisionDetailOut,
     EditorStateRevisionListOut,
     EditorStateRevisionMetaOut,
+    EditorStateRevisionRestore,
+    EditorStateRevisionRestoreOut,
 )
 from app.core.database import get_db
-from app.services import editor_state_revision_history_service
+from app.services import (
+    editor_state_revision_history_service,
+    editor_state_revision_restore_service,
+    editor_state_service,
+)
 from app.services.editor_state_revision_history_service import (
     EditorStateRevisionHistoryError,
+)
+from app.services.editor_state_revision_restore_service import (
+    EditorStateRevisionRestoreError,
 )
 
 router = APIRouter(prefix="/projects", tags=["editor-state-revisions"])
 
 
 def _no_store(response: Response) -> None:
-    """用途：P12C-C1 响应固定禁止缓存。"""
+    """用途：P12C-C1/C2 响应固定禁止缓存。"""
     response.headers["Cache-Control"] = "no-store"
 
 
-def _raise_app_error(exc: EditorStateRevisionHistoryError) -> None:
+def _raise_history_error(exc: EditorStateRevisionHistoryError) -> None:
     """
-    用途：映射服务层固定错误，不附加路径或异常原文。
+    用途：映射只读服务层固定错误，不附加路径或异常原文。
     二次开发：业务 404/500 必须自带 Cache-Control: no-store。
     """
+    raise HTTPException(
+        status_code=exc.status_code,
+        detail=exc.as_detail(),
+        headers={"Cache-Control": "no-store"},
+    ) from None
+
+
+def _raise_restore_error(exc: EditorStateRevisionRestoreError) -> None:
+    """用途：映射恢复服务层固定错误。"""
     raise HTTPException(
         status_code=exc.status_code,
         detail=exc.as_detail(),
@@ -80,7 +99,7 @@ def list_editor_state_revisions(
             db, workspace_id, project_id
         )
     except EditorStateRevisionHistoryError as exc:
-        _raise_app_error(exc)
+        _raise_history_error(exc)
     return EditorStateRevisionListOut(
         items=[_meta_out(item) for item in data["items"]]
     )
@@ -107,7 +126,7 @@ def get_editor_state_revision(
             db, workspace_id, project_id, revision_id
         )
     except EditorStateRevisionHistoryError as exc:
-        _raise_app_error(exc)
+        _raise_history_error(exc)
     return EditorStateRevisionDetailOut(
         revision_id=data["revision_id"],
         state_version=data["state_version"],
@@ -115,4 +134,50 @@ def get_editor_state_revision(
         source_kind=data["source_kind"],
         created_at=data["created_at"],
         snapshot=data["snapshot"],
+    )
+
+
+@router.post(
+    "/{project_id}/editor-state-revisions/{revision_id}/restore",
+    response_model=EditorStateRevisionRestoreOut,
+    status_code=200,
+)
+def restore_editor_state_revision(
+    project_id: str,
+    revision_id: str,
+    body: EditorStateRevisionRestore,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    workspace_id: Annotated[str, Depends(get_workspace_id)],
+) -> EditorStateRevisionRestoreOut:
+    """
+    用途：原子恢复目标修订；先写恢复前安全检查点，再覆盖当前 13 键。
+    对接：P12C-C2；服务层 restore_editor_state_revision。
+    二次开发：body 仅 expectedStateVersion；409 复用全状态冲突协议；成功/业务错误 no-store。
+    """
+    _no_store(response)
+    try:
+        data = editor_state_revision_restore_service.restore_editor_state_revision(
+            db,
+            workspace_id,
+            project_id,
+            revision_id,
+            body.expected_state_version,
+        )
+    except editor_state_service.EditorStateVersionConflict as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": editor_state_service.CODE_FULL_STATE_VERSION_CONFLICT,
+                "message": exc.message,
+                "currentStateVersion": exc.current_state_version,
+            },
+            headers={"Cache-Control": "no-store"},
+        ) from None
+    except EditorStateRevisionRestoreError as exc:
+        _raise_restore_error(exc)
+    return EditorStateRevisionRestoreOut(
+        safety_checkpoint_id=data["safety_checkpoint_id"],
+        state_version=data["state_version"],
+        restored_at=data["restored_at"],
     )

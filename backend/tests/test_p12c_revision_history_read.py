@@ -1285,21 +1285,42 @@ def test_service_and_api_source_no_write_ops_ast_supplement(disabled_client):
 
 
 def test_no_write_routes_on_revision_history(disabled_client):
+    """
+    用途：除精确 C2 POST restore 外，修订历史仍无其他写路由。
+    二次开发：C2 注册 POST .../restore 后，空 body 固定 422 且零写；
+      不得弱化列表/详情 PUT/PATCH/DELETE 与 POST 列表/详情的 404/405 守卫。
+    """
     client = disabled_client
     pid = _create_project(client)
     _put_state(client, pid, tag="nowrite")
     rid = _db_rev_rows(pid)[0]["id"]
     before = _domain_snapshot(pid)
+    restore_path = f"{_url(pid, rid)}/restore"
 
     for method in ("post", "put", "patch", "delete"):
-        for path in (_url(pid), _url(pid, rid), f"{_url(pid, rid)}/restore"):
+        for path in (_url(pid), _url(pid, rid), restore_path):
             fn = getattr(client, method)
             if method in ("post", "put", "patch"):
                 res = fn(path, json={})
             else:
                 res = fn(path)
-            # 未注册写路由：405 或 404（/restore 不得 2xx）
-            assert res.status_code in (404, 405), (method, path, res.status_code, res.text)
+            # 精确 C2 POST restore：路由已注册，空 body 固定 422 且不得成功写
+            if method == "post" and path == restore_path:
+                assert res.status_code == 422, (
+                    method,
+                    path,
+                    res.status_code,
+                    res.text,
+                )
+                assert res.status_code not in (200, 201)
+                continue
+            # 除精确 C2 POST 外仍无其他写路由
+            assert res.status_code in (404, 405), (
+                method,
+                path,
+                res.status_code,
+                res.text,
+            )
             assert res.status_code != 200
             assert res.status_code != 201
 

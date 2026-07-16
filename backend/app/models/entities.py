@@ -1509,7 +1509,8 @@ class EditorStateRevisionRow(Base):
             "source_kind IN ("
             "'browser_put','task','revise','callback',"
             "'local_parser','content_fuse_apply',"
-            "'content_fuse_consume','checkpoint_restore'"
+            "'content_fuse_consume','checkpoint_restore',"
+            "'revision_restore'"
             ")",
             name="ck_editor_state_revisions_source_kind",
         ),

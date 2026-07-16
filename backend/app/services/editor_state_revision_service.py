@@ -35,6 +35,7 @@ REVISION_SOURCE_KINDS: frozenset[str] = frozenset(
         "content_fuse_apply",
         "content_fuse_consume",
         "checkpoint_restore",
+        "revision_restore",
     }
 )
 

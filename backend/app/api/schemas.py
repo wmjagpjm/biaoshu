@@ -2065,6 +2065,41 @@ class EditorStateRevisionDetailOut(BaseModel):
     snapshot: dict[str, Any]
 
 
+class EditorStateRevisionRestore(BaseModel):
+    """
+    模块：P12C-C2 修订受限恢复请求
+    用途：仅接受 camelCase expectedStateVersion；无 body 其它键。
+    对接：POST .../editor-state-revisions/{revisionId}/restore。
+    二次开发：extra=forbid；禁止 populate_by_name；snake_case/缺失/非法/额外键 422。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_state_version: str = Field(
+        alias="expectedStateVersion",
+        pattern=r"^esv_[0-9a-f]{32}$",
+        min_length=1,
+    )
+
+
+class EditorStateRevisionRestoreOut(BaseModel):
+    """
+    模块：P12C-C2 修订受限恢复响应
+    用途：仅 safetyCheckpointId/stateVersion/restoredAt。
+    对接：POST .../editor-state-revisions/{revisionId}/restore。
+    二次开发：禁止回显 revision ID、新 revision 行 ID、正文、原来源或路径。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    safety_checkpoint_id: str = Field(serialization_alias="safetyCheckpointId")
+    state_version: str = Field(
+        serialization_alias="stateVersion",
+        pattern=r"^esv_[0-9a-f]{32}$",
+    )
+    restored_at: str = Field(serialization_alias="restoredAt")
+
+
 class EditorStateCheckpointCreate(BaseModel):
     """
     模块：P12A 手动检查点创建请求

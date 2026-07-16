@@ -539,6 +539,110 @@ def get_editor_state_checkpoint(
     return meta
 
 
+# P12C-C2：共享恢复原语仅允许这两类准确内部来源
+_RESTORE_SOURCE_KINDS: frozenset[str] = frozenset(
+    {"checkpoint_restore", "revision_restore"}
+)
+
+
+def stage_locked_canonical_restore(
+    db: Session,
+    workspace_id: str,
+    project_id: str,
+    *,
+    row: ProjectEditorStateRow | None,
+    current_state: dict[str, Any],
+    target_snapshot: dict[str, Any],
+    target_version: str,
+    source_kind: str,
+) -> dict[str, Any]:
+    """
+    用途：已锁定、已验证规范目标后的无提交共享恢复原语。
+    对接：checkpoint restore 与 revision restore 共用；P12C-C2。
+    规则：
+      1. 仅允许 source_kind ∈ {checkpoint_restore, revision_restore}；
+      2. 从 current_state 构造安全检查点 → 13 键写回 → 结果版本复核；
+      3. 仅当 result_version != current 时记 transition；同版本禁止 recorder；
+      4. 保护新安全检查点裁剪到 20；不 commit/rollback/refresh/加锁/查目标。
+    """
+    if not isinstance(source_kind, str) or source_kind not in _RESTORE_SOURCE_KINDS:
+        raise EditorStateCheckpointError(
+            500, CODE_CHECKPOINT_CORRUPT, MSG_CHECKPOINT_CORRUPT
+        )
+    if not isinstance(workspace_id, str) or not workspace_id:
+        raise _corrupt()
+    if not isinstance(project_id, str) or not project_id:
+        raise _corrupt()
+    if not isinstance(current_state, dict) or not isinstance(target_snapshot, dict):
+        raise _corrupt()
+    if not isinstance(target_version, str) or not target_version:
+        raise _corrupt()
+
+    # 1) 从锁后当前权威状态构造恢复前安全快照（1–2 MiB）
+    safety_snapshot = extract_canonical_snapshot(current_state)
+    safety_json = _canonical_snapshot_json(safety_snapshot)
+    safety_bytes = len(safety_json.encode("utf-8"))
+    if safety_bytes < MIN_SNAPSHOT_BYTES or safety_bytes > MAX_SNAPSHOT_BYTES:
+        raise EditorStateCheckpointError(
+            413, CODE_CHECKPOINT_TOO_LARGE, MSG_CHECKPOINT_TOO_LARGE
+        )
+    safety_version = compute_state_version(safety_json)
+    if safety_version != current_state["stateVersion"]:
+        raise _corrupt()
+    safety_outline = count_outline_nodes(safety_snapshot.get("outline"))
+    safety_chapters = count_chapter_dicts(safety_snapshot.get("chapters"))
+    safety_id = _new_checkpoint_id()
+
+    safety_row = _insert_checkpoint_row(
+        db,
+        checkpoint_id=safety_id,
+        workspace_id=workspace_id,
+        project_id=project_id,
+        snapshot_json=safety_json,
+        state_version=safety_version,
+        snapshot_bytes=safety_bytes,
+        outline_node_count=safety_outline,
+        chapter_count=safety_chapters,
+    )
+    safety_id = safety_row.id
+
+    # 2) 写回精确 13 键
+    row = editor_state_service.apply_canonical_snapshot_to_locked_row(
+        db, project_id, row, target_snapshot
+    )
+
+    # 3) 写回后重算版本，必须精确等于目标版本
+    result_state = editor_state_service._state_from_row(project_id, row)
+    result_version = result_state["stateVersion"]
+    if result_version != target_version:
+        raise _corrupt()
+
+    # 4) 仅不同规范版本时记准确来源；同版本禁止伪造修订
+    if result_version != current_state["stateVersion"]:
+        editor_state_revision_service.record_editor_state_transition(
+            db,
+            workspace_id,
+            project_id,
+            before_state=current_state,
+            after_state=result_state,
+            source_kind=source_kind,
+        )
+
+    # 5) 保护新安全记录地裁剪到最多 20
+    _trim_checkpoints(db, workspace_id, project_id, protect_id=safety_id)
+
+    restored_at = result_state.get("updatedAt")
+    if not isinstance(restored_at, str) or not restored_at:
+        raise _corrupt()
+    return {
+        "safety_checkpoint_id": safety_id,
+        "state_version": target_version,
+        "restored_at": restored_at,
+        "result_state": result_state,
+        "result_version": result_version,
+    }
+
+
 def restore_editor_state_checkpoint(
     db: Session,
     workspace_id: str,
@@ -548,15 +652,13 @@ def restore_editor_state_checkpoint(
 ) -> dict[str, Any]:
     """
     用途：锁后 CAS + 恢复前安全检查点 + 13 键写回 + 条件修订 + 保护裁剪，一次原子 commit。
-    对接：POST .../editor-state-checkpoints/{checkpointId}/restore；P12C-B-D3。
+    对接：POST .../editor-state-checkpoints/{checkpointId}/restore；P12C-B-D3 / P12C-C2。
     二次开发：
       - 禁止嵌套调用 create_editor_state_checkpoint / upsert_editor_state；
-      - 禁止复制 ORM 映射/13 键哈希/矩阵收敛；写回只走 apply_canonical_snapshot_to_locked_row；
+      - 写回/安全检查点/条件修订走 stage_locked_canonical_restore；
       - 目标读取必须 id+workspace_id+project_id 三重 SQL；
       - 409 必须在任何安全插入之前；失败 editor-state/安全检查点/revision 三域零写；
-      - 仅当 result_version != current_state["stateVersion"] 时固定 checkpoint_restore 记 transition；
-      - 同版本仍建安全检查点并成功返回，但禁止调用 recorder；
-      - recorder/revision 裁剪/检查点裁剪/commit 留在同一 rollback 域；
+      - 仅当 result_version != current_state["stateVersion"] 时固定 checkpoint_restore；
       - commit 前构造响应；commit 后禁止 refresh / get_editor_state。
     """
     try:
@@ -590,73 +692,23 @@ def restore_editor_state_checkpoint(
         )
         target_version = target_row.state_version
 
-        # 4) 从锁后当前权威状态构造恢复前安全快照（1–2 MiB）
-        safety_snapshot = extract_canonical_snapshot(current_state)
-        safety_json = _canonical_snapshot_json(safety_snapshot)
-        safety_bytes = len(safety_json.encode("utf-8"))
-        if safety_bytes < MIN_SNAPSHOT_BYTES or safety_bytes > MAX_SNAPSHOT_BYTES:
-            raise EditorStateCheckpointError(
-                413, CODE_CHECKPOINT_TOO_LARGE, MSG_CHECKPOINT_TOO_LARGE
-            )
-        safety_version = compute_state_version(safety_json)
-        # 安全检查点版本必须等于锁后当前 stateVersion
-        if safety_version != current_state["stateVersion"]:
-            raise _corrupt()
-        safety_outline = count_outline_nodes(safety_snapshot.get("outline"))
-        safety_chapters = count_chapter_dicts(safety_snapshot.get("chapters"))
-        safety_id = _new_checkpoint_id()
-
-        # 5) 插入恢复前安全检查点（以落库行实际 id 为准，便于测试强制并列时间戳）
-        safety_row = _insert_checkpoint_row(
+        # 4–8) 共享无提交原语：安全检查点 + 写回 + 条件修订 + 保护裁剪
+        staged = stage_locked_canonical_restore(
             db,
-            checkpoint_id=safety_id,
-            workspace_id=workspace_id,
-            project_id=project_id,
-            snapshot_json=safety_json,
-            state_version=safety_version,
-            snapshot_bytes=safety_bytes,
-            outline_node_count=safety_outline,
-            chapter_count=safety_chapters,
-        )
-        safety_id = safety_row.id
-
-        # 6) 通过共享无提交原语写回精确 13 键
-        row = editor_state_service.apply_canonical_snapshot_to_locked_row(
-            db, project_id, row, target_snapshot
+            workspace_id,
+            project_id,
+            row=row,
+            current_state=current_state,
+            target_snapshot=target_snapshot,
+            target_version=target_version,
+            source_kind="checkpoint_restore",
         )
 
-        # 7) 写回后重算版本，必须精确等于目标检查点版本
-        result_state = editor_state_service._state_from_row(project_id, row)
-        result_version = result_state["stateVersion"]
-        if result_version != target_version:
-            raise _corrupt()
-
-        # 7.5) P12C-B-D3：仅不同规范版本时记 checkpoint_restore；同版本禁止伪造修订
-        # 位置：版本复核成功后、检查点保护裁剪与原唯一 commit 之前
-        if result_version != current_state["stateVersion"]:
-            editor_state_revision_service.record_editor_state_transition(
-                db,
-                workspace_id,
-                project_id,
-                before_state=current_state,
-                after_state=result_state,
-                source_kind="checkpoint_restore",
-            )
-
-        # 8) 保护新安全记录地裁剪到最多 20
-        _trim_checkpoints(
-            db, workspace_id, project_id, protect_id=safety_id
-        )
-
-        # 9) commit 前构造响应（restoredAt 对齐本轮 updatedAt 字符串）
-        restored_at = result_state.get("updatedAt")
-        if not isinstance(restored_at, str) or not restored_at:
-            raise _corrupt()
         response = {
             "restored_checkpoint_id": checkpoint_id,
-            "safety_checkpoint_id": safety_id,
-            "state_version": target_version,
-            "restored_at": restored_at,
+            "safety_checkpoint_id": staged["safety_checkpoint_id"],
+            "state_version": staged["state_version"],
+            "restored_at": staged["restored_at"],
         }
         db.commit()
         return response

@@ -88,6 +88,111 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
+def migrate_editor_state_revisions_revision_restore_source(conn) -> None:
+    """
+    用途：P12C-C2 将旧 SQLite 八来源 CHECK 幂等迁移为含 revision_restore 的九来源。
+    对接：ensure_schema_columns；仅 SQLite 生效。
+    二次开发：
+      - 已含 revision_restore 立即 no-op；非 SQLite no-op；
+      - 独立单事务：建临时表 → 显式八列复制 → 核对行数 → DROP 旧表 → RENAME → 重建索引；
+      - 禁止 writable_schema / ignore_check_constraints / 无核对 DROP / 吞异常后继续启动；
+      - 失败必须抛出让调用方回滚并阻止启动。
+    """
+    dialect_name = getattr(getattr(conn, "dialect", None), "name", None)
+    if dialect_name != "sqlite":
+        return
+
+    row = conn.exec_driver_sql(
+        "SELECT sql FROM sqlite_master "
+        "WHERE type='table' AND name='editor_state_revisions'"
+    ).fetchone()
+    if row is None or not row[0]:
+        # 表尚不存在：create_all 将按新模型创建
+        return
+    ddl = row[0]
+    if "revision_restore" in ddl:
+        return
+
+    # SQLAlchemy sqlite legacy 下外层 begin 在首个 DML 前可能未物理 BEGIN；
+    # CREATE 会落在事务外，异常回滚后临时表残留。先做 0 行 DML 触发真实事务。
+    # 事务仍由 ensure_schema_columns 的外层 begin 唯一 commit/rollback。
+    conn.exec_driver_sql(
+        "UPDATE editor_state_revisions SET id = id WHERE 0"
+    )
+
+    # 固定临时表 + 显式八列复制
+    conn.exec_driver_sql(
+        """
+        CREATE TABLE editor_state_revisions__p12cc2_mig (
+            id VARCHAR(64) PRIMARY KEY,
+            workspace_id VARCHAR(64) NOT NULL
+                REFERENCES workspaces(id) ON DELETE CASCADE,
+            project_id VARCHAR(64) NOT NULL
+                REFERENCES projects(id) ON DELETE CASCADE,
+            snapshot_json TEXT NOT NULL,
+            state_version VARCHAR(64) NOT NULL,
+            snapshot_bytes INTEGER NOT NULL,
+            source_kind VARCHAR(64) NOT NULL,
+            created_at DATETIME NOT NULL,
+            CHECK (snapshot_bytes >= 1 AND snapshot_bytes <= 2097152),
+            CHECK (
+                source_kind IN (
+                    'browser_put','task','revise','callback',
+                    'local_parser','content_fuse_apply',
+                    'content_fuse_consume','checkpoint_restore',
+                    'revision_restore'
+                )
+            )
+        )
+        """
+    )
+    before = conn.exec_driver_sql(
+        "SELECT COUNT(*) FROM editor_state_revisions"
+    ).fetchone()[0]
+    conn.exec_driver_sql(
+        """
+        INSERT INTO editor_state_revisions__p12cc2_mig (
+            id, workspace_id, project_id, snapshot_json,
+            state_version, snapshot_bytes, source_kind, created_at
+        )
+        SELECT
+            id, workspace_id, project_id, snapshot_json,
+            state_version, snapshot_bytes, source_kind, created_at
+        FROM editor_state_revisions
+        """
+    )
+    after = conn.exec_driver_sql(
+        "SELECT COUNT(*) FROM editor_state_revisions__p12cc2_mig"
+    ).fetchone()[0]
+    if before != after:
+        raise RuntimeError(
+            "editor_state_revisions 迁移行数核对失败，已中止（调用方须回滚）"
+        )
+
+    conn.exec_driver_sql("DROP TABLE editor_state_revisions")
+    conn.exec_driver_sql(
+        "ALTER TABLE editor_state_revisions__p12cc2_mig "
+        "RENAME TO editor_state_revisions"
+    )
+    # 重建全部索引（单列 + 复合）
+    conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_editor_state_revisions_workspace_id "
+        "ON editor_state_revisions(workspace_id)"
+    )
+    conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_editor_state_revisions_project_id "
+        "ON editor_state_revisions(project_id)"
+    )
+    conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_editor_state_revisions_created_at "
+        "ON editor_state_revisions(created_at)"
+    )
+    conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_esr_workspace_project_created_id "
+        "ON editor_state_revisions(workspace_id, project_id, created_at, id)"
+    )
+
+
 def ensure_schema_columns(target_engine=None) -> None:
     """
     用途：SQLite 个人版轻量加列（create_all 不会改已有表）。
@@ -184,3 +289,5 @@ def ensure_schema_columns(target_engine=None) -> None:
             except Exception:
                 # 列已存在或其它可忽略错误
                 pass
+        # P12C-C2：九来源 CHECK 迁移失败必须回滚并阻止启动（不吞异常）
+        migrate_editor_state_revisions_revision_restore_source(conn)
