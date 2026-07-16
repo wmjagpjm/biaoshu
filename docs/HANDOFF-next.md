@@ -21,7 +21,8 @@
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
 当前进度：P12A、P12B-A/B/C/D、P12C-A/B/C、P9D、P9C-R1、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。P9C-R1 冻结=`cd70ef0`、实现=`b53dcce`；后端全量 817、前端全量 284 passed。
 当前状态：P9C-R1 固定离线模型运行时门已完成真实验收；本机固定模型为 10 文件/96,378,176 字节，真实合成集 Recall@5=1.0、NDCG@5=0.927295，生产加载严格离线。
-下一步：先做新一轮全局只读审计，从真实 MinerU/Docling 生产部署、Word structure/整章布局、合法外部标讯来源、有限版本治理扩展等剩余主线中选择一个可独立验收的最小包；先冻结契约/计划，再通过消息箱交给 Grok 实现。不得把多个高风险域合包。
+当前执行包：P12D-A 修订与当前状态差异摘要 API 已完成只读审计并冻结；仅新增后端只读 comparison、完整 13 键规范比较和两侧六项有界摘要，前端入口不在本包。
+下一步：提交并推送 P12D-A 契约/计划，再通过本地消息箱下发四文件 failure-first 任务。Grok 只实现和自测，不得修改 P12C 权威服务、前端、文档或提交推送；Codex 负责受限审查、全量验收与中文闭环。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -498,6 +499,8 @@ frontend/src/features/
 | docs/plans/2026-07-15-p8e-docling-local-helper-plan.md | P8E 两阶段受限实施与验收计划 |
 | docs/p9c-fixed-model-runtime-gate-contract.md | P9C-R1 固定提交、显式准备、严格离线加载与真实预检冻结契约 |
 | docs/plans/2026-07-16-p9c-fixed-model-runtime-gate-plan.md | P9C-R1 六文件 failure-first、Grok 自测与 Codex 真实验收计划 |
+| docs/p12d-revision-current-diff-summary-contract.md | P12D-A 当前状态与目标修订只读差异摘要契约 |
+| docs/plans/2026-07-16-p12d-revision-current-diff-summary-plan.md | P12D-A 四文件 failure-first、零写与 Codex 全量验收计划 |
 | docs/p12a-editor-state-manual-checkpoints-contract.md | P12A 手动检查点只读库冻结契约 |
 | docs/plans/2026-07-15-p12a-editor-state-manual-checkpoints-plan.md | P12A 七文件后端实施与验收计划 |
 | docs/p12b-editor-state-version-foundation-contract.md | P12B-A 全状态版本与可选 CAS 冻结契约 |
@@ -590,7 +593,7 @@ frontend/src/features/
 - **M3-C 融合写入单批撤销交付**：计划=`c63310f`，实现=`b8ff605`。当前融合对话框只保存最近成功批次的最小内存快照；撤销点击时精确校验章节存在性、标题、正文和状态，未漂移才恢复正文与原状态，漂移章跳过。快照一次消费、关闭即失效；无新 API、后端、存储、历史栈或通用撤销。完整契约见 `docs/m3c-content-fuse-undo-contract.md`。
 - **M3-D 融合写入持久恢复交付**：计划=`d326c7d`、后端=`6a5f61f`、前端=`b89a387`。后端以成功任务结果为唯一建议权威，锁内校验 base，同事务写章节/快照/裁剪，最近 20 批且漂移安全一次消费；前端确认前零本地写，POST 成功后唯一真实重载，业务已完成但重载失败有独立固定中文，项目/关闭迟到不污染，不写浏览器存储或外网。完整契约见 `docs/m3d-content-fuse-persistent-recovery-contract.md`。
 - **P9D 导出图片失效引用提示交付**：计划=`4925a51`，实现=`e5adad7`。技术标/商务标成功 export 只消费后端 `imageWarnings`，最多 20 条、每条 240 码点，以 React 纯文本显示且继续下载；告警绑定项目并用实例代次隔离迟到响应。两轮审查修复首帧旧告警/迟到污染、E2E 假同步、调用顺序和 lint warning。完整契约见 `docs/p9d-export-image-warning-contract.md`。
-- **已验证基线**：P12C-C3 专项/checkpoint/truth **21/51/46**、前端单 worker 零重试全量 **284 passed**，lint/build/七文件白名单/diff 通过；P12C-C2 专项/四文件回归 23/121、后端串行全量 800 passed（只有 1 条既有 Starlette/httpx 弃用告警）。P12C-C1 历史基线为 13/201/777，P12C-B-D3 为 18/270/764，P12C-B-D2 为 25/299/746，P12C-B-D1 为 11/285/732，P12C-B-C2 为 20/272/721，P12C-B-C1 为 10/224/711，P12C-B-B2 为 11/147/701，P12C-B-B1 为 10/126/690，P12C-B-A 为 14/107/680，P12C-A 为 67/77/666；P12B-D1 历史基线为 58/81/599，P12B-C 为 570/212，P8E Docling 46、MinerU 54 继续保留。**E2E 共用 SQLite 重置库，所有 Playwright 命令必须串行。**
+- **已验证基线**：P9C-R1 专项/语义/知识库完整 **17/21/28**、真实预检 **1.0/0.927295**、后端串行全量 **817 passed**（只有 1 条既有 Starlette/httpx 弃用告警）；P12C-C3 专项/checkpoint/truth **21/51/46**、前端单 worker 零重试全量 **284 passed**，lint/build/七文件白名单/diff 通过。P12C-C2 历史基线为 23/121/800，P12C-C1 为 13/201/777，P12C-B-D3 为 18/270/764，P12C-B-D2 为 25/299/746，P12C-B-D1 为 11/285/732，P12C-B-C2 为 20/272/721，P12C-B-C1 为 10/224/711，P12C-B-B2 为 11/147/701，P12C-B-B1 为 10/126/690，P12C-B-A 为 14/107/680，P12C-A 为 67/77/666；P8E Docling 46、MinerU 54 继续保留。**E2E 共用 SQLite 重置库，所有 Playwright 命令必须串行。**
 - **P10J 已完成**：契约=`docs/p10j-finance-personal-cost-change-events-contract.md`，计划=`docs/plans/2026-07-14-p10j-finance-personal-cost-change-events-plan.md`。两轮后端审查和一轮前端测试网络审查均闭环。
 - **P8C 已完成**：契约=`docs/p8c-local-parser-one-time-callback-ticket-contract.md`，计划=`docs/plans/2026-07-14-p8c-local-parser-one-time-callback-ticket-plan.md`。两轮后端审查和三轮前端反假绿审查均闭环；它只补 required 模式回传授权，不交付 MinerU/Docling 运行时。
 - **P10K 已完成**：计划=`2e53007`、后端=`1eaa75e`、前端=`dbf301c`。最小 `finance_project_cost_change_events` 只记录本包上线后 P10C 成功变更并与业务/审计同事务；项目 GET 只回 action/entryId/actorScope/occurredAt，前端只在 `/finance` 显式点击后读取。后端全量 453、前端全量 140 均通过。
@@ -614,8 +617,9 @@ frontend/src/features/
 - **P12C-C2 已完成**：冻结=`54af600`、范围修订=`2276366`、实现=`0803250`。严格 expected CAS、C1 目标重验、安全检查点、共享写回、准确 `revision_restore`、双配额和旧库迁移已闭环；Codex 独立 23/121/800 验收通过。
 - **P12C-C3 已完成**：冻结=`6b9143a`、实现=`5e4f9f6`。默认折叠、严格列表/按需摘要、共享令牌/保存链、执行时 expected、唯一重读和 list/detail/restore 迟到隔离已闭环；多轮反假绿后 Codex 独立 21/51/46/284、lint/build 验收通过。无删除、diff、搜索、跨项目历史、超出最近 10 条的完整历史/保留策略或多人协作。
 - **P9C-R1 已完成并推送**：冻结=`cd70ef0`、实现=`b53dcce`。固定依赖、固定 endpoint/revision/10 文件/权重哈希、显式准备唯一联网路径、生产/预检严格离线和跨 cwd 缓存确定性均已闭环；真实制品指纹=`a04f4aa475164fb551464a0320b09c37`，预检 Recall@5=`1.0`、NDCG@5=`0.927295`，后端全量 **817 passed**。首次专项 8 failed；返修红测 11 failed / 6 passed，最终专项 17 passed。测试假制品临时写入已从约 0.54 GiB 收敛到 925 字节。模型缓存被 Git 忽略，不是仓库交付物。
+- **当前已冻结未实现包**：P12D-A 修订与当前状态差异摘要 API；四文件只读组合既有当前状态与目标修订重验，按完整 13 键规范 JSON 比较，只返回变更字段与两侧六项有界摘要。禁止正文/值/ID/版本回显、数据库写入、前端、任意历史两两比较、删除、搜索或分页。
 - **其余未实现主线**：修订删除、diff、搜索、跨项目历史、超出最近 10 条的完整历史/保留策略与多人协作；MinerU/Docling 自动安装、模型打包、常驻服务、真实模型样本验收与完整孙进程治理；P9C 真实用户语料调优、其他模型/GPU/在线 embedding/自动更新；Word `structure`/整章布局；除国能 e 招外的合法外部标讯来源；人力附件/真实证件核验；财务税务/审批/导出/预算/回款/版本、失败尝试与完整身份审计；投标人矩阵明细/版本/结果跟踪；Alembic、PostgreSQL、HTTPS、Key 加密、Docker 和公网 SaaS。
 - 新任务分工不变：Grok 只负责限定实现与自测，未经 Codex 审查确认不得提交；Codex 负责计划、范围冻结、差异审查、独立测试、验收、中文提交、文档闭环和 GitHub 状态核验。每一包仍按“计划提交 → 实现提交 → 文档闭环提交 → 推送协作分支”执行，禁止合包。
 - GitHub 若出现连接重置，可在当前 PowerShell 进程临时配置 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY=http://127.0.0.1:7890` 与 `NO_PROXY=localhost,127.0.0.1` 后重试；不得把代理或凭据写入仓库。
 
-**换会话可直接：核验分支、HEAD/远端与工作区 → 读本文 §0～§3.1、§4.23、§5、§6、§11、P9C-R1 契约/计划及路线图 → 确认 P9C-R1 实现 `b53dcce` 已推送、后端/前端全量 817/284 passed、真实离线预检 1.0/0.927295 → 对剩余主线做只读审计并冻结一个最小下一包，再交给 Grok 实现。禁止重新实现 P9C-R1 或 P12C-C3/C2/C1/B-D3/D2/D1/C2/C1/B2/B1/A、让 Grok commit/push、在生产请求隐式下载模型、默认合入其他模型/GPU/在线 embedding/真实用户语料，或由 Codex 冒充 Grok 完成主实现。**
+**换会话可直接：核验分支、HEAD/远端与工作区 → 读本文 §0～§3.1、§4.23、§5、§6、§11、P12D-A 契约/计划及路线图 → 确认 P9C-R1 实现 `b53dcce` 已推送、后端/前端全量 817/284 passed → 继续 P12D-A 四文件 failure-first、Grok 实现、Codex 审查与全量验收。禁止重新实现 P9C-R1 或 P12C-C3/C2/C1/B-D3/D2/D1/C2/C1/B2/B1/A、让 Grok commit/push、把 P12D-A 扩成正文 diff/前端/任意历史比较/删除/分页/多人协作，或由 Codex 冒充 Grok 完成主实现。**
