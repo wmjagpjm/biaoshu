@@ -454,7 +454,8 @@ def _source_kind_literal_on_call(call: ast.Call) -> str | None:
 def test_ast_apply_unique_literal_source_consume_zero_recorder():
     """
     用途：AST 补充证明 apply 内唯一 record、字面量 content_fuse_apply；
-      consume 与 restore 零 recorder 调用。不能替代真实 HTTP 证据。
+      D2 后 consume 内唯一 record、字面量 content_fuse_consume；checkpoint 零调用。
+      不能替代真实 HTTP 证据。
     """
     apply_fn = _find_function_def(_SERVICE_PATH, "apply_content_fuse_application")
     assert apply_fn is not None
@@ -485,7 +486,20 @@ def test_ast_apply_unique_literal_source_consume_zero_recorder():
         if isinstance(n, ast.Call)
         and _call_func_name(n) == "record_editor_state_transition"
     ]
-    assert consume_records == [], "consume 不得调用 recorder（D2 另包）"
+    # D2 阶段守卫：consume 内恰好一次 recorder，字面量 content_fuse_consume
+    assert len(consume_records) == 1, (
+        f"consume 应有且仅有一次 record 调用，实际 {len(consume_records)}"
+    )
+    consume_src = _source_kind_literal_on_call(consume_records[0])
+    assert consume_src == _SOURCE_CONSUME, (
+        f"source_kind 必须字面量 content_fuse_consume，实际 {consume_src!r}"
+    )
+    consume_gets = [
+        n
+        for n in ast.walk(consume_fn)
+        if isinstance(n, ast.Call) and _call_func_name(n) == "get_editor_state"
+    ]
+    assert consume_gets == [], "consume restored>0 路径禁止 get_editor_state 重读"
 
     # 全文件不得出现 checkpoint_restore 来源或 restore 调用
     tree = ast.parse(_SERVICE_PATH.read_text(encoding="utf-8"))
@@ -498,7 +512,7 @@ def test_ast_apply_unique_literal_source_consume_zero_recorder():
         if name == "record_editor_state_transition":
             lit = _source_kind_literal_on_call(call)
             assert lit != _SOURCE_CHECKPOINT
-            assert lit != _SOURCE_CONSUME
+            assert lit in {_SOURCE_APPLY, _SOURCE_CONSUME}, lit
 
 
 # ---------- 成功路径 ----------
@@ -1134,8 +1148,8 @@ def test_consume_after_apply_does_not_record_consume_or_extra_apply(
     client: TestClient,
 ):
     """
-    用途：成功 apply 后执行零/部分/完整 consume，本包只保留 apply 修订；
-      content_fuse_consume 行数精确为零，且修订账本身份序列在 consume 前后完全不变。
+    用途：D2 阶段守卫——完整/部分 consume 各精确 +1 content_fuse_consume，
+      零恢复身份序列全等；全程不新增额外 apply 或 checkpoint 来源。
     """
     pid = _create_project(client, name="consume未误接")
     chs = _default_chapters(2)
@@ -1157,36 +1171,46 @@ def test_consume_after_apply_does_not_record_consume_or_extra_apply(
     batch_full = body["batchId"]
     rows_after_apply = _db_rev_rows(pid)
     apply_n = _apply_count(rows_after_apply)
+    n_after_apply = len(rows_after_apply)
     assert apply_n == 1
     assert _source_count(rows_after_apply, _SOURCE_CONSUME) == 0
     # 完整 consume 前：锁定精确修订身份序列（id/版本/来源）
     ledger_before_full_consume = _revision_identity_seq(rows_after_apply)
-    assert len(ledger_before_full_consume) == len(rows_after_apply)
+    assert len(ledger_before_full_consume) == n_after_apply
     assert all(
         _REVISION_ID_RE.fullmatch(rid) and _STATE_VERSION_RE.fullmatch(ver)
         for rid, ver, _src in ledger_before_full_consume
     )
 
-    # 完整 consume（两章均可恢复）
+    # 完整 consume（两章均可恢复）→ D2 精确 +1 content_fuse_consume
     c1 = client.post(
         _consume_url(pid, batch_full),
         json={"expectedStateVersion": after_apply},
     )
     assert c1.status_code == 200, c1.text
     assert c1.json()["restoredChapterCount"] == 2
+    consume_after1 = _assert_state_version(c1.json()["stateVersion"])
+    assert consume_after1 != after_apply
     rows1 = _db_rev_rows(pid)
-    # D1 不接 consume：章节状态可变，修订账本身份序列必须完全不变
-    assert len(rows1) == len(ledger_before_full_consume)
-    assert _revision_identity_seq(rows1) == ledger_before_full_consume
-    assert _apply_count(rows1) == apply_n == 1
-    assert _source_count(rows1, _SOURCE_CONSUME) == 0
-    assert all(r.source_kind != _SOURCE_CONSUME for r in rows1)
+    assert len(rows1) == n_after_apply + 1
+    assert _apply_count(rows1) == apply_n == 1  # 不新增 apply
+    assert _source_count(rows1, _SOURCE_CONSUME) == 1
+    # 完整恢复可能回到历史 browser_put 同一 stateVersion，必须按版本+来源锁定
+    consume_matched1 = [
+        r
+        for r in rows1
+        if r.state_version == consume_after1 and r.source_kind == _SOURCE_CONSUME
+    ]
+    assert len(consume_matched1) == 1
+    assert _REVISION_ID_RE.fullmatch(consume_matched1[0].id)
+    # 旧 apply 行身份保留
+    assert set(ledger_before_full_consume).issubset(set(_revision_identity_seq(rows1)))
     assert all(r.source_kind != _SOURCE_CHECKPOINT for r in rows1)
 
-    # 部分恢复：再 apply 双章；consume 不记账 → 最新仍是上次 apply after → 补 before+after
+    # 部分恢复：再 apply 双章；D2 后 consume 已落账 → 最新=consume after → 仅 +1 apply after
     state_mid = _get_state(client, pid)
     v_mid = state_mid["stateVersion"]
-    assert v_mid != after_apply  # 完整 consume 已改状态版本但未落账
+    assert v_mid == consume_after1
     chs_now = state_mid["chapters"]
     live_a = next(c for c in chs_now if c["id"] == "chap_a")
     live_b = next(c for c in chs_now if c["id"] == "chap_b")
@@ -1219,9 +1243,9 @@ def test_consume_after_apply_does_not_record_consume_or_extra_apply(
     batch2 = body2["batchId"]
     rows_after_apply2 = _db_rev_rows(pid)
     apply_n2 = _apply_count(rows_after_apply2)
-    # 精确 +2：before（consume 后断链补点）+ after
-    assert apply_n2 == apply_n + 2 == 3
-    assert _source_count(rows_after_apply2, _SOURCE_CONSUME) == 0
+    # 精确 +1 apply after（无断链补点）
+    assert apply_n2 == apply_n + 1 == 2
+    assert _source_count(rows_after_apply2, _SOURCE_CONSUME) == 1
 
     # 外部 browser_put 改写 chap_b → 部分漂移已落账
     state_after2 = _get_state(client, pid)
@@ -1233,7 +1257,7 @@ def test_consume_after_apply_does_not_record_consume_or_extra_apply(
                 next(c for c in state_after2["chapters"] if c["id"] == "chap_a"),
                 {
                     **(next(c for c in state_after2["chapters"] if c["id"] == "chap_b")),
-                    "body": "外部漂移正文-不得被 consume 记修订",
+                    "body": "外部漂移正文-部分 consume 只记一条",
                     "status": "needs_review",
                 },
             ],
@@ -1243,15 +1267,21 @@ def test_consume_after_apply_does_not_record_consume_or_extra_apply(
     v_drift = drifted["stateVersion"]
     rows_before_partial = _db_rev_rows(pid)
     apply_before_partial = _apply_count(rows_before_partial)
-    # browser_put 漂移落账后、部分 consume 前：锁定精确身份序列
+    n_before_partial = len(rows_before_partial)
     ledger_before_partial_consume = _revision_identity_seq(rows_before_partial)
-    assert apply_before_partial == apply_n2 == 3
-    assert len(ledger_before_partial_consume) == len(rows_before_partial)
-    # 漂移 PUT 相对第二轮 apply 后精确 +1 browser_put（总数 = apply2 账本 + 1）
-    assert len(ledger_before_partial_consume) == len(rows_after_apply2) + 1
+    assert apply_before_partial == apply_n2 == 2
+    assert len(ledger_before_partial_consume) == n_before_partial
+    # 漂移 PUT 相对第二轮 apply 后精确 +1 browser_put
+    assert n_before_partial == len(rows_after_apply2) + 1
     drift_rows = _rows_by_version(rows_before_partial, v_drift)
     assert len(drift_rows) == 1
     assert drift_rows[0].source_kind == _SOURCE_BROWSER
+    # browser + apply 行身份保留对照
+    browser_and_apply_before = [
+        (rid, ver, src)
+        for rid, ver, src in ledger_before_partial_consume
+        if src in {_SOURCE_BROWSER, _SOURCE_APPLY}
+    ]
 
     c_partial = client.post(
         _consume_url(pid, batch2),
@@ -1260,18 +1290,30 @@ def test_consume_after_apply_does_not_record_consume_or_extra_apply(
     assert c_partial.status_code == 200, c_partial.text
     assert c_partial.json()["restoredChapterCount"] == 1
     assert c_partial.json()["skippedChapterCount"] == 1
+    consume_after_partial = _assert_state_version(c_partial.json()["stateVersion"])
+    assert consume_after_partial != v_drift
     rows_partial = _db_rev_rows(pid)
-    # 部分恢复会改 editor-state，但修订账本身份序列必须完全不变
-    assert len(rows_partial) == len(ledger_before_partial_consume)
-    assert _revision_identity_seq(rows_partial) == ledger_before_partial_consume
-    assert _apply_count(rows_partial) == apply_before_partial == 3
-    assert _source_count(rows_partial, _SOURCE_CONSUME) == 0
+    # 部分恢复：精确 +1 content_fuse_consume；apply/browser 身份不变
+    assert len(rows_partial) == n_before_partial + 1
+    assert _apply_count(rows_partial) == apply_before_partial == 2
+    assert _source_count(rows_partial, _SOURCE_CONSUME) == 2
+    partial_matched = [
+        r
+        for r in rows_partial
+        if r.state_version == consume_after_partial
+        and r.source_kind == _SOURCE_CONSUME
+    ]
+    assert len(partial_matched) == 1
+    assert _REVISION_ID_RE.fullmatch(partial_matched[0].id)
+    assert set(browser_and_apply_before).issubset(
+        set(_revision_identity_seq(rows_partial))
+    )
     assert all(r.source_kind != _SOURCE_CHECKPOINT for r in rows_partial)
 
     # 零恢复：再 apply 后外部双章漂移
     state3 = _get_state(client, pid)
     v3 = state3["stateVersion"]
-    assert v3 != v_drift  # 部分 consume 已改状态版本但未落账
+    assert v3 == consume_after_partial
     live_a3 = next(c for c in state3["chapters"] if c["id"] == "chap_a")
     sugs3 = [
         _suggestion(
@@ -1289,9 +1331,9 @@ def test_consume_after_apply_does_not_record_consume_or_extra_apply(
     batch3 = body3["batchId"]
     rows_after_apply3 = _db_rev_rows(pid)
     apply_n3 = _apply_count(rows_after_apply3)
-    # 精确 +2：before（部分 consume 后断链补点）+ after
-    assert apply_n3 == apply_n2 + 2 == 5
-    assert _source_count(rows_after_apply3, _SOURCE_CONSUME) == 0
+    # 精确 +1 apply after（无断链补点）
+    assert apply_n3 == apply_n2 + 1 == 3
+    assert _source_count(rows_after_apply3, _SOURCE_CONSUME) == 2
 
     state_after3 = _get_state(client, pid)
     drifted_zero = _put_state(
@@ -1317,8 +1359,10 @@ def test_consume_after_apply_does_not_record_consume_or_extra_apply(
     rows_before_zero = _db_rev_rows(pid)
     apply_before_zero = _apply_count(rows_before_zero)
     n_before_zero = len(rows_before_zero)
+    consume_before_zero = _source_count(rows_before_zero, _SOURCE_CONSUME)
     ledger_before_zero_consume = _revision_identity_seq(rows_before_zero)
-    assert apply_before_zero == apply_n3 == 5
+    assert apply_before_zero == apply_n3 == 3
+    assert consume_before_zero == 2
     # 零恢复漂移 PUT 相对第三轮 apply 后精确 +1 browser_put
     assert n_before_zero == len(rows_after_apply3) + 1
 
@@ -1330,16 +1374,16 @@ def test_consume_after_apply_does_not_record_consume_or_extra_apply(
     assert c_zero.json()["restoredChapterCount"] == 0
     assert c_zero.json()["stateVersion"] == v_zero  # 零恢复版本不变
     rows_zero = _db_rev_rows(pid)
-    # 零恢复：版本不变，修订账本身份序列精确零增量
+    # 零恢复：版本不变，修订账本身份序列精确零增量（禁止仅数 consume 来源）
     assert len(rows_zero) == n_before_zero
     assert _revision_identity_seq(rows_zero) == ledger_before_zero_consume
-    assert _apply_count(rows_zero) == apply_before_zero == apply_n3 == 5
-    assert _source_count(rows_zero, _SOURCE_CONSUME) == 0
+    assert _apply_count(rows_zero) == apply_before_zero == apply_n3 == 3
+    assert _source_count(rows_zero, _SOURCE_CONSUME) == consume_before_zero == 2
     assert all(r.source_kind != _SOURCE_CHECKPOINT for r in rows_zero)
-    # 全程：完整/部分/零 consume 均未写入 content_fuse_consume
-    assert _source_count(rows_zero, _SOURCE_CONSUME) == 0
-    # 全程精确 apply 计数：1 → 3 → 5（每次 consume 断链后 apply 补 before+after）
-    assert apply_n == 1 and apply_n2 == 3 and apply_n3 == 5
+    # 全程：完整/部分各 1 条 consume；零恢复不新增
+    assert _source_count(rows_zero, _SOURCE_CONSUME) == 2
+    # 全程精确 apply 计数：1 → 2 → 3（consume 已落账，无断链补点）
+    assert apply_n == 1 and apply_n2 == 2 and apply_n3 == 3
 
 
 def test_response_version_matches_get_and_after_snapshot(client: TestClient):

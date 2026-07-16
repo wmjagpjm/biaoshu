@@ -666,16 +666,18 @@ def consume_content_fuse_application(
     二次开发：
       - 锁后先全状态 CAS；冲突时批次不消费、章节零写；
       - 全状态匹配后仍执行原 after 漂移规则；
-      - 零恢复时版本等于操作前（批次消费不进 13 键）。
+      - 零恢复时版本等于操作前（批次消费不进 13 键）；
+      - restored>0 才在原唯一 commit 前固定 content_fuse_consume 记账。
     """
     _require_technical_project(db, workspace_id, project_id, lock=False)
     # 全状态优先：不匹配则抛 EditorStateVersionConflict，不消费批次
-    state_row, current_state = (
+    # before_state 复用锁后权威视图，供 restored>0 时同事务修订账本 before 侧
+    state_row, before_state = (
         editor_state_service.lock_and_assert_expected_state_version(
             db, workspace_id, project_id, expected_state_version
         )
     )
-    pre_version = current_state["stateVersion"]
+    pre_version = before_state["stateVersion"]
 
     batch = db.get(ContentFuseApplicationBatchRow, batch_id)
     if (
@@ -760,12 +762,19 @@ def consume_content_fuse_application(
         state_row.updated_at = now
     batch.state = "consumed"
     batch.consumed_at = now
-    # 零恢复：批次消费不进 13 键，版本等于操作前；有恢复则 commit 前重算
+    # 零恢复：批次消费不进 13 键，不调 recorder，版本等于操作前
+    # restored>0：同一内存行构造 after，原唯一 commit 前固定 content_fuse_consume
     if restored > 0:
-        new_state = editor_state_service.get_editor_state(
-            db, workspace_id, project_id
+        after_state = editor_state_service._state_from_row(project_id, state_row)
+        editor_state_revision_service.record_editor_state_transition(
+            db,
+            workspace_id,
+            project_id,
+            before_state=before_state,
+            after_state=after_state,
+            source_kind="content_fuse_consume",
         )
-        new_version = new_state["stateVersion"]
+        new_version = after_state["stateVersion"]
     else:
         new_version = pre_version
     db.commit()
