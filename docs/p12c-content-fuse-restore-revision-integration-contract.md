@@ -7,7 +7,7 @@
 
 # P12C-B-D content-fuse 与 checkpoint restore 修订账本接入契约
 
-> **状态**：三类写入只读审计完成；D1 `content_fuse_apply` 与 D2 `content_fuse_consume` 均已实现、独立验收并推送；D3 checkpoint restore 是下一包，必须独立冻结。
+> **状态**：三类写入只读审计完成；D1 `content_fuse_apply` 与 D2 `content_fuse_consume` 均已实现、独立验收并推送；D3 checkpoint restore 已冻结，待 failure-first 与实现。
 > **前置**：P12C-B-C2 冻结=`52bbabf`、实现=`82cc82e`、闭环=`3f77559`；后端/前端串行全量基线 **721/263 passed**。
 > **D1 提交**：冻结=`e8ffaeb`、实现=`a6a28f6`；Codex 独立后端基线 **11/285/732 passed**，前端沿用 **263 passed**。
 > **D2 提交**：冻结=`6b83fc1`、实现=`f256f5b`；Codex 独立后端基线 **25/299/746 passed**，前端沿用 **263 passed**。
@@ -133,3 +133,55 @@ Grok 在冻结提交 `6b83fc1` 后按精确三文件白名单完成 failure-firs
 Codex 独立确认完整/部分恢复精确 +1、遗留空账本 before+after、零恢复只消费、跨项目/跨空间零副作用、两类真实双并发精确错误码、recorder flush/commit 失败全域回滚及公开 500 脱敏。专项 **25 passed**、扩大受影响回归 **299 passed**、后端串行全量 **746 passed**；均只有 1 条既有 Starlette/httpx 弃用警告。三文件 `py_compile`、`git diff --check`、精确白名单、暂存区与分支/远端检查通过。Codex 确认=`msg_2e23e5e7f9414b52b83569b526592426`，实现提交 `f256f5b` 已推送 `collab/grok-code-codex-review`。
 
 D2 闭环后仍未实现 `checkpoint_restore` 修订接入、修订历史 API/前端、删除、diff、搜索或多人协作。下一包只能先只读审计 P12B-D 安全检查点恢复的复合事务，再冻结 P12C-B-D3；不得把 D2 的条件记账机械复制到 restore。
+
+## 10. P12C-B-D3 checkpoint restore 冻结边界
+
+### 10.1 只读审计结论
+
+`restore_editor_state_checkpoint` 已在一次项目写锁和一个显式回滚域内完成：锁后全状态 CAS、目标检查点三重作用域读取与严格重验、恢复前安全检查点插入、共享 13 键写回、目标版本复核、保护安全检查点地裁剪、提交前响应构造和唯一 commit。D3 不得重做 P12B-D，也不得嵌套调用自行提交的检查点创建或 editor-state upsert。
+
+修订账本的状态版本只覆盖规范 13 键，不含 `updatedAt`。因此必须精确区分：
+
+- 当前版本与目标版本不同：发生真实规范状态迁移，固定 `checkpoint_restore` 记录一次 before→after transition；空账本允许 recorder 写 before+after，已有连续基线精确新增一条 after；
+- 当前版本与目标版本相同：恢复仍按 P12B-D 语义创建恢复前安全检查点、更新 `updatedAt` 并成功返回，但规范 13 键及 `stateVersion` 未迁移，必须零修订；不得因账本为空而伪造一条 before；
+- 恢复回到历史上已出现过的版本：只要它与当前最新版本不同，就必须作为新的时间点再次追加，不能按“全表已有该版本”去重。
+
+### 10.2 精确文件白名单
+
+Grok 只允许修改：
+
+1. `backend/app/services/editor_state_checkpoint_service.py`；
+2. 新增 `backend/tests/test_p12c_checkpoint_restore_revisions.py`。
+
+禁止修改 API 路由、Schema、`editor_state_service.py`、`editor_state_revision_service.py`、模型、认证中间件、既有测试、前端、依赖、配置或文档；禁止新增或移动 commit、rollback、refresh、项目锁、目标/状态读取、检查点插入/裁剪或公开字段。除调用无提交 recorder 的内部最新版本查询与裁剪外，不得新增查询。Grok 不得 git add、commit 或 push。
+
+### 10.3 固定实现位置与事务顺序
+
+在既有锁后 `current_state`、目标严格重验、安全检查点插入、共享写回和 `result_version == target_version` 复核全部成功后，且在 `_trim_checkpoints` 与原唯一 commit 之前：
+
+- 若 `result_version != current_state["stateVersion"]`，以 `current_state` 为 before、`result_state` 为 after、固定字面量 `source_kind="checkpoint_restore"` 调用 `record_editor_state_transition`；
+- 若两版本相同，禁止调用 recorder；
+- recorder、revision 裁剪、检查点保护裁剪和 commit 必须留在现有同一 try/rollback 域；任何一步失败都要让 editor-state、安全检查点与 revision 三域同时回滚；
+- 成功响应继续使用既有目标版本、检查点 ID 与 `restoredAt`，提交后仍禁止 refresh 或 `get_editor_state` 重读。
+
+### 10.4 必须证明的行为
+
+1. 遗留空账本从 B 恢复到不同目标 A：精确形成 before(B)+after(A) 两条 `checkpoint_restore`，after 版本与响应、最终 GET、目标检查点一致；安全检查点快照精确等于 B；
+2. 已有 `browser_put`/其他来源连续基线：恢复到不同目标只精确 +1 checkpoint after，旧行 ID/版本/来源完全保留；技术标和商务标均不得改变 P12B-D 的 13 键恢复语义；
+3. 同内容恢复：安全检查点仍精确 +1，响应成功且 `restoredAt` 对齐最终 `updatedAt`；规范 13 键、版本和 revision 身份序列精确不变。必须包含遗留空账本，防止无条件 recorder 在空账本伪造 before；
+4. 回退到已出现过的历史目标版本时，每次从不同当前版本恢复都精确新增一个新的 checkpoint after 行；禁止用版本集合或随机 ID 顺序假设冒充新时间点；
+5. 缺/坏 expected、陈旧 409、项目/检查点不存在、跨项目、真实跨空间、损坏/超限目标以及写回后版本漂移，均不得新增 revision、安全检查点或 editor-state 写入；公开错误不泄漏 ID、正文、版本、SQL、表名、路径、异常类型或内部来源；
+6. 不同目标版本的真实双并发必须精确一胜一 `editor_state_version_conflict`，胜者只形成一个安全检查点和一次 checkpoint transition；不得只断言任意 409。相同内容不承诺一次性冲突，禁止把版本未变化的重复成功误写为单胜契约；
+7. recorder 真实 flush 后抛错、recorder/revision 裁剪失败、后续检查点裁剪失败和最终 commit 失败，均证明 editor-state、安全检查点、revision 三域全回滚且目标检查点仍可重试；commit 注入必须在同一 Session 观察 after revision、安全检查点和写回状态均已 pending；
+8. D1 apply 只保留 `content_fuse_apply`，D2 consume 只保留 `content_fuse_consume`，D3 restore 只允许 `checkpoint_restore`；请求体、检查点正文/ID 或客户端字段不能控制来源；
+9. AST 只能补充 restore 内唯一 recorder、固定字面来源、同版本分支不调用及无提交后重读，不能替代真实 HTTP、SQLite、跨空间、并发和回滚证据。
+
+### 10.5 failure-first 与验收门
+
+生产修改前必须先新增 D3 专项并真实运行，至少一项因 restore 尚未调用 recorder 而失败，同时同内容零修订用例应在旧生产上通过；必须报告精确失败/通过数。测试禁止 `>=`/`>0` 修订增量、空集合、宽泛 2xx/409 集合、固定 sleep、顺序调用冒充并发、跨项目冒充跨空间或 mock 掉 SQLite。
+
+Grok 至少串行运行新 D3 专项、既有 `test_editor_state_checkpoint_restore.py`、修订账本及 D1/D2 content-fuse 专项，再执行双文件 `py_compile`、`git diff --check`、暂存区与精确白名单检查。Codex 独立复跑专项、扩大恢复/editor-state/全部既有来源回归和后端串行全量；前端无改动，沿用单 worker、零重试 **263 passed** 基线。
+
+### 10.6 D3 非目标
+
+D3 不新增或修改检查点/修订历史 API、Schema 或前端，不改变手动/安全检查点最近 20 条与修订最近 10 条的独立裁剪域，不实现删除、diff、搜索、跨项目历史、任意修订恢复、自动定时历史或多人协作。P12C-C 必须等待 D3 实现与文档闭环后另行冻结。
