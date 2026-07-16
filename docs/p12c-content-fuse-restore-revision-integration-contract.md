@@ -7,7 +7,7 @@
 
 # P12C-B-D content-fuse 与 checkpoint restore 修订账本接入契约
 
-> **状态**：三类写入只读审计完成；D1 `content_fuse_apply` 已实现、独立验收并推送，D2 consume 与 D3 checkpoint restore 待后续独立冻结。
+> **状态**：三类写入只读审计完成；D1 `content_fuse_apply` 已实现、独立验收并推送；D2 `content_fuse_consume` 已冻结，待 failure-first 与实现；D3 checkpoint restore 待 D2 闭环后独立冻结。
 > **前置**：P12C-B-C2 冻结=`52bbabf`、实现=`82cc82e`、闭环=`3f77559`；后端/前端串行全量基线 **721/263 passed**。
 > **D1 提交**：冻结=`e8ffaeb`、实现=`a6a28f6`；Codex 独立后端基线 **11/285/732 passed**，前端沿用 **263 passed**。
 > **固定拆包**：D1 apply=`content_fuse_apply` → D2 consume=`content_fuse_consume` → D3 checkpoint restore=`checkpoint_restore`。三包分别失败先测、实现、验收、提交和闭环。
@@ -72,3 +72,53 @@ Codex 独立通过专项 **11 passed**、扩大融合/editor-state/检查点/全
 ## 6. 非目标
 
 D1 不接 `content_fuse_consume` 或 `checkpoint_restore`，不修改 M3-D 前端/队列/响应，不新增历史列表/详情/恢复/删除/diff/搜索，不改变批次 20 条配额、一次消费、章节漂移规则、任务建议协议或权限。D2/D3 仍须重新冻结，禁止从 D1 实现推断已自动接入。
+
+## 7. P12C-B-D2 consume 冻结边界
+
+### 7.1 精确文件白名单
+
+Grok 只允许修改：
+
+1. `backend/app/services/content_fuse_application_service.py`；
+2. `backend/tests/test_p12c_content_fuse_apply_revisions.py`，只把 D1 的“consume 尚未接入”阶段守卫机械更新为 D2 后真值，不得削弱 D1 apply 证据；
+3. 新增 `backend/tests/test_p12c_content_fuse_consume_revisions.py`。
+
+禁止修改 API 路由、共享 editor-state/revision service、模型、Schema、认证中间件、其他既有测试、前端、依赖、配置或文档；禁止新增/移动 commit、rollback、refresh、锁、查询、upsert、API 字段、历史 API 或日志。Grok 不得 commit/push。
+
+### 7.2 固定实现
+
+`consume_content_fuse_application` 复用现有锁原语返回的 `state_row/current_state`，其中 current 是服务端权威 before。现有章节漂移筛选、批次 `consumed` 标记和 `consumed_at` 不变：
+
+- `restored > 0`：写回同一 `state_row` 后用 `editor_state_service._state_from_row(project_id, state_row)` 构造 after，在原唯一 commit 前固定字面量 `content_fuse_consume` 调用无提交 recorder；响应版本直接取 after；
+- `restored == 0`：批次仍在原事务内消费，但不得调用 recorder、不得改 13 键状态或 `updatedAt`，响应版本继续精确等于操作前版本；
+- 删除 restored>0 成功路径的 `get_editor_state` 重读；不得改变完整/部分/零恢复数量、跳过规则、一次消费错误码或公开响应字段。
+
+### 7.3 必须证明的行为
+
+1. D1 apply 后完整恢复：无论恢复一至五章，同批只精确新增一条 `content_fuse_consume` after，响应/最终 GET/after 版本精确一致，不按章节数多记；
+2. 外部 `browser_put` 造成部分漂移后，部分恢复只精确新增一条 consume after；浏览器和 apply 行来源/身份不变，其他项目零增量；
+3. D1 以前遗留的空账本 active 批次完整恢复时，before+after 均以 `content_fuse_consume` 留史；空账本零恢复只消费且修订仍为零；
+4. 零恢复时批次必须 consumed、版本和 13 键完全不变、revision 身份序列完全不变；禁止仅断言 `content_fuse_consume == 0` 而放过其他来源误写；
+5. 缺/坏 expected、陈旧 CAS、项目/批次不存在、已消费、跨项目/跨空间以及失败请求均不得新增本次 consume 修订，不得改变 active 批次或章节；
+6. 完整恢复双并发恰好一胜一 409，胜者只留一条 consume after；零恢复双并发恰好一胜一“已消费”409，状态版本不变且 consume 修订为零；
+7. recorder 真实 flush 后抛错与最终 commit 抛错均走真实公开 HTTP/SQLite，证明章节、批次、revision 全域回滚且批次仍可重试；commit 注入必须在同一 Session 观察 consume after、来源、版本和 pending batch/chapter 已暂存；
+8. 公开 500 不泄漏正文、项目/任务/批次/建议 ID、版本、SQL、路径、表名、异常类型或内部来源；响应 shape、`no-store` 和版本格式不变；
+9. D1 apply 仍只记录 `content_fuse_apply`，D2 consume 只记录 `content_fuse_consume`，checkpoint restore 仍零 recorder；AST 只能补充固定调用数和字面来源，不能替代 HTTP、SQLite、并发与回滚证据。
+
+### 7.4 failure-first 与验收
+
+生产修改前必须先写/更新两份测试并真实运行，至少一项因 consume 未调用 recorder 失败，报告精确失败/通过数。专项禁止 `>=`、`>0`、空集合、随机 ID 顺序、宽泛状态集合、固定 sleep、顺序调用冒充并发或 mock 掉 SQLite。
+
+Grok 至少串行运行：
+
+```powershell
+cd C:\Users\Administrator\biaoshu\backend
+.\.venv\Scripts\python.exe -m pytest -q tests\test_p12c_content_fuse_consume_revisions.py tests\test_p12c_content_fuse_apply_revisions.py
+.\.venv\Scripts\python.exe -m pytest -q tests\test_content_fuse_applications.py tests\test_p12b_delayed_writer_fences.py tests\test_editor_state_revisions.py tests\test_p12c_browser_put_revisions.py tests\test_p12c_task_revisions.py tests\test_p12c_revise_revisions.py tests\test_p12c_personal_callback_revisions.py tests\test_p12c_local_parser_callback_revisions.py
+```
+
+再执行三文件 `py_compile`、`git diff --check`、暂存区检查和精确三文件白名单。Codex 独立扩大回归并运行后端串行全量；前端无改动，沿用 **263 passed** 串行基线。
+
+## 8. D2 非目标
+
+D2 不接 `checkpoint_restore`，不修改 M3-D 前端/队列/响应，不新增历史列表/详情/恢复/删除/diff/搜索，不改变 20 批配额、快照结构、章节漂移规则、零恢复一次消费、权限或审计。D3 必须在 D2 实现与文档闭环后重新冻结。
