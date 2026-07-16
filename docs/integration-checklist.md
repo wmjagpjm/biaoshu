@@ -173,7 +173,7 @@ npm run test:e2e:business-editor-state-truth
 npm run test:e2e:technical-editor-state-truth
 ```
 
-当前基线：后端串行全量 **800 passed**（1 条既有 Starlette/httpx 弃用警告）；P12C-C2 专项/四文件回归 **23/121 passed**，11 文件 `py_compile`、真实 SQLite 迁移失败回滚、白名单与 diff 检查通过。P12C-C1 历史基线为 13/201/777，P12C-B-D3 为 18/270/764，P12C-B-D2 为 25/299/746，P12C-B-D1 为 11/285/732，P12C-B-C2 为 20/272/721，P12C-B-C1 为 10/224/711，P12C-B-B2 为 11/147/701，P12C-B-B1 为 10/126/690，P12C-B-A 为 14/107/680，P12C-A 为 67/77/666。前端未因 C2 改动，`lint` / `build` 既有基线通过（仅大包体积提示），P12B-D2 专项/受影响回归 **51/63 passed**，Chromium headless、单 worker、零重试全量 E2E **263 passed**。P12B-D1 历史恢复专项/受影响回归/全量为 58/81/599；P12B-C3 历史后端/前端全量为 570/212；P12A、P8C、M3-D、P10K、P9D 及其他既有专项继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
+当前基线：后端串行全量 **800 passed**（1 条既有 Starlette/httpx 弃用警告）；P12C-C2 专项/四文件回归 **23/121 passed**，11 文件 `py_compile`、真实 SQLite 迁移失败回滚、白名单与 diff 检查通过。P12C-C1 历史基线为 13/201/777，P12C-B-D3 为 18/270/764，P12C-B-D2 为 25/299/746，P12C-B-D1 为 11/285/732，P12C-B-C2 为 20/272/721，P12C-B-C1 为 10/224/711，P12C-B-B2 为 11/147/701，P12C-B-B1 为 10/126/690，P12C-B-A 为 14/107/680，P12C-A 为 67/77/666。P12C-C3 前端独立结果为专项 **21 passed**、checkpoint restore **51 passed**、技术/商务 truth **46 passed**、Chromium headless 单 worker 零重试全量 **284 passed**；`lint` / `build` / 七文件白名单 / diff 通过，仅保留既有大 chunk 提示。P12B-D1 历史恢复专项/受影响回归/全量为 58/81/599；P12B-C3 历史后端/前端全量为 570/212；P12A、P8C、M3-D、P10K、P9D 及其他既有专项继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
 
 P8D/P8E 本机助手独立验收命令（仓库根；不安装或探测真实 MinerU/Docling）：
 
@@ -377,7 +377,21 @@ cd C:\Users\Administrator\biaoshu\backend
 .\.venv\Scripts\python.exe -m pytest -q --tb=line
 ```
 
-P12C-C2 已实现（冻结=`54af600`、范围修订=`2276366`、实现=`0803250`）。POST restore 严格 expected CAS 后复用 C1 三重作用域目标重验，以准确 `revision_restore` 与恢复前安全检查点、共享 13 键写回、双配额裁剪共享唯一事务；同内容只创建安全点并更新时间，零修订。Codex 首轮真实故障注入得到 **1 failed / 22 passed**，证明旧 SQLite 迁移失败会残留临时表；CREATE 前零行 DML 触发物理事务后，旧 DDL/八列逐值/索引/FK/旧 CHECK 完整且临时表不存在。独立结果为 **23 / 121 / 800 passed**；前端无改动沿用 **263 passed**。C3 前端、删除、diff、搜索、跨项目历史与多人协作仍未实现。
+P12C-C2 已实现（冻结=`54af600`、范围修订=`2276366`、实现=`0803250`）。POST restore 严格 expected CAS 后复用 C1 三重作用域目标重验，以准确 `revision_restore` 与恢复前安全检查点、共享 13 键写回、双配额裁剪共享唯一事务；同内容只创建安全点并更新时间，零修订。Codex 首轮真实故障注入得到 **1 failed / 22 passed**，证明旧 SQLite 迁移失败会残留临时表；CREATE 前零行 DML 触发物理事务后，旧 DDL/八列逐值/索引/FK/旧 CHECK 完整且临时表不存在。独立结果为 **23 / 121 / 800 passed**；前端入口随后已由 C3 完成。
+
+P12C-C3 独立验收命令（前端；必须逐条串行）：
+
+```powershell
+cd C:\Users\Administrator\biaoshu\frontend
+npx playwright test e2e/editor-state-revision-history.spec.ts --workers=1 --retries=0
+npx playwright test e2e/editor-state-checkpoint-restore.spec.ts --workers=1 --retries=0
+npx playwright test e2e/technical-editor-state-truth.spec.ts e2e/business-editor-state-truth.spec.ts --workers=1 --retries=0
+npm run lint
+npm run build
+npx playwright test --workers=1 --retries=0
+```
+
+P12C-C3 已实现（冻结=`6b9143a`、实现=`5e4f9f6`）。默认折叠零请求，展开只取最近 10 条元数据，详情严格校验后只保留六项有界摘要；revision ID/version/正文不进入可见 DOM、URL、存储或日志。恢复与检查点共用令牌和既有保存链，确认前零 POST、执行时使用最新 expected、成功唯一 editor-state GET；list/detail/restore 迟到以项目会话和详情操作代次隔离。多轮测试返修用真实检查点 create、双项目双 restore 与 `listCompleteLog/detailCompleteLog` 关闭互斥、旧 finally、迟到及 arrived 冒充 fulfill 假绿。Codex 独立结果为 **21 / 51 / 46 / 284 passed**，lint/build/diff/七文件白名单通过；后端沿用 **800 passed**。删除、diff、搜索、分页、跨项目历史、超出最近 10 条的完整历史/保留策略和多人协作仍未实现。
 
 ## 6. 已接 API 一览
 
@@ -386,6 +400,7 @@ P12C-C2 已实现（冻结=`54af600`、范围修订=`2276366`、实现=`0803250`
 | GET | `/api/health` |
 | GET | `/api/projects/{projectId}/editor-state-revisions`（最近 10 条元数据；不读取正文） |
 | GET | `/api/projects/{projectId}/editor-state-revisions/{revisionId}`（按需详情；三重作用域） |
+| POST | `/api/projects/{projectId}/editor-state-revisions/{revisionId}/restore`（执行时 expected；安全检查点后受限恢复） |
 | GET | `/api/auth/bootstrap-status`（公开；`bootstrapped`、`authRequired`） |
 | POST | `/api/auth/login`（公开；设置 HttpOnly 会话 Cookie） |
 | POST | `/api/auth/logout`（当前会话 + CSRF） |

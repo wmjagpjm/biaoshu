@@ -7,8 +7,8 @@
 
 # P12C editor-state 有限自动修订历史契约
 
-> **状态**：P12C-A 账本、P12C-B 八类原子写入来源、P12C-C1 只读列表/详情与 P12C-C2 受限恢复均已实现并独立验收；P12C-C3 双工作区前端已冻结。
-> **拆包**：P12C-A（`daa8c43`/`226e1c1`）→ B-A 浏览器 PUT（`fbf93c0`/`acf3139`）→ B-B1 九类任务（`05864f6`/`5a0d1c0`）→ B-B2 商务 revise（`3a30c03`/`5149385`）→ B-C1 个人 callback（`76834f5`/`1d0ce0e`）→ B-C2 P8C 票据 callback（`52bbabf`/`82cc82e`）→ B-D1 content-fuse apply（`e8ffaeb`/`a6a28f6`）→ B-D2 consume（`6b83fc1`/`f256f5b`）→ B-D3 checkpoint restore（`1d44484`/`b91a7ff`）→ P12C-C1 只读列表/详情（`26b504e`/`7023ecd`）→ C2 受限恢复（`54af600`/`2276366`/`0803250`）→ C3 双工作区前端（已冻结）。
+> **状态**：P12C-A 账本、P12C-B 八类原子写入来源、P12C-C1 只读列表/详情、P12C-C2 受限恢复与 P12C-C3 双工作区前端均已实现并独立验收。
+> **拆包**：P12C-A（`daa8c43`/`226e1c1`）→ B-A 浏览器 PUT（`fbf93c0`/`acf3139`）→ B-B1 九类任务（`05864f6`/`5a0d1c0`）→ B-B2 商务 revise（`3a30c03`/`5149385`）→ B-C1 个人 callback（`76834f5`/`1d0ce0e`）→ B-C2 P8C 票据 callback（`52bbabf`/`82cc82e`）→ B-D1 content-fuse apply（`e8ffaeb`/`a6a28f6`）→ B-D2 consume（`6b83fc1`/`f256f5b`）→ B-D3 checkpoint restore（`1d44484`/`b91a7ff`）→ P12C-C1 只读列表/详情（`26b504e`/`7023ecd`）→ C2 受限恢复（`54af600`/`2276366`/`0803250`）→ C3 双工作区前端（`6b9143a`/`5e4f9f6`）。
 
 ## 1. 只读审计结论
 
@@ -149,8 +149,10 @@ C2 冻结=`54af600`、范围修订=`2276366`、实现=`0803250`。固定新增 `
 
 Codex 用真实 DROP 前故障注入发现旧 SQLite 迁移首版在失败后残留临时表；Grok 受限返修为 CREATE 前零行 DML 触发物理事务后，失败路径完整保留旧 DDL/八列/索引/FK/CHECK 且不留临时表。独立通过专项 **23**、四文件 **121**、后端串行全量 **800 passed**；前端无改动沿用 **263 passed**。精确 API、11 文件白名单和完整反假绿记录见 `docs/p12c-revision-restore-contract.md` 与 `docs/plans/2026-07-16-p12c-revision-restore-plan.md`。前端、删除、diff、搜索和多人协作不在 C2；下一包只能先审计并冻结 C3 前端边界。
 
-## 19. P12C-C3 双工作区前端冻结
+## 19. P12C-C3 双工作区前端完成
 
 C3 只新增独立 revision API/共用折叠面板，并在技术/商务 hook 与页面复用 P12B-D2 已验收的版本化外部写队列。默认折叠零请求，列表最多 10 条，详情只在点击后读取并在 API 层压缩成有界计数摘要；原始 13 键快照不进入组件，revision ID 和版本只保留在内存，不进入可见 DOM、URL、存储或日志。恢复二次确认后使用执行时最新 expected，成功唯一 editor-state GET；两个面板共用操作令牌，检查点与修订恢复不能并发写。
 
-精确七文件白名单、失败矩阵和单 worker、零重试 E2E 命令见 `docs/p12c-revision-history-frontend-contract.md` 与 `docs/plans/2026-07-16-p12c-revision-history-frontend-plan.md`。C3 不修改后端或检查点模块，不实现删除、diff、搜索、分页、跨项目历史、自动历史或多人协作。
+精确七文件白名单、失败矩阵和单 worker、零重试 E2E 命令见 `docs/p12c-revision-history-frontend-contract.md` 与 `docs/plans/2026-07-16-p12c-revision-history-frontend-plan.md`。C3 不修改后端或检查点模块，不实现删除、diff、搜索、分页、跨项目历史、超出最近 10 条的完整历史/保留策略或多人协作。
+
+C3 冻结=`6b9143a`、实现=`5e4f9f6`。Codex 多轮反假绿审查要求用真实检查点 create 证明共享令牌、用双项目双 restore 证明旧 finally 不误清新令牌，并为 list/detail 增加 fulfill 完成计数，禁止 arrived 计数提前通过。独立结果为 C3 **21**、checkpoint restore **51**、技术/商务 truth **46**、前端串行全量 **284 passed**，`lint` / `build` / diff / 白名单均通过；后端沿用 **800 passed**。P12C 最小有限修订、摘要与受限恢复闭环完成。

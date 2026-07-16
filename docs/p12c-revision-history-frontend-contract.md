@@ -7,7 +7,7 @@
 
 # P12C-C3 editor-state 修订历史前端契约
 
-> **状态**：已冻结，待 Grok failure-first、受限实现与 Codex 独立验收。
+> **状态**：已完成并经 Grok failure-first、Codex 多轮反假绿审查与独立验收。
 > **前置**：C2 冻结=`54af600`、范围修订=`2276366`、实现=`0803250`、闭环=`f34e3fc`；后端/前端串行全量基线 **800/263 passed**。
 
 ## 1. 目标与关键决策
@@ -98,4 +98,10 @@ Grok 只允许修改以下 7 个文件：
 
 Grok 最低自测：新 C3 E2E、既有 checkpoint restore E2E、技术/商务 editor-state truth、`npm run lint`、`npm run build`、`git diff --check` 与精确七文件白名单。所有 Playwright 命令固定 `--workers=1 --retries=0` 且逐条运行，禁止并行共享 SQLite。
 
-Codex 独立审查 API 严格 shape、原文最小化、同令牌/同队列、执行时 expected、唯一重读和迟到隔离，再串行运行专项、受影响回归及前端全量。C3 不实现删除、diff、搜索、分页、跨项目历史、命名、标签、保留期、自动历史、分支/合并/发布/审批或多人实时协作。
+Codex 独立审查 API 严格 shape、原文最小化、同令牌/同队列、执行时 expected、唯一重读和迟到隔离，再串行运行专项、受影响回归及前端全量。C3 不实现删除、diff、搜索、分页、跨项目历史、命名、标签、超出最近 10 条的完整历史/保留策略、分支/合并/发布/审批或多人实时协作。
+
+## 8. 完成与独立验收记录
+
+C3 冻结=`6b9143a`、实现=`5e4f9f6`。Grok 在生产未改时先跑出 **2 failed / 0 passed / 18 did not run**；初版实现后，Codex 先发现目标 revision 在恢复后列表头变化导致的测试时序取证错误，再连续关闭条件 count、三选一消息、条件点击、未真实发起检查点写、未真实发起 A 项目列表、详情旧请求无独立代次、到达计数冒充完成计数和保存链后补发等假绿。最终 E2E 使用真实请求闸及 `listCompleteLog/detailCompleteLog`，证明迟到响应已 fulfill 后仍不污染新项目或新摘要。
+
+Codex 独立通过 C3 专项 **21 passed**、既有 checkpoint restore **51 passed**、技术/商务 editor-state truth **46 passed**、`lint`、`build` 和单 worker、零重试前端全量 **284 passed**；后端未改，沿用 **800 passed**。精确七文件白名单、暂存区、`git diff --check`、原始快照最小化、共享令牌/保存链、执行时 expected、唯一重读和迟到代次均通过。P12C 最近 10 条修订的九来源留史、列表、按需摘要和受限恢复链至此完整闭环；删除、diff、搜索、跨项目历史、超出最近 10 条的完整历史/保留策略与多人协作仍未实现。
