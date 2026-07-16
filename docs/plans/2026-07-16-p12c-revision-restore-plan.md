@@ -1,6 +1,6 @@
 <!--
 模块：P12C-C2 editor-state 修订受限恢复实施计划
-用途：落实九来源旧库迁移、共享恢复原语、七生产文件加一测试文件的 failure-first 顺序。
+用途：落实九来源旧库迁移、共享恢复原语、七生产文件加四测试文件的 failure-first 顺序。
 对接：p12c-revision-restore-contract.md；P12C-C1；P12B-D checkpoint restore。
 二次开发：后端恢复与前端拆包；迁移失败必须阻止启动，禁止静默忽略。
 -->
@@ -21,7 +21,8 @@
 3. 从 checkpoint service 抽取无提交 `stage_locked_canonical_restore` 类共享原语，并让既有 checkpoint restore 复用，先跑全部 P12B-D/P12C-D3 回归证明语义不变；
 4. 新增 revision restore service：锁/CAS 后调用 C1 目标读取，再调用共享原语并以 `revision_restore` 编排唯一 commit/rollback；
 5. 在既有 revision router/schema 增加严格 POST 与精确三字段响应；不改 `main.py`；
-6. 串行运行 C2 专项、C1/D3/checkpoint/editor-state/auth/迁移扩大回归和后端全量，再做八文件 `py_compile`、diff、暂存区与白名单检查；完成后仅发送 `review_request`。
+6. 仅按契约修订 C1 无 restore、P12C-A 八来源、D3 直接 recorder 三个过时阶段守卫，保持其他断言不变；
+7. 串行运行 C2 专项、C1/D3/checkpoint/editor-state/auth/迁移扩大回归和后端全量，再做十一文件 `py_compile`、diff、暂存区与白名单检查；完成后仅发送 `review_request`。
 
 ## 3. Grok 最低自测
 
@@ -29,7 +30,7 @@
 cd C:\Users\Administrator\biaoshu\backend
 .\.venv\Scripts\python.exe -m pytest -q tests\test_p12c_revision_restore.py --tb=line
 .\.venv\Scripts\python.exe -m pytest -q tests\test_p12c_revision_history_read.py tests\test_p12c_checkpoint_restore_revisions.py tests\test_editor_state_checkpoint_restore.py tests\test_editor_state_checkpoints.py tests\test_editor_state_revisions.py tests\test_editor_state_full_version.py tests\test_auth_rbac.py tests\test_local_parser_callback_tickets.py --tb=line
-.\.venv\Scripts\python.exe -m py_compile app\models\entities.py app\core\database.py app\services\editor_state_revision_service.py app\services\editor_state_checkpoint_service.py app\services\editor_state_revision_restore_service.py app\api\editor_state_revisions.py app\api\schemas.py tests\test_p12c_revision_restore.py
+.\.venv\Scripts\python.exe -m py_compile app\models\entities.py app\core\database.py app\services\editor_state_revision_service.py app\services\editor_state_checkpoint_service.py app\services\editor_state_revision_restore_service.py app\api\editor_state_revisions.py app\api\schemas.py tests\test_p12c_revision_restore.py tests\test_p12c_revision_history_read.py tests\test_p12c_checkpoint_restore_revisions.py tests\test_editor_state_revisions.py
 ```
 
 ## 4. Codex 验收门
