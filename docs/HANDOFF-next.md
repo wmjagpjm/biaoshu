@@ -1,14 +1,14 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-16（P12C-B-D3 checkpoint restore 修订账本原子接入已完成并推送）
+> **交接日期**：2026-07-16（P12C-C1 修订历史只读列表/详情已完成并推送）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
-> **协作分支已推送功能基线**：P12C-B-D3 冻结=`1d44484`、实现=`b91a7ff`；P12C-B-D2 冻结=`6b83fc1`、实现=`f256f5b`；P12C-B-D1 冻结=`e8ffaeb`、实现=`a6a28f6`；P12C-B-C2 冻结=`52bbabf`、实现=`82cc82e`；P12C-B-C1 冻结=`76834f5`、实现=`1d0ce0e`；P12C-B-B2 冻结=`3a30c03`、实现=`5149385`；P12C-B-B1 冻结=`05864f6`、实现=`5a0d1c0`；P12C-B-A 冻结=`fbf93c0`、实现=`acf3139`；P12C-A 冻结=`daa8c43`、实现=`226e1c1`；P12B-D 冻结=`613818f`、D1 后端=`551caba`、D2 前端=`0f81dd6`；P12B-C 冻结=`b5a9d90`、C1=`0c8fc77`、C2=`f3c05ae`、C3=`59fcd50`；P12B-B 契约/计划=`0636302`、实现=`473e823`；P12B-A 计划/契约=`0b55c30`、实现=`780cc82`；P12A 计划/契约=`bf8ccd6`、后端=`9f53d92`；其余既有功能基线见本文 §11。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
-> **最新增量基线**：P12C-B-D3 冻结=`1d44484`、实现=`b91a7ff`；不同版本 checkpoint restore 固定记录 `checkpoint_restore`，同内容零修订。
+> **协作分支已推送功能基线**：P12C-C1 冻结=`26b504e`、实现=`7023ecd`；P12C-B-D3 冻结=`1d44484`、实现=`b91a7ff`；P12C-B-D2 冻结=`6b83fc1`、实现=`f256f5b`；P12C-B-D1 冻结=`e8ffaeb`、实现=`a6a28f6`；P12C-B-C2 冻结=`52bbabf`、实现=`82cc82e`；P12C-B-C1 冻结=`76834f5`、实现=`1d0ce0e`；P12C-B-B2 冻结=`3a30c03`、实现=`5149385`；P12C-B-B1 冻结=`05864f6`、实现=`5a0d1c0`；P12C-B-A 冻结=`fbf93c0`、实现=`acf3139`；P12C-A 冻结=`daa8c43`、实现=`226e1c1`；P12B-D 冻结=`613818f`、D1 后端=`551caba`、D2 前端=`0f81dd6`；P12B-C 冻结=`b5a9d90`、C1=`0c8fc77`、C2=`f3c05ae`、C3=`59fcd50`；P12B-B 契约/计划=`0636302`、实现=`473e823`；P12B-A 计划/契约=`0b55c30`、实现=`780cc82`；P12A 计划/契约=`bf8ccd6`、后端=`9f53d92`；其余既有功能基线见本文 §11。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
+> **最新增量基线**：P12C-C1 冻结=`26b504e`、实现=`7023ecd`；公开列表只读最近 10 条元数据，详情按需重验规范快照，尚无 revision restore 或前端入口。
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **本地状态**：P12C-B-D3 实现=`b91a7ff` 已推送，本文档闭环提交位于其后。新会话仍须重新核对本地 HEAD、远端 SHA 与工作区。
-> **验收基线**：P12C-B-D3 专项/扩大恢复与全部来源回归 **18/270 passed**，后端串行全量 **764 passed**（1 条既有 Starlette/httpx 弃用警告）；P12B-D2 专项/受影响回归 **51/63 passed**，单 worker、零重试前端全量 E2E **263 passed**；`frontend npm run lint` 零问题，`build` 通过（仅既有大包体积提示），双文件 `py_compile`、白名单与 diff 检查通过。P12C-B-D2 历史基线为 25/299/746，P12C-B-D1 为 11/285/732，P12C-B-C2 为 20/272/721，P12C-B-C1 为 10/224/711，P12C-B-B2 为 11/147/701，P12C-B-B1 为 10/126/690，P12C-B-A 为 14/107/680，P12C-A 为 67/77/666，P12B-D1 为 58/81/599，P12B-C 历史后端/前端全量为 570/212，Docling 46、MinerU 54 继续保留。**所有 Playwright E2E 共用 SQLite 重置库，必须逐条串行运行，禁止并行。**
+> **本地状态**：P12C-C1 实现=`7023ecd` 已推送，本文档闭环提交位于其后。新会话仍须重新核对本地 HEAD、远端 SHA 与工作区。
+> **验收基线**：P12C-C1 专项/扩大回归 **13/201 passed**，后端串行全量 **777 passed**（1 条既有 Starlette/httpx 弃用告警）；P12B-D2 前端专项/受影响回归 **51/63 passed**，单 worker、零重试前端全量 E2E **263 passed**；五文件 `py_compile`、真实坏时间 HTTP、白名单与 diff 检查通过。P12C-B-D3 历史基线为 18/270/764，P12C-B-D2 为 25/299/746，P12C-B-D1 为 11/285/732，P12C-B-C2 为 20/272/721，P12C-B-C1 为 10/224/711，P12C-B-B2 为 11/147/701，P12C-B-B1 为 10/126/690，P12C-B-A 为 14/107/680，P12C-A 为 67/77/666，P12B-D1 为 58/81/599，P12B-C 历史后端/前端全量为 570/212，Docling 46、MinerU 54 继续保留。**所有 Playwright E2E 共用 SQLite 重置库，必须逐条串行运行，禁止并行。**
 
 ---
 
@@ -19,9 +19,9 @@
 工作分支只能是 collab/grok-code-codex-review，禁止直接操作 main；先执行 git status -sb，并核对 HEAD 与 origin/collab/grok-code-codex-review 一致且工作区干净。
 完整阅读 docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/plans/2026-07-13-package-9-delivery-enhancement-plan.md、docs/integration-checklist.md。
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
-当前进度：P12A、P12B-A/B/C/D、P12C-A、P12C-B-A、P12C-B-B1、P12C-B-B2、P12C-B-C1、P12C-B-C2、P12C-B-D1、P12C-B-D2、P12C-B-D3、P9D、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。D3 冻结=`1d44484`、实现=`b91a7ff`；后端全量 764、前端全量 263 passed。
-当前执行包：P12C-B-D3 已让 checkpoint restore 的真实 13 键迁移以固定 `checkpoint_restore` 与 editor-state、安全检查点和两个裁剪域共享原唯一事务；同内容更新 `updatedAt` 但零修订。
-下一步：只读审计并冻结 P12C-C 受限修订历史能力，先定义列表/详情/恢复的最小 API 与前端边界、正文出域、权限、版本围栏和复合事务；不得直接宣称任意历史恢复、删除、diff、搜索、跨项目历史或多人协作已实现。
+当前进度：P12A、P12B-A/B/C/D、P12C-A、P12C-B-A、P12C-B-B1、P12C-B-B2、P12C-B-C1、P12C-B-C2、P12C-B-D1、P12C-B-D2、P12C-B-D3、P12C-C1、P9D、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。C1 冻结=`26b504e`、实现=`7023ecd`；后端全量 777、前端全量 263 passed。
+当前执行包：P12C-C1 已交付当前项目最近 10 条修订元数据列表与单条按需详情；列表不加载正文，详情三重作用域并严格重验规范 13 键，所有成功/业务错误 no-store。
+下一步：只读审计并冻结 P12C-C2 受限 revision restore；必须重新定义 expectedStateVersion、恢复前安全检查点、目标快照重验、写回/新 revision 时间点、两个配额裁剪与失败全回滚。不得合入前端、删除、diff、搜索、跨项目历史或多人协作。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -101,7 +101,7 @@
 6. **写完能力更新 HANDOFF 时**：必须在 §2.3 表更新该模块注释状态。
 7. **PowerShell 脚本**：新增或修改后必须为 UTF-8 BOM，避免 Windows PowerShell 解析中文注释或字符串异常。
 
-### 2.3 功能注释齐备表（交接审计 · 2026-07-15）
+### 2.3 功能注释齐备表（交接审计 · 2026-07-16）
 
 图例：**齐** = 文件顶含模块+用途+对接（核心服务另有二次开发）；**部分** = 有用途但缺对接/二次开发或仅部分文件；**弱/无** = 缺文件顶或仅零星行内注释。
 
@@ -118,6 +118,7 @@
 | 编辑态 | `services/editor_state_service.py` | **齐** | business_json、response_matrix_json 规范化与死引用收敛；P12B-A 共享 13 键版本、一次锁后 CAS、提交前响应和非有限值兼容 |
 | 编辑态手动检查点 P12A | `models/entities.py`、`api/editor_state_checkpoints.py`、`services/editor_state_checkpoint_service.py`、`api/schemas.py`、`tests/test_editor_state_checkpoints.py` | **齐** | 服务端权威 13 键标准 JSON、最近 20 条、最小 SQL、完整显式回滚、只读详情；专项 29、后端全量 518 passed |
 | 编辑态全状态版本 P12B-A | `api/projects.py`、`api/schemas.py`、`services/editor_state_service.py`、`services/editor_state_checkpoint_service.py`、`tests/test_editor_state_full_version.py` | **齐** | GET/PUT `stateVersion`、可选 expected CAS、固定最小 409、矩阵冲突优先级；专项 19、后端全量 537 passed |
+| 编辑态有限修订与只读历史 P12C | `models/entities.py`、`services/editor_state_revision_service.py`、`services/editor_state_revision_history_service.py`、`api/editor_state_revisions.py`、`api/schemas.py`、`tests/test_p12c_revision_history_read.py` | **齐** | 最近 10 条、八类原子来源、列表五列无正文、详情三重作用域与规范重验、损坏固定 no-store；C1 独立 13/201/777 passed |
 | 响应矩阵 | `services/editor_state_service.py`、`services/task_service.py`、`api/projects.py`、`api/tasks.py`、`services/export_service.py`、`models/entities.py`；前端 `useTechnicalPlanEditors` / `ResponseMatrixPanel` | **齐/部分** | service/API/导出与乐观锁注释齐；`response_match` 支持 `candidateBatchIndex` 候选分批且只产出待确认建议；前端冲突 UX 与串行分批进度注释齐；`entities.py` 仍按历史文件部分 |
 | 知识库 | `services/knowledge_service.py`、`api/knowledge.py` | **齐** | P9C 版本化离线索引、工作空间隔离、关键词降级；`get_chunk` 供卡片沉淀 |
 | 知识卡片 | `services/card_service.py`、`api/cards.py`、`models/entities.py`（KnowledgeCardRow） | **齐** | 独立 knowledge_cards；列表摘要/详情；from-chunk/from-project-image；insert-card → biaoshu-image |
@@ -421,17 +422,19 @@ P12C-B-D1 已完成并推送：冻结=`e8ffaeb`、实现=`a6a28f6`。融合 appl
 
 P12C-B-D2 已完成并推送：冻结=`6b83fc1`、实现=`f256f5b`。融合 consume 复用锁后 before/同一状态行，仅在 `restored > 0` 时从提交前内存行构造 after，以固定 `content_fuse_consume` 与章节和批次消费共享原唯一事务；零恢复仍消费批次，但完整 13 键、`updatedAt`、版本与修订身份序列不变。Grok failure-first 11 failed / 13 passed；Codex 两轮仅测试返修关闭宽松集合、跨项目恒真比较、真实跨空间隔离缺失、并发任意 409、零恢复部分字段比较、公开 500 固定表名/路径及外空间完整状态比较假绿，独立通过 **25/299/746 passed**。Grok 最终回执=`msg_a9410ee18ff64338b36b652e6dc7401b`，Codex 确认=`msg_2e23e5e7f9414b52b83569b526592426`。D2 当时已覆盖 content-fuse apply/consume，checkpoint restore 后续由 D3 独立接入。
 
-P12C-B-D3 已完成并推送：冻结=`1d44484`、实现=`b91a7ff`。检查点恢复复用锁后 before 和写回后 after，在目标版本复核后、检查点裁剪与唯一 commit 前，仅对不同规范版本固定记录 `checkpoint_restore`；同内容仍创建安全检查点并更新 `updatedAt`，但修订身份精确不变。Grok failure-first **11 failed / 7 passed**、最终专项 18；Codex 两轮仅测试返修关闭来源隔离同义反复、失败路径只比版本、裁剪失败缺可重试和同内容时间语义弱断言，独立通过 **18/270/764 passed**。Grok 最终回执=`msg_69322b31400844f4aa72bbaed660eb98`，Codex 确认=`msg_1b0bff219b7940eabf665626c1214a2b`。当前八类内部来源的既有写入已覆盖；公开历史 API/前端仍须 P12C-C 独立冻结。
+P12C-B-D3 已完成并推送：冻结=`1d44484`、实现=`b91a7ff`。检查点恢复复用锁后 before 和写回后 after，在目标版本复核后、检查点裁剪与唯一 commit 前，仅对不同规范版本固定记录 `checkpoint_restore`；同内容仍创建安全检查点并更新 `updatedAt`，但修订身份精确不变。Grok failure-first **11 failed / 7 passed**、最终专项 18；Codex 两轮仅测试返修关闭来源隔离同义反复、失败路径只比版本、裁剪失败缺可重试和同内容时间语义弱断言，独立通过 **18/270/764 passed**。Grok 最终回执=`msg_69322b31400844f4aa72bbaed660eb98`，Codex 确认=`msg_1b0bff219b7940eabf665626c1214a2b`。当前八类内部来源的既有写入已覆盖。
+
+P12C-C1 已完成并推送：冻结=`26b504e`、实现=`7023ecd`。列表固定最近 10 条 `id/state_version/snapshot_bytes/source_kind/created_at` 投影，不读取 `snapshot_json`；详情以 revision/workspace/project 三重作用域读取并严格重验规范 JSON、字节和版本。Grok 首版 failure-first **12 failed / 0 passed**、专项 13；Codex 审查真实复现坏时间在 ORM 物化阶段裸 500，返修 failure-first **1 failed / 12 passed** 后关闭真实越界字节、非法来源、坏时间和正文损坏的固定 500/no-store 门。Codex 独立通过 **13/201/777 passed**，Grok 回执=`msg_1ea43d2ffaf94129aa18badfa1da9180`，Codex 确认=`msg_a61704c81ee24b98bda1d56f5a5f7cd9`。C2 revision restore 与前端仍未开始。
 
 ### 4.24 路径索引
 
 ```text
 backend/app/
-  api/compliance.py finance.py hr.py bidder.py knowledge.py tasks.py projects.py content_fuse_applications.py editor_state_checkpoints.py settings.py opportunities.py resources.py templates.py
+  api/compliance.py finance.py hr.py bidder.py knowledge.py tasks.py projects.py content_fuse_applications.py editor_state_checkpoints.py editor_state_revisions.py settings.py opportunities.py resources.py templates.py
   services/
     task_service.py parse_engines.py business_task_service.py knowledge_service.py
     embedding_service.py duplicate_service.py rejection_service.py
-    export_service.py revise_service.py editor_state_service.py editor_state_checkpoint_service.py editor_state_revision_service.py
+    export_service.py revise_service.py editor_state_service.py editor_state_checkpoint_service.py editor_state_revision_service.py editor_state_revision_history_service.py
     file_service.py finance_service.py hr_credential_service.py hr_performance_service.py hr_credential_expiry_service.py bidder_compliance_preview_service.py bidder_project_compliance_service.py opportunity_service.py resource_service.py resource_sync_service.py
     template_service.py content_fuse_application_service.py text_similarity.py
 
@@ -451,7 +454,7 @@ frontend/src/features/
 | 技术标 | editor-state 真值 | P11C 已完成并推送（计划/契约=`24b7ba8`、安全细化=`c5b3eec`、前端=`1441509`）：只认服务端 editor-state，旧键忽略保值，失败固定脱敏，required Cookie/CSRF、409/M3-D 与 A→B 挂起保存隔离均有 E2E |
 | 导出 | `structure` / `min_heading_left_enabled` | P9A 已实现：叶子标题左侧强调线（`c1ff160`）；整章布局与 `structure` 仍不做，详见 `docs/plans/2026-07-13-p9a-word-layout-plan.md` |
 | 业务 | 其他外部标讯数据源 | P9B 已完成唯一的国能 e 招单站受控追踪；其他网站/API/RSS、定时同步和浏览器外网请求仍未接，须另立计划 |
-| 技术标 | 通用版本、响应矩阵与解析增强 | M3-D 已交付服务端原子确认和最近 20 批一次性漂移安全恢复；P12B-A/B/C/D 已完成全状态版本、浏览器 CAS、所有既有延迟写入围栏、恢复前安全检查点、原子 restore 与双工作区显式入口；P12C-A/B-A/B-B1/B-B2/B-C1/B-C2/B-D1/B-D2/B-D3 已交付独立最近 10 条修订账本和八类内部来源的既有生产写入接入。响应矩阵已完成来源分页、字段级三方合并和冲突保护；P8B/P8C/P8D/P8E 已接策略、单次票据与本机 MinerU/Docling 助手。仍未接：公开历史列表/详情/受限恢复、删除、diff、搜索、跨项目历史、多人协作、解析器自动部署/模型打包、真实模型验收与其他交付增强 |
+| 技术标 | 通用版本、响应矩阵与解析增强 | M3-D 已交付服务端原子确认和最近 20 批一次性漂移安全恢复；P12B-A/B/C/D 已完成全状态版本、浏览器 CAS、所有既有延迟写入围栏、恢复前安全检查点、原子 restore 与双工作区显式入口；P12C-A/B-A/B-B1/B-B2/B-C1/B-C2/B-D1/B-D2/B-D3 已交付独立最近 10 条修订账本和八类内部来源接入，P12C-C1 已交付公开元数据列表与按需详情。响应矩阵已完成来源分页、字段级三方合并和冲突保护；P8B/P8C/P8D/P8E 已接策略、单次票据与本机 MinerU/Docling 助手。仍未接：revision 受限恢复及前端入口、删除、diff、搜索、跨项目历史、多人协作、解析器自动部署/模型打包、真实模型验收与其他交付增强 |
 | 资产 | 卡片化知识/多模板融合 | 阶段 1 模板 + 阶段 2 卡片库（`53e012f`）；阶段 3 M3-A 至 M3-D 均已完成，最新计划=`d326c7d`、后端=`6a5f61f`、前端=`b89a387` |
 | RAG | 真语义大模型 embedding 调优 | 有本地+可选 API，可继续增强 |
 | 财务 | 税务、审批、导出、预算、回款、版本与完整财务审计 | P10B/P10C 已完成报价只读、人工成本草案与毛利快照；P10J 已完成本人记录，P10K 已完成上线后项目记录；旧历史、失败尝试与完整身份审计仍未实现；禁止从报价推算 |
@@ -468,7 +471,7 @@ frontend/src/features/
 1. 阶段 4 **功能包 8** MVP=`6db1586`、P8B/P8C、**P8D MinerU 助手**（计划=`30d066f`、实现=`e1fe316`）与 **P8E Docling 助手**（计划=`73b1264`、后端=`79b346e`、助手=`e3f9cc4`）均已验收并推送；真实 CLI/模型仍需人工准备，自动部署仍须独立安全契约。
 2. 阶段 4 **P9A/P9B/P9C/P9D** 与阶段 5 **P10A/P10B/P10C/P10D/P10F/P10E/P10G/P10H/P10I/P10J/P10K** 均已实现、独立验收并文档闭环。P9C 的真实模型门仍是运行时前置：固定依赖和模型缓存就绪后，用户显式构建索引，再运行固定预检；未通过前继续关键词降级。
 3. P8C/P8D/P8E、P10K、M3-D、P11A、P11B 与 P11C 均已完成。P8E 已按顺序完成后端精确 `mineru|docling` 枚举和独立本机助手；继续保持 P8B/P8C/P8D 的策略、票据、回环和正文出域边界。
-4. P12B-A/B/C/D、P12C-A 与 P12C-B-A/B1/B2/C1/C2/D1/D2/D3 已完成。下一步只读审计并冻结 P12C-C 受限历史 API/前端；禁止把内部账本直接暴露为正文历史，或跳到删除、diff、搜索、跨项目历史、任意版本恢复或多人协作。
+4. P12B-A/B/C/D、P12C-A、P12C-B-A/B1/B2/C1/C2/D1/D2/D3 与 P12C-C1 已完成。下一步只读审计并冻结 P12C-C2 受限 revision restore；必须复用已校验详情边界并重新证明 CAS、安全检查点、新修订时间点和失败全回滚，禁止合入前端、删除、diff、搜索、跨项目历史或多人协作。
 
 资源同步后续只可由管理员配置新的签名发布方，绝不可放开浏览器 URL 或外网抓取。图片管线已冻结项目内资源引用协议，后续扩展不得放开外链或客户端路径。SSE 的多工作空间鉴权、事件游标和项目级总线不在当前范围。
 
@@ -553,8 +556,8 @@ frontend/src/features/
 - **P11C 已完成并推送**：契约=`docs/p11c-technical-editor-state-truth-contract.md`，计划=`docs/plans/2026-07-15-p11c-technical-editor-state-truth-plan.md`，前端=`1441509`。技术标 editor-state 只认服务端；旧本地键忽略保值，真实空态不补 mock，失败固定脱敏；普通与合并 PUT 使用同源 Cookie/内存 CSRF；409/M3-D 保持兼容；A 的迟到或挂起保存不污染、阻塞 B；生产演示入口已移除。
 - **P8D 已完成并推送**：契约=`docs/p8d-mineru-local-helper-contract.md`，计划=`docs/plans/2026-07-15-p8d-mineru-local-helper-plan.md`，实现=`e1fe316`。纯标准库助手只从交互 TTY 读取 P8C 单次票据，Windows 只认 `mineru.exe`，强制本地离线模型、环境白名单、临时输出和回环无代理/无重定向单次回调；真实 CLI/模型由用户人工准备。
 - **P8E 已完成并推送**：契约/计划提交=`73b1264`，P8E-A 后端=`79b346e`，P8E-B 助手=`e3f9cc4`。Docling 46、MinerU 54、后端受影响回归 37、P8C E2E 9、P8B E2E 6 passed；真实 Docling/模型仍未安装、未验收，禁止声称真实模型就绪。
-- **Grok 当前状态**：额度可用；P12C-B-D1 初版=`msg_7f737db9851a4ae1ae761ae6f19f53df`、consume 隔离返修任务=`msg_1c1610e5c0114550a3001e426625be4a`、返修回执=`msg_e51deb777dcc46eda74ea0adf2a38d1c`，Codex 确认=`msg_50e3179cd2fc44929c835c259f1cc35d`。协作方式仍是 Grok 只实现/自测、不提交推送，Codex 独立规划、审查、验收、中文提交与推送；后续不得因额度可用而跳过任务包和审查门。
-- 当前分支仍为 `collab/grok-code-codex-review`；P12C-B-D1 实现=`a6a28f6` 及 P12C-B-C2/C1/B2/B1/B-A、P12C-A、P12B-D/C/B/A、P12A、P8D、P11C/B/A、M3-D、P10K、P8C、P10J、P9D、M3-C、P10I/H/G/F/E 与 P8B 基线均已推送，本文档闭环提交位于其后。新会话第一步必须用 `git status -sb`、`git rev-parse HEAD`、`git rev-parse origin/collab/grok-code-codex-review` 重新核验，不可只信本文静态 SHA。
+- **Grok 当前状态**：额度可用；P12C-C1 首版=`msg_67307de85a9d47528cdbc4987da252c8`、物化损坏返修任务=`msg_a002407f293a4c1b8f018c90a2a153c9`、返修回执=`msg_1ea43d2ffaf94129aa18badfa1da9180`，Codex 确认=`msg_a61704c81ee24b98bda1d56f5a5f7cd9`。协作方式仍是 Grok 只实现/自测、不提交推送，Codex 独立规划、审查、验收、中文提交与推送；Grok 当前等待下一份 C2 冻结任务，不得自行开工。
+- 当前分支仍为 `collab/grok-code-codex-review`；P12C-C1 实现=`7023ecd` 及 P12C-B-D3/D2/D1/C2/C1/B2/B1/B-A、P12C-A、P12B-D/C/B/A、P12A、P8D、P11C/B/A、M3-D、P10K、P8C、P10J、P9D、M3-C、P10I/H/G/F/E 与 P8B 基线均已推送，本文档闭环提交位于其后。新会话第一步必须用 `git status -sb`、`git rev-parse HEAD`、`git rev-parse origin/collab/grok-code-codex-review` 重新核验，不可只信本文静态 SHA。
 - 阶段 3 **已完成并推送**：M3-A 只读融合建议、M3-B 差异预览与浏览器确认、M3-C 会话内单批撤销、M3-D 服务端原子确认与最近 20 批持久恢复。
 - 阶段 4 **包 5** 已推送：`460097a` 智能建议人工确认 E2E。
 - 阶段 4 **包 6** 已推送：`1289c92` 实现响应矩阵源分页调用。
@@ -579,7 +582,7 @@ frontend/src/features/
 - **M3-C 融合写入单批撤销交付**：计划=`c63310f`，实现=`b8ff605`。当前融合对话框只保存最近成功批次的最小内存快照；撤销点击时精确校验章节存在性、标题、正文和状态，未漂移才恢复正文与原状态，漂移章跳过。快照一次消费、关闭即失效；无新 API、后端、存储、历史栈或通用撤销。完整契约见 `docs/m3c-content-fuse-undo-contract.md`。
 - **M3-D 融合写入持久恢复交付**：计划=`d326c7d`、后端=`6a5f61f`、前端=`b89a387`。后端以成功任务结果为唯一建议权威，锁内校验 base，同事务写章节/快照/裁剪，最近 20 批且漂移安全一次消费；前端确认前零本地写，POST 成功后唯一真实重载，业务已完成但重载失败有独立固定中文，项目/关闭迟到不污染，不写浏览器存储或外网。完整契约见 `docs/m3d-content-fuse-persistent-recovery-contract.md`。
 - **P9D 导出图片失效引用提示交付**：计划=`4925a51`，实现=`e5adad7`。技术标/商务标成功 export 只消费后端 `imageWarnings`，最多 20 条、每条 240 码点，以 React 纯文本显示且继续下载；告警绑定项目并用实例代次隔离迟到响应。两轮审查修复首帧旧告警/迟到污染、E2E 假同步、调用顺序和 lint warning。完整契约见 `docs/p9d-export-image-warning-contract.md`。
-- **已验证基线**：P12C-B-D3 专项/扩大回归 18/270、后端串行全量 764 passed（只有 1 条既有 Starlette/httpx 弃用警告）；P12C-B-D2 历史基线为 25/299/746，P12C-B-D1 为 11/285/732，P12C-B-C2 为 20/272/721，P12C-B-C1 为 10/224/711，P12C-B-B2 为 11/147/701，P12C-B-B1 为 10/126/690，P12C-B-A 为 14/107/680，P12C-A 为 67/77/666；P12B-D2 专项/受影响回归 51/63、单 worker、零重试前端全量 E2E 263 passed；lint 零问题，build 通过（仅既有大 chunk 警告），双文件 `py_compile`、白名单、工作树与暂存区 diff 检查通过。P12B-D1 历史基线为 58/81/599；D2 全量首跑 239 passed 后单次纯白页，精确 1 项与完整 263 项重跑均通过。P12B-C 历史基线为后端/前端全量 570/212；P8E 独立 Docling 46、MinerU 54 继续保留。**E2E 共用 SQLite 重置库，所有 Playwright 命令必须串行。**
+- **已验证基线**：P12C-C1 专项/扩大回归 13/201、后端串行全量 777 passed（只有 1 条既有 Starlette/httpx 弃用告警）；P12C-B-D3 历史基线为 18/270/764，P12C-B-D2 为 25/299/746，P12C-B-D1 为 11/285/732，P12C-B-C2 为 20/272/721，P12C-B-C1 为 10/224/711，P12C-B-B2 为 11/147/701，P12C-B-B1 为 10/126/690，P12C-B-A 为 14/107/680，P12C-A 为 67/77/666；P12B-D2 专项/受影响回归 51/63、单 worker、零重试前端全量 E2E 263 passed；五文件 `py_compile`、真实坏时间 HTTP、白名单、工作树与暂存区 diff 检查通过。P12B-D1 历史基线为 58/81/599；D2 全量首跑 239 passed 后单次纯白页，精确 1 项与完整 263 项重跑均通过。P12B-C 历史基线为后端/前端全量 570/212；P8E 独立 Docling 46、MinerU 54 继续保留。**E2E 共用 SQLite 重置库，所有 Playwright 命令必须串行。**
 - **P10J 已完成**：契约=`docs/p10j-finance-personal-cost-change-events-contract.md`，计划=`docs/plans/2026-07-14-p10j-finance-personal-cost-change-events-plan.md`。两轮后端审查和一轮前端测试网络审查均闭环。
 - **P8C 已完成**：契约=`docs/p8c-local-parser-one-time-callback-ticket-contract.md`，计划=`docs/plans/2026-07-14-p8c-local-parser-one-time-callback-ticket-plan.md`。两轮后端审查和三轮前端反假绿审查均闭环；它只补 required 模式回传授权，不交付 MinerU/Docling 运行时。
 - **P10K 已完成**：计划=`2e53007`、后端=`1eaa75e`、前端=`dbf301c`。最小 `finance_project_cost_change_events` 只记录本包上线后 P10C 成功变更并与业务/审计同事务；项目 GET 只回 action/entryId/actorScope/occurredAt，前端只在 `/finance` 显式点击后读取。后端全量 453、前端全量 140 均通过。
@@ -599,8 +602,9 @@ frontend/src/features/
 - **P12C-B-D1 已完成并推送**：冻结=`e8ffaeb`、实现=`a6a28f6`。融合 apply 以固定 `content_fuse_apply` 与章节、恢复批次和裁剪同事务留史；空账本 before+after、已有基线精确 +1、失败全域回滚和双并发均已证明。Codex 关闭 consume 隔离假绿后独立 11/285/732 验收通过。
 - **P12C-B-D2 已完成并推送**：冻结=`6b83fc1`、实现=`f256f5b`。融合完整/部分 consume 以固定 `content_fuse_consume` 原子留史，零恢复只消费且状态/版本/修订全等；跨项目/跨空间、精确并发错误码、失败全回滚和公开 500 脱敏均已证明。Codex 独立 25/299/746 验收通过。
 - **P12C-B-D3 已完成并推送**：冻结=`1d44484`、实现=`b91a7ff`。不同版本 checkpoint restore 固定记录 `checkpoint_restore`，同内容零修订；回退新时间点、跨空间、精确并发、完整失败零写与四类失败可重试均已证明。Codex 独立 18/270/764 验收通过。
-- **其余未实现主线**：P12C-C 受限历史列表/详情/恢复及多人协作；修订删除、diff、搜索、跨项目历史与自动定时历史；MinerU/Docling 自动安装、模型打包、常驻服务、真实模型样本验收与完整孙进程治理；P9C 后续真实语义调优；Word `structure`/整章布局；除国能 e 招外的合法外部标讯来源；人力附件/真实证件核验；财务税务/审批/导出/预算/回款/版本、失败尝试与完整身份审计；投标人矩阵明细/版本/结果跟踪；Alembic、PostgreSQL、HTTPS、Key 加密、Docker 和公网 SaaS 能力。下一步只读审计并冻结 P12C-C 的最小公开边界；不得把内部账本直接当作已交付历史产品。
+- **P12C-C1 已完成并推送**：冻结=`26b504e`、实现=`7023ecd`。最近 10 条元数据列表不加载正文，详情按 revision/workspace/project 三重作用域读取并重验规范快照；真实坏时间物化、越界字节、非法来源和正文损坏均固定 500/no-store。Codex 独立 13/201/777 验收通过；无恢复或前端。
+- **其余未实现主线**：P12C-C2 受限 revision restore、P12C 历史前端与多人协作；修订删除、diff、搜索、跨项目历史与自动定时历史；MinerU/Docling 自动安装、模型打包、常驻服务、真实模型样本验收与完整孙进程治理；P9C 后续真实语义调优；Word `structure`/整章布局；除国能 e 招外的合法外部标讯来源；人力附件/真实证件核验；财务税务/审批/导出/预算/回款/版本、失败尝试与完整身份审计；投标人矩阵明细/版本/结果跟踪；Alembic、PostgreSQL、HTTPS、Key 加密、Docker 和公网 SaaS 能力。下一步只读审计并冻结 P12C-C2 的最小恢复边界；不得把只读详情直接当作恢复已交付。
 - 新任务分工不变：Grok 只负责限定实现与自测，未经 Codex 审查确认不得提交；Codex 负责计划、范围冻结、差异审查、独立测试、验收、中文提交、文档闭环和 GitHub 状态核验。每一包仍按“计划提交 → 实现提交 → 文档闭环提交 → 推送协作分支”执行，禁止合包。
 - GitHub 若出现连接重置，可在当前 PowerShell 进程临时配置 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY=http://127.0.0.1:7890` 与 `NO_PROXY=localhost,127.0.0.1` 后重试；不得把代理或凭据写入仓库。
 
-**换会话可直接：核验分支、HEAD/远端与工作区 → 读本文 §0～§3.1、§4.23、§5、§6、§11、P12C 契约/计划及路线图 → 确认 P12C-B-D3 冻结 `1d44484`、实现 `b91a7ff` 已推送且后端/前端全量 764/263 passed → 只读审计并冻结 P12C-C 受限历史 API/前端，明确列表最小投影、详情正文出域、恢复版本围栏、权限与复合事务。禁止重新实现 D3/D2/D1/C2/C1/B2/B1/B-A/P12C-A/P12B-A/B/C/D/P12A、把内部账本直接当作公开历史、自动合并列表/详情/恢复/删除/diff/多人协作、让 Grok commit/push，或由 Codex 冒充 Grok 完成主实现。**
+**换会话可直接：核验分支、HEAD/远端与工作区 → 读本文 §0～§3.1、§4.23、§5、§6、§11、P12C 契约/计划及路线图 → 确认 P12C-C1 冻结 `26b504e`、实现 `7023ecd` 已推送且后端/前端全量 777/263 passed → 只读审计并冻结 P12C-C2 受限 revision restore，明确 expectedStateVersion、恢复前安全检查点、目标重验、写回/新 revision、裁剪与失败全回滚。禁止重新实现 P12C-C1/B-D3/B-D2/B-D1/B-C2/B-C1/B-B2/B-B1/B-A/P12C-A/P12B-A/B/C/D/P12A、把只读详情直接当作恢复、合入前端/删除/diff/多人协作、让 Grok commit/push，或由 Codex 冒充 Grok 完成主实现。**

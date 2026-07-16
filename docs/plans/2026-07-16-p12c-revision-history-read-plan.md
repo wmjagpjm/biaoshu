@@ -7,7 +7,7 @@
 
 # P12C-C1 editor-state 修订历史只读接口实施计划
 
-> **状态**：已冻结，待 Grok failure-first、实现与自测。
+> **状态**：已完成、独立验收并推送；冻结=`26b504e`，实现=`7023ecd`。
 > **基线**：D3 实现=`b91a7ff`、闭环=`d07012b`；后端/前端串行全量 **764/263 passed**。
 
 ## 1. 交付目标
@@ -38,3 +38,7 @@ Codex 独立审查 SQL 投影、三重作用域、损坏收敛、完整只读零
 ## 5. 后续拆包
 
 C1 闭环后再审计 C2 受限 revision restore；C2 必须决定是否抽取共享快照验证/写回原语，并重新证明 expectedStateVersion、恢复前安全检查点、revision 新时间点与失败全回滚。前端列表/详情/恢复入口继续后置，禁止与 C1 合包。
+
+## 6. 交付结果
+
+Grok 首版 failure-first **12 failed / 0 passed**、专项 **13 passed**。Codex 首次审查发现坏 `created_at` 在 SQLAlchemy 物化阶段绕过固定错误，要求同一五文件边界内返修；本轮 failure-first **1 failed / 12 passed**，返修后专项 **13 passed**。Codex 独立运行计划六组回归 **201 passed**、后端串行全量 **777 passed**，并定点复现列表/详情的坏时间固定 500/no-store。五文件编译、SQL 投影、三重作用域、零写、鉴权、白名单与 diff 门均通过；前端未改，继续沿用 **263 passed** 串行基线。

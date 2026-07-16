@@ -173,7 +173,7 @@ npm run test:e2e:business-editor-state-truth
 npm run test:e2e:technical-editor-state-truth
 ```
 
-当前基线：后端串行全量 **764 passed**（1 条既有 Starlette/httpx 弃用警告）；P12C-B-D3 专项/扩大恢复与全部来源回归 **18/270 passed**，双文件 `py_compile` 通过。P12C-B-D2 历史基线为 25/299/746，P12C-B-D1 为 11/285/732，P12C-B-C2 为 20/272/721，P12C-B-C1 为 10/224/711，P12C-B-B2 为 11/147/701，P12C-B-B1 为 10/126/690，P12C-B-A 为 14/107/680，P12C-A 为 67/77/666。前端 `lint` / `build` 通过（仅既有大包体积提示），P12B-D2 专项/受影响回归 **51/63 passed**，Chromium headless、单 worker、零重试全量 E2E **263 passed**。P12B-D1 历史恢复专项/受影响回归/全量为 58/81/599；P12B-C3 历史后端/前端全量为 570/212；P12A、P8C、M3-D、P10K、P9D 及其他既有专项继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
+当前基线：后端串行全量 **777 passed**（1 条既有 Starlette/httpx 弃用警告）；P12C-C1 专项/扩大回归 **13/201 passed**，五文件 `py_compile` 与真实坏时间 HTTP 复现通过。P12C-B-D3 历史基线为 18/270/764，P12C-B-D2 为 25/299/746，P12C-B-D1 为 11/285/732，P12C-B-C2 为 20/272/721，P12C-B-C1 为 10/224/711，P12C-B-B2 为 11/147/701，P12C-B-B1 为 10/126/690，P12C-B-A 为 14/107/680，P12C-A 为 67/77/666。前端未因 C1 改动，`lint` / `build` 既有基线通过（仅大包体积提示），P12B-D2 专项/受影响回归 **51/63 passed**，Chromium headless、单 worker、零重试全量 E2E **263 passed**。P12B-D1 历史恢复专项/受影响回归/全量为 58/81/599；P12B-C3 历史后端/前端全量为 570/212；P12A、P8C、M3-D、P10K、P9D 及其他既有专项继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
 
 P8D/P8E 本机助手独立验收命令（仓库根；不安装或探测真实 MinerU/Docling）：
 
@@ -356,11 +356,25 @@ cd C:\Users\Administrator\biaoshu\backend
 
 P12C-B-D3 已实现并推送（冻结=`1d44484`、实现=`b91a7ff`）。不同版本恢复在原唯一事务内固定记录 `checkpoint_restore`；空账本 before+after、已有基线精确 +1、回到旧版本形成新时间点，同内容只创建安全检查点并更新 `updatedAt`、零修订。两轮 test-only 返修收紧来源隔离、完整失败状态零写、两个裁剪失败原目标可重试与公开 500 脱敏。Codex 独立结果为 **18 / 270 / 764 passed**；历史 API/前端、删除、diff、搜索、跨项目历史、任意修订恢复与多人协作仍未实现。
 
+P12C-C1 独立验收命令（后端；全部串行）：
+
+```powershell
+cd C:\Users\Administrator\biaoshu\backend
+.\.venv\Scripts\python.exe -m pytest -q tests\test_p12c_revision_history_read.py --tb=line
+.\.venv\Scripts\python.exe -m pytest -q tests\test_editor_state_revisions.py tests\test_p12c_checkpoint_restore_revisions.py tests\test_editor_state_checkpoints.py tests\test_editor_state_checkpoint_restore.py tests\test_editor_state_full_version.py tests\test_auth_rbac.py --tb=line
+.\.venv\Scripts\python.exe -m pytest -q --tb=line
+.\.venv\Scripts\python.exe -m py_compile app\services\editor_state_revision_history_service.py app\api\editor_state_revisions.py app\api\schemas.py app\main.py tests\test_p12c_revision_history_read.py
+```
+
+P12C-C1 已实现并推送（冻结=`26b504e`、实现=`7023ecd`）。列表只投影最近 10 条五列元数据，详情三重作用域按需读取并严格重验规范快照；所有成功与业务错误 `no-store`。Codex 首次审查真实复现坏 `created_at` 裸 500，返修后越界字节、非法来源、坏时间和正文损坏均以真实 SQLite+HTTP 固定脱敏。独立结果为 **13 / 201 / 777 passed**；C2 revision restore、前端、删除、diff、搜索、跨项目历史与多人协作仍未实现。
+
 ## 6. 已接 API 一览
 
 | 方法 | 路径 |
 |------|------|
 | GET | `/api/health` |
+| GET | `/api/projects/{projectId}/editor-state-revisions`（最近 10 条元数据；不读取正文） |
+| GET | `/api/projects/{projectId}/editor-state-revisions/{revisionId}`（按需详情；三重作用域） |
 | GET | `/api/auth/bootstrap-status`（公开；`bootstrapped`、`authRequired`） |
 | POST | `/api/auth/login`（公开；设置 HttpOnly 会话 Cookie） |
 | POST | `/api/auth/logout`（当前会话 + CSRF） |

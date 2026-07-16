@@ -7,7 +7,7 @@
 
 # P12C-C1 editor-state 修订历史只读接口契约
 
-> **状态**：已冻结，待 Grok failure-first、受限实现与 Codex 独立验收。
+> **状态**：已实现、独立验收并推送；冻结=`26b504e`，实现=`7023ecd`。
 > **前置**：P12C-B-D3 冻结=`1d44484`、实现=`b91a7ff`、闭环=`d07012b`；后端/前端串行全量基线 **764/263 passed**。
 
 ## 1. 目标与拆包
@@ -79,3 +79,9 @@ Grok 只允许修改以下 5 个文件：
 ## 7. 非目标
 
 C1 不实现修订恢复、恢复前安全检查点、expectedStateVersion、删除、diff、搜索、分页、下载、导出、命名、标签、审批、跨项目历史、保留期设置、自动定时历史、前端面板或多人实时协作。C2 恢复与后续前端必须在 C1 独立闭环后重新规划，不能直接复用检查点 restore 或把 `revisionId` 当 `checkpointId`。
+
+## 8. 实现与独立验收记录
+
+Grok 首版 failure-first **12 failed / 0 passed**，最终首版专项 **13 passed**；Codex 审查以真实 SQLite 原始损坏 `created_at` 复现出列表/详情裸 `500 Internal Server Error` 且缺少 `no-store`，并拒绝用私有校验函数冒充字节、来源和时间的公开 HTTP 证据。受限返修先得到 **1 failed / 12 passed**，随后在查询结果物化边界统一收敛解码异常，并以临时忽略 CHECK 的真实行证明越界字节、非法来源和坏时间均固定脱敏。
+
+Codex 最终独立通过专项 **13**、冻结计划六组扩大回归 **201**、后端串行全量 **777 passed**；真实坏时间列表/详情均精确返回 `500 editor_state_revision_corrupt`、`Cache-Control: no-store` 且不泄漏 ID。五文件 `py_compile`、SQL 投影、三重作用域、完整零写、白名单、暂存区和 `diff --check` 全部通过。前端未改动，沿用单 worker、零重试 **263 passed** 基线。C2 受限恢复仍须独立冻结。
