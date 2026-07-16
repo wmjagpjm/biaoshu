@@ -1,0 +1,41 @@
+<!--
+模块：P12C-C2 editor-state 修订受限恢复实施计划
+用途：落实九来源旧库迁移、共享恢复原语、七生产文件加一测试文件的 failure-first 顺序。
+对接：p12c-revision-restore-contract.md；P12C-C1；P12B-D checkpoint restore。
+二次开发：后端恢复与前端拆包；迁移失败必须阻止启动，禁止静默忽略。
+-->
+
+# P12C-C2 editor-state 修订受限恢复实施计划
+
+> **状态**：已冻结，待 Grok failure-first、实现与自测。
+> **基线**：C1 冻结=`26b504e`、实现=`7023ecd`、闭环=`5be234c`；后端/前端串行全量 **777/263 passed**。
+
+## 1. 交付目标
+
+交付单条 revision 的后端原子恢复：严格 expected CAS、恢复前安全检查点、目标规范重验、13 键写回、准确 `revision_restore` 新时间点、10/20 双配额裁剪和失败三域全回滚。同时幂等迁移旧 SQLite 八来源 CHECK；不做前端。
+
+## 2. 实施顺序
+
+1. 仅新增专项，先覆盖旧表迁移、POST body/权限、正常/同内容/断链/并发/失败回滚与来源隔离，保持生产未改运行 failure-first；
+2. 在模型、revision service 与数据库迁移中增加第九来源；先让新旧 SQLite 的 DDL、数据保真、幂等和失败阻断测试通过；
+3. 从 checkpoint service 抽取无提交 `stage_locked_canonical_restore` 类共享原语，并让既有 checkpoint restore 复用，先跑全部 P12B-D/P12C-D3 回归证明语义不变；
+4. 新增 revision restore service：锁/CAS 后调用 C1 目标读取，再调用共享原语并以 `revision_restore` 编排唯一 commit/rollback；
+5. 在既有 revision router/schema 增加严格 POST 与精确三字段响应；不改 `main.py`；
+6. 串行运行 C2 专项、C1/D3/checkpoint/editor-state/auth/迁移扩大回归和后端全量，再做八文件 `py_compile`、diff、暂存区与白名单检查；完成后仅发送 `review_request`。
+
+## 3. Grok 最低自测
+
+```powershell
+cd C:\Users\Administrator\biaoshu\backend
+.\.venv\Scripts\python.exe -m pytest -q tests\test_p12c_revision_restore.py --tb=line
+.\.venv\Scripts\python.exe -m pytest -q tests\test_p12c_revision_history_read.py tests\test_p12c_checkpoint_restore_revisions.py tests\test_editor_state_checkpoint_restore.py tests\test_editor_state_checkpoints.py tests\test_editor_state_revisions.py tests\test_editor_state_full_version.py tests\test_auth_rbac.py tests\test_local_parser_callback_tickets.py --tb=line
+.\.venv\Scripts\python.exe -m py_compile app\models\entities.py app\core\database.py app\services\editor_state_revision_service.py app\services\editor_state_checkpoint_service.py app\services\editor_state_revision_restore_service.py app\api\editor_state_revisions.py app\api\schemas.py tests\test_p12c_revision_restore.py
+```
+
+## 4. Codex 验收门
+
+Codex 独立审查迁移是否事务化/幂等/保留 DDL 与全部旧行，准确来源是否贯穿模型、服务、SQL CHECK 和公开列表；审查共享原语无查询/锁/事务所有权漂移，CAS 顺序、三重作用域、同内容零修订、断链补点、双配额与三域回滚。专项和扩大回归通过后运行后端串行全量；前端无改动，沿用单 worker、零重试 **263 passed** 基线。
+
+## 5. 后续拆包
+
+C2 闭环后再冻结前端 C3：列表展开才读、详情按需、二次确认、执行时最新 expected、成功唯一 editor-state/list 重读、项目切换/折叠/连点迟到隔离及正文不落 DOM/URL/存储/日志。删除、diff、搜索与多人协作继续不在 C3 默认范围。
