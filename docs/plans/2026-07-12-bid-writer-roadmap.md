@@ -7,7 +7,7 @@
 
 # 标书制作者能力补全与角色化演进路线图
 
-> **状态**：阶段 0/1/2 已完成；阶段 3 M3-A=`5d37dba`、M3-B=`e2e5d04`、M3-C 计划=`c63310f`/实现=`b8ff605`、M3-D 计划=`d326c7d`/后端=`6a5f61f`/前端=`b89a387` 均已完成；阶段 4 **包 5** 已推送（`460097a`）；**包 6** 已推送（`1289c92`）；**包 7** 已推送（`2c7b3e0`）；**包 8/P8B/P8C/P8D/P8E** 均已完成（调度=`6db1586`，P8B 计划=`f662674`/后端=`0994cc8`/前端=`80d2579`，P8C 计划=`cabe99d`/后端=`af39ff8`/前端=`1cf5576`，P8D 计划=`30d066f`/助手=`e1fe316`，P8E 计划=`73b1264`/后端=`79b346e`/助手=`e3f9cc4`；两种真实 CLI/模型均需人工准备）；包 9A 与 P9D 已完成。阶段 5 已完成 P10A 至 P10K；P10K 计划=`2e53007`、后端=`1eaa75e`、前端=`dbf301c`。P11A/P11B/P11C 三个真实数据收口包均已完成。P12A、P12B-A/B/C/D、P12C-A、P12C-B-A、P12C-B-B1、P12C-B-B2 与 P12C-B-C1 均已完成；C1 冻结=`76834f5`、实现=`1d0ce0e`，后端/前端串行全量基线为 **711/263 passed**。自动历史目前覆盖公开浏览器 PUT、九类任务、五类商务 revise 与个人 callback；P8C callback/content-fuse/checkpoint restore 尚未接入。
+> **状态**：阶段 0/1/2 已完成；阶段 3 M3-A=`5d37dba`、M3-B=`e2e5d04`、M3-C 计划=`c63310f`/实现=`b8ff605`、M3-D 计划=`d326c7d`/后端=`6a5f61f`/前端=`b89a387` 均已完成；阶段 4 **包 5** 已推送（`460097a`）；**包 6** 已推送（`1289c92`）；**包 7** 已推送（`2c7b3e0`）；**包 8/P8B/P8C/P8D/P8E** 均已完成（调度=`6db1586`，P8B 计划=`f662674`/后端=`0994cc8`/前端=`80d2579`，P8C 计划=`cabe99d`/后端=`af39ff8`/前端=`1cf5576`，P8D 计划=`30d066f`/助手=`e1fe316`，P8E 计划=`73b1264`/后端=`79b346e`/助手=`e3f9cc4`；两种真实 CLI/模型均需人工准备）；包 9A 与 P9D 已完成。阶段 5 已完成 P10A 至 P10K；P10K 计划=`2e53007`、后端=`1eaa75e`、前端=`dbf301c`。P11A/P11B/P11C 三个真实数据收口包均已完成。P12A、P12B-A/B/C/D、P12C-A、P12C-B-A、P12C-B-B1、P12C-B-B2、P12C-B-C1 与 P12C-B-C2 均已完成；C2 冻结=`52bbabf`、实现=`82cc82e`，后端/前端串行全量基线为 **721/263 passed**。自动历史目前覆盖公开浏览器 PUT、九类任务、五类商务 revise、个人 callback 与 P8C callback；content-fuse/checkpoint restore 尚未接入。
 > **当前分支**：`collab/grok-code-codex-review`
 > **协作方式**：Grok 负责限定范围的实现与测试；Codex 负责范围、审查、验收和提交授权。
 
@@ -325,7 +325,7 @@
 
 ## 5. 当前下一步
 
-阶段 0/1/2、阶段 3 M3-A 至 M3-D、阶段 4 **包 5** 至 **包 8/P8B/P8C/P8D/P8E**、P9A/P9B/P9C/P9D、阶段 5 P10A 至 P10K、**P11A/P11B/P11C 三个真实数据收口包**，以及 **P12A/P12B-A/P12B-B/P12B-C/P12B-D/P12C-A/P12C-B-A/P12C-B-B1/P12C-B-B2/P12C-B-C1** 均保持已交付。P8E 完整契约见 `docs/p8e-docling-local-helper-contract.md`，实施与独立验收记录见 `docs/plans/2026-07-15-p8e-docling-local-helper-plan.md`。
+阶段 0/1/2、阶段 3 M3-A 至 M3-D、阶段 4 **包 5** 至 **包 8/P8B/P8C/P8D/P8E**、P9A/P9B/P9C/P9D、阶段 5 P10A 至 P10K、**P11A/P11B/P11C 三个真实数据收口包**，以及 **P12A/P12B-A/P12B-B/P12B-C/P12B-D/P12C-A/P12C-B-A/P12C-B-B1/P12C-B-B2/P12C-B-C1/P12C-B-C2** 均保持已交付。P8E 完整契约见 `docs/p8e-docling-local-helper-contract.md`，实施与独立验收记录见 `docs/plans/2026-07-15-p8e-docling-local-helper-plan.md`。
 
 P8D 与 P8E 本机外置解析助手均已完成并推送：P8D 计划=`30d066f`、实现=`e1fe316`、闭环=`38b9318`；P8E 计划=`73b1264`、后端=`79b346e`、助手=`e3f9cc4`。P8E 独立验收为 Docling 46、MinerU 54、后端受影响回归 37、P8C E2E 9、P8B E2E 6 passed；真实 Docling/模型未安装、未验收，自动安装/模型打包/服务端内嵌仍不是已交付能力。
 
@@ -341,4 +341,6 @@ P8D 与 P8E 本机外置解析助手均已完成并推送：P8D 计划=`30d066f`
 
 **P12C-B-B2 五类商务 revise 原子接入已完成**：冻结=`3a30c03`、实现=`5149385`。两个真实 upsert 写点固定记录 `revise`；结构化解析失败、空 revised、普通技术 revise、陈旧 expected 与 LLM 期间漂移保持本次修订零增量。Codex 独立通过专项 **11**、扩展受影响回归 **147**、后端串行全量 **701 passed**。B2 完成后已只读审计个人 callback 与 P8C 一次性本地解析 callback 的不同事务边界，并据此先交付 C1；content-fuse、checkpoint restore 继续拆包。不得直接跳到任意版本时间线/浏览/回滚、删除、diff 或多人协作。Word `structure` 因缺少容器/跨页视觉决策继续不接线；外部来源和真实语义调优不得合包。
 
-**P12C-B-C1 个人 callback 原子接入已完成**：冻结=`76834f5`、实现=`1d0ce0e`。同一次锁后 before、提交前内存 after 与固定 `callback` 共享个人回调唯一事务；失败时 editor-state/任务/项目/revision 全域回滚。Codex 独立通过专项 **10**、扩大受影响回归 **224**、后端串行全量 **711 passed**。下一主线固定为 P12C-B-C2 P8C 一次性票据 callback 的 `local_parser` 接入；stale/null 必须只提交票据消费且零修订，非版本失败必须完整回滚并允许票据重用。content-fuse、checkpoint restore 继续拆包，不得跳到历史浏览/恢复或多人协作。
+**P12C-B-C1 个人 callback 原子接入已完成**：冻结=`76834f5`、实现=`1d0ce0e`。同一次锁后 before、提交前内存 after 与固定 `callback` 共享个人回调唯一事务；失败时 editor-state/任务/项目/revision 全域回滚。Codex 独立通过专项 **10**、扩大受影响回归 **224**、后端串行全量 **711 passed**。C1 完成后下一主线曾固定为 C2 `local_parser`；其 stale/null 只消费零修订与非版本失败可重用语义随后已由 C2 独立交付。content-fuse、checkpoint restore 继续拆包，不得跳到历史浏览/恢复或多人协作。
+
+**P12C-B-C2 P8C 票据 callback 原子接入已完成**：冻结=`52bbabf`、实现=`82cc82e`。fresh 成功以同一次锁后 before/行和固定 `local_parser` 与票据消费、正文、任务、项目、审计同事务留史；stale/null 只提交消费且零修订，recorder/commit 失败全域回滚并允许同票重用。Codex 独立通过专项 **20**、扩大受影响回归 **272**、后端串行全量 **721 passed**。下一步只读审计 content-fuse apply/consume 与 checkpoint restore 的事务边界并继续拆包，不得跳到历史浏览/恢复或多人协作。

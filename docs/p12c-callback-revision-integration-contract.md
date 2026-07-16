@@ -7,7 +7,7 @@
 
 # P12C-B-C callback 修订账本接入契约
 
-> **状态**：两类 callback 只读审计完成；P12C-B-C1 个人 callback 已实现、独立验收并推送，C2 P8C 票据 callback 已冻结、待 Grok 实现。
+> **状态**：两类 callback 均已实现、独立验收并推送；C1=`76834f5`/`1d0ce0e`，C2=`52bbabf`/`82cc82e`。
 > **前置**：P12C-B-B2 冻结=`3a30c03`、实现=`5149385`、闭环=`33ef13e`；后端/前端全量基线 **701/263 passed**。
 > **固定拆包**：C1 个人兼容 callback 来源 `callback`（冻结=`76834f5`、实现=`1d0ce0e`）→ C2 P8C 一次性票据 callback 来源 `local_parser`。两包必须分别失败先测、实现、验收、提交和闭环。
 
@@ -113,3 +113,13 @@ C2 必须通过真实公开 `POST /api/local-parser/callback` 证明：
 6. 个人 callback 仍只产生 `callback`，不得被误记为 `local_parser`；AST 只能补充证明生产函数内固定字面来源、单次 recorder 调用和文件边界，不能替代真实 SQLite 原子性断言。
 
 failure-first 必须在生产修改前运行 C2 新专项，报告真实失败数与原因。Grok 随后至少运行新专项，以及 `test_local_parser_callback_tickets.py`、`test_p12c_personal_callback_revisions.py`、`test_p12b_delayed_writer_fences.py`、`test_editor_state_revisions.py` 和既有 P12C 来源专项；最后执行双文件 `py_compile`、`git diff --check` 与精确双文件白名单。Codex 独立扩大回归并运行后端串行全量，前端沿用 **263 passed** 串行基线。
+
+## 9. C2 实现与验收记录
+
+冻结提交 `52bbabf`、实现提交 `82cc82e`。fresh 分支保存同一次锁原语返回的锁后行和权威 before，`_finalize_success_writes` 复用该行，在既有正文、任务、项目和成功审计暂存后以同一内存行构造 after，并在原唯一 commit 前用固定 `local_parser` 调用无提交修订原语。stale/null 分支没有进入 helper，仍只提交票据消费；其他异常仍完整 rollback 并允许同票重用。未新增锁、查询、commit/rollback、upsert、API 字段或前端改动。
+
+Grok failure-first 为 **7 failed / 3 passed**，实现后专项 **10 passed**；受影响回归的唯一失败是 C1 阶段“P8C 尚未接 local_parser”的过时守卫。Codex 要求只返修测试：旧守卫改为 P8C 精确一条 `local_parser` 且零 `callback`，C2 recorder `added_count` 精确为 1，并把无效/缺失/过期/重放 401 收紧为固定 JSON。返修后 Grok 通过 **20/147 passed**。
+
+Codex 独立通过专项 **20 passed**、扩大受影响回归 **272 passed**、后端串行全量 **721 passed**；只有 1 条既有 Starlette/httpx 弃用警告。三文件 `py_compile`、精确三文件白名单、工作树/暂存区 diff 与安全审查均通过。Grok failure-first=`msg_03552ae3506d477591ecedede8c34261`、初版=`msg_b4761646c5f247679acd6c45b36cfbb9`、返修=`msg_e7215fc505304d5b977c7419a36eebd9`，Codex 确认=`msg_445f10c957ac45b1890bff677abcf845`。
+
+两类 callback 均已闭环。下一来源必须重新只读审计 content-fuse apply/consume 的双事务和 checkpoint restore 的恢复事务，禁止把三者合包或直接跳到历史浏览/恢复 UI。
