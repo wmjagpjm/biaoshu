@@ -2018,6 +2018,53 @@ class ContentFuseApplicationConsumeOut(BaseModel):
     )
 
 
+class EditorStateRevisionMetaOut(BaseModel):
+    """
+    模块：P12C-C1 修订历史元数据
+    用途：列表项字段，不含 snapshot 正文。
+    对接：GET /api/projects/{projectId}/editor-state-revisions。
+    二次开发：禁止附加 projectId/正文/路径/用户/任务字段。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    revision_id: str = Field(serialization_alias="revisionId")
+    state_version: str = Field(serialization_alias="stateVersion")
+    snapshot_bytes: int = Field(serialization_alias="snapshotBytes")
+    source_kind: str = Field(serialization_alias="sourceKind")
+    created_at: datetime = Field(serialization_alias="createdAt")
+
+
+class EditorStateRevisionListOut(BaseModel):
+    """
+    模块：P12C-C1 修订历史列表
+    用途：固定最近 10 条元数据，顶层仅 items。
+    对接：GET /api/projects/{projectId}/editor-state-revisions。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    items: list[EditorStateRevisionMetaOut]
+
+
+class EditorStateRevisionDetailOut(BaseModel):
+    """
+    模块：P12C-C1 修订历史详情
+    用途：元数据 + 已校验的规范 snapshot 对象。
+    对接：GET .../editor-state-revisions/{revisionId}。
+    二次开发：snapshot 必须服务端重验键集/字节/版本后返回。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    revision_id: str = Field(serialization_alias="revisionId")
+    state_version: str = Field(serialization_alias="stateVersion")
+    snapshot_bytes: int = Field(serialization_alias="snapshotBytes")
+    source_kind: str = Field(serialization_alias="sourceKind")
+    created_at: datetime = Field(serialization_alias="createdAt")
+    snapshot: dict[str, Any]
+
+
 class EditorStateCheckpointCreate(BaseModel):
     """
     模块：P12A 手动检查点创建请求

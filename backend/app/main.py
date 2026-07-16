@@ -25,6 +25,7 @@ from app.api import (
     compliance as compliance_api,
     content_fuse_applications as content_fuse_applications_api,
     editor_state_checkpoints as editor_state_checkpoints_api,
+    editor_state_revisions as editor_state_revisions_api,
     export as export_api,
     files,
     finance as finance_api,
@@ -144,6 +145,7 @@ def create_app() -> FastAPI:
     app.include_router(projects.router, prefix="/api")
     app.include_router(content_fuse_applications_api.router, prefix="/api")
     app.include_router(editor_state_checkpoints_api.router, prefix="/api")
+    app.include_router(editor_state_revisions_api.router, prefix="/api")
     app.include_router(settings_api.router, prefix="/api")
     app.include_router(llm.router, prefix="/api")
     app.include_router(revise.router, prefix="/api")
