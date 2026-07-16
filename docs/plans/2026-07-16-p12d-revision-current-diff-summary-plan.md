@@ -8,6 +8,7 @@
 # P12D-A 修订与当前状态差异摘要实施计划
 
 > **给 Grok：** REQUIRED SUB-SKILL：按 `executing-plans` 逐项执行；先 failure-first，再最小实现。不得提交或推送。
+> **完成状态**：冻结=`2cc6ee3`、实现=`9445fcc`，后端全量 **831 passed**；本计划已闭环，后续前端工作另立 P12D-B。
 
 **目标：** 新增一个只读 API，精确比较所选修订与服务端当前 13 键状态，只返回变更字段名和两侧有界摘要。
 
@@ -124,3 +125,12 @@ backend\.venv\Scripts\python.exe -m pytest -q backend\tests --basetemp=C:\Temp\b
 ## 8. 后续边界
 
 P12D-A 只交付后端只读基础。P12D-B 才可设计技术/商务共用“与当前版本对比”入口、严格 response parser、迟到隔离和串行 E2E；任意历史两两比较、正文 diff、搜索、分页、删除、导出与多人协作继续不做。
+
+## 9. 实施闭环
+
+1. 计划冻结提交为 `2cc6ee3`；Grok 任务=`msg_0458b3b3de3c4c088e9bdeead15f1f16`，审查请求=`msg_49322ccb10bb44beb9e70d054d5f9f96`，未执行 Git 暂存、提交或推送。
+2. 首次红测被 `MultipleResultsFound` 暴露为测试 fixture 无效失败；在生产代码仍未修改时修正 fixture 后，有效 failure-first 为 **14 failed**，精确落在路由 404、缺比较服务或响应上。
+3. Grok 自测为专项 **14 passed**、四组受影响回归 **132 passed**，并通过 `py_compile`、diff 与四文件白名单。
+4. Codex 逐行审查 Schema、路由、服务和完整专项测试，确认 13 键共享来源、逐字段规范 JSON、摘要预算、固定脱敏错误和五域零写；直接反假绿验证 `True` 与 `1` 得到 `changedFields=["guidance"]`。
+5. Codex 独立结果为专项 **14 passed**、受影响回归 **132 passed**、后端串行全量 **831 passed**（1 条既有弃用告警，1026.84 秒，标准错误为空）；`py_compile`、`git diff --check`、暂存区为空及精确四文件白名单通过。
+6. 实现以中文提交 `9445fcc` 推送；验收确认=`msg_33dd27a988b542a3a808604d27b643ae`。P12D-A 到此完成，未偷带前端、恢复、任意历史比较、正文 diff、删除、搜索或分页。
