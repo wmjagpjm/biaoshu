@@ -2100,6 +2100,70 @@ class EditorStateRevisionRestoreOut(BaseModel):
     restored_at: str = Field(serialization_alias="restoredAt")
 
 
+# P12D-A：修订与当前状态差异摘要（仅六项计数 + 13 键字段名；无正文/ID/版本）
+EditorStateCanonicalFieldName = Literal[
+    "outline",
+    "chapters",
+    "facts",
+    "mode",
+    "analysis",
+    "responseMatrix",
+    "guidance",
+    "parsedMarkdown",
+    "businessQualify",
+    "businessToc",
+    "businessQuote",
+    "businessCommit",
+    "analysisOverview",
+]
+
+
+class EditorStateRevisionComparisonSummaryOut(BaseModel):
+    """
+    模块：P12D-A 差异摘要两侧六键计数
+    用途：有界节点/数组统计；禁止附加字段值或正文。
+    对接：GET .../editor-state-revisions/{revisionId}/comparison。
+    二次开发：精确六键；计数非负整数；hasParsedMarkdown 仅布尔。
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    outline_node_count: int = Field(
+        serialization_alias="outlineNodeCount", ge=0
+    )
+    chapter_count: int = Field(serialization_alias="chapterCount", ge=0)
+    fact_count: int = Field(serialization_alias="factCount", ge=0)
+    response_matrix_row_count: int = Field(
+        serialization_alias="responseMatrixRowCount", ge=0
+    )
+    business_entry_total: int = Field(
+        serialization_alias="businessEntryTotal", ge=0
+    )
+    has_parsed_markdown: bool = Field(serialization_alias="hasParsedMarkdown")
+
+
+class EditorStateRevisionComparisonOut(BaseModel):
+    """
+    模块：P12D-A 修订与当前状态差异摘要响应
+    用途：仅 sameState/changedFields/currentSummary/targetSummary。
+    对接：GET .../editor-state-revisions/{revisionId}/comparison。
+    二次开发：禁止 ID、版本、来源、时间、snapshot 或字段原值。
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    same_state: bool = Field(serialization_alias="sameState")
+    changed_fields: list[EditorStateCanonicalFieldName] = Field(
+        serialization_alias="changedFields"
+    )
+    current_summary: EditorStateRevisionComparisonSummaryOut = Field(
+        serialization_alias="currentSummary"
+    )
+    target_summary: EditorStateRevisionComparisonSummaryOut = Field(
+        serialization_alias="targetSummary"
+    )
+
+
 class EditorStateCheckpointCreate(BaseModel):
     """
     模块：P12A 手动检查点创建请求
