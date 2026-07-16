@@ -24,6 +24,8 @@ import type {
   CheckpointCreateOutcome,
   CheckpointRestoreOutcome,
 } from "../../editor-state-checkpoints/EditorStateCheckpointPanel";
+import { restoreEditorStateRevision as postRestoreEditorStateRevision } from "../../editor-state-revisions/editorStateRevisionApi";
+import type { RevisionRestoreOutcome } from "../../editor-state-revisions/EditorStateRevisionPanel";
 import { apiFetch } from "../../../shared/lib/api";
 import type {
   AiFeedbackRecord,
@@ -892,6 +894,54 @@ export function useBusinessBidWorkspace(projectId: string) {
     [projectId, runVersionedExternalWrite],
   );
 
+  /**
+   * 用途：P12C-C3 修订受限恢复——复用检查点操作令牌与版本化外部写 runner。
+   * 约束：执行时读最新 expected；成功唯一 GET；零自动重试。
+   */
+  const restoreRevision = useCallback(
+    async (revisionId: string): Promise<RevisionRestoreOutcome> => {
+      if (!projectId) return { status: "blocked" };
+      if (fullStateBlockedRef.current) return { status: "blocked" };
+      if (!isValidStateVersion(stateVersionRef.current)) {
+        return { status: "blocked" };
+      }
+      const requestPid = projectId;
+      const existingOp = checkpointOpTokenRef.current;
+      if (existingOp && existingOp.projectId === requestPid) {
+        return { status: "post_failed" };
+      }
+      const myToken = ++checkpointOpTokenSeqRef.current;
+      checkpointOpTokenRef.current = { projectId: requestPid, token: myToken };
+      if (saveTimer.current) {
+        clearTimeout(saveTimer.current);
+        saveTimer.current = null;
+      }
+
+      try {
+        const outcome = await runVersionedExternalWrite((expectedStateVersion) =>
+          postRestoreEditorStateRevision(
+            requestPid,
+            revisionId,
+            expectedStateVersion,
+          ),
+        );
+        if (outcome.status === "success") return { status: "success" };
+        if (outcome.status === "reload_failed") {
+          return { status: "reload_failed" };
+        }
+        return outcome.blocked
+          ? { status: "blocked" }
+          : { status: "post_failed" };
+      } finally {
+        const cur = checkpointOpTokenRef.current;
+        if (cur && cur.projectId === requestPid && cur.token === myToken) {
+          checkpointOpTokenRef.current = null;
+        }
+      }
+    },
+    [projectId, runVersionedExternalWrite],
+  );
+
   return {
     workspace,
     history,
@@ -906,6 +956,7 @@ export function useBusinessBidWorkspace(projectId: string) {
     refreshFromApi,
     createCheckpoint,
     restoreCheckpoint,
+    restoreRevision,
     setParseMarkdown,
     updateQualifyItem,
     toggleTocItem,

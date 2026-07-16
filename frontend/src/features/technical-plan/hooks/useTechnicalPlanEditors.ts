@@ -32,6 +32,8 @@ import type {
   CheckpointCreateOutcome,
   CheckpointRestoreOutcome,
 } from "../../editor-state-checkpoints/EditorStateCheckpointPanel";
+import { restoreEditorStateRevision as postRestoreEditorStateRevision } from "../../editor-state-revisions/editorStateRevisionApi";
+import type { RevisionRestoreOutcome } from "../../editor-state-revisions/EditorStateRevisionPanel";
 import {
   apiFetch,
   getApiBase,
@@ -1399,6 +1401,66 @@ export function useTechnicalPlanEditors(projectId: string) {
     [projectId, runVersionedExternalWrite],
   );
 
+  /**
+   * 用途：P12C-C3 修订受限恢复——复用检查点操作令牌与版本化外部写 runner。
+   * 约束：执行时读最新 expected；成功唯一 GET；零自动重试；不得用列表 stateVersion 当 expected。
+   */
+  const restoreRevision = useCallback(
+    async (revisionId: string): Promise<RevisionRestoreOutcome> => {
+      if (!projectId) return { status: "blocked" };
+      if (fullStateBlockedRef.current) return { status: "blocked" };
+      if (!isValidStateVersion(stateVersionRef.current)) {
+        return { status: "blocked" };
+      }
+      const requestProjectId = projectId;
+      // 与 createCheckpoint/restoreCheckpoint 共用令牌，禁止并行版本化写
+      const existingOp = checkpointOpTokenRef.current;
+      if (existingOp && existingOp.projectId === requestProjectId) {
+        return { status: "post_failed" };
+      }
+      const myToken = ++checkpointOpTokenSeqRef.current;
+      checkpointOpTokenRef.current = {
+        projectId: requestProjectId,
+        token: myToken,
+      };
+
+      if (saveTimer.current) {
+        window.clearTimeout(saveTimer.current);
+        saveTimer.current = null;
+      }
+
+      try {
+        const outcome = await runVersionedExternalWrite((expectedStateVersion) =>
+          postRestoreEditorStateRevision(
+            requestProjectId,
+            revisionId,
+            expectedStateVersion,
+          ),
+        );
+
+        if (outcome.status === "success") {
+          return { status: "success" };
+        }
+        if (outcome.status === "reload_failed") {
+          return { status: "reload_failed" };
+        }
+        return outcome.blocked
+          ? { status: "blocked" }
+          : { status: "post_failed" };
+      } finally {
+        const cur = checkpointOpTokenRef.current;
+        if (
+          cur &&
+          cur.projectId === requestProjectId &&
+          cur.token === myToken
+        ) {
+          checkpointOpTokenRef.current = null;
+        }
+      }
+    },
+    [projectId, runVersionedExternalWrite],
+  );
+
   const reloadRemoteResponseMatrix = useCallback(() => {
     if (fullStateBlockedRef.current) {
       return;
@@ -1898,6 +1960,8 @@ export function useTechnicalPlanEditors(projectId: string) {
     createCheckpoint,
     /** P12B-D2：检查点安全恢复（版本化外部写 + 唯一 GET） */
     restoreCheckpoint,
+    /** P12C-C3：修订受限恢复（共用操作令牌 + 版本化外部写 + 唯一 GET） */
+    restoreRevision,
     loading,
     loadError,
     saveError,

@@ -28,6 +28,7 @@ import { useWorkspaceParseStrategy } from "../../parse-strategy/hooks/useWorkspa
 import { ChapterEditor } from "../components/ChapterEditor";
 import { ContentFuseDialog } from "../components/ContentFuseDialog";
 import { EditorStateCheckpointPanel } from "../../editor-state-checkpoints/EditorStateCheckpointPanel";
+import { EditorStateRevisionPanel } from "../../editor-state-revisions/EditorStateRevisionPanel";
 import { FactsEditor } from "../components/FactsEditor";
 import { OutlineStepWorkspace } from "../components/OutlineStepWorkspace";
 import { ProjectGuidanceCard } from "../components/ProjectGuidanceCard";
@@ -753,6 +754,16 @@ export function TechnicalPlanWorkspace() {
         }
         createCheckpoint={editors.createCheckpoint}
         restoreCheckpoint={editors.restoreCheckpoint}
+      />
+
+      <EditorStateRevisionPanel
+        projectId={project.id}
+        disabled={
+          !editors.apiReady ||
+          Boolean(editors.loadError) ||
+          editors.fullStateConflict
+        }
+        restoreRevision={editors.restoreRevision}
       />
 
       {saveTemplateTip && (
