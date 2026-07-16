@@ -7,9 +7,9 @@
 
 # P12C-B-C callback 修订账本接入契约
 
-> **状态**：两类 callback 只读审计完成；P12C-B-C1 个人 callback 已冻结、尚未实现。
+> **状态**：两类 callback 只读审计完成；P12C-B-C1 个人 callback 已实现、独立验收并推送，C2 P8C 票据 callback 尚未冻结。
 > **前置**：P12C-B-B2 冻结=`3a30c03`、实现=`5149385`、闭环=`33ef13e`；后端/前端全量基线 **701/263 passed**。
-> **固定拆包**：C1 个人兼容 callback 来源 `callback` → C2 P8C 一次性票据 callback 来源 `local_parser`。两包必须分别失败先测、实现、验收、提交和闭环。
+> **固定拆包**：C1 个人兼容 callback 来源 `callback`（冻结=`76834f5`、实现=`1d0ce0e`）→ C2 P8C 一次性票据 callback 来源 `local_parser`。两包必须分别失败先测、实现、验收、提交和闭环。
 
 ## 1. 只读调用与事务审计
 
@@ -81,3 +81,13 @@ cd C:\Users\Administrator\biaoshu\backend
 ## 6. 非目标与后续闸门
 
 C1 不接入 P8C `local_parser`、content-fuse apply/consume 或 checkpoint restore，不新增历史列表/详情/恢复/删除/diff/搜索、前端入口、版本投稿或多人协作。C1 独立闭环后，必须基于票据消费例外重新冻结 C2 白名单和失败原子性，禁止直接复制 C1 实现。
+
+## 7. C1 实现与验收记录
+
+冻结提交 `76834f5`、实现提交 `1d0ce0e`。个人 callback 保存同一次锁后 CAS 返回的权威 before，在 parsed Markdown、成功任务与项目步骤均写入后，以同一内存行构造 after，并在唯一 commit 前用服务端字面量 `callback` 调用无提交修订原语。未调用 upsert，未新增锁、查询、commit/rollback、API 字段或前端改动。
+
+Grok failure-first 为 **6 failed / 4 passed**；实现后专项/受影响回归 **10/150 passed**。Codex 审查发现通用 500 也可通过脱敏 helper、P8C 隔离用例直调 service 冒充公开路由，遂限定仅返修新测试：固定要求 JSON `parse_callback_failed/回传处理失败`，并改用真实 `POST /api/local-parser/callback`。返修后 Grok 通过 **10/48 passed**。
+
+Codex 独立通过专项 **10 passed**、扩大受影响回归 **224 passed**、后端串行全量 **711 passed**；只有 1 条既有 Starlette/httpx 弃用警告。`py_compile`、精确双文件白名单、工作树与暂存区 diff 检查全部通过。Grok 最终回执=`msg_23f84b7c2b924ab2878267a2aaeaef96`，Codex 确认=`msg_8fa02eb1bca24a81a18f8b34b9443f96`。
+
+C1 只覆盖个人兼容 callback。C2 仍须独立冻结 `local_parser_ticket_service.py` 与新测试，尤其不能破坏 stale/null 票据“只提交消费、零修订”和非版本失败“完整 rollback、票据可重用”的分叉事务语义。
