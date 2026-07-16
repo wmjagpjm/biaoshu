@@ -20,7 +20,7 @@ from app.api.deps import get_workspace_id, require_strict_bid_writer
 from app.core.config import Settings, get_settings
 from app.core.database import get_db
 from app.models.entities import Project, ProjectEditorStateRow, ProjectTaskRow
-from app.services import editor_state_service
+from app.services import editor_state_revision_service, editor_state_service
 from app.services.local_parser_ticket_service import (
     CODE_TICKET_INVALID,
     MSG_TICKET_INVALID,
@@ -67,6 +67,7 @@ def parse_callback(
     """
     用途：写入解析 Markdown；可选 Token 校验；P12B-C2 锁后全状态 CAS 同事务落库。
     二次开发：禁止先 upsert 再补任务/项目；陈旧固定 409 + currentStateVersion；成功返回 stateVersion。
+      P12C-B-C1：同事务无提交记录 callback 修订；禁止客户端 source 决定内部来源。
     """
     expected = (settings.local_parser_token or "").strip()
     if expected and (x_local_token or "").strip() != expected:
@@ -84,7 +85,8 @@ def parse_callback(
     now = datetime.now(timezone.utc)
     try:
         # 共用锁后原语：版本不匹配抛冲突；不自行 commit
-        row, _current = editor_state_service.lock_and_assert_expected_state_version(
+        # 保存同一次锁返回的权威 before，供提交前修订账本使用
+        row, before_state = editor_state_service.lock_and_assert_expected_state_version(
             db,
             workspace_id,
             project_id,
@@ -127,6 +129,15 @@ def parse_callback(
         # commit 前基于内存行构造新版本，保证与落库一致
         new_state = editor_state_service._state_from_row(project_id, row)
         new_sv = new_state["stateVersion"]
+        # 唯一 commit 前无提交记录修订；来源固定服务端字面量 callback
+        editor_state_revision_service.record_editor_state_transition(
+            db,
+            workspace_id,
+            project_id,
+            before_state=before_state,
+            after_state=new_state,
+            source_kind="callback",
+        )
         db.commit()
     except editor_state_service.EditorStateVersionConflict as exc:
         db.rollback()
