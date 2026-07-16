@@ -1,14 +1,15 @@
 """
-模块：P12A/P12B-D1 editor-state 检查点服务
-用途：手动创建/列表/详情；以及锁后 CAS 的原子安全恢复。
+模块：P12A/P12B-D1/P12C-B-D3 editor-state 检查点服务
+用途：手动创建/列表/详情；以及锁后 CAS 的原子安全恢复与修订账本接入。
 对接：api.editor_state_checkpoints；editor_state_service（共享全状态版本算法与写回原语）；
-  EditorStateCheckpointRow。
+  editor_state_revision_service.record_editor_state_transition；EditorStateCheckpointRow。
 二次开发：
   - 禁止接受客户端 snapshot/版本/计数/名称；
-  - 创建与裁剪同事务；恢复与安全检查点/写回/裁剪同事务；失败必须 rollback；
+  - 创建与裁剪同事务；恢复与安全检查点/写回/修订/裁剪同事务；失败必须 rollback；
   - 列表 SQL 只投影元数据列，绝不 select snapshot_json；
   - 13 键/规范 JSON/stateVersion/ORM 映射必须委托 editor_state_service，禁止第二套算法；
   - 禁止调用会自行 commit 的 create_editor_state_checkpoint 或 upsert_editor_state 做嵌套恢复；
+  - 不同版本恢复固定 source_kind=checkpoint_restore；同版本禁止调用 recorder；
   - 不实现删除、自动历史或客户端 force。
 """
 
@@ -27,7 +28,7 @@ from app.models.entities import (
     ProjectEditorStateRow,
     utc_now,
 )
-from app.services import editor_state_service
+from app.services import editor_state_revision_service, editor_state_service
 from app.services.project_service import ProjectNotFoundError
 
 MAX_CHECKPOINTS_PER_PROJECT = 20
@@ -546,13 +547,16 @@ def restore_editor_state_checkpoint(
     expected_state_version: str,
 ) -> dict[str, Any]:
     """
-    用途：锁后 CAS + 恢复前安全检查点 + 13 键写回 + 保护裁剪，一次原子 commit。
-    对接：POST .../editor-state-checkpoints/{checkpointId}/restore。
+    用途：锁后 CAS + 恢复前安全检查点 + 13 键写回 + 条件修订 + 保护裁剪，一次原子 commit。
+    对接：POST .../editor-state-checkpoints/{checkpointId}/restore；P12C-B-D3。
     二次开发：
       - 禁止嵌套调用 create_editor_state_checkpoint / upsert_editor_state；
       - 禁止复制 ORM 映射/13 键哈希/矩阵收敛；写回只走 apply_canonical_snapshot_to_locked_row；
       - 目标读取必须 id+workspace_id+project_id 三重 SQL；
-      - 409 必须在任何安全插入之前；失败 editor-state 与安全检查点双零写；
+      - 409 必须在任何安全插入之前；失败 editor-state/安全检查点/revision 三域零写；
+      - 仅当 result_version != current_state["stateVersion"] 时固定 checkpoint_restore 记 transition；
+      - 同版本仍建安全检查点并成功返回，但禁止调用 recorder；
+      - recorder/revision 裁剪/检查点裁剪/commit 留在同一 rollback 域；
       - commit 前构造响应；commit 后禁止 refresh / get_editor_state。
     """
     try:
@@ -626,6 +630,18 @@ def restore_editor_state_checkpoint(
         result_version = result_state["stateVersion"]
         if result_version != target_version:
             raise _corrupt()
+
+        # 7.5) P12C-B-D3：仅不同规范版本时记 checkpoint_restore；同版本禁止伪造修订
+        # 位置：版本复核成功后、检查点保护裁剪与原唯一 commit 之前
+        if result_version != current_state["stateVersion"]:
+            editor_state_revision_service.record_editor_state_transition(
+                db,
+                workspace_id,
+                project_id,
+                before_state=current_state,
+                after_state=result_state,
+                source_kind="checkpoint_restore",
+            )
 
         # 8) 保护新安全记录地裁剪到最多 20
         _trim_checkpoints(
