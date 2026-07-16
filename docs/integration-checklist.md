@@ -173,7 +173,7 @@ npm run test:e2e:business-editor-state-truth
 npm run test:e2e:technical-editor-state-truth
 ```
 
-当前基线：后端串行全量 **721 passed**（1 条既有 Starlette/httpx 弃用警告）；P12C-B-C2 专项/扩大受影响回归 **20/272 passed**，三文件 `py_compile` 通过。P12C-B-C1 历史基线为 10/224/711，P12C-B-B2 为 11/147/701，P12C-B-B1 为 10/126/690，P12C-B-A 为 14/107/680，P12C-A 为 67/77/666。前端 `lint` / `build` 通过（仅既有大包体积提示），P12B-D2 专项/受影响回归 **51/63 passed**，Chromium headless、单 worker、零重试全量 E2E **263 passed**。P12B-D1 历史恢复专项/受影响回归/全量为 58/81/599；P12B-C3 历史后端/前端全量为 570/212；P12A、P8C、M3-D、P10K、P9D 及其他既有专项继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
+当前基线：后端串行全量 **732 passed**（1 条既有 Starlette/httpx 弃用警告）；P12C-B-D1 专项/扩大受影响回归 **11/285 passed**，双文件 `py_compile` 通过。P12C-B-C2 历史基线为 20/272/721，P12C-B-C1 为 10/224/711，P12C-B-B2 为 11/147/701，P12C-B-B1 为 10/126/690，P12C-B-A 为 14/107/680，P12C-A 为 67/77/666。前端 `lint` / `build` 通过（仅既有大包体积提示），P12B-D2 专项/受影响回归 **51/63 passed**，Chromium headless、单 worker、零重试全量 E2E **263 passed**。P12B-D1 历史恢复专项/受影响回归/全量为 58/81/599；P12B-C3 历史后端/前端全量为 570/212；P12A、P8C、M3-D、P10K、P9D 及其他既有专项继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
 
 P8D/P8E 本机助手独立验收命令（仓库根；不安装或探测真实 MinerU/Docling）：
 
@@ -319,7 +319,18 @@ cd C:\Users\Administrator\biaoshu\backend
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-P12C-B-C2 已实现并推送（冻结=`52bbabf`、实现=`82cc82e`）。P8C fresh 回调用同一次锁后 before/行和固定 `local_parser`，与票据消费、parsed Markdown、成功任务、项目步骤及成功审计共享原唯一事务；stale/null 继续只提交票据消费且零修订，recorder/commit 失败全域回滚并允许同票重用。旧 C1 阶段守卫已收紧为 P8C 精确一条 `local_parser` 且零 `callback`，无效/缺失/过期/重放 401 必须固定 JSON。Codex 独立结果为 **20 / 272 / 721 passed**；content-fuse apply/consume、checkpoint restore、历史 API 与前端仍未实现。
+P12C-B-C2 已实现并推送（冻结=`52bbabf`、实现=`82cc82e`）。P8C fresh 回调用同一次锁后 before/行和固定 `local_parser`，与票据消费、parsed Markdown、成功任务、项目步骤及成功审计共享原唯一事务；stale/null 继续只提交票据消费且零修订，recorder/commit 失败全域回滚并允许同票重用。旧 C1 阶段守卫已收紧为 P8C 精确一条 `local_parser` 且零 `callback`，无效/缺失/过期/重放 401 必须固定 JSON。Codex 独立结果为 **20 / 272 / 721 passed**；C2 交付时 content-fuse apply/consume、checkpoint restore、历史 API 与前端仍未实现，随后 apply 已由 D1 单独交付。
+
+P12C-B-D1 独立验收命令（后端；全部串行）：
+
+```powershell
+cd C:\Users\Administrator\biaoshu\backend
+.\.venv\Scripts\python.exe -m pytest -q tests\test_p12c_content_fuse_apply_revisions.py
+.\.venv\Scripts\python.exe -m pytest -q tests\test_p12c_content_fuse_apply_revisions.py tests\test_content_fuse_applications.py tests\test_content_fuse.py tests\test_p12b_delayed_writer_fences.py tests\test_editor_state_revisions.py tests\test_editor_state_full_version.py tests\test_editor_state_checkpoint_restore.py tests\test_editor_state_checkpoints.py tests\test_editor_state.py tests\test_p12c_browser_put_revisions.py tests\test_p12c_task_revisions.py tests\test_p12c_revise_revisions.py tests\test_p12c_personal_callback_revisions.py tests\test_p12c_local_parser_callback_revisions.py
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+P12C-B-D1 已实现并推送（冻结=`e8ffaeb`、实现=`a6a28f6`）。融合 apply 以同一次锁后 before/行、提交前内存 after 和固定 `content_fuse_apply`，与章节、恢复批次和裁剪共享原唯一事务；browser_put 基线后一至五条建议同批精确 +1，空账本精确 before+after。recorder/trim/commit 失败全域回滚，双并发恰好一胜一 409；完整/部分/零 consume 的修订身份序列前后完全不变，证明 D1 未误接。Codex 独立结果为 **11 / 285 / 732 passed**；consume、checkpoint restore、历史 API 与前端仍未实现。
 
 ## 6. 已接 API 一览
 

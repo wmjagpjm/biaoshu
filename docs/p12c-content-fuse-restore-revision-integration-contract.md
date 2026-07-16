@@ -7,8 +7,9 @@
 
 # P12C-B-D content-fuse 与 checkpoint restore 修订账本接入契约
 
-> **状态**：三类写入只读审计完成；D1 `content_fuse_apply` 已冻结，D2 consume 与 D3 checkpoint restore 待后续独立冻结。
+> **状态**：三类写入只读审计完成；D1 `content_fuse_apply` 已实现、独立验收并推送，D2 consume 与 D3 checkpoint restore 待后续独立冻结。
 > **前置**：P12C-B-C2 冻结=`52bbabf`、实现=`82cc82e`、闭环=`3f77559`；后端/前端串行全量基线 **721/263 passed**。
+> **D1 提交**：冻结=`e8ffaeb`、实现=`a6a28f6`；Codex 独立后端基线 **11/285/732 passed**，前端沿用 **263 passed**。
 > **固定拆包**：D1 apply=`content_fuse_apply` → D2 consume=`content_fuse_consume` → D3 checkpoint restore=`checkpoint_restore`。三包分别失败先测、实现、验收、提交和闭环。
 
 ## 1. 只读事务审计
@@ -60,6 +61,14 @@ cd C:\Users\Administrator\biaoshu\backend
 
 再执行双文件 `py_compile`、`git diff --check`、暂存区 diff 检查和精确双文件白名单。Codex 独立审查并扩大回归、运行后端串行全量；前端无改动，沿用 **263 passed** 串行基线。
 
-## 5. 非目标
+## 5. D1 实现、返修与独立验收记录
+
+Grok 在精确双文件边界内先取得 **9 failed / 2 passed** 的 failure-first 证据，再完成生产接入和专项 **11 passed**。实现保存同一次锁后 `state_row/before_state`，在章节、恢复批次 flush 与最近 20 批裁剪后，从同一内存行构造 after；原唯一 commit 前以服务端字面量 `content_fuse_apply` 调用无提交 recorder，响应版本直接取 after，并移除 apply 成功路径的 `get_editor_state` 重读。Grok 未提交或推送。
+
+Codex 审查发现 consume 隔离用例只检查 apply/consume 来源计数，若误写为其他来源仍可能假绿，遂下发仅测试返修 `msg_1c1610e5c0114550a3001e426625be4a`。Grok 回执 `msg_e51deb777dcc46eda74ea0adf2a38d1c` 将完整、部分、零 consume 前后的 `(revision_id, stateVersion, source)` 身份序列收紧为完全相等，并把断链后的 apply 补点改为精确增量；生产文件在返修阶段保持不变。初版回执=`msg_7f737db9851a4ae1ae761ae6f19f53df`，Codex 最终确认=`msg_50e3179cd2fc44929c835c259f1cc35d`。
+
+Codex 独立通过专项 **11 passed**、扩大融合/editor-state/检查点/全部既有来源回归 **285 passed**、后端串行全量 **732 passed**；均只有 1 条既有 Starlette/httpx 弃用警告。双文件 `py_compile`、`git diff --check`、精确白名单、暂存区和分支/远端检查全部通过。实现提交 `a6a28f6` 已推送 `collab/grok-code-codex-review`。
+
+## 6. 非目标
 
 D1 不接 `content_fuse_consume` 或 `checkpoint_restore`，不修改 M3-D 前端/队列/响应，不新增历史列表/详情/恢复/删除/diff/搜索，不改变批次 20 条配额、一次消费、章节漂移规则、任务建议协议或权限。D2/D3 仍须重新冻结，禁止从 D1 实现推断已自动接入。
