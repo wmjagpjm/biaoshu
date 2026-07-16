@@ -1,13 +1,13 @@
 <!--
 模块：P12C-B-C callback 修订账本接入契约
-用途：记录个人 callback 与 P8C 一次性本地解析 callback 的只读事务审计，并冻结 C1 最小实现包。
+用途：记录个人 callback 与 P8C 一次性本地解析 callback 的事务审计，并分别冻结 C1/C2 最小实现包。
 对接：P12C-A 修订原语；P12B-C2 callback 版本围栏；P8C 一次性回传票据。
 二次开发：个人 callback 与 P8C 票据 callback 禁止合包；陈旧票据消费例外不得被普通回滚语义覆盖。
 -->
 
 # P12C-B-C callback 修订账本接入契约
 
-> **状态**：两类 callback 只读审计完成；P12C-B-C1 个人 callback 已实现、独立验收并推送，C2 P8C 票据 callback 尚未冻结。
+> **状态**：两类 callback 只读审计完成；P12C-B-C1 个人 callback 已实现、独立验收并推送，C2 P8C 票据 callback 已冻结、待 Grok 实现。
 > **前置**：P12C-B-B2 冻结=`3a30c03`、实现=`5149385`、闭环=`33ef13e`；后端/前端全量基线 **701/263 passed**。
 > **固定拆包**：C1 个人兼容 callback 来源 `callback`（冻结=`76834f5`、实现=`1d0ce0e`）→ C2 P8C 一次性票据 callback 来源 `local_parser`。两包必须分别失败先测、实现、验收、提交和闭环。
 
@@ -80,7 +80,7 @@ cd C:\Users\Administrator\biaoshu\backend
 
 ## 6. 非目标与后续闸门
 
-C1 不接入 P8C `local_parser`、content-fuse apply/consume 或 checkpoint restore，不新增历史列表/详情/恢复/删除/diff/搜索、前端入口、版本投稿或多人协作。C1 独立闭环后，必须基于票据消费例外重新冻结 C2 白名单和失败原子性，禁止直接复制 C1 实现。
+C1 不接入 P8C `local_parser`、content-fuse apply/consume 或 checkpoint restore，不新增历史列表/详情/恢复/删除/diff/搜索、前端入口、版本投稿或多人协作。C1 独立闭环后，已基于票据消费例外重新冻结 C2 白名单和失败原子性，禁止直接复制 C1 实现。
 
 ## 7. C1 实现与验收记录
 
@@ -90,4 +90,26 @@ Grok failure-first 为 **6 failed / 4 passed**；实现后专项/受影响回归
 
 Codex 独立通过专项 **10 passed**、扩大受影响回归 **224 passed**、后端串行全量 **711 passed**；只有 1 条既有 Starlette/httpx 弃用警告。`py_compile`、精确双文件白名单、工作树与暂存区 diff 检查全部通过。Grok 最终回执=`msg_23f84b7c2b924ab2878267a2aaeaef96`，Codex 确认=`msg_8fa02eb1bca24a81a18f8b34b9443f96`。
 
-C1 只覆盖个人兼容 callback。C2 仍须独立冻结 `local_parser_ticket_service.py` 与新测试，尤其不能破坏 stale/null 票据“只提交消费、零修订”和非版本失败“完整 rollback、票据可重用”的分叉事务语义。
+C1 只覆盖个人兼容 callback。C2 已独立冻结 `local_parser_ticket_service.py` 与新测试，尤其不能破坏 stale/null 票据“只提交消费、零修订”和非版本失败“完整 rollback、票据可重用”的分叉事务语义。
+
+## 8. P12C-B-C2 冻结边界
+
+C2 只允许 Grok 修改：
+
+1. `backend/app/services/local_parser_ticket_service.py`；
+2. 新增 `backend/tests/test_p12c_local_parser_callback_revisions.py`。
+
+生产实现固定为复用现有锁后行，不新增锁、查询或事务原语：`apply_one_time_callback` 保存 `lock_and_assert_expected_state_version` 返回的 `locked_state_row/before_state`，仅在 fresh 版本匹配分支把两者传给 `_finalize_success_writes`。该私有 helper 复用传入的锁后行；行为空才按既有语义创建，在 parsed Markdown、成功任务、项目步骤和成功审计均已暂存后，用 `editor_state_service._state_from_row` 从同一内存行构造 after，并以服务端字面量 `source_kind="local_parser"` 调用 `record_editor_state_transition`。recorder 只 flush，最终仍由现有 fresh 分支唯一 `db.commit()` 提交。
+
+禁止修改公开路由、`editor_state_service.py`、`editor_state_revision_service.py`、模型、Schema、认证中间件、既有测试、前端、依赖或文档；禁止接受客户端 revision 来源、调用 upsert、新增 commit/rollback/refresh/锁/查询、改变票据 TTL/摘要/公开授权或响应字段。Grok 不得 commit/push。
+
+C2 必须通过真实公开 `POST /api/local-parser/callback` 证明：
+
+1. fresh 空账本成功时 before/after 原子写入且来源均为 `local_parser`；已有 `browser_put` 基线时只精确增加 after 一条，版本与最终 GET 一致；
+2. 客户端 `source=mineru|docling` 只影响既有解析元数据，均不能控制 revision 来源；非法 source/正文、超限、无效/过期/重放票据均零 `local_parser` 修订；
+3. stale 与旧空 `expected_state_version` 均固定 409、票据已消费且重放 401，正文/任务/项目/成功审计/`local_parser` 修订零写；并发形成的外部 `browser_put` 修订不得计入本次增量；
+4. recorder 真实 flush 后抛错与最终 commit 抛错均固定返回 `{"detail":{"code":"local_parser_callback_failed","message":"回传处理失败"}}` 500，票据消费、正文、任务、项目、成功审计和 revision 全部 rollback；移除注入后同一票据可重试且只成功留史一次；
+5. 公开成功响应仍精确只有 `ok/chars/taskId`，409 不含 `currentStateVersion`，所有失败均不反射票据、正文、文件名、客户端 source、SQL、路径、表名、异常类型或内部 revision 字段；
+6. 个人 callback 仍只产生 `callback`，不得被误记为 `local_parser`；AST 只能补充证明生产函数内固定字面来源、单次 recorder 调用和文件边界，不能替代真实 SQLite 原子性断言。
+
+failure-first 必须在生产修改前运行 C2 新专项，报告真实失败数与原因。Grok 随后至少运行新专项，以及 `test_local_parser_callback_tickets.py`、`test_p12c_personal_callback_revisions.py`、`test_p12b_delayed_writer_fences.py`、`test_editor_state_revisions.py` 和既有 P12C 来源专项；最后执行双文件 `py_compile`、`git diff --check` 与精确双文件白名单。Codex 独立扩大回归并运行后端串行全量，前端沿用 **263 passed** 串行基线。
