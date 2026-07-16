@@ -21,8 +21,8 @@
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
 当前进度：P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A、P9D、P9C-R1、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。P12D-A 冻结=`2cc6ee3`、实现=`9445fcc`；后端全量 831、前端全量 284 passed。
 当前状态：P12D-A 后端只读 comparison 已完成并推送；完整 13 键逐字段规范比较、两侧六项有界摘要、固定脱敏错误与五域零写均已独立验收，尚无前端入口。
-当前执行包：P12D-A 已闭环；下一包待独立审计并冻结为 P12D-B 技术/商务共用“与当前版本对比”前端入口。
-下一步：只读盘点既有修订 API、共享历史面板和 E2E，冻结 P12D-B 严格 parser、中文字段标签、加载/失败/空差异状态、项目/请求迟到隔离与精确前端文件白名单；再通过本地消息箱交 Grok 实现。Codex 负责受限审查、所有 E2E 单 worker 零重试独立验收、中文闭环和协作分支推送。
+当前执行包：P12D-B 技术/商务共用“与当前版本对比”前端入口已完成只读审计并冻结；严格限定 API 封装、共享面板、既有 E2E 三个前端文件。
+下一步：提交并推送 P12D-B 契约/计划，再通过本地消息箱下发三个新增 E2E 的 failure-first 任务。Grok 只实现和自测，不得修改后端、workspace/hook、样式、依赖、文档或提交推送；Codex 负责受限审查、所有 E2E 单 worker 零重试独立验收、中文闭环和协作分支推送。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -501,6 +501,8 @@ frontend/src/features/
 | docs/plans/2026-07-16-p9c-fixed-model-runtime-gate-plan.md | P9C-R1 六文件 failure-first、Grok 自测与 Codex 真实验收计划 |
 | docs/p12d-revision-current-diff-summary-contract.md | P12D-A 当前状态与目标修订只读差异摘要契约 |
 | docs/plans/2026-07-16-p12d-revision-current-diff-summary-plan.md | P12D-A 四文件 failure-first、零写与 Codex 全量验收计划 |
+| docs/p12d-revision-comparison-frontend-contract.md | P12D-B 双工作区前端比较入口、严格解析与迟到隔离契约 |
+| docs/plans/2026-07-17-p12d-revision-comparison-frontend-plan.md | P12D-B 三文件 failure-first、状态互斥与串行 E2E 计划 |
 | docs/p12a-editor-state-manual-checkpoints-contract.md | P12A 手动检查点只读库冻结契约 |
 | docs/plans/2026-07-15-p12a-editor-state-manual-checkpoints-plan.md | P12A 七文件后端实施与验收计划 |
 | docs/p12b-editor-state-version-foundation-contract.md | P12B-A 全状态版本与可选 CAS 冻结契约 |
@@ -618,9 +620,9 @@ frontend/src/features/
 - **P12C-C3 已完成**：冻结=`6b9143a`、实现=`5e4f9f6`。默认折叠、严格列表/按需摘要、共享令牌/保存链、执行时 expected、唯一重读和 list/detail/restore 迟到隔离已闭环；多轮反假绿后 Codex 独立 21/51/46/284、lint/build 验收通过。无删除、diff、搜索、跨项目历史、超出最近 10 条的完整历史/保留策略或多人协作。
 - **P9C-R1 已完成并推送**：冻结=`cd70ef0`、实现=`b53dcce`。固定依赖、固定 endpoint/revision/10 文件/权重哈希、显式准备唯一联网路径、生产/预检严格离线和跨 cwd 缓存确定性均已闭环；真实制品指纹=`a04f4aa475164fb551464a0320b09c37`，预检 Recall@5=`1.0`、NDCG@5=`0.927295`，后端全量 **817 passed**。首次专项 8 failed；返修红测 11 failed / 6 passed，最终专项 17 passed。测试假制品临时写入已从约 0.54 GiB 收敛到 925 字节。模型缓存被 Git 忽略，不是仓库交付物。
 - **P12D-A 已完成并推送**：冻结=`2cc6ee3`、实现=`9445fcc`。首次红测因 fixture 单值查询触发 `MultipleResultsFound` 而无效；生产代码未改时修正 fixture 后有效红测 **14 failed**，最终 Grok/Codex 专项 **14 passed**、受影响回归 **132 passed**、后端全量 **831 passed**。四文件白名单、共享 13 键逐字段规范 JSON、两侧六项摘要、固定错误脱敏、五域零写及 `True`/`1` 反假绿均通过；无前端、正文/值/ID/版本回显、恢复或数据库写入。
-- **下一待冻结包**：P12D-B 技术/商务共用前端“与当前版本对比”入口；先只读审计现有 API、共享面板和 E2E，再冻结严格 parser、中文字段标签、加载/失败/空差异状态、项目/请求迟到隔离及文件白名单。不得扩成正文 diff、任意历史两两比较、删除、搜索、分页或多人协作。
+- **当前已冻结未实现包**：P12D-B 技术/商务共用前端“与当前版本对比”入口。只允许修改 API 封装、共享修订面板和既有修订历史 E2E；新增独立按钮，严格解析四键响应、13 键有序子集和两侧六项摘要，只显示中文字段标签。摘要/比较/恢复互斥，项目/修订/折叠/刷新/恢复迟到均按代次隔离；新增且仅新增 3 个 E2E，目标历史专项 24、前端全量 287。不得扩成正文 diff、任意历史两两比较、删除、搜索、分页或多人协作。
 - **其余未实现主线**：正文 diff、任意历史两两比较、修订删除、搜索、跨项目历史、超出最近 10 条的完整历史/保留策略与多人协作；MinerU/Docling 自动安装、模型打包、常驻服务、真实模型样本验收与完整孙进程治理；P9C 真实用户语料调优、其他模型/GPU/在线 embedding/自动更新；Word `structure`/整章布局；除国能 e 招外的合法外部标讯来源；人力附件/真实证件核验；财务税务/审批/导出/预算/回款/版本、失败尝试与完整身份审计；投标人矩阵明细/版本/结果跟踪；Alembic、PostgreSQL、HTTPS、Key 加密、Docker 和公网 SaaS。
 - 新任务分工不变：Grok 只负责限定实现与自测，未经 Codex 审查确认不得提交；Codex 负责计划、范围冻结、差异审查、独立测试、验收、中文提交、文档闭环和 GitHub 状态核验。每一包仍按“计划提交 → 实现提交 → 文档闭环提交 → 推送协作分支”执行，禁止合包。
 - GitHub 若出现连接重置，可在当前 PowerShell 进程临时配置 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY=http://127.0.0.1:7890` 与 `NO_PROXY=localhost,127.0.0.1` 后重试；不得把代理或凭据写入仓库。
 
-**换会话可直接：核验分支、HEAD/远端与工作区 → 读本文 §0～§3.1、§4.23、§5、§6、§11、P12D-A 契约/计划及路线图 → 确认 P12D-A 实现 `9445fcc` 已推送、后端/前端全量 831/284 passed → 继续 P12D-B 只读审计、独立冻结、Grok 实现、Codex 审查与串行全量验收。禁止重新实现 P12D-A、P9C-R1 或 P12C-C3/C2/C1/B-D3/D2/D1/C2/C1/B2/B1/A，让 Grok commit/push，把 P12D-B 扩成正文 diff/任意历史比较/删除/分页/多人协作，或由 Codex 冒充 Grok 完成主实现。**
+**换会话可直接：核验分支、HEAD/远端与工作区 → 读本文 §0～§3.1、§4.23、§5、§6、§11、P12D-A/P12D-B 契约与计划及路线图 → 确认 P12D-A 实现 `9445fcc`、闭环 `fcf7447` 已推送，后端/前端全量 831/284 passed → 继续 P12D-B 三文件 failure-first、Grok 实现、Codex 审查与串行全量验收。禁止重新实现 P12D-A、P9C-R1 或 P12C-C3/C2/C1/B-D3/D2/D1/C2/C1/B2/B1/A，让 Grok commit/push，把 P12D-B 扩成正文 diff/任意历史比较/删除/分页/多人协作，或由 Codex 冒充 Grok 完成主实现。**

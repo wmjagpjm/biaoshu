@@ -37,7 +37,7 @@
 
 ### 步骤 2：先写最小红测
 
-先只写：同状态 comparison 应 200、精确三键、`sameState=true`、`changedFields=[]`、两侧摘要相同、`Cache-Control=no-store`。在生产未改时运行：
+先只写：同状态 comparison 应 200、精确四键、`sameState=true`、`changedFields=[]`、两侧摘要相同、`Cache-Control=no-store`。在生产未改时运行：
 
 ```powershell
 cd C:\Users\Administrator\biaoshu\backend

@@ -27,7 +27,7 @@ GET /api/projects/{projectId}/editor-state-revisions/{revisionId}/comparison
 - 继续复用 `get_workspace_id`：disabled 模式沿用默认工作空间，required 模式仅 `bid_writer`；跨工作空间、跨项目和不存在修订统一 404。
 - 请求无 body、无查询参数语义；未知查询参数不得改变比较目标、作用域、字段全集或读取范围。
 - 成功和所有业务错误固定 `Cache-Control: no-store`。
-- 成功体精确三键：
+- 成功体精确四键：
 
 ```json
 {
@@ -84,7 +84,7 @@ Grok 只允许修改以下 4 个文件：
 ## 6. 验收门
 
 - failure-first 必须在生产未改时由 comparison 路由 404 或缺少响应模型/服务失败；不得用语法错误、坏 fixture 或缺依赖冒充。
-- 专项至少覆盖：精确三键/两侧六键；完整 13 键顺序；同状态；单字段；多字段；相同计数但内容不同；`True` 与 `1`；空行默认态；技术/商务混合；10,000/32 边界与越界固定失败；损坏修订；不存在/跨项目/跨空间；required 角色；`no-store`；固定 500 脱敏；真实 SQLite 五域零写；AST 禁止写原语。
+- 专项至少覆盖：精确四键/两侧六键；完整 13 键顺序；同状态；单字段；多字段；相同计数但内容不同；`True` 与 `1`；空行默认态；技术/商务混合；10,000/32 边界与越界固定失败；损坏修订；不存在/跨项目/跨空间；required 角色；`no-store`；固定 500 脱敏；真实 SQLite 五域零写；AST 禁止写原语。
 - Codex 独立运行新专项、P12C C1/C2/账本/检查点受影响回归、`py_compile`、后端串行全量、`git diff --check` 和四文件白名单。任一门失败不得进入前端包。
 
 ## 7. 非目标
