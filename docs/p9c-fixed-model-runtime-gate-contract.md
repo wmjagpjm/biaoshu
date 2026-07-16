@@ -7,12 +7,12 @@
 
 # P9C-R1 固定离线模型运行时门契约
 
-> **状态**：已完成全局只读审计并冻结，待 Grok failure-first、受限实现与 Codex 独立真实验收。
-> **基线**：P9C 后端=`cc0d217`、前端=`a0bd84b`、运行时降级=`71c503c`、合成评测/预检=`585e502`；当前后端/前端全量基线 **800/284 passed**。
+> **状态**：已完成；冻结=`cd70ef0`，实现=`b53dcce`，Codex 已完成固定依赖、真实制品、真实离线预检与后端全量独立验收。
+> **基线**：P9C 后端=`cc0d217`、前端=`a0bd84b`、运行时降级=`71c503c`、合成评测/预检=`585e502`；当前后端/前端全量基线 **817/284 passed**。
 
 ## 1. 审计结论与选包理由
 
-当前 P9C 已有固定模型标识、512 维版本化索引、关键词降级、状态面板、合成评测和真实预检，但本机固定缓存为空，后端虚拟环境缺少 `sentence-transformers`、`torch`、`transformers`，真实预检稳定返回 `model_unavailable`/退出码 2。现有生产加载还未固定模型提交，且 `SentenceTransformer(...)` 未强制 `local_files_only=True`；用户点击重建时可能由第三方库隐式联网。默认相对 `upload_dir` 也会让缓存根随启动目录改变，与“固定缓存”文档不一致。
+开工前 P9C 已有固定模型标识、512 维版本化索引、关键词降级、状态面板、合成评测和真实预检，但本机固定缓存为空，后端虚拟环境缺少 `sentence-transformers`、`torch`、`transformers`，真实预检稳定返回 `model_unavailable`/退出码 2。开工前生产加载还未固定模型提交，且 `SentenceTransformer(...)` 未强制 `local_files_only=True`；用户点击重建时可能由第三方库隐式联网。默认相对 `upload_dir` 也会让缓存根随启动目录改变，与“固定缓存”文档不一致。上述缺口现已由本包闭环，历史描述仅用于解释选包依据。
 
 候选比较：
 
@@ -102,3 +102,12 @@ Codex 真实门：
 ## 7. 非目标
 
 不实现真实用户语料评测、排序权重调优、其他模型、GPU、在线 embedding、自动更新、后台静默下载、模型打包进 Git/安装包、服务端下载 API、前端下载按钮、MinerU/Docling、Word 版式、外部标讯或多人协作。真实预检通过只证明固定合成集与运行时就绪，不宣称真实业务检索质量已经完成。
+
+## 8. 交付与独立验收记录
+
+- 计划冻结提交为 `cd70ef0`，六文件实现提交为 `b53dcce`；实现与文档均推送到 `collab/grok-code-codex-review`。Grok 初始任务、首版审查请求、Codex 返修与最终回执分别为 `msg_34ba888f6b324a6db5c2ad6c9d9b9800`、`msg_e392f14d573346b1a1beebdf6e81d9bb`、`msg_fe78f5e4db5b4365a69d5ea86f6e766d`、`msg_60f7048c744c4267aadcfd59fb0aa08c`，Codex 验收确认=`msg_05b4ca2b4d084e928b70cbbc759bc33a`。
+- 首版专项曾有 8 项失败；受限返修按 failure-first 得到 **11 failed / 6 passed**，最终专项 **17 passed**、`test_knowledge_rag.py -k semantic` **21 passed / 7 deselected**、完整 `test_knowledge_rag.py` **28 passed**。测试假制品从每轮约 0.54 GiB 收敛到实际临时写入 **925 字节**。
+- Codex 使用 `--no-cache-dir` 安装固定依赖；PyPI 官方 `torch-2.12.1-cp313-cp313-win_amd64.whl` 为 **122,987,777 字节**，SHA-256=`f92609e3b3ce72f25e2eb780d043ced2480c1a86c47c852604fc7a9108648386`，安装后临时轮子已删除。`pip check` 无破损依赖。
+- 真实准备结果为固定 revision、**10 文件 / 96,378,176 字节**，权重 SHA-256 与契约一致，`artifactFingerprint=a04f4aa475164fb551464a0320b09c37`；所有符号链接目标均位于固定缓存内。缓存位于被 Git 忽略的 `backend/data/semantic-models`，未进入工作区差异。
+- 在 `HF_HUB_OFFLINE=1`、`TRANSFORMERS_OFFLINE=1` 下，真实预检 `usedRealModel=true`、20 查询、Recall@5=`1.0`、NDCG@5=`0.927295`；生产加载器独立得到 512 维、L2 norm=`1.0`。验收时 C 盘剩余约 **35.82 GiB**，高于固定 5 GiB 门。
+- 后端串行全量最终 **817 passed / 1 条既有 Starlette/httpx 弃用告警**，耗时 1145.00 秒，stderr 为 0；`py_compile`、`git diff --check` 与六文件白名单均通过。一次过长 `--basetemp` 导致的 Windows 路径长度失败和一次 300 秒外层等待超时均由短临时目录/后台续跑复核，属于验收工具问题，不计为产品失败。

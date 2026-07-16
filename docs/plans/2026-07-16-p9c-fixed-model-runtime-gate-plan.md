@@ -8,6 +8,7 @@
 # P9C-R1 固定离线模型运行时门实施计划
 
 > **给 Grok：** 必须按本计划逐项 failure-first；只实现、自测并发送 `review_request`，不得提交或推送。
+> **完成状态：** 已完成；冻结=`cd70ef0`、实现=`b53dcce`，Codex 独立真实验收通过。
 
 **目标：** 为既有 P9C 增加固定提交、显式准备、严格离线加载和真实制品验收门，使语义运行时可重复且不会在业务请求中隐式联网。
 
@@ -159,3 +160,11 @@ backend\.venv\Scripts\python.exe backend\scripts\semantic_model_preflight.py
 ## 8. 后续边界
 
 本包完成后，只能声称“固定模型运行时和合成集真实预检已就绪”。真实用户语料评测、排序调优、GPU、其他模型、自动更新、模型打包/安装器、在线 embedding 与浏览器配置仍须另立任务。
+
+## 9. 实施闭环
+
+1. Grok 首版经 Codex 受限审查发现 endpoint 可被环境漂移、5 GiB 门可覆盖、准备脚本导入数据库链、有效缓存仍触网、依赖错误合并及测试大文件假绿等问题；返修任务=`msg_fe78f5e4db5b4365a69d5ea86f6e766d`。
+2. Grok 返修红测为 **11 failed / 6 passed**，最终专项/语义回归/知识库完整回归为 **17 / 21（另 7 deselected）/28 passed**；最终回执=`msg_60f7048c744c4267aadcfd59fb0aa08c`。
+3. Codex 独立安装固定依赖并校验官方 torch 轮子 SHA-256，显式下载固定制品后复核 10 文件、总字节、权重哈希、缓存内链接和制品指纹；无参数准备与严格离线生产加载均通过。
+4. 真实预检为 `Recall@5=1.0`、`NDCG@5=0.927295`；后端全量 **817 passed**，`py_compile`、`pip check`、`git diff --check`、六文件白名单与缓存忽略门全部通过。
+5. 实现已由 Codex 以中文提交 `b53dcce` 推送；验收确认=`msg_05b4ca2b4d084e928b70cbbc759bc33a`。模型缓存只保留在本机，不属于 Git 交付物。
