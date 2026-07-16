@@ -148,3 +148,10 @@ npx playwright test --workers=1 --retries=0
 ## 7. 后续边界
 
 P12D-B 只把 P12D-A 摘要比较安全呈现给技术/商务标书制作者。正文 diff、任意历史两两比较、删除、搜索、分页、完整历史/保留策略、导出、分享和多人协作继续独立排期；不得从比较结果自动触发恢复或生成结论。
+## 8. 实施与验收闭环（2026-07-17）
+
+Grok 按 \`msg_a8258d4b49f44678bf43fe2a2356d583\` 实现，未提交、未推送；实际改动仅为 \`frontend/src/features/editor-state-revisions/editorStateRevisionApi.ts\`、\`frontend/src/features/editor-state-revisions/EditorStateRevisionPanel.tsx\` 和 \`frontend/e2e/editor-state-revision-history.spec.ts\`。首轮红测日志 \`grok-p12d-b-failure-first.stdout.log\` 为 **2 failed / 21 passed / 1 did not run**，因串行分组首个失败导致第三条未运行；首个失败属于比较入口缺失，未出现依赖、TypeScript、fixture、路由或浏览器启动冒充。该偏差已如实保留，不能写成 3/21。
+
+Codex 独立串行验收日志：历史专项 \`codex-p12d-b-history.stdout.log\` 为 24 passed；检查点 \`codex-p12d-b-checkpoint.stdout.log\` 为 51 passed；技术/商务真值 \`codex-p12d-b-truth.stdout.log\` 为 46 passed；前端全量 \`codex-p12d-b-full.stdout.log\` 为 287 passed（6.8m）；lint/build 均通过，build 仅有既有 chunk 大小警告。
+
+本包完成。未实现边界保持冻结：不做正文或字段值 diff、任意历史两两比较、自动批量比较、删除、搜索、分页、导出、分享、多人协作、后端修改或比较结果驱动的自动恢复。

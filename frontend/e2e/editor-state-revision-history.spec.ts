@@ -1,8 +1,8 @@
 /**
- * 模块：P12C-C3 双工作区修订历史前端 E2E
- * 用途：技术标/商务标证明默认折叠零请求、按需列表/摘要、二次确认 restore、
+ * 模块：P12C-C3 / P12D-B 双工作区修订历史与对比前端 E2E
+ * 用途：技术标/商务标证明默认折叠零请求、按需列表/摘要/对比、二次确认 restore、
  *       执行时 expected、唯一 editor-state GET、失败阻断、迟到隔离与数据最小化。
- * 对接：Playwright chromium headless workers=1 retries=0；route 探针。
+ * 对接：Playwright chromium headless workers=1 retries=0；route 探针（含 comparison arrived/complete）。
  * 二次开发：禁止固定 sleep、.or(...)、>=1 冒充、宽泛状态码、route fallback 假成功。
  */
 import {
@@ -42,6 +42,9 @@ const SNAPSHOT_BODY_LEAK = "P12C_C3_SNAPSHOT_BODY_MUST_NOT_LEAK";
 
 const MSG_LIST_FAIL = "修订历史加载失败，请稍后重试";
 const MSG_DETAIL_FAIL = "修订摘要加载失败，请稍后重试";
+const MSG_COMPARE_FAIL = "修订差异加载失败，请稍后重试";
+const MSG_COMPARE_SAME = "与当前版本一致";
+const MSG_COMPARE_DIFF = "与当前版本存在差异";
 const MSG_RESTORE_OK = "已恢复到所选修订";
 const MSG_RESTORE_BLOCKED =
   "当前无法恢复，请先处理版本冲突或重新载入";
@@ -51,6 +54,40 @@ const MSG_RESTORE_RELOAD_FAIL =
 const MSG_CHECKPOINT_CREATE_FAIL = "保存检查点失败，请确认后重试";
 const RESTORE_CONFIRM =
   "服务器当前内容会先保存为安全检查点，恢复替换技术标和商务标全部编辑态，尚未保存的本地修改不会写入。";
+
+/** 权威 13 键固定顺序（与后端 CANONICAL_STATE_KEYS 对齐） */
+const CANONICAL_FIELD_ORDER = [
+  "outline",
+  "chapters",
+  "facts",
+  "mode",
+  "analysis",
+  "responseMatrix",
+  "guidance",
+  "parsedMarkdown",
+  "businessQualify",
+  "businessToc",
+  "businessQuote",
+  "businessCommit",
+  "analysisOverview",
+] as const;
+
+/** 13 键固定中文标签 */
+const CANONICAL_FIELD_LABELS: Record<(typeof CANONICAL_FIELD_ORDER)[number], string> = {
+  outline: "大纲",
+  chapters: "章节",
+  facts: "事实",
+  mode: "编写模式",
+  analysis: "分析",
+  responseMatrix: "响应矩阵",
+  guidance: "编写指导",
+  parsedMarkdown: "解析正文",
+  businessQualify: "商务资格",
+  businessToc: "商务目录",
+  businessQuote: "商务报价",
+  businessCommit: "商务承诺",
+  analysisOverview: "分析概览",
+};
 
 const FULL_STATE_CONFLICT_MSG =
   "编辑内容已被其他操作更新，已停止自动保存。重新载入远端内容将替换当前未保存修改。";
@@ -143,6 +180,23 @@ type PutMode =
 
 type ListMode = { kind: "ok" } | { kind: "hold"; gate: HoldGate };
 type DetailMode = { kind: "ok" } | { kind: "hold"; gate: HoldGate };
+type ComparisonMode = { kind: "ok" } | { kind: "hold"; gate: HoldGate };
+
+type ComparisonSummary = {
+  outlineNodeCount: number;
+  chapterCount: number;
+  factCount: number;
+  responseMatrixRowCount: number;
+  businessEntryTotal: number;
+  hasParsedMarkdown: boolean;
+};
+
+type ComparisonPayload = {
+  sameState: boolean;
+  changedFields: string[];
+  currentSummary: ComparisonSummary;
+  targetSummary: ComparisonSummary;
+};
 
 type ProbeState = {
   mode: Mode;
@@ -169,18 +223,35 @@ type ProbeState = {
   detailLog: Array<{ projectId: string; revisionId: string }>;
   /** detail 响应已 fulfill（await json 返回后）——用于证明迟到响应真正完成 */
   detailCompleteLog: Array<{ projectId: string; revisionId: string }>;
+  /** comparison 到达（gate 前） */
+  comparisonLog: Array<{
+    projectId: string;
+    revisionId: string;
+    method: string;
+    path: string;
+    postData: string | null;
+    hasQuery: boolean;
+  }>;
+  /** comparison 响应已 fulfill（await json 返回后） */
+  comparisonCompleteLog: Array<{ projectId: string; revisionId: string }>;
   editorGetLog: Array<{ projectId: string; path: string }>;
   putMode: PutMode;
   restoreMode: RestoreMode;
   listMode: ListMode;
   detailMode: DetailMode;
+  comparisonMode: ComparisonMode;
   restoreModeByProject: Record<string, RestoreMode>;
   listModeByProject: Record<string, ListMode>;
   detailModeByProject: Record<string, DetailMode>;
   detailModeByRevisionId: Record<string, DetailMode>;
+  comparisonModeByProject: Record<string, ComparisonMode>;
+  comparisonModeByRevisionId: Record<string, ComparisonMode>;
   listResponseOverride: unknown | null;
   detailResponseOverride: unknown | null;
   restoreResponseOverride: unknown | null;
+  comparisonResponseOverride: unknown | null;
+  /** 按 revisionId 固定 comparison 响应表 */
+  comparisonResponseByRevisionId: Record<string, unknown>;
   nextEditorGetFail: boolean;
   restoreArrivedWhilePutHeld: boolean;
   externalHits: string[];
@@ -349,18 +420,25 @@ function createProbeState(mode: Mode): ProbeState {
     listCompleteLog: [],
     detailLog: [],
     detailCompleteLog: [],
+    comparisonLog: [],
+    comparisonCompleteLog: [],
     editorGetLog: [],
     putMode: { kind: "ok" },
     restoreMode: { kind: "ok" },
     listMode: { kind: "ok" },
     detailMode: { kind: "ok" },
+    comparisonMode: { kind: "ok" },
     restoreModeByProject: {},
     listModeByProject: {},
     detailModeByProject: {},
     detailModeByRevisionId: {},
+    comparisonModeByProject: {},
+    comparisonModeByRevisionId: {},
     listResponseOverride: null,
     detailResponseOverride: null,
     restoreResponseOverride: null,
+    comparisonResponseOverride: null,
+    comparisonResponseByRevisionId: {},
     nextEditorGetFail: false,
     restoreArrivedWhilePutHeld: false,
     externalHits: [],
@@ -388,6 +466,84 @@ function resolveDetailMode(
     state.detailModeByProject[projectId] ??
     state.detailMode
   );
+}
+
+function resolveComparisonMode(
+  state: ProbeState,
+  projectId: string,
+  revisionId: string,
+): ComparisonMode {
+  return (
+    state.comparisonModeByRevisionId[revisionId] ??
+    state.comparisonModeByProject[projectId] ??
+    state.comparisonMode
+  );
+}
+
+/** 大纲节点有界计数（探针侧，与生产摘要语义一致） */
+function probeCountOutlineNodes(nodes: unknown, depth = 0): number {
+  if (depth > 32 || !Array.isArray(nodes)) return 0;
+  let total = 0;
+  for (const node of nodes) {
+    total += 1;
+    if (node && typeof node === "object") {
+      total += probeCountOutlineNodes(
+        (node as { children?: unknown }).children,
+        depth + 1,
+      );
+    }
+  }
+  return total;
+}
+
+function probeSummarizeSnapshot(
+  snap: Record<string, unknown>,
+): ComparisonSummary {
+  const qualify = Array.isArray(snap.businessQualify)
+    ? snap.businessQualify.length
+    : 0;
+  const toc = Array.isArray(snap.businessToc) ? snap.businessToc.length : 0;
+  const commit = Array.isArray(snap.businessCommit)
+    ? snap.businessCommit.length
+    : 0;
+  let quoteRows = 0;
+  const bq = snap.businessQuote;
+  if (bq && typeof bq === "object") {
+    const rows = (bq as { rows?: unknown }).rows;
+    if (Array.isArray(rows)) quoteRows = rows.length;
+  }
+  const parsed = snap.parsedMarkdown;
+  return {
+    outlineNodeCount: probeCountOutlineNodes(snap.outline),
+    chapterCount: Array.isArray(snap.chapters) ? snap.chapters.length : 0,
+    factCount: Array.isArray(snap.facts) ? snap.facts.length : 0,
+    responseMatrixRowCount: Array.isArray(snap.responseMatrix)
+      ? snap.responseMatrix.length
+      : 0,
+    businessEntryTotal: qualify + toc + quoteRows + commit,
+    hasParsedMarkdown:
+      typeof parsed === "string" ? parsed.trim().length > 0 : false,
+  };
+}
+
+/** 构造权威 comparison 响应：逐字段 JSON 比较 + 两侧六项摘要 */
+function buildComparisonPayload(
+  current: EditorState,
+  targetSnap: Record<string, unknown>,
+): ComparisonPayload {
+  const currentSnap = canonicalSnapshot(current);
+  const changedFields: string[] = [];
+  for (const key of CANONICAL_FIELD_ORDER) {
+    if (JSON.stringify(currentSnap[key]) !== JSON.stringify(targetSnap[key])) {
+      changedFields.push(key);
+    }
+  }
+  return {
+    sameState: changedFields.length === 0,
+    changedFields,
+    currentSummary: probeSummarizeSnapshot(currentSnap),
+    targetSummary: probeSummarizeSnapshot(targetSnap),
+  };
 }
 
 /** 构造超过 MAX_COUNT_DEPTH 的大纲树，触发固定摘要失败 */
@@ -813,6 +969,72 @@ async function installRoutes(page: Page, state: ProbeState) {
       }
       state.forbiddenHits.push(`${method} ${path}`);
       await json(route, { detail: "method_not_allowed" }, 405);
+      return;
+    }
+
+    // comparison 必须在通用 detail 之前匹配：GET .../revisions/{id}/comparison
+    const revComparisonMatch = path.match(
+      /^\/api\/projects\/([^/]+)\/editor-state-revisions\/([^/]+)\/comparison\/?$/,
+    );
+    if (revComparisonMatch) {
+      const pid = revComparisonMatch[1];
+      const revisionId = revComparisonMatch[2];
+      const hasQuery = url.search.length > 1;
+      const postData = req.postData();
+      if (!known.has(pid)) {
+        state.forbiddenHits.push(`${method} ${path}`);
+        await json(route, { detail: "not_found" }, 404);
+        return;
+      }
+      if (method !== "GET") {
+        state.forbiddenHits.push(`${method} ${path}`);
+        await json(route, { detail: "method_not_allowed" }, 405);
+        return;
+      }
+      // 拒绝 body / 查询参数改变结果：记录后仍按固定响应处理
+      state.comparisonLog.push({
+        projectId: pid,
+        revisionId,
+        method,
+        path,
+        postData,
+        hasQuery,
+      });
+      const comparisonMode = resolveComparisonMode(state, pid, revisionId);
+      if (comparisonMode.kind === "hold") {
+        await comparisonMode.gate.wait();
+      }
+      if (state.comparisonResponseOverride != null) {
+        await json(route, state.comparisonResponseOverride);
+        state.comparisonCompleteLog.push({ projectId: pid, revisionId });
+        return;
+      }
+      if (state.comparisonResponseByRevisionId[revisionId] != null) {
+        await json(route, state.comparisonResponseByRevisionId[revisionId]);
+        state.comparisonCompleteLog.push({ projectId: pid, revisionId });
+        return;
+      }
+      const detail = state.details[revisionId];
+      if (!detail) {
+        await json(
+          route,
+          {
+            detail: {
+              code: "editor_state_revision_not_found",
+              message: "修订不存在",
+            },
+          },
+          404,
+        );
+        state.comparisonCompleteLog.push({ projectId: pid, revisionId });
+        return;
+      }
+      const payload = buildComparisonPayload(
+        state.projects[pid],
+        detail.snapshot,
+      );
+      await json(route, payload);
+      state.comparisonCompleteLog.push({ projectId: pid, revisionId });
       return;
     }
 
@@ -2083,6 +2305,575 @@ test.describe("P12C-C3 技术标修订历史", () => {
     await expect(page.getByText("删除修订")).toHaveCount(0);
     await expect(page.getByText("搜索修订")).toHaveCount(0);
   });
+
+  test("P12D-B 技术标：按需对比成功/一致、严格解析、中文标签、summary/compare/restore 互斥与零泄漏", async ({
+    page,
+  }) => {
+    const state = createProbeState("tech");
+    seedRevisions(state, TECH_A, 2, ["browser_put", "task"]);
+    const rev0 = state.revisions[TECH_A][0];
+    const rev1 = state.revisions[TECH_A][1];
+    // 差异修订：改 chapters + parsedMarkdown + analysisOverview（固定 13 键顺序）
+    const diffSnap = {
+      ...state.details[rev0.revisionId].snapshot,
+      chapters: [
+        {
+          id: "diff_ch",
+          title: "差异章节",
+          body: "DIFF_CHAPTER_BODY",
+        },
+      ],
+      parsedMarkdown: "DIFF_PARSED_MARKDOWN_BODY",
+      analysisOverview: "DIFF_ANALYSIS_OVERVIEW",
+      analysis: { overview: "DIFF_ANALYSIS_OVERVIEW" },
+    };
+    state.details[rev0.revisionId] = {
+      ...state.details[rev0.revisionId],
+      snapshot: diffSnap,
+    };
+    // seed 会在 snapshot 注入泄漏探针，故“一致”用例用固定响应表显式 sameState
+    const expectedDiff = buildComparisonPayload(
+      state.projects[TECH_A],
+      diffSnap,
+    );
+    expect(expectedDiff.sameState).toBe(false);
+    expect(expectedDiff.changedFields).toEqual([
+      "chapters",
+      "analysis",
+      "parsedMarkdown",
+      "analysisOverview",
+    ]);
+    const sameSummary = probeSummarizeSnapshot(
+      canonicalSnapshot(state.projects[TECH_A]),
+    );
+    const samePayload: ComparisonPayload = {
+      sameState: true,
+      changedFields: [],
+      currentSummary: sameSummary,
+      targetSummary: { ...sameSummary },
+    };
+    state.comparisonResponseByRevisionId[rev1.revisionId] = samePayload;
+
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+
+    await openWorkspace(page, "tech", TECH_A);
+    // 默认折叠：comparison 精确 0
+    expect(state.comparisonLog.length).toBe(0);
+    expect(state.comparisonCompleteLog.length).toBe(0);
+
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => state.listLog.filter((p) => p === TECH_A).length, {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    // 展开后仍无自动 comparison
+    expect(state.comparisonLog.length).toBe(0);
+
+    const getsBefore = state.editorGetLog.filter(
+      (g) => g.projectId === TECH_A,
+    ).length;
+    const putBefore = state.putLog.length;
+    const restoreBefore = state.restoreLog.length;
+    const detailBefore = state.detailLog.length;
+    const externalBefore = state.externalHits.length;
+
+    // 差异对比
+    await page.getByTestId("editor-state-revision-compare-0").click();
+    await expect
+      .poll(() => state.comparisonLog.length, { timeout: 10_000 })
+      .toBe(1);
+    await expect
+      .poll(() => state.comparisonCompleteLog.length, { timeout: 10_000 })
+      .toBe(1);
+    const firstCmp = state.comparisonLog[0];
+    expect(firstCmp.projectId).toBe(TECH_A);
+    expect(firstCmp.revisionId).toBe(rev0.revisionId);
+    expect(firstCmp.method).toBe("GET");
+    expect(firstCmp.postData).toBeNull();
+    expect(firstCmp.hasQuery).toBe(false);
+    expect(firstCmp.path).toContain("/comparison");
+
+    await expect(
+      page.getByTestId("editor-state-revision-comparison-0"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-comparison-status-0"),
+    ).toHaveText(MSG_COMPARE_DIFF);
+    const fieldsText = await page
+      .getByTestId("editor-state-revision-comparison-fields-0")
+      .innerText();
+    // 中文标签且顺序正确；不得出现内部字段键
+    expect(fieldsText).toBe(
+      [
+        CANONICAL_FIELD_LABELS.chapters,
+        CANONICAL_FIELD_LABELS.analysis,
+        CANONICAL_FIELD_LABELS.parsedMarkdown,
+        CANONICAL_FIELD_LABELS.analysisOverview,
+      ].join("、"),
+    );
+    for (const key of expectedDiff.changedFields) {
+      expect(fieldsText).not.toContain(key);
+    }
+    const currentText = await page
+      .getByTestId("editor-state-revision-comparison-current-0")
+      .innerText();
+    const targetText = await page
+      .getByTestId("editor-state-revision-comparison-target-0")
+      .innerText();
+    expect(currentText).toContain("当前版本");
+    expect(currentText).toContain(
+      `大纲节点 ${expectedDiff.currentSummary.outlineNodeCount}`,
+    );
+    expect(currentText).toContain(
+      `章节 ${expectedDiff.currentSummary.chapterCount}`,
+    );
+    expect(currentText).toContain(
+      `事实 ${expectedDiff.currentSummary.factCount}`,
+    );
+    expect(currentText).toContain(
+      `矩阵行 ${expectedDiff.currentSummary.responseMatrixRowCount}`,
+    );
+    expect(currentText).toContain(
+      `商务条目 ${expectedDiff.currentSummary.businessEntryTotal}`,
+    );
+    expect(targetText).toContain("所选修订");
+    expect(targetText).toContain(
+      `大纲节点 ${expectedDiff.targetSummary.outlineNodeCount}`,
+    );
+    expect(targetText).toContain(
+      `章节 ${expectedDiff.targetSummary.chapterCount}`,
+    );
+    expect(targetText).toContain(
+      expectedDiff.targetSummary.hasParsedMarkdown
+        ? "含解析正文"
+        : "无解析正文",
+    );
+
+    // 零旁路
+    expect(state.detailLog.length).toBe(detailBefore);
+    expect(state.restoreLog.length).toBe(restoreBefore);
+    expect(state.putLog.length).toBe(putBefore);
+    expect(
+      state.editorGetLog.filter((g) => g.projectId === TECH_A).length,
+    ).toBe(getsBefore);
+    expect(state.externalHits.length).toBe(externalBefore);
+
+    // 同状态文案（第二条）
+    await page.getByTestId("editor-state-revision-compare-1").click();
+    await expect
+      .poll(() => state.comparisonCompleteLog.length, { timeout: 10_000 })
+      .toBe(2);
+    await expect(
+      page.getByTestId("editor-state-revision-comparison-status-1"),
+    ).toHaveText(MSG_COMPARE_SAME);
+    await expect(
+      page.getByTestId("editor-state-revision-comparison-0"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-comparison-fields-1"),
+    ).toHaveCount(0);
+
+    // summary / compare 互斥：点摘要作废比较
+    await page.getByTestId("editor-state-revision-summary-1").click();
+    await expect
+      .poll(() => state.detailCompleteLog.length, { timeout: 10_000 })
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-summary-body-1"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-comparison-1"),
+    ).toHaveCount(0);
+
+    // compare 作废摘要
+    await page.getByTestId("editor-state-revision-compare-0").click();
+    await expect
+      .poll(() => state.comparisonCompleteLog.length, { timeout: 10_000 })
+      .toBe(3);
+    await expect(
+      page.getByTestId("editor-state-revision-comparison-0"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-summary-body-1"),
+    ).toHaveCount(0);
+
+    // restore 确认作废比较
+    await page.getByTestId("editor-state-revision-restore-0").click();
+    await expect(
+      page.getByTestId("editor-state-revision-confirm-0"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-comparison-0"),
+    ).toHaveCount(0);
+    await page.getByTestId("editor-state-revision-cancel-restore-0").click();
+
+    // 重新加载成功结果，再测严格 shape 失败会清除旧结果
+    await page.getByTestId("editor-state-revision-compare-0").click();
+    await expect
+      .poll(() => state.comparisonCompleteLog.length, { timeout: 10_000 })
+      .toBe(4);
+    await expect(
+      page.getByTestId("editor-state-revision-comparison-0"),
+    ).toBeVisible();
+
+    const baseOk = buildComparisonPayload(
+      state.projects[TECH_A],
+      state.details[rev0.revisionId].snapshot,
+    );
+    const illegalCases: unknown[] = [
+      { ...baseOk, leakExtra: "CMP_TOP_EXTRA" },
+      {
+        sameState: false,
+        changedFields: ["chapters", "unknownField"],
+        currentSummary: baseOk.currentSummary,
+        targetSummary: baseOk.targetSummary,
+      },
+      {
+        sameState: false,
+        changedFields: ["chapters", "chapters"],
+        currentSummary: baseOk.currentSummary,
+        targetSummary: baseOk.targetSummary,
+      },
+      {
+        sameState: false,
+        changedFields: ["parsedMarkdown", "chapters"],
+        currentSummary: baseOk.currentSummary,
+        targetSummary: baseOk.targetSummary,
+      },
+      {
+        sameState: true,
+        changedFields: ["chapters"],
+        currentSummary: baseOk.currentSummary,
+        targetSummary: baseOk.targetSummary,
+      },
+      {
+        sameState: false,
+        changedFields: baseOk.changedFields,
+        currentSummary: {
+          ...baseOk.currentSummary,
+          outlineNodeCount: -1,
+        },
+        targetSummary: baseOk.targetSummary,
+      },
+      {
+        sameState: false,
+        changedFields: baseOk.changedFields,
+        currentSummary: {
+          ...baseOk.currentSummary,
+          chapterCount: 1.5,
+        },
+        targetSummary: baseOk.targetSummary,
+      },
+      {
+        sameState: false,
+        changedFields: baseOk.changedFields,
+        currentSummary: {
+          ...baseOk.currentSummary,
+          factCount: "1",
+        },
+        targetSummary: baseOk.targetSummary,
+      },
+      {
+        sameState: false,
+        changedFields: baseOk.changedFields,
+        currentSummary: {
+          ...baseOk.currentSummary,
+          hasParsedMarkdown: "yes",
+        },
+        targetSummary: baseOk.targetSummary,
+      },
+      {
+        sameState: false,
+        changedFields: baseOk.changedFields,
+        currentSummary: {
+          outlineNodeCount: 1,
+          chapterCount: 1,
+          factCount: 0,
+          responseMatrixRowCount: 0,
+          businessEntryTotal: 0,
+          hasParsedMarkdown: false,
+          extra: 1,
+        },
+        targetSummary: baseOk.targetSummary,
+      },
+      {
+        sameState: false,
+        changedFields: baseOk.changedFields,
+        currentSummary: {
+          outlineNodeCount: 1,
+          chapterCount: 1,
+          factCount: 0,
+          responseMatrixRowCount: 0,
+          businessEntryTotal: 0,
+        },
+        targetSummary: baseOk.targetSummary,
+      },
+    ];
+
+    let completeBase = state.comparisonCompleteLog.length;
+    for (const bad of illegalCases) {
+      state.comparisonResponseOverride = bad;
+      // 再次点击同一项：关闭 → 再点加载
+      await page.getByTestId("editor-state-revision-compare-0").click();
+      await expect(
+        page.getByTestId("editor-state-revision-comparison-0"),
+      ).toHaveCount(0);
+      await page.getByTestId("editor-state-revision-compare-0").click();
+      completeBase += 1;
+      await expect
+        .poll(() => state.comparisonCompleteLog.length, { timeout: 10_000 })
+        .toBe(completeBase);
+      await expect(
+        page.getByTestId("editor-state-revision-comparison-error"),
+      ).toHaveText(MSG_COMPARE_FAIL);
+      await expect(
+        page.getByTestId("editor-state-revision-comparison-0"),
+      ).toHaveCount(0);
+      const html = await page.content();
+      expect(html).not.toContain("CMP_TOP_EXTRA");
+      expect(html).not.toContain(rev0.revisionId);
+      expect(html).not.toContain(rev0.stateVersion);
+      expect(html).not.toContain("unknownField");
+      expect(html).not.toContain("DIFF_PARSED_MARKDOWN_BODY");
+      expect(html).not.toContain(SNAPSHOT_BODY_LEAK);
+    }
+    state.comparisonResponseOverride = null;
+
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+    await assertNoIdLeak(page, state, guards.consoleLogs);
+    // 未使用变量：rev1 保证 seed 存在
+    expect(rev1.sourceKind).toBe("task");
+  });
+
+  test("P12D-B 技术标：comparison arrived+complete 迟到隔离（A0→A1、项目切换、折叠/刷新/摘要/恢复）", async ({
+    page,
+  }) => {
+    const state = createProbeState("tech");
+    seedRevisions(state, TECH_A, 2, ["browser_put", "task"]);
+    seedRevisions(state, TECH_B, 1, ["revise"]);
+    // A0 差异、A1 一致，便于观察是否被覆盖
+    const revA0 = state.revisions[TECH_A][0].revisionId;
+    const revA1 = state.revisions[TECH_A][1].revisionId;
+    state.details[revA0].snapshot = {
+      ...state.details[revA0].snapshot,
+      chapters: [{ id: "a0", title: "A0_ONLY", body: "A0_BODY" }],
+      analysisOverview: "A0_OVERVIEW_DIFF",
+      analysis: { overview: "A0_OVERVIEW_DIFF" },
+    };
+    // A1 固定 sameState，避免 seed 泄漏探针导致“差异”假失败
+    const sameSummaryA = probeSummarizeSnapshot(
+      canonicalSnapshot(state.projects[TECH_A]),
+    );
+    state.comparisonResponseByRevisionId[revA1] = {
+      sameState: true,
+      changedFields: [],
+      currentSummary: sameSummaryA,
+      targetSummary: { ...sameSummaryA },
+    };
+
+    const gateA0 = createHoldGate();
+    const gateProjA = createHoldGate();
+    state.comparisonModeByRevisionId[revA0] = {
+      kind: "hold",
+      gate: gateA0,
+    };
+
+    await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+
+    await openWorkspace(page, "tech", TECH_A);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => state.listCompleteLog.filter((p) => p === TECH_A).length, {
+        timeout: 10_000,
+      })
+      .toBe(1);
+
+    // A0 挂起 → A1 成功 → 释放 A0 不得覆盖
+    await page.getByTestId("editor-state-revision-compare-0").click();
+    await gateA0.waitUntilEntered(1);
+    expect(
+      state.comparisonCompleteLog.filter((d) => d.revisionId === revA0)
+        .length,
+    ).toBe(0);
+    await expect(
+      page.getByTestId("editor-state-revision-compare-0"),
+    ).toContainText("正在对比");
+
+    await page.getByTestId("editor-state-revision-compare-1").click();
+    await expect
+      .poll(
+        () =>
+          state.comparisonCompleteLog.filter((d) => d.revisionId === revA1)
+            .length,
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-comparison-status-1"),
+    ).toHaveText(MSG_COMPARE_SAME);
+    await expect(
+      page.getByTestId("editor-state-revision-comparison-error"),
+    ).toHaveCount(0);
+
+    gateA0.release();
+    delete state.comparisonModeByRevisionId[revA0];
+    await expect
+      .poll(
+        () =>
+          state.comparisonCompleteLog.filter((d) => d.revisionId === revA0)
+            .length,
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-comparison-status-1"),
+    ).toHaveText(MSG_COMPARE_SAME);
+    await expect(
+      page.getByTestId("editor-state-revision-comparison-0"),
+    ).toHaveCount(0);
+
+    // 折叠作废
+    await page.getByTestId("editor-state-revision-toggle").click();
+    await expect(page.getByTestId("editor-state-revision-body")).toHaveCount(0);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => state.listCompleteLog.filter((p) => p === TECH_A).length, {
+        timeout: 10_000,
+      })
+      .toBe(2);
+    await expect(
+      page.getByTestId("editor-state-revision-comparison-0"),
+    ).toHaveCount(0);
+
+    // 刷新作废：先成功对比，再刷新
+    await page.getByTestId("editor-state-revision-compare-1").click();
+    await expect
+      .poll(
+        () =>
+          state.comparisonCompleteLog.filter((d) => d.revisionId === revA1)
+            .length,
+        { timeout: 10_000 },
+      )
+      .toBe(2);
+    await expect(
+      page.getByTestId("editor-state-revision-comparison-1"),
+    ).toBeVisible();
+    await page.getByTestId("editor-state-revision-refresh").click();
+    await expect
+      .poll(() => state.listCompleteLog.filter((p) => p === TECH_A).length, {
+        timeout: 10_000,
+      })
+      .toBe(3);
+    await expect(
+      page.getByTestId("editor-state-revision-comparison-1"),
+    ).toHaveCount(0);
+
+    // 摘要作废比较
+    await page.getByTestId("editor-state-revision-compare-1").click();
+    await expect
+      .poll(
+        () =>
+          state.comparisonCompleteLog.filter((d) => d.revisionId === revA1)
+            .length,
+        { timeout: 10_000 },
+      )
+      .toBe(3);
+    await page.getByTestId("editor-state-revision-summary-1").click();
+    await expect
+      .poll(
+        () =>
+          state.detailCompleteLog.filter((d) => d.revisionId === revA1)
+            .length,
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-comparison-1"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-summary-body-1"),
+    ).toBeVisible();
+
+    // 恢复确认作废比较
+    await page.getByTestId("editor-state-revision-compare-1").click();
+    await expect
+      .poll(
+        () =>
+          state.comparisonCompleteLog.filter((d) => d.revisionId === revA1)
+            .length,
+        { timeout: 10_000 },
+      )
+      .toBe(4);
+    await page.getByTestId("editor-state-revision-restore-1").click();
+    await expect(
+      page.getByTestId("editor-state-revision-confirm-1"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-comparison-1"),
+    ).toHaveCount(0);
+    await page.getByTestId("editor-state-revision-cancel-restore-1").click();
+
+    // 项目 A 对比挂起 → 切 B → 释放不得污染
+    state.comparisonModeByProject[TECH_A] = {
+      kind: "hold",
+      gate: gateProjA,
+    };
+    await page.getByTestId("editor-state-revision-compare-0").click();
+    await gateProjA.waitUntilEntered(1);
+    const completeABeforeSwitch = state.comparisonCompleteLog.filter(
+      (d) => d.projectId === TECH_A,
+    ).length;
+
+    await openWorkspace(page, "tech", TECH_B);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => state.listCompleteLog.filter((p) => p === TECH_B).length, {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    expect(await readContent(page, "tech")).toBe(TECH_OVERVIEW_B);
+    await expect(
+      page.getByTestId("editor-state-revision-comparison-0"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-comparison-error"),
+    ).toHaveCount(0);
+
+    const cmpBArrivedBefore = state.comparisonLog.filter(
+      (d) => d.projectId === TECH_B,
+    ).length;
+    const cmpBCompleteBefore = state.comparisonCompleteLog.filter(
+      (d) => d.projectId === TECH_B,
+    ).length;
+    gateProjA.release();
+    delete state.comparisonModeByProject[TECH_A];
+    await expect
+      .poll(
+        () =>
+          state.comparisonCompleteLog.filter((d) => d.projectId === TECH_A)
+            .length,
+        { timeout: 10_000 },
+      )
+      .toBe(completeABeforeSwitch + 1);
+    expect(
+      state.comparisonLog.filter((d) => d.projectId === TECH_B).length,
+    ).toBe(cmpBArrivedBefore);
+    expect(
+      state.comparisonCompleteLog.filter((d) => d.projectId === TECH_B)
+        .length,
+    ).toBe(cmpBCompleteBefore);
+    expect(await readContent(page, "tech")).toBe(TECH_OVERVIEW_B);
+    await expect(
+      page.getByTestId("editor-state-revision-comparison-0"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-source-0"),
+    ).toHaveText(SOURCE_LABELS.revise);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -2265,5 +3056,93 @@ test.describe("P12C-C3 商务标修订历史", () => {
     await expect(
       page.getByTestId("editor-state-revision-list-error"),
     ).toHaveCount(0);
+  });
+
+  test("P12D-B 商务标：共享对比入口成功、comparison 精确 1、正文不变、零旁路", async ({
+    page,
+  }) => {
+    const state = createProbeState("biz");
+    seedRevisions(state, BIZ_A, 1, ["callback"]);
+    const rev0 = state.revisions[BIZ_A][0];
+    // 商务差异：改 parsedMarkdown 与 businessQualify
+    state.details[rev0.revisionId].snapshot = {
+      ...state.details[rev0.revisionId].snapshot,
+      parsedMarkdown: "BIZ_DIFF_PARSED_MD",
+      businessQualify: [
+        {
+          id: "q_diff",
+          requirement: "DIFF_QUALIFY",
+          response: "r",
+          evidence: "e",
+          status: "matched",
+        },
+      ],
+    };
+    const expected = buildComparisonPayload(
+      state.projects[BIZ_A],
+      state.details[rev0.revisionId].snapshot,
+    );
+    expect(expected.sameState).toBe(false);
+
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+
+    await openWorkspace(page, "biz", BIZ_A);
+    expect(state.comparisonLog.length).toBe(0);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => state.listCompleteLog.filter((p) => p === BIZ_A).length, {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    expect(state.comparisonLog.length).toBe(0);
+
+    const bodyBefore = await readContent(page, "biz");
+    expect(bodyBefore).toBe(BIZ_MD);
+    const getsBefore = state.editorGetLog.filter(
+      (g) => g.projectId === BIZ_A,
+    ).length;
+    const putBefore = state.putLog.length;
+    const restoreBefore = state.restoreLog.length;
+    const detailBefore = state.detailLog.length;
+    const externalBefore = state.externalHits.length;
+
+    await page.getByTestId("editor-state-revision-compare-0").click();
+    await expect
+      .poll(() => state.comparisonLog.length, { timeout: 10_000 })
+      .toBe(1);
+    await expect
+      .poll(() => state.comparisonCompleteLog.length, { timeout: 10_000 })
+      .toBe(1);
+    expect(state.comparisonLog[0].revisionId).toBe(rev0.revisionId);
+    expect(state.comparisonLog[0].method).toBe("GET");
+    expect(state.comparisonLog[0].postData).toBeNull();
+    expect(state.comparisonLog[0].hasQuery).toBe(false);
+
+    await expect(
+      page.getByTestId("editor-state-revision-comparison-status-0"),
+    ).toHaveText(MSG_COMPARE_DIFF);
+    const fields = await page
+      .getByTestId("editor-state-revision-comparison-fields-0")
+      .innerText();
+    expect(fields).toContain(CANONICAL_FIELD_LABELS.parsedMarkdown);
+    expect(fields).toContain(CANONICAL_FIELD_LABELS.businessQualify);
+    expect(fields).not.toContain("parsedMarkdown");
+    expect(fields).not.toContain("businessQualify");
+
+    // 正文不变、零旁路
+    expect(await readContent(page, "biz")).toBe(BIZ_MD);
+    expect(state.detailLog.length).toBe(detailBefore);
+    expect(state.restoreLog.length).toBe(restoreBefore);
+    expect(state.putLog.length).toBe(putBefore);
+    expect(
+      state.editorGetLog.filter((g) => g.projectId === BIZ_A).length,
+    ).toBe(getsBefore);
+    expect(state.externalHits.length).toBe(externalBefore);
+    expect(state.comparisonLog.length).toBe(1);
+
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+    await assertNoIdLeak(page, state, guards.consoleLogs);
   });
 });

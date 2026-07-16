@@ -1,11 +1,11 @@
 /**
- * 模块：P12C-C3 editor-state 修订历史 API 封装
- * 用途：严格校验 list/detail/restore 响应 shape；详情仅在 API 栈内解析并压缩为有界摘要。
- * 对接：GET|POST /api/projects/{id}/editor-state-revisions*；apiFetch。
+ * 模块：P12C-C3 / P12D-B editor-state 修订历史与对比 API 封装
+ * 用途：严格校验 list/detail/restore/comparison 响应 shape；详情仅在 API 栈内解析并压缩为有界摘要。
+ * 对接：GET|POST /api/projects/{id}/editor-state-revisions*；comparison 只读 GET；apiFetch。
  * 二次开发：
  *   - 禁止把原始 snapshot 返回给 React；禁止本地生成 revisionId/version
- *   - 禁止把响应原文、路径、后端 detail 拼进错误文案
- *   - 九类来源白名单；列表最多 10 条
+ *   - 禁止把响应原文、路径、后端 detail、字段值/键名拼进错误文案
+ *   - 九类来源白名单；列表最多 10 条；comparison 顶层精确四键 + 13 键有序子序列
  */
 
 import { apiFetch } from "../../shared/lib/api";
@@ -95,6 +95,48 @@ const CANONICAL_SNAPSHOT_KEYS = [
   "analysisOverview",
 ] as const;
 
+/** 权威字段键字面量类型 */
+export type CanonicalStateFieldKey = (typeof CANONICAL_SNAPSHOT_KEYS)[number];
+
+/** 13 键固定中文标签（可见层唯一业务字段名） */
+export const CANONICAL_FIELD_LABELS: Record<CanonicalStateFieldKey, string> = {
+  outline: "大纲",
+  chapters: "章节",
+  facts: "事实",
+  mode: "编写模式",
+  analysis: "分析",
+  responseMatrix: "响应矩阵",
+  guidance: "编写指导",
+  parsedMarkdown: "解析正文",
+  businessQualify: "商务资格",
+  businessToc: "商务目录",
+  businessQuote: "商务报价",
+  businessCommit: "商务承诺",
+  analysisOverview: "分析概览",
+};
+
+const CANONICAL_FIELD_INDEX = new Map<string, number>(
+  CANONICAL_SNAPSHOT_KEYS.map((k, i) => [k, i]),
+);
+
+/** comparison 顶层精确四键 */
+const COMPARISON_TOP_KEYS = [
+  "sameState",
+  "changedFields",
+  "currentSummary",
+  "targetSummary",
+] as const;
+
+/** comparison 两侧摘要精确六键 */
+const COMPARISON_SUMMARY_KEYS = [
+  "outlineNodeCount",
+  "chapterCount",
+  "factCount",
+  "responseMatrixRowCount",
+  "businessEntryTotal",
+  "hasParsedMarkdown",
+] as const;
+
 const MAX_LIST_ITEMS = 10;
 
 /** 摘要计数遍历上限，防止恶意深树耗尽页面 */
@@ -177,6 +219,17 @@ export type EditorStateRevisionRestoreResult = {
   safetyCheckpointId: string;
   stateVersion: string;
   restoredAt: string;
+};
+
+/**
+ * 模块：修订与当前状态差异摘要（P12D-B）
+ * 约束：仅四键；changedFields 为 13 键有序无重复子序列；两侧摘要各六键。
+ */
+export type EditorStateRevisionComparison = {
+  sameState: boolean;
+  changedFields: CanonicalStateFieldKey[];
+  currentSummary: EditorStateRevisionSummary;
+  targetSummary: EditorStateRevisionSummary;
 };
 
 /**
@@ -375,6 +428,101 @@ export function parseRestoreResult(
 }
 
 /**
+ * 用途：严格解析 comparison 两侧摘要；精确六键；计数非负安全整数；hasParsedMarkdown 布尔。
+ * 约束：不从 snapshot 重算；额外/缺失/类型错误一律固定失败。
+ */
+function parseComparisonSummary(raw: unknown): EditorStateRevisionSummary {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("revision_comparison_invalid");
+  }
+  const o = raw as Record<string, unknown>;
+  if (!hasExactKeys(o, COMPARISON_SUMMARY_KEYS)) {
+    throw new Error("revision_comparison_invalid");
+  }
+  if (!isNonNegativeSafeInt(o.outlineNodeCount)) {
+    throw new Error("revision_comparison_invalid");
+  }
+  if (!isNonNegativeSafeInt(o.chapterCount)) {
+    throw new Error("revision_comparison_invalid");
+  }
+  if (!isNonNegativeSafeInt(o.factCount)) {
+    throw new Error("revision_comparison_invalid");
+  }
+  if (!isNonNegativeSafeInt(o.responseMatrixRowCount)) {
+    throw new Error("revision_comparison_invalid");
+  }
+  if (!isNonNegativeSafeInt(o.businessEntryTotal)) {
+    throw new Error("revision_comparison_invalid");
+  }
+  if (typeof o.hasParsedMarkdown !== "boolean") {
+    throw new Error("revision_comparison_invalid");
+  }
+  return {
+    outlineNodeCount: o.outlineNodeCount,
+    chapterCount: o.chapterCount,
+    factCount: o.factCount,
+    responseMatrixRowCount: o.responseMatrixRowCount,
+    businessEntryTotal: o.businessEntryTotal,
+    hasParsedMarkdown: o.hasParsedMarkdown,
+  };
+}
+
+/**
+ * 用途：严格解析 comparison 响应；顶层精确四键；changedFields 为 13 键有序无重复子序列。
+ * 约束：sameState 当且仅当 changedFields 为空；失败不携带字段值。
+ */
+export function parseRevisionComparison(
+  raw: unknown,
+): EditorStateRevisionComparison {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("revision_comparison_invalid");
+  }
+  const o = raw as Record<string, unknown>;
+  if (!hasExactKeys(o, COMPARISON_TOP_KEYS)) {
+    throw new Error("revision_comparison_invalid");
+  }
+  if (typeof o.sameState !== "boolean") {
+    throw new Error("revision_comparison_invalid");
+  }
+  if (!Array.isArray(o.changedFields)) {
+    throw new Error("revision_comparison_invalid");
+  }
+  const seen = new Set<string>();
+  let lastIndex = -1;
+  const changedFields: CanonicalStateFieldKey[] = [];
+  for (const item of o.changedFields) {
+    if (typeof item !== "string") {
+      throw new Error("revision_comparison_invalid");
+    }
+    const idx = CANONICAL_FIELD_INDEX.get(item);
+    if (idx === undefined) {
+      throw new Error("revision_comparison_invalid");
+    }
+    if (seen.has(item)) {
+      throw new Error("revision_comparison_invalid");
+    }
+    if (idx <= lastIndex) {
+      // 乱序：必须严格沿权威 13 键递增
+      throw new Error("revision_comparison_invalid");
+    }
+    seen.add(item);
+    lastIndex = idx;
+    changedFields.push(item as CanonicalStateFieldKey);
+  }
+  if (o.sameState !== (changedFields.length === 0)) {
+    throw new Error("revision_comparison_invalid");
+  }
+  const currentSummary = parseComparisonSummary(o.currentSummary);
+  const targetSummary = parseComparisonSummary(o.targetSummary);
+  return {
+    sameState: o.sameState,
+    changedFields,
+    currentSummary,
+    targetSummary,
+  };
+}
+
+/**
  * 用途：GET 最近 10 条元数据；不请求详情 snapshot。
  * 对接：GET /projects/{projectId}/editor-state-revisions
  */
@@ -441,6 +589,32 @@ export async function restoreEditorStateRevision(
     },
   );
   return parseRestoreResult(raw);
+}
+
+/**
+ * 用途：按需 GET 修订与当前状态差异摘要；无 body/查询/重试。
+ * 对接：GET /projects/{projectId}/editor-state-revisions/{revisionId}/comparison
+ */
+export async function getEditorStateRevisionComparison(
+  projectId: string,
+  revisionId: string,
+): Promise<EditorStateRevisionComparison> {
+  if (!isValidRevisionId(revisionId)) {
+    throw new Error("revision_id_invalid");
+  }
+  const raw = await apiFetch<unknown>(
+    `/projects/${encodeURIComponent(projectId)}/editor-state-revisions/${encodeURIComponent(revisionId)}/comparison`,
+  );
+  return parseRevisionComparison(raw);
+}
+
+/**
+ * 用途：字段键转固定中文标签；未知回退固定文案（正常路径不会触发）。
+ */
+export function formatCanonicalFieldLabel(
+  key: CanonicalStateFieldKey,
+): string {
+  return CANONICAL_FIELD_LABELS[key] || "未知字段";
 }
 
 /**
