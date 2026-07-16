@@ -7,8 +7,8 @@
 
 # P12C editor-state 有限自动修订历史契约
 
-> **状态**：P12C-A 账本、P12C-B 八类内部来源接入与 P12C-C1 只读列表/详情均已实现、独立验收并推送；P12C-C2 受限恢复已冻结。
-> **拆包**：P12C-A（`daa8c43`/`226e1c1`）→ B-A 浏览器 PUT（`fbf93c0`/`acf3139`）→ B-B1 九类任务（`05864f6`/`5a0d1c0`）→ B-B2 商务 revise（`3a30c03`/`5149385`）→ B-C1 个人 callback（`76834f5`/`1d0ce0e`）→ B-C2 P8C 票据 callback（`52bbabf`/`82cc82e`）→ B-D1 content-fuse apply（`e8ffaeb`/`a6a28f6`）→ B-D2 consume（`6b83fc1`/`f256f5b`）→ B-D3 checkpoint restore（`1d44484`/`b91a7ff`）→ P12C-C1 只读列表/详情（`26b504e`/`7023ecd`）→ C2 受限恢复 → C3 前端另行冻结。
+> **状态**：P12C-A 账本、P12C-B 八类原子写入来源、P12C-C1 只读列表/详情与 P12C-C2 受限恢复均已实现并独立验收；前端 C3 待另行冻结。
+> **拆包**：P12C-A（`daa8c43`/`226e1c1`）→ B-A 浏览器 PUT（`fbf93c0`/`acf3139`）→ B-B1 九类任务（`05864f6`/`5a0d1c0`）→ B-B2 商务 revise（`3a30c03`/`5149385`）→ B-C1 个人 callback（`76834f5`/`1d0ce0e`）→ B-C2 P8C 票据 callback（`52bbabf`/`82cc82e`）→ B-D1 content-fuse apply（`e8ffaeb`/`a6a28f6`）→ B-D2 consume（`6b83fc1`/`f256f5b`）→ B-D3 checkpoint restore（`1d44484`/`b91a7ff`）→ P12C-C1 只读列表/详情（`26b504e`/`7023ecd`）→ C2 受限恢复（`54af600`/`2276366`/`0803250`）→ C3 前端另行冻结。
 
 ## 1. 只读审计结论
 
@@ -143,6 +143,8 @@ Grok failure-first **11 failed / 13 passed**。Codex 两轮仅测试返修依次
 
 C1 冻结=`26b504e`、实现=`7023ecd`。只新增当前项目最近 10 条元数据列表与单条详情 GET；列表固定五列投影且不加载 `snapshot_json`，详情以 revision/workspace/project 三重作用域读取六列并严格重验规范快照。Codex 对物化阶段坏时间做一次受限返修后，独立通过 **13/201/777 passed**；真实越界字节、非法来源、坏时间和正文损坏均固定脱敏 500/no-store，完整 GET 零写。恢复、删除、diff、搜索、分页、前端与多人协作均不在 C1，下一步只能独立审计并冻结 C2。
 
-## 18. P12C-C2 受限 revision restore 冻结
+## 18. P12C-C2 受限 revision restore 完成
 
-C2 固定新增 `POST .../editor-state-revisions/{revisionId}/restore` 与准确来源 `revision_restore`，不得用 `checkpoint_restore` 冒充。恢复锁后 CAS、三重作用域读取并重验目标、原子保存安全检查点、共享 13 键写回、不同内容记新时间点、同内容零修订，最后在同一事务内完成修订 10 条与检查点 20 条裁剪。旧 SQLite 八来源 CHECK 必须事务化幂等迁移且失败阻止启动。精确 API、七生产文件加四测试文件白名单和反假绿矩阵见 `docs/p12c-revision-restore-contract.md` 与 `docs/plans/2026-07-16-p12c-revision-restore-plan.md`；三个旧测试仅允许更新被新路由、九来源与共享原语合法替代的阶段守卫，前端、删除、diff、搜索和多人协作不在 C2。
+C2 冻结=`54af600`、范围修订=`2276366`、实现=`0803250`。固定新增 `POST .../editor-state-revisions/{revisionId}/restore` 与准确来源 `revision_restore`，不得用 `checkpoint_restore` 冒充。恢复锁后 CAS、三重作用域读取并重验目标、原子保存安全检查点、共享 13 键写回、不同内容记新时间点、同内容零修订，最后在同一事务内完成修订 10 条与检查点 20 条裁剪。
+
+Codex 用真实 DROP 前故障注入发现旧 SQLite 迁移首版在失败后残留临时表；Grok 受限返修为 CREATE 前零行 DML 触发物理事务后，失败路径完整保留旧 DDL/八列/索引/FK/CHECK 且不留临时表。独立通过专项 **23**、四文件 **121**、后端串行全量 **800 passed**；前端无改动沿用 **263 passed**。精确 API、11 文件白名单和完整反假绿记录见 `docs/p12c-revision-restore-contract.md` 与 `docs/plans/2026-07-16-p12c-revision-restore-plan.md`。前端、删除、diff、搜索和多人协作不在 C2；下一包只能先审计并冻结 C3 前端边界。

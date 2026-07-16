@@ -173,7 +173,7 @@ npm run test:e2e:business-editor-state-truth
 npm run test:e2e:technical-editor-state-truth
 ```
 
-当前基线：后端串行全量 **777 passed**（1 条既有 Starlette/httpx 弃用警告）；P12C-C1 专项/扩大回归 **13/201 passed**，五文件 `py_compile` 与真实坏时间 HTTP 复现通过。P12C-B-D3 历史基线为 18/270/764，P12C-B-D2 为 25/299/746，P12C-B-D1 为 11/285/732，P12C-B-C2 为 20/272/721，P12C-B-C1 为 10/224/711，P12C-B-B2 为 11/147/701，P12C-B-B1 为 10/126/690，P12C-B-A 为 14/107/680，P12C-A 为 67/77/666。前端未因 C1 改动，`lint` / `build` 既有基线通过（仅大包体积提示），P12B-D2 专项/受影响回归 **51/63 passed**，Chromium headless、单 worker、零重试全量 E2E **263 passed**。P12B-D1 历史恢复专项/受影响回归/全量为 58/81/599；P12B-C3 历史后端/前端全量为 570/212；P12A、P8C、M3-D、P10K、P9D 及其他既有专项继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
+当前基线：后端串行全量 **800 passed**（1 条既有 Starlette/httpx 弃用警告）；P12C-C2 专项/四文件回归 **23/121 passed**，11 文件 `py_compile`、真实 SQLite 迁移失败回滚、白名单与 diff 检查通过。P12C-C1 历史基线为 13/201/777，P12C-B-D3 为 18/270/764，P12C-B-D2 为 25/299/746，P12C-B-D1 为 11/285/732，P12C-B-C2 为 20/272/721，P12C-B-C1 为 10/224/711，P12C-B-B2 为 11/147/701，P12C-B-B1 为 10/126/690，P12C-B-A 为 14/107/680，P12C-A 为 67/77/666。前端未因 C2 改动，`lint` / `build` 既有基线通过（仅大包体积提示），P12B-D2 专项/受影响回归 **51/63 passed**，Chromium headless、单 worker、零重试全量 E2E **263 passed**。P12B-D1 历史恢复专项/受影响回归/全量为 58/81/599；P12B-C3 历史后端/前端全量为 570/212；P12A、P8C、M3-D、P10K、P9D 及其他既有专项继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
 
 P8D/P8E 本机助手独立验收命令（仓库根；不安装或探测真实 MinerU/Docling）：
 
@@ -366,7 +366,18 @@ cd C:\Users\Administrator\biaoshu\backend
 .\.venv\Scripts\python.exe -m py_compile app\services\editor_state_revision_history_service.py app\api\editor_state_revisions.py app\api\schemas.py app\main.py tests\test_p12c_revision_history_read.py
 ```
 
-P12C-C1 已实现并推送（冻结=`26b504e`、实现=`7023ecd`）。列表只投影最近 10 条五列元数据，详情三重作用域按需读取并严格重验规范快照；所有成功与业务错误 `no-store`。Codex 首次审查真实复现坏 `created_at` 裸 500，返修后越界字节、非法来源、坏时间和正文损坏均以真实 SQLite+HTTP 固定脱敏。独立结果为 **13 / 201 / 777 passed**；C2 revision restore、前端、删除、diff、搜索、跨项目历史与多人协作仍未实现。
+P12C-C1 已实现并推送（冻结=`26b504e`、实现=`7023ecd`）。列表只投影最近 10 条五列元数据，详情三重作用域按需读取并严格重验规范快照；所有成功与业务错误 `no-store`。Codex 首次审查真实复现坏 `created_at` 裸 500，返修后越界字节、非法来源、坏时间和正文损坏均以真实 SQLite+HTTP 固定脱敏。独立结果为 **13 / 201 / 777 passed**；C1 交付时 C2 restore 与前端尚未实现，后端恢复随后已由 C2 完成。
+
+P12C-C2 独立验收命令（后端；全部串行）：
+
+```powershell
+cd C:\Users\Administrator\biaoshu\backend
+.\.venv\Scripts\python.exe -m pytest -q tests\test_p12c_revision_restore.py --tb=line
+.\.venv\Scripts\python.exe -m pytest -q tests\test_p12c_revision_restore.py tests\test_p12c_revision_history_read.py tests\test_p12c_checkpoint_restore_revisions.py tests\test_editor_state_revisions.py --tb=line
+.\.venv\Scripts\python.exe -m pytest -q --tb=line
+```
+
+P12C-C2 已实现（冻结=`54af600`、范围修订=`2276366`、实现=`0803250`）。POST restore 严格 expected CAS 后复用 C1 三重作用域目标重验，以准确 `revision_restore` 与恢复前安全检查点、共享 13 键写回、双配额裁剪共享唯一事务；同内容只创建安全点并更新时间，零修订。Codex 首轮真实故障注入得到 **1 failed / 22 passed**，证明旧 SQLite 迁移失败会残留临时表；CREATE 前零行 DML 触发物理事务后，旧 DDL/八列逐值/索引/FK/旧 CHECK 完整且临时表不存在。独立结果为 **23 / 121 / 800 passed**；前端无改动沿用 **263 passed**。C3 前端、删除、diff、搜索、跨项目历史与多人协作仍未实现。
 
 ## 6. 已接 API 一览
 
