@@ -6,6 +6,7 @@
   - 新增配置项写在 Settings 类字段，并同步更新 .env.example 中文说明
   - 禁止在本文件或默认值中写死 LLM API Key / sk-
   - get_settings 带缓存；测试改环境变量后需 get_settings.cache_clear()
+  - P9C 模型 ID/revision/维度为服务端固定常量，禁止任意覆盖
 """
 
 from functools import lru_cache
@@ -16,6 +17,18 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # P10A：AUTH_MODE 白名单；未知值必须在配置加载时拒绝，禁止静默降级为 disabled
 _AUTH_MODE_ALLOWED = frozenset({"disabled", "required"})
+
+# P9C-R1：固定离线模型契约（禁止运行时漂移）
+SEMANTIC_MODEL_ID = "BAAI/bge-small-zh-v1.5"
+SEMANTIC_MODEL_REVISION = "26478543676740eb665f803ca07f3f7f478857c8"
+SEMANTIC_EMBEDDING_DIM = 512
+SEMANTIC_MODEL_CACHE_DIR_NAME = "semantic-models"
+# 固定 5 GiB，prepare/loader/preflight 与 Settings 均不可漂移
+SEMANTIC_MIN_FREE_DISK_BYTES = 5 * 1024 * 1024 * 1024
+# 固定官方 endpoint；下载必须显式传入，不得受 HF_ENDPOINT 环境改写
+FIXED_HF_ENDPOINT = "https://huggingface.co"
+# backend/app/core/config.py → parents[2] = backend/
+_BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseSettings):
@@ -70,14 +83,15 @@ class Settings(BaseSettings):
     seed_sample_opportunities: bool = False
     # 本地 MinerU 回传 Token；空字符串表示不校验（保密机默认）
     local_parser_token: str = ""
-    # P9C 离线语义索引：模型/维度/缓存/磁盘下限均由服务端固定，禁止 API/前端传入
-    semantic_model_id: str = "BAAI/bge-small-zh-v1.5"
-    semantic_embedding_dim: int = 512
+    # P9C 离线语义索引：模型/revision/维度/缓存/磁盘下限均由服务端固定，禁止 API/前端传入
+    semantic_model_id: str = SEMANTIC_MODEL_ID
+    semantic_model_revision: str = SEMANTIC_MODEL_REVISION
+    semantic_embedding_dim: int = SEMANTIC_EMBEDDING_DIM
     # data 下固定子目录名；真实路径必须由 resolve_semantic_model_cache_dir 从 upload_dir 推导
-    # 禁止依赖进程 cwd，禁止 HTTP/前端/工作空间设置覆盖
-    semantic_model_cache_dir: str = "semantic-models"
-    # 重建前最低可用磁盘（字节），默认 5 GiB
-    semantic_min_free_disk_bytes: int = 5 * 1024 * 1024 * 1024
+    # 禁止依赖进程 cwd，禁止 HTTP/前端/工作空间设置覆盖；仅接受字面 semantic-models
+    semantic_model_cache_dir: str = SEMANTIC_MODEL_CACHE_DIR_NAME
+    # 重建前最低可用磁盘（字节）；仅允许精确等于固定 5 GiB 常量
+    semantic_min_free_disk_bytes: int = SEMANTIC_MIN_FREE_DISK_BYTES
     # P10A 本机身份：仅允许 disabled（默认，个人版兼容）或 required（强制会话与成员校验）
     # 大小写不敏感；任何未知值在配置加载时拒绝，绝不可静默按 disabled 运行
     auth_mode: str = "disabled"
@@ -104,6 +118,90 @@ class Settings(BaseSettings):
                 f"AUTH_MODE 仅允许 disabled 或 required，当前值非法: {value!r}"
             )
         return normalized
+
+    @field_validator("semantic_model_id", mode="before")
+    @classmethod
+    def validate_semantic_model_id(cls, value: object) -> str:
+        """用途：仅允许固定 BAAI/bge-small-zh-v1.5；任何覆盖在配置加载期失败。"""
+        if value is None:
+            raise ValueError(f"semantic_model_id 仅允许 {SEMANTIC_MODEL_ID}")
+        normalized = str(value).strip()
+        if normalized != SEMANTIC_MODEL_ID:
+            raise ValueError(
+                f"semantic_model_id 仅允许 {SEMANTIC_MODEL_ID}，当前值非法"
+            )
+        return SEMANTIC_MODEL_ID
+
+    @field_validator("semantic_model_revision", mode="before")
+    @classmethod
+    def validate_semantic_model_revision(cls, value: object) -> str:
+        """用途：仅允许完整固定提交；截断或替换一律拒绝。"""
+        if value is None:
+            raise ValueError(
+                f"semantic_model_revision 仅允许 {SEMANTIC_MODEL_REVISION}"
+            )
+        normalized = str(value).strip()
+        if normalized != SEMANTIC_MODEL_REVISION:
+            raise ValueError(
+                "semantic_model_revision 仅允许固定完整提交，当前值非法"
+            )
+        return SEMANTIC_MODEL_REVISION
+
+    @field_validator("semantic_embedding_dim", mode="before")
+    @classmethod
+    def validate_semantic_embedding_dim(cls, value: object) -> int:
+        """用途：仅允许固定 512 维。"""
+        if value is None:
+            raise ValueError(
+                f"semantic_embedding_dim 仅允许 {SEMANTIC_EMBEDDING_DIM}"
+            )
+        try:
+            dim = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"semantic_embedding_dim 仅允许 {SEMANTIC_EMBEDDING_DIM}"
+            ) from exc
+        if dim != SEMANTIC_EMBEDDING_DIM:
+            raise ValueError(
+                f"semantic_embedding_dim 仅允许 {SEMANTIC_EMBEDDING_DIM}，当前值非法"
+            )
+        return SEMANTIC_EMBEDDING_DIM
+
+    @field_validator("semantic_model_cache_dir", mode="before")
+    @classmethod
+    def validate_semantic_model_cache_dir(cls, value: object) -> str:
+        """
+        用途：仅允许去首尾空白后的字面 semantic-models。
+        规则：../semantic-models、x/semantic-models、绝对路径均拒绝；不得 basename 放行。
+        """
+        if value is None:
+            return SEMANTIC_MODEL_CACHE_DIR_NAME
+        raw = str(value).strip()
+        if raw != SEMANTIC_MODEL_CACHE_DIR_NAME:
+            raise ValueError(
+                f"semantic_model_cache_dir 仅允许字面 {SEMANTIC_MODEL_CACHE_DIR_NAME}"
+            )
+        return SEMANTIC_MODEL_CACHE_DIR_NAME
+
+    @field_validator("semantic_min_free_disk_bytes", mode="before")
+    @classmethod
+    def validate_semantic_min_free_disk_bytes(cls, value: object) -> int:
+        """用途：仅允许精确等于固定 5 GiB；任何非精确覆盖在配置加载期失败。"""
+        if value is None:
+            raise ValueError(
+                f"semantic_min_free_disk_bytes 仅允许 {SEMANTIC_MIN_FREE_DISK_BYTES}"
+            )
+        try:
+            n = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"semantic_min_free_disk_bytes 仅允许 {SEMANTIC_MIN_FREE_DISK_BYTES}"
+            ) from exc
+        if n != SEMANTIC_MIN_FREE_DISK_BYTES:
+            raise ValueError(
+                "semantic_min_free_disk_bytes 仅允许固定 5 GiB，当前值非法"
+            )
+        return SEMANTIC_MIN_FREE_DISK_BYTES
 
     def cors_origin_list(self) -> list[str]:
         """用途：将 cors_origins 字符串拆成列表，供 CORSMiddleware 使用。"""
@@ -141,14 +239,23 @@ def get_settings() -> Settings:
 def resolve_semantic_model_cache_dir(settings: Settings | None = None) -> Path:
     """
     用途：解析 P9C 离线模型固定缓存目录。
-    规则：与 knowledge_service._kb_root 同根——upload_dir 父目录 / data / <子目录名>；
+    规则：
+      - 相对 upload_dir：先锚定 backend/，再取父目录下 data/<固定子目录>，
+        从仓库根、backend/ 或其他 cwd 运行均得到同一 backend/data/semantic-models；
+      - 绝对 upload_dir：仍以其父目录 / data / <子目录名> 为准（既有契约）。
     不依赖进程启动工作目录；不可由 HTTP/前端/工作空间设置传入。
-    对接：embedding_service.OfflineBgeEmbedder。
+    对接：embedding_service.OfflineBgeEmbedder、prepare/preflight 脚本。
     """
     s = settings or get_settings()
-    # 仅取末段目录名，防止配置写成绝对路径或 ../ 逃逸
-    raw = (s.semantic_model_cache_dir or "semantic-models").strip().replace("\\", "/")
-    name = Path(raw.rstrip("/")).name
-    if not name or name in {".", ".."}:
-        name = "semantic-models"
-    return Path(s.upload_dir).resolve().parent / "data" / name
+    # Settings 已校验为字面 semantic-models；此处再防御空值
+    name = (s.semantic_model_cache_dir or SEMANTIC_MODEL_CACHE_DIR_NAME).strip()
+    if name != SEMANTIC_MODEL_CACHE_DIR_NAME:
+        name = SEMANTIC_MODEL_CACHE_DIR_NAME
+
+    upload = Path(s.upload_dir)
+    if upload.is_absolute():
+        return upload.resolve().parent / "data" / name
+
+    # 相对路径：锚定 backend，避免随 cwd 漂移到仓库根 data/
+    upload_resolved = (_BACKEND_ROOT / upload).resolve()
+    return upload_resolved.parent / "data" / name

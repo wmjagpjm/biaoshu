@@ -11,5 +11,7 @@ Pillow>=11.0.0
 pypdf>=5.0.0
 openpyxl>=3.1.5
 # P9C 离线语义索引（仅后台受控重建加载；pytest 使用注入假模型，不下载）
-sentence-transformers>=3.0.0
-torch>=2.2.0
+# P9C-R1：三个直接依赖固定版本；真实安装由 Codex 以 --no-cache-dir 验收
+sentence-transformers==5.6.0
+torch==2.12.1
+huggingface-hub==1.23.0

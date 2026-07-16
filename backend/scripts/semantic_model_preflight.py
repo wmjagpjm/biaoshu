@@ -1,13 +1,14 @@
 """
 模块：P9C 离线语义模型预检与合成评测
 用途：
-  - 校验固定模型 BAAI/bge-small-zh-v1.5、512 维与固定缓存目录磁盘空间（固定 5GiB，不可绕过）
+  - 校验固定模型 BAAI/bge-small-zh-v1.5、固定 revision、512 维与固定缓存目录磁盘空间（固定 5GiB，不可绕过）
   - 基于仓库内合成评测集计算 Recall@5 / NDCG@5；低于阈值非零退出
-  - 禁止自动下载；模型/依赖/维度缺失时输出中文说明并失败
+  - 禁止自动下载；严格 local_files_only + trust_remote_code=False；模型/依赖/维度缺失时输出中文说明并失败
 对接：
-  - app.core.config.resolve_semantic_model_cache_dir / Settings
-  - app.services.embedding_service.OfflineBgeEmbedder 制品指纹
+  - app.core.config.resolve_semantic_model_cache_dir / Settings / 固定 revision
+  - app.services.embedding_service 制品校验与指纹
   - tests/fixtures/p9c_semantic_eval.json（唯一评测数据源）
+  - scripts/prepare_semantic_model.py（唯一显式准备入口，本脚本不下载）
 二次开发：
   - 禁止写入知识库或数据库；禁止外发正文/查询；禁止触网下载
   - 禁止 CLI 接受外部评测路径、下载开关或跳过磁盘检查
@@ -32,12 +33,20 @@ if str(_BACKEND_ROOT) not in sys.path:
 
 # ---------- 固定契约（与 config / 计划一致，禁止运行时覆盖为在线 API） ----------
 FIXED_MODEL_ID = "BAAI/bge-small-zh-v1.5"
+FIXED_MODEL_REVISION = "26478543676740eb665f803ca07f3f7f478857c8"
 FIXED_DIM = 512
+# 固定 5 GiB；与 config.SEMANTIC_MIN_FREE_DISK_BYTES 一致，预检不可绕过
 DEFAULT_MIN_FREE_BYTES = 5 * 1024 * 1024 * 1024
 DEFAULT_RECALL_AT_5 = 0.80
 DEFAULT_NDCG_AT_5 = 0.70
 # 相关等级阈值：relevance >= 1 视为“有相关文档”
 MIN_RELEVANT_GRADE = 1
+# 显式准备命令提示（无绝对路径）
+PREPARE_HINT = (
+    "请先运行 backend/scripts/prepare_semantic_model.py "
+    "（无参数检查；仅 --download 可联网准备固定 revision 制品）。"
+    "本预检禁止自动下载，不访问知识库或数据库。"
+)
 
 
 class PreflightError(RuntimeError):
@@ -517,20 +526,21 @@ def resolve_cache_dir_from_settings() -> Path:
 
 def model_cache_seems_present(cache_dir: Path, model_id: str = FIXED_MODEL_ID) -> bool:
     """
-    用途：粗检缓存是否已有本地文件（不加载模型、不触网）。
-    说明：huggingface 缓存通常含 models--BAAI--bge-small-zh-v1.5。
+    用途：粗检固定 revision 快照是否存在（不加载模型、不触网）。
+    说明：完整校验见 embedding_service.validate_semantic_model_artifacts。
     """
     _ = model_id
-    marker = cache_dir / "models--BAAI--bge-small-zh-v1.5"
-    if marker.is_dir():
+    snap = (
+        cache_dir
+        / "models--BAAI--bge-small-zh-v1.5"
+        / "snapshots"
+        / FIXED_MODEL_REVISION
+    )
+    if snap.is_dir():
         try:
-            return any(marker.rglob("*"))
+            return any(snap.iterdir())
         except OSError:
             return False
-    # 兼容直接展开权重目录
-    for name in ("config.json", "modules.json", "pytorch_model.bin", "model.safetensors"):
-        if (cache_dir / name).is_file():
-            return True
     return False
 
 
@@ -540,7 +550,7 @@ def load_local_sentence_transformer(
     model_id: str = FIXED_MODEL_ID,
 ) -> Any:
     """
-    用途：仅在本地缓存已存在时以 local_files_only=True 加载；禁止下载。
+    用途：仅在固定 revision 制品校验通过后以严格离线参数加载；禁止下载。
     返回：SentenceTransformer 实例；缺失/失败一律 model_unavailable 或 deps_missing。
     """
     if model_id != FIXED_MODEL_ID:
@@ -548,15 +558,33 @@ def load_local_sentence_transformer(
             "model_id_mismatch",
             f"仅允许固定模型 {FIXED_MODEL_ID}，收到 {model_id}",
         )
-    if not model_cache_seems_present(cache_dir, model_id):
+
+    # 复用共享制品校验（固定 revision / 10 文件 / 大小 / SHA-256）
+    try:
+        from app.services.embedding_service import (
+            OfflineEmbedderError,
+            validate_semantic_model_artifacts,
+        )
+
+        validate_semantic_model_artifacts(cache_dir)
+    except OfflineEmbedderError as exc:
+        if exc.code == "model_artifact_mismatch":
+            raise PreflightError(
+                "model_artifact_mismatch",
+                f"固定模型制品与契约不符。{PREPARE_HINT}",
+            ) from exc
         raise PreflightError(
             "model_unavailable",
-            (
-                "本地未找到离线模型缓存。"
-                "请先在受控环境将 BAAI/bge-small-zh-v1.5 放入服务端固定缓存目录。"
-                "本脚本禁止自动下载，不会写入知识库或数据库。"
-            ),
-        )
+            f"本地未找到完整的固定 revision 离线模型缓存。{PREPARE_HINT}",
+        ) from exc
+    except PreflightError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise PreflightError(
+            "model_unavailable",
+            f"无法校验本地模型制品。{PREPARE_HINT}",
+        ) from exc
+
     try:
         from sentence_transformers import SentenceTransformer  # type: ignore
     except Exception as exc:  # noqa: BLE001
@@ -566,19 +594,23 @@ def load_local_sentence_transformer(
         ) from exc
 
     try:
-        # 硬编码 local_files_only=True，禁止任何下载路径
+        # 固定 revision + 严格离线 + 禁止远程代码
         model = SentenceTransformer(
             model_id,
             cache_folder=str(cache_dir),
             device="cpu",
+            revision=FIXED_MODEL_REVISION,
             local_files_only=True,
+            trust_remote_code=False,
         )
+    except PreflightError:
+        raise
     except Exception as exc:  # noqa: BLE001
         raise PreflightError(
             "model_unavailable",
             (
-                "无法从本地缓存加载 BAAI/bge-small-zh-v1.5。"
-                "请确认缓存完整且未损坏；本脚本禁止自动下载。"
+                "无法从本地缓存加载固定 revision 的 BAAI/bge-small-zh-v1.5。"
+                f"{PREPARE_HINT}"
             ),
         ) from exc
     return model
@@ -608,10 +640,28 @@ def make_real_embed_fn(model: Any, *, expected_dim: int = FIXED_DIM) -> EmbedFn:
 
 
 def compute_artifact_fingerprint(cache_dir: Path, model_id: str = FIXED_MODEL_ID) -> str:
-    """用途：复用 OfflineBgeEmbedder 的内容指纹算法（不加载权重）。"""
-    from app.services.embedding_service import OfflineBgeEmbedder
+    """
+    用途：仅使用固定 revision 指纹算法；不得回退任意目录扫描。
+    失败：将 OfflineEmbedderError 映射为 PreflightError，不吞没缺失文件。
+    """
+    _ = model_id
+    from app.services.embedding_service import (
+        OfflineEmbedderError,
+        compute_fixed_artifact_fingerprint,
+    )
 
-    return OfflineBgeEmbedder()._compute_artifact_fingerprint(cache_dir, model_id)
+    try:
+        return compute_fixed_artifact_fingerprint(cache_dir)
+    except OfflineEmbedderError as exc:
+        if exc.code == "model_artifact_mismatch":
+            raise PreflightError(
+                "model_artifact_mismatch",
+                f"固定模型制品与契约不符。{PREPARE_HINT}",
+            ) from exc
+        raise PreflightError(
+            "model_unavailable",
+            f"本地未找到完整的固定 revision 离线模型缓存。{PREPARE_HINT}",
+        ) from exc
 
 
 def run_preflight(
@@ -677,6 +727,7 @@ def run_preflight(
     return {
         "ok": True,
         "modelId": FIXED_MODEL_ID,
+        "revision": FIXED_MODEL_REVISION,
         "dimension": FIXED_DIM,
         "cacheDirName": resolved_cache.name,
         "modelFingerprint": fingerprint,
@@ -706,12 +757,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     """
     p = argparse.ArgumentParser(
         description=(
-            "P9C 离线语义模型预检：固定 BAAI/bge-small-zh-v1.5 / 512 维，"
-            "禁止下载，固定 5GiB 磁盘检查，仅读取仓库合成评测集，"
-            "计算 Recall@5 与 NDCG@5"
+            "P9C 离线语义模型预检：固定 BAAI/bge-small-zh-v1.5 / 固定 revision / 512 维，"
+            "禁止下载（请用 prepare_semantic_model.py --download），"
+            "固定 5GiB 磁盘检查，仅读取仓库合成评测集，计算 Recall@5 与 NDCG@5"
         )
     )
-    # 无 --allow-download / --skip-disk-check / --eval-json
+    # 无 --allow-download / --skip-disk-check / --eval-json / 路径 / 跳过参数
     return p
 
 
@@ -728,21 +779,25 @@ def main(argv: Iterable[str] | None = None) -> int:
             "errorCode": exc.code,
             "message": str(exc),
             "modelId": FIXED_MODEL_ID,
+            "revision": FIXED_MODEL_REVISION,
             "dimension": FIXED_DIM,
             "hint": (
-                "请准备本机离线模型缓存并确保磁盘≥5GiB；"
-                "本脚本不访问知识库、不写数据库、禁止下载模型、"
-                "仅读取仓库内固定合成评测集。"
+                f"{PREPARE_HINT}"
+                "并确保磁盘≥5GiB；本脚本不访问知识库、不写数据库、"
+                "禁止下载模型、仅读取仓库内固定合成评测集。"
             ),
         }
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 2
-    except Exception as exc:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
+        # 固定有界字段：禁止 detailType/异常类名/第三方正文泄漏
         payload = {
             "ok": False,
             "errorCode": "internal_error",
             "message": "预检发生未预期错误",
-            "detailType": type(exc).__name__,
+            "modelId": FIXED_MODEL_ID,
+            "revision": FIXED_MODEL_REVISION,
+            "dimension": FIXED_DIM,
         }
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 1

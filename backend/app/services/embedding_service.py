@@ -2,12 +2,15 @@
 模块：文本向量（embedding）与 P9C 离线语义提供者
 用途：
   - 保留本地哈希向量工具（历史 embedding_json 兼容，不作语义结果）
-  - OfflineBgeEmbedder：固定 BAAI/bge-small-zh-v1.5、512 维，仅受控后台重建加载
+  - OfflineBgeEmbedder：固定 BAAI/bge-small-zh-v1.5、revision、512 维，严格离线加载
+  - 共享制品清单校验（精确 10 文件/大小/权重 SHA-256）
   - 测试可注入确定性假模型，禁止下载/触网
-对接：knowledge_service 语义索引重建与 hybrid 检索
+对接：knowledge_service 语义索引重建与 hybrid 检索；prepare/preflight 只读校验接口
 二次开发：
-  - 模型 ID/维度/缓存目录只读 config 常量，禁止从 API 或工作空间设置读取
+  - 模型 ID/revision/维度/缓存目录只读 config 常量，禁止从 API 或工作空间设置读取
   - 知识库检索不得再调用 try_api_embed 外发正文/查询
+  - 生产服务不得反向导入 CLI 脚本
+  - 纯制品接口导入不得加载 sqlalchemy/app.models/settings_service
 """
 
 from __future__ import annotations
@@ -18,34 +21,181 @@ import math
 import re
 import shutil
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
-from sqlalchemy.orm import Session
+from app.core.config import (
+    FIXED_HF_ENDPOINT,
+    SEMANTIC_MIN_FREE_DISK_BYTES,
+    SEMANTIC_MODEL_ID,
+    SEMANTIC_MODEL_REVISION,
+    Settings,
+    get_settings,
+    resolve_semantic_model_cache_dir,
+)
 
-from app.core.config import Settings, get_settings, resolve_semantic_model_cache_dir
-from app.services import settings_service
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 # 本地哈希向量维度（历史兼容；非 P9C 语义维）
 LOCAL_DIM = 256
 # P9C 固定维度（与 config.semantic_embedding_dim 一致，代码侧常量便于测试断言）
 OFFLINE_DIM = 512
 OFFLINE_PROVIDER = "offline_bge"
+FIXED_MODEL_ID = SEMANTIC_MODEL_ID
+FIXED_MODEL_REVISION = SEMANTIC_MODEL_REVISION
+# FIXED_HF_ENDPOINT 已从 config 导入并再导出，供 prepare 与测试断言
 _WS = re.compile(r"\s+")
 
 # 固定错误码
 ERR_MODEL_UNAVAILABLE = "model_unavailable"
 ERR_STORAGE_INSUFFICIENT = "model_storage_insufficient"
+ERR_ARTIFACT_MISMATCH = "model_artifact_mismatch"
+ERR_DOWNLOAD_FAILED = "model_download_failed"
+ERR_DEPS_MISSING = "deps_missing"
+
+# 固定制品：10 必需文件与精确大小；总量 96,378,176 字节
+FIXED_SAFETENSORS_NAME = "model.safetensors"
+FIXED_SAFETENSORS_SHA256 = (
+    "354763b9b1357bc9c44f62c6be2276321081ed2567773608c0d0785b61d5a026"
+)
+FIXED_ARTIFACT_FILES: dict[str, int] = {
+    "1_Pooling/config.json": 190,
+    "config.json": 776,
+    "config_sentence_transformers.json": 124,
+    "model.safetensors": 95_827_648,
+    "modules.json": 229,
+    "sentence_bert_config.json": 52,
+    "special_tokens_map.json": 125,
+    "tokenizer.json": 439_125,
+    "tokenizer_config.json": 367,
+    "vocab.txt": 109_540,
+}
+FIXED_ARTIFACT_TOTAL_BYTES = sum(FIXED_ARTIFACT_FILES.values())  # 96378176
+FIXED_ARTIFACT_FILE_COUNT = len(FIXED_ARTIFACT_FILES)
+# 下载白名单：仅 10 文件，顺序与 FIXED_ARTIFACT_FILES 键序精确一致
+FIXED_DOWNLOAD_ALLOW_PATTERNS: tuple[str, ...] = tuple(FIXED_ARTIFACT_FILES.keys())
 
 
 class OfflineEmbedderError(RuntimeError):
     """
     用途：离线向量提供者可观察失败；code 仅为服务端固定码。
-    对接：knowledge_service 重建失败落库 error_code。
+    对接：knowledge_service 重建失败落库 error_code；prepare/preflight JSON errorCode。
     """
 
     def __init__(self, code: str, message: str = "") -> None:
         self.code = code
         super().__init__(message or code)
+
+
+def resolve_fixed_snapshot_dir(cache_dir: Path) -> Path:
+    """
+    用途：解析固定 revision 的 Hugging Face 快照目录（相对 cache 根，不含绝对路径输出）。
+    布局：models--BAAI--bge-small-zh-v1.5/snapshots/<revision>/
+    """
+    repo_dir = "models--" + FIXED_MODEL_ID.replace("/", "--")
+    return Path(cache_dir) / repo_dir / "snapshots" / FIXED_MODEL_REVISION
+
+
+def sha256_file(path: Path) -> str:
+    """用途：对单文件做分块 SHA-256；供制品校验与测试 monkeypatch。"""
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        while True:
+            block = fh.read(1024 * 1024)
+            if not block:
+                break
+            h.update(block)
+    return h.hexdigest()
+
+
+def compute_fixed_artifact_fingerprint(cache_dir: Path) -> str:
+    """
+    用途：对固定 revision 快照内 10 个必需文件做确定性内容指纹。
+    说明：仅相对路径名 + 内容；不含绝对路径。
+    失败：任一必需文件缺失/不可读 → model_artifact_mismatch（不得写 missing 后成功）。
+    """
+    snap = resolve_fixed_snapshot_dir(cache_dir)
+    h = hashlib.sha256()
+    h.update(FIXED_MODEL_ID.encode("utf-8"))
+    h.update(FIXED_MODEL_REVISION.encode("utf-8"))
+    for rel in sorted(FIXED_ARTIFACT_FILES.keys()):
+        h.update(rel.encode("utf-8"))
+        path = snap / rel
+        try:
+            with path.open("rb") as fh:
+                while True:
+                    block = fh.read(1024 * 1024)
+                    if not block:
+                        break
+                    h.update(block)
+        except OSError as exc:
+            raise OfflineEmbedderError(
+                ERR_ARTIFACT_MISMATCH, "fingerprint_unreadable"
+            ) from exc
+    return h.hexdigest()[:32]
+
+
+def validate_semantic_model_artifacts(cache_dir: Path) -> dict[str, Any]:
+    """
+    用途：校验固定 revision 快照精确为 10 必需文件（无额外）、精确大小与 safetensors SHA-256。
+    返回：ok/fileCount/totalBytes/artifactFingerprint/revision/modelId（无绝对路径）。
+    失败：
+      - 快照目录不存在 → model_unavailable
+      - 文件缺失/额外/大小不符/哈希不符 → model_artifact_mismatch
+    错误消息禁止包含绝对路径、第三方异常原文。
+    """
+    root = Path(cache_dir)
+    snap = resolve_fixed_snapshot_dir(root)
+    if not snap.is_dir():
+        raise OfflineEmbedderError(ERR_MODEL_UNAVAILABLE, "snapshot_missing")
+
+    # 收集快照内全部相对文件路径（精确集合，禁止额外文件）
+    found: set[str] = set()
+    try:
+        for p in snap.rglob("*"):
+            if p.is_file():
+                found.add(p.relative_to(snap).as_posix())
+    except OSError as exc:
+        raise OfflineEmbedderError(ERR_ARTIFACT_MISMATCH, "scan_failed") from exc
+
+    expected = set(FIXED_ARTIFACT_FILES.keys())
+    if found != expected:
+        raise OfflineEmbedderError(ERR_ARTIFACT_MISMATCH, "file_set_mismatch")
+
+    total = 0
+    for rel, expected_size in FIXED_ARTIFACT_FILES.items():
+        path = snap / rel
+        if not path.is_file():
+            raise OfflineEmbedderError(ERR_ARTIFACT_MISMATCH, "file_missing")
+        try:
+            size = int(path.stat().st_size)
+        except OSError as exc:
+            raise OfflineEmbedderError(ERR_ARTIFACT_MISMATCH, "file_unreadable") from exc
+        if size != int(expected_size):
+            raise OfflineEmbedderError(ERR_ARTIFACT_MISMATCH, "size_mismatch")
+        total += size
+        if rel == FIXED_SAFETENSORS_NAME:
+            try:
+                digest = sha256_file(path)
+            except OSError as exc:
+                raise OfflineEmbedderError(
+                    ERR_ARTIFACT_MISMATCH, "hash_unreadable"
+                ) from exc
+            if digest.lower() != FIXED_SAFETENSORS_SHA256:
+                raise OfflineEmbedderError(ERR_ARTIFACT_MISMATCH, "hash_mismatch")
+
+    if total != FIXED_ARTIFACT_TOTAL_BYTES:
+        raise OfflineEmbedderError(ERR_ARTIFACT_MISMATCH, "total_mismatch")
+
+    fingerprint = compute_fixed_artifact_fingerprint(root)
+    return {
+        "ok": True,
+        "modelId": FIXED_MODEL_ID,
+        "revision": FIXED_MODEL_REVISION,
+        "fileCount": FIXED_ARTIFACT_FILE_COUNT,
+        "totalBytes": total,
+        "artifactFingerprint": fingerprint,
+    }
 
 
 def local_embed(text: str, *, dim: int = LOCAL_DIM) -> list[float]:
@@ -135,9 +285,13 @@ def try_api_embed(
     """
     用途：历史 OpenAI 兼容 embeddings 调用（非知识库路径）。
     说明：P9C 起知识库入库/查询禁止调用本函数外发正文或查询。
+    导入：settings_service 仅在本函数内延迟导入，避免纯制品导入链拉起数据库模型。
     """
     if not texts:
         return []
+    # 延迟导入：prepare/preflight 不触碰本路径
+    from app.services import settings_service
+
     cfg = settings_service.get_or_create_settings(db, workspace_id)
     model = (getattr(cfg, "embedding_model", None) or "").strip()
     if not model:
@@ -251,6 +405,8 @@ class OfflineBgeEmbedder:
 
     def _check_disk(self, settings: Settings) -> None:
         cache = resolve_semantic_model_cache_dir(settings)
+        # 使用不可漂移的固定 5 GiB，不读取可被错误覆盖的运行时字段
+        min_free = SEMANTIC_MIN_FREE_DISK_BYTES
         try:
             cache.mkdir(parents=True, exist_ok=True)
             free = shutil.disk_usage(str(cache)).free
@@ -258,13 +414,13 @@ class OfflineBgeEmbedder:
             raise OfflineEmbedderError(
                 ERR_MODEL_UNAVAILABLE, "cache_unusable"
             ) from exc
-        if free < int(settings.semantic_min_free_disk_bytes):
+        if free < int(min_free):
             raise OfflineEmbedderError(ERR_STORAGE_INSUFFICIENT)
 
     def _compute_artifact_fingerprint(self, cache_dir: Path, model_id: str) -> str:
         """
-        用途：对模型缓存内文件做确定性内容 SHA-256 指纹（相对路径名 + 分块读内容）。
-        说明：不含绝对路径；同名同尺寸内容不同必须得到不同指纹。
+        用途：兼容旧扫描指纹（仅注入/回退路径）；生产固定指纹见 compute_fixed_artifact_fingerprint。
+        说明：preflight 不得回退到本方法；prepare 使用固定指纹。
         """
         h = hashlib.sha256()
         h.update(model_id.encode("utf-8"))
@@ -291,8 +447,8 @@ class OfflineBgeEmbedder:
 
     def ensure_loaded_for_rebuild(self, settings: Settings | None = None) -> str:
         """
-        用途：仅后台重建调用；检查磁盘后按固定模型 ID 懒加载。
-        返回：制品指纹。失败抛 OfflineEmbedderError（固定 code）。
+        用途：仅后台重建调用；检查磁盘与制品后按固定 revision 严格离线加载。
+        返回：制品指纹。失败抛 OfflineEmbedderError（固定 code，无路径/第三方原文）。
         """
         settings = settings or get_settings()
         if self._injected and self._inject_fn is not None:
@@ -303,31 +459,55 @@ class OfflineBgeEmbedder:
 
         self._check_disk(settings)
         cache = resolve_semantic_model_cache_dir(settings)
-        cache.mkdir(parents=True, exist_ok=True)
+        try:
+            cache.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise OfflineEmbedderError(ERR_MODEL_UNAVAILABLE, "cache_unusable") from exc
+
         model_id = settings.semantic_model_id
+        revision = getattr(settings, "semantic_model_revision", FIXED_MODEL_REVISION)
         dim = int(settings.semantic_embedding_dim)
+        if model_id != FIXED_MODEL_ID or revision != FIXED_MODEL_REVISION:
+            raise OfflineEmbedderError(ERR_MODEL_UNAVAILABLE, "model_contract_mismatch")
         if dim != OFFLINE_DIM:
             # 服务端常量被错误覆盖时拒绝，避免错维激活
             raise OfflineEmbedderError(ERR_MODEL_UNAVAILABLE, "dim_mismatch")
 
+        # 加载前共享制品校验：缺失 → unavailable；损坏 → mismatch
         try:
-            # 懒导入：未安装依赖时给出 model_unavailable，不在 import 期崩
-            from sentence_transformers import SentenceTransformer  # type: ignore
+            meta = validate_semantic_model_artifacts(cache)
+        except OfflineEmbedderError:
+            raise
         except Exception as exc:  # noqa: BLE001
-            raise OfflineEmbedderError(ERR_MODEL_UNAVAILABLE, "deps_missing") from exc
+            raise OfflineEmbedderError(ERR_MODEL_UNAVAILABLE, "artifact_check_failed") from exc
 
         try:
-            # local_files_only=False 仅重建路径；测试不得走到此处
+            # 懒导入：未安装依赖时固定 deps_missing，不在 import 期崩
+            from sentence_transformers import SentenceTransformer  # type: ignore
+        except Exception as exc:  # noqa: BLE001
+            raise OfflineEmbedderError(ERR_DEPS_MISSING, "deps_missing") from exc
+
+        try:
+            # 生产加载必须固定 revision + 严格离线 + 禁止远程代码
             self._model = SentenceTransformer(
                 model_id,
                 cache_folder=str(cache),
                 device="cpu",
+                revision=FIXED_MODEL_REVISION,
+                local_files_only=True,
+                trust_remote_code=False,
             )
+        except OfflineEmbedderError:
+            self._model = None
+            raise
         except Exception as exc:  # noqa: BLE001
             self._model = None
+            # 不泄露第三方异常原文与绝对路径
             raise OfflineEmbedderError(ERR_MODEL_UNAVAILABLE, "load_failed") from exc
 
-        self._fingerprint = self._compute_artifact_fingerprint(cache, model_id)
+        self._fingerprint = str(meta.get("artifactFingerprint") or "") or (
+            compute_fixed_artifact_fingerprint(cache)
+        )
         return self._fingerprint
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
