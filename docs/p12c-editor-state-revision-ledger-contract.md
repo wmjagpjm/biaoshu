@@ -7,8 +7,8 @@
 
 # P12C editor-state 有限自动修订历史契约
 
-> **状态**：P12C-A 账本、浏览器 PUT、九类任务、五类商务 revise、个人 callback 与 P8C 票据 callback 接入均已实现、独立验收并推送。
-> **拆包**：P12C-A（`daa8c43`/`226e1c1`）→ B-A 浏览器 PUT（`fbf93c0`/`acf3139`）→ B-B1 九类任务（`05864f6`/`5a0d1c0`）→ B-B2 商务 revise（`3a30c03`/`5149385`）→ B-C1 个人 callback（`76834f5`/`1d0ce0e`）→ B-C2 P8C 票据 callback（`52bbabf`/`82cc82e`）→ B-D1 content-fuse apply（`e8ffaeb`/`a6a28f6`）→ B-D2 consume → B-D3 checkpoint restore → P12C-C 受限浏览/恢复另行冻结。
+> **状态**：P12C-A 账本、浏览器 PUT、九类任务、五类商务 revise、个人 callback、P8C 票据 callback、content-fuse apply 与 consume 接入均已实现、独立验收并推送。
+> **拆包**：P12C-A（`daa8c43`/`226e1c1`）→ B-A 浏览器 PUT（`fbf93c0`/`acf3139`）→ B-B1 九类任务（`05864f6`/`5a0d1c0`）→ B-B2 商务 revise（`3a30c03`/`5149385`）→ B-C1 个人 callback（`76834f5`/`1d0ce0e`）→ B-C2 P8C 票据 callback（`52bbabf`/`82cc82e`）→ B-D1 content-fuse apply（`e8ffaeb`/`a6a28f6`）→ B-D2 consume（`6b83fc1`/`f256f5b`）→ B-D3 checkpoint restore → P12C-C 受限浏览/恢复另行冻结。
 
 ## 1. 只读审计结论
 
@@ -127,4 +127,10 @@ Grok failure-first **6 failed / 5 passed**，最终专项/受影响回归 11/122
 
 冻结=`e8ffaeb`、实现=`a6a28f6`。融合 apply 复用同一次锁后 before/行，在章节、恢复批次和裁剪全部暂存后从同一内存行构造 after，以固定 `content_fuse_apply` 在唯一 commit 前记账；一至五条建议同批只形成一次迁移，空账本形成 before+after。consume 与 checkpoint restore 未被接入。
 
-Grok failure-first **9 failed / 2 passed**，首版专项/受影响回归 **11/184 passed**。Codex 一次仅测试返修关闭完整/部分 consume 可能以其他来源误写仍通过的假绿点，以逐行身份序列前后全等收紧隔离；最终独立通过专项 **11**、扩大回归 **285**、后端串行全量 **732 passed**，双文件编译、diff 与白名单检查通过。D2 必须重新冻结 restored>0 与零恢复只消费语义，D3 继续独立分包。
+Grok failure-first **9 failed / 2 passed**，首版专项/受影响回归 **11/184 passed**。Codex 一次仅测试返修关闭完整/部分 consume 可能以其他来源误写仍通过的假绿点，以逐行身份序列前后全等收紧隔离；最终独立通过专项 **11**、扩大回归 **285**、后端串行全量 **732 passed**，双文件编译、diff 与白名单检查通过。D1 当时要求 D2 重新冻结 restored>0 与零恢复只消费语义；该动作随后已完成，D3 继续独立分包。
+
+## 15. P12C-B-D2 content-fuse consume 接入记录
+
+冻结=`6b83fc1`、实现=`f256f5b`。融合 consume 复用锁后 before/同一状态行：完整或部分恢复只在原唯一 commit 前固定记录一次 `content_fuse_consume`，不按恢复章节数多记；零恢复仍原子消费批次，但 13 键、`updatedAt`、版本及全部修订身份序列精确不变。成功路径不再用 `get_editor_state` 重读，checkpoint restore 未被接入。
+
+Grok failure-first **11 failed / 13 passed**。Codex 两轮仅测试返修依次关闭部分恢复宽松集合、跨项目恒真自比较、缺失真实跨空间公开 HTTP、并发任意 409、零恢复部分字段比较、500 固定表名/路径泄漏门，以及外空间 editor-state 只比三个字段。最终独立通过 D1+D2 专项 **25**、扩大受影响回归 **299**、后端串行全量 **746 passed**，三文件编译、diff、白名单和分支/远端检查通过。当前生产写入已覆盖浏览器 PUT、九类任务、五类商务 revise、个人 callback、P8C callback、content-fuse apply 与 consume；下一步只允许独立冻结 D3 checkpoint restore，P12C-C 历史能力不得提前开始。

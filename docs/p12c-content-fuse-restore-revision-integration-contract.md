@@ -1,15 +1,16 @@
 <!--
 模块：P12C-B-D content-fuse 与 checkpoint restore 修订账本接入契约
-用途：记录 apply/consume/restore 的只读事务审计，并冻结 D1 content_fuse_apply 最小包。
+用途：记录 apply/consume/restore 的只读事务审计，以及 D1/D2 的冻结、实现与独立验收闭环。
 对接：P12C-A 修订原语；M3-D 融合应用/一次消费；P12B-D 检查点恢复。
 二次开发：apply、consume、checkpoint restore 禁止合包；零恢复消费不得伪造 editor-state 修订。
 -->
 
 # P12C-B-D content-fuse 与 checkpoint restore 修订账本接入契约
 
-> **状态**：三类写入只读审计完成；D1 `content_fuse_apply` 已实现、独立验收并推送；D2 `content_fuse_consume` 已冻结，待 failure-first 与实现；D3 checkpoint restore 待 D2 闭环后独立冻结。
+> **状态**：三类写入只读审计完成；D1 `content_fuse_apply` 与 D2 `content_fuse_consume` 均已实现、独立验收并推送；D3 checkpoint restore 是下一包，必须独立冻结。
 > **前置**：P12C-B-C2 冻结=`52bbabf`、实现=`82cc82e`、闭环=`3f77559`；后端/前端串行全量基线 **721/263 passed**。
 > **D1 提交**：冻结=`e8ffaeb`、实现=`a6a28f6`；Codex 独立后端基线 **11/285/732 passed**，前端沿用 **263 passed**。
+> **D2 提交**：冻结=`6b83fc1`、实现=`f256f5b`；Codex 独立后端基线 **25/299/746 passed**，前端沿用 **263 passed**。
 > **固定拆包**：D1 apply=`content_fuse_apply` → D2 consume=`content_fuse_consume` → D3 checkpoint restore=`checkpoint_restore`。三包分别失败先测、实现、验收、提交和闭环。
 
 ## 1. 只读事务审计
@@ -122,3 +123,13 @@ cd C:\Users\Administrator\biaoshu\backend
 ## 8. D2 非目标
 
 D2 不接 `checkpoint_restore`，不修改 M3-D 前端/队列/响应，不新增历史列表/详情/恢复/删除/diff/搜索，不改变 20 批配额、快照结构、章节漂移规则、零恢复一次消费、权限或审计。D3 必须在 D2 实现与文档闭环后重新冻结。
+
+## 9. D2 实现、返修与独立验收记录
+
+Grok 在冻结提交 `6b83fc1` 后按精确三文件白名单完成 failure-first **11 failed / 13 passed**，随后接入生产逻辑：复用锁后 `state_row/before_state`，仅在 `restored > 0` 时从同一内存行构造 after，并在原唯一 commit 前以固定 `content_fuse_consume` 调用无提交 recorder；`restored == 0` 继续只消费批次，13 键、`updatedAt`、响应版本与修订身份序列均不变。实现没有新增或移动 commit、rollback、refresh、锁、查询或 upsert，也没有接入 checkpoint restore。
+
+初版回执=`msg_75568b0572a445c18c5fa659137bdf29`。Codex 首轮受限审查拒绝部分恢复的 `>=1`/子集断言、跨项目自比较、缺失真实跨空间公开 HTTP、并发只看 409、零恢复只比部分字段以及 500 脱敏缺少固定表名/路径，返修任务=`msg_f34f653ca76243afa3785e27a9813b15`；Grok 回执=`msg_12fe29174bb64c47947bc4558dac1a31`。Codex 再把外空间 editor-state 从三字段比较收紧为完整字典全等，任务=`msg_22c714d6ed9e445f9a177ee47d88360b`，最终回执=`msg_a9410ee18ff64338b36b652e6dc7401b`。两轮返修均只改 D2 新测试，生产文件和 D1 阶段守卫保持不变。
+
+Codex 独立确认完整/部分恢复精确 +1、遗留空账本 before+after、零恢复只消费、跨项目/跨空间零副作用、两类真实双并发精确错误码、recorder flush/commit 失败全域回滚及公开 500 脱敏。专项 **25 passed**、扩大受影响回归 **299 passed**、后端串行全量 **746 passed**；均只有 1 条既有 Starlette/httpx 弃用警告。三文件 `py_compile`、`git diff --check`、精确白名单、暂存区与分支/远端检查通过。Codex 确认=`msg_2e23e5e7f9414b52b83569b526592426`，实现提交 `f256f5b` 已推送 `collab/grok-code-codex-review`。
+
+D2 闭环后仍未实现 `checkpoint_restore` 修订接入、修订历史 API/前端、删除、diff、搜索或多人协作。下一包只能先只读审计 P12B-D 安全检查点恢复的复合事务，再冻结 P12C-B-D3；不得把 D2 的条件记账机械复制到 restore。

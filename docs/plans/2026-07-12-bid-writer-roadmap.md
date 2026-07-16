@@ -345,4 +345,6 @@ P8D 与 P8E 本机外置解析助手均已完成并推送：P8D 计划=`30d066f`
 
 **P12C-B-C2 P8C 票据 callback 原子接入已完成**：冻结=`52bbabf`、实现=`82cc82e`。fresh 成功以同一次锁后 before/行和固定 `local_parser` 与票据消费、正文、任务、项目、审计同事务留史；stale/null 只提交消费且零修订，recorder/commit 失败全域回滚并允许同票重用。Codex 独立通过专项 **20**、扩大受影响回归 **272**、后端串行全量 **721 passed**。C2 后只读审计的 content-fuse apply 已由 D1 独立交付；consume 与 checkpoint restore 继续按 D2/D3 拆包，不得跳到历史浏览/恢复或多人协作。
 
-**P12C-B-D1 content-fuse apply 原子接入已完成**：冻结=`e8ffaeb`、实现=`a6a28f6`。一至五条建议同批与章节、恢复批次、裁剪和固定 `content_fuse_apply` 共享唯一事务；空账本记录 before+after，已有基线精确 +1。Codex 返修 consume 隔离假绿后独立通过专项 **11**、扩大回归 **285**、后端串行全量 **732 passed**。下一步只能冻结 D2 consume：完整/部分恢复迁移状态时记 `content_fuse_consume`，零恢复仍消费批次但不得伪造修订；checkpoint restore 留给 D3，不得合包或跳到历史浏览/恢复、删除、diff、搜索或多人协作。
+**P12C-B-D1 content-fuse apply 原子接入已完成**：冻结=`e8ffaeb`、实现=`a6a28f6`。一至五条建议同批与章节、恢复批次、裁剪和固定 `content_fuse_apply` 共享唯一事务；空账本记录 before+after，已有基线精确 +1。Codex 返修 consume 隔离假绿后独立通过专项 **11**、扩大回归 **285**、后端串行全量 **732 passed**。D1 当时明确把完整/部分恢复记账与零恢复只消费留给 D2；该包随后已按独立冻结完成，checkpoint restore 继续留给 D3。
+
+**P12C-B-D2 content-fuse consume 原子接入已完成**：冻结=`6b83fc1`、实现=`f256f5b`。完整/部分恢复只在原唯一事务内固定记录一次 `content_fuse_consume`；零恢复继续消费批次但 13 键、`updatedAt`、版本和修订身份序列全等。Codex 两轮仅测试返修关闭部分集合、跨项目/跨空间隔离、精确并发错误码、完整状态全等与 500 脱敏假绿，独立通过专项 **25**、扩大回归 **299**、后端串行全量 **746 passed**。下一步只能审计并冻结 D3 checkpoint restore 的 editor-state、安全检查点与 revision 复合事务；不得把 D2 机械复制到 restore，也不得提前跳到历史浏览/恢复、删除、diff、搜索或多人协作。

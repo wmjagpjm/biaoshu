@@ -173,7 +173,7 @@ npm run test:e2e:business-editor-state-truth
 npm run test:e2e:technical-editor-state-truth
 ```
 
-当前基线：后端串行全量 **732 passed**（1 条既有 Starlette/httpx 弃用警告）；P12C-B-D1 专项/扩大受影响回归 **11/285 passed**，双文件 `py_compile` 通过。P12C-B-C2 历史基线为 20/272/721，P12C-B-C1 为 10/224/711，P12C-B-B2 为 11/147/701，P12C-B-B1 为 10/126/690，P12C-B-A 为 14/107/680，P12C-A 为 67/77/666。前端 `lint` / `build` 通过（仅既有大包体积提示），P12B-D2 专项/受影响回归 **51/63 passed**，Chromium headless、单 worker、零重试全量 E2E **263 passed**。P12B-D1 历史恢复专项/受影响回归/全量为 58/81/599；P12B-C3 历史后端/前端全量为 570/212；P12A、P8C、M3-D、P10K、P9D 及其他既有专项继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
+当前基线：后端串行全量 **746 passed**（1 条既有 Starlette/httpx 弃用警告）；P12C-B-D2 D1+D2 专项/扩大受影响回归 **25/299 passed**，三文件 `py_compile` 通过。P12C-B-D1 历史基线为 11/285/732，P12C-B-C2 为 20/272/721，P12C-B-C1 为 10/224/711，P12C-B-B2 为 11/147/701，P12C-B-B1 为 10/126/690，P12C-B-A 为 14/107/680，P12C-A 为 67/77/666。前端 `lint` / `build` 通过（仅既有大包体积提示），P12B-D2 专项/受影响回归 **51/63 passed**，Chromium headless、单 worker、零重试全量 E2E **263 passed**。P12B-D1 历史恢复专项/受影响回归/全量为 58/81/599；P12B-C3 历史后端/前端全量为 570/212；P12A、P8C、M3-D、P10K、P9D 及其他既有专项继续保留。E2E 共用 SQLite 重置脚本，禁止并行启动多个 Playwright 命令，必须逐条串行运行。
 
 P8D/P8E 本机助手独立验收命令（仓库根；不安装或探测真实 MinerU/Docling）：
 
@@ -330,7 +330,19 @@ cd C:\Users\Administrator\biaoshu\backend
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-P12C-B-D1 已实现并推送（冻结=`e8ffaeb`、实现=`a6a28f6`）。融合 apply 以同一次锁后 before/行、提交前内存 after 和固定 `content_fuse_apply`，与章节、恢复批次和裁剪共享原唯一事务；browser_put 基线后一至五条建议同批精确 +1，空账本精确 before+after。recorder/trim/commit 失败全域回滚，双并发恰好一胜一 409；完整/部分/零 consume 的修订身份序列前后完全不变，证明 D1 未误接。Codex 独立结果为 **11 / 285 / 732 passed**；consume、checkpoint restore、历史 API 与前端仍未实现。
+P12C-B-D1 已实现并推送（冻结=`e8ffaeb`、实现=`a6a28f6`）。融合 apply 以同一次锁后 before/行、提交前内存 after 和固定 `content_fuse_apply`，与章节、恢复批次和裁剪共享原唯一事务；browser_put 基线后一至五条建议同批精确 +1，空账本精确 before+after。recorder/trim/commit 失败全域回滚，双并发恰好一胜一 409；完整/部分/零 consume 的修订身份序列前后完全不变，证明 D1 未误接。Codex 独立结果为 **11 / 285 / 732 passed**；D1 交付时 consume、checkpoint restore、历史 API 与前端均未实现，随后 consume 已由 D2 单独交付。
+
+P12C-B-D2 独立验收命令（后端；全部串行）：
+
+```powershell
+cd C:\Users\Administrator\biaoshu\backend
+.\.venv\Scripts\python.exe -m pytest -q tests\test_p12c_content_fuse_apply_revisions.py tests\test_p12c_content_fuse_consume_revisions.py --tb=line
+.\.venv\Scripts\python.exe -m pytest -q tests\test_p12c_content_fuse_consume_revisions.py tests\test_p12c_content_fuse_apply_revisions.py tests\test_content_fuse_applications.py tests\test_content_fuse.py tests\test_p12b_delayed_writer_fences.py tests\test_editor_state_revisions.py tests\test_editor_state_full_version.py tests\test_editor_state_checkpoint_restore.py tests\test_editor_state_checkpoints.py tests\test_editor_state.py tests\test_p12c_browser_put_revisions.py tests\test_p12c_task_revisions.py tests\test_p12c_revise_revisions.py tests\test_p12c_personal_callback_revisions.py tests\test_p12c_local_parser_callback_revisions.py --tb=line
+.\.venv\Scripts\python.exe -m pytest -q --tb=line
+.\.venv\Scripts\python.exe -m py_compile app\services\content_fuse_application_service.py tests\test_p12c_content_fuse_apply_revisions.py tests\test_p12c_content_fuse_consume_revisions.py
+```
+
+P12C-B-D2 已实现并推送（冻结=`6b83fc1`、实现=`f256f5b`）。完整/部分恢复在原唯一事务内精确记录一次固定 `content_fuse_consume`；零恢复只消费批次，完整 editor-state、版本和修订身份序列不变。两轮测试返修关闭宽松集合、跨项目恒真比较、真实跨空间隔离缺失、并发任意 409、零恢复部分字段比较及 500 表名/路径泄漏门；完整/零恢复双并发分别固定版本冲突/已消费错误码。Codex 独立结果为 **25 / 299 / 746 passed**；checkpoint restore、历史 API/前端、删除、diff、搜索与多人协作仍未实现。
 
 ## 6. 已接 API 一览
 
