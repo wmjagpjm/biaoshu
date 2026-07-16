@@ -28,7 +28,7 @@ from app.models.entities import (
     ProjectTaskRow,
     utc_now,
 )
-from app.services import editor_state_service
+from app.services import editor_state_revision_service, editor_state_service
 
 ALLOWED_ACTIONS = frozenset({"merge", "expand", "rewrite", "merge_suggest"})
 # 与前端 ChapterContent.status 对齐；缺失按 M3-C 语义落 pending，禁止 draft
@@ -487,7 +487,8 @@ def apply_content_fuse_application(
 
     _require_technical_project(db, workspace_id, project_id, lock=False)
     # 共用原语：项目级锁 + 锁后规范视图比较 expected（全状态优先）
-    state_row, _current_state = (
+    # before_state 复用锁后权威视图，供同事务修订账本 before 侧
+    state_row, before_state = (
         editor_state_service.lock_and_assert_expected_state_version(
             db, workspace_id, project_id, expected_state_version
         )
@@ -586,9 +587,18 @@ def apply_content_fuse_application(
     db.add(batch)
     db.flush()
     _trim_batches(db, workspace_id, project_id)
-    # commit 前由规范视图独立计算新版本，禁止客户端自报
-    new_state = editor_state_service.get_editor_state(db, workspace_id, project_id)
-    new_version = new_state["stateVersion"]
+    # 章节/批次/裁剪完成后：同一内存行构造 after，无提交接入修订账本
+    # 删除成功路径 get_editor_state 重读；响应版本取 after
+    after_state = editor_state_service._state_from_row(project_id, state_row)
+    editor_state_revision_service.record_editor_state_transition(
+        db,
+        workspace_id,
+        project_id,
+        before_state=before_state,
+        after_state=after_state,
+        source_kind="content_fuse_apply",
+    )
+    new_version = after_state["stateVersion"]
     db.commit()
     db.refresh(batch)
     return {
