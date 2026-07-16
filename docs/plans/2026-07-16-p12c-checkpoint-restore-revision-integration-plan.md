@@ -7,7 +7,7 @@
 
 # P12C-B-D3 checkpoint restore 修订账本接入实施计划
 
-> **状态**：已冻结，待 Grok failure-first、实现与自测。
+> **状态**：已完成、独立验收并推送；冻结=`1d44484`、实现=`b91a7ff`。
 > **前置**：D2 冻结=`6b83fc1`、实现=`f256f5b`、闭环=`e72427a`；后端/前端串行全量基线 **746/263 passed**。
 > **顺序**：计划提交推送 → Grok 双文件失败先测/实现/自测 → Codex 受限审查与必要返修 → 独立验收 → 中文实现提交推送 → 文档闭环。
 
@@ -39,3 +39,11 @@ Grok 串行运行 D3 新专项、既有恢复专项、P12C 修订原语与 D1/D2
 ## 6. 非目标
 
 不新增历史 API/前端，不改变检查点 20 条或修订 10 条配额，不改目标验证、13 键映射、CAS、权限、安全检查点、响应与 `updatedAt` 语义，不实现删除、diff、搜索、任意修订恢复、定时器或多人协作。P12C-C 留给 D3 闭环后的下一轮规划。
+
+## 7. 实施与验收记录
+
+Grok 在冻结提交 `1d44484` 后严格按双文件白名单完成 failure-first **11 failed / 7 passed**，随后在目标版本复核成功后、检查点裁剪与原唯一 commit 前接入条件 recorder：不同版本固定 `checkpoint_restore`，同版本零 recorder；生产实现没有新增锁、查询、提交、刷新或公开字段。
+
+Codex 首轮审查发现来源隔离用例对筛选后的 restore 行否定 apply/consume，无法拦截额外来源误写，返修任务=`msg_7526501fec8744d58be85c18b5bde998`；第二轮继续收紧同内容 `updatedAt` 真值、所有失败路径完整 editor-state/修订身份全等，以及两个裁剪失败后的原目标可重试，任务=`msg_42b459153c9e4c5191048b00df4fc1b8`。两轮均只修改 D3 新测试，生产文件 SHA256 保持不变。
+
+Codex 独立通过 D3 专项 **18 passed**、扩大恢复/editor-state/全部既有来源回归 **270 passed**、后端串行全量 **764 passed**；均只有 1 条既有 Starlette/httpx 弃用警告。双文件 `py_compile`、`git diff --check`、精确白名单、暂存区、分支与远端检查均通过。确认消息=`msg_1b0bff219b7940eabf665626c1214a2b`，实现提交 `b91a7ff` 已推送 `collab/grok-code-codex-review`；前端无改动，沿用单 worker、零重试 **263 passed** 基线。

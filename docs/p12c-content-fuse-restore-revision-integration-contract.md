@@ -7,10 +7,11 @@
 
 # P12C-B-D content-fuse 与 checkpoint restore 修订账本接入契约
 
-> **状态**：三类写入只读审计完成；D1 `content_fuse_apply` 与 D2 `content_fuse_consume` 均已实现、独立验收并推送；D3 checkpoint restore 已冻结，待 failure-first 与实现。
+> **状态**：D1 `content_fuse_apply`、D2 `content_fuse_consume` 与 D3 `checkpoint_restore` 三类写入均已实现、独立验收并推送。
 > **前置**：P12C-B-C2 冻结=`52bbabf`、实现=`82cc82e`、闭环=`3f77559`；后端/前端串行全量基线 **721/263 passed**。
 > **D1 提交**：冻结=`e8ffaeb`、实现=`a6a28f6`；Codex 独立后端基线 **11/285/732 passed**，前端沿用 **263 passed**。
 > **D2 提交**：冻结=`6b83fc1`、实现=`f256f5b`；Codex 独立后端基线 **25/299/746 passed**，前端沿用 **263 passed**。
+> **D3 提交**：冻结=`1d44484`、实现=`b91a7ff`；Codex 独立后端基线 **18/270/764 passed**，前端沿用 **263 passed**。
 > **固定拆包**：D1 apply=`content_fuse_apply` → D2 consume=`content_fuse_consume` → D3 checkpoint restore=`checkpoint_restore`。三包分别失败先测、实现、验收、提交和闭环。
 
 ## 1. 只读事务审计
@@ -185,3 +186,13 @@ Grok 至少串行运行新 D3 专项、既有 `test_editor_state_checkpoint_rest
 ### 10.6 D3 非目标
 
 D3 不新增或修改检查点/修订历史 API、Schema 或前端，不改变手动/安全检查点最近 20 条与修订最近 10 条的独立裁剪域，不实现删除、diff、搜索、跨项目历史、任意修订恢复、自动定时历史或多人协作。P12C-C 必须等待 D3 实现与文档闭环后另行冻结。
+
+## 11. D3 实现、返修与独立验收记录
+
+Grok 在冻结提交 `1d44484` 后先取得 **11 failed / 7 passed** 的 failure-first 证据，再按精确双文件边界完成接入：复用锁后 `current_state` 和写回后 `result_state`，仅在两者规范版本不同时以固定 `checkpoint_restore` 调用无提交 recorder；同版本仍创建安全检查点并更新 `updatedAt`，但修订身份序列保持不变。recorder、两个独立裁剪域与唯一 commit 继续位于原回滚域内，Grok 未提交或推送。
+
+首轮回执=`msg_4430593ed0004731b5c155393eba699e`。Codex 首轮拒绝来源隔离的同义反复断言，返修任务=`msg_7526501fec8744d58be85c18b5bde998`、回执=`msg_df4a4ca99337452098d92e80c4dbfe8d`；第二轮把同内容 `updatedAt` 更新、失败完整状态零写和 revision/checkpoint 裁剪失败后的原目标可重试收紧为精确证据，任务=`msg_42b459153c9e4c5191048b00df4fc1b8`、回执=`msg_69322b31400844f4aa72bbaed660eb98`。两轮返修均只改新测试，生产文件哈希不变。
+
+Codex 独立确认空账本 before+after、已有基线精确 +1、同内容零修订、回到历史版本形成新时间点、跨项目/跨空间隔离、不同版本真实双并发精确一胜一冲突、四类失败三域回滚与公开 500 脱敏。专项 **18 passed**、扩大回归 **270 passed**、后端串行全量 **764 passed**；均只有 1 条既有 Starlette/httpx 弃用警告。双文件 `py_compile`、`git diff --check`、精确白名单、暂存区与分支/远端检查通过。Codex 确认=`msg_1b0bff219b7940eabf665626c1214a2b`，实现提交 `b91a7ff` 已推送。
+
+D3 闭环后，八类内部来源的既有生产写入接入已覆盖到 checkpoint restore。仍未实现的是修订历史 API/前端、受限历史恢复、删除、diff、搜索、跨项目历史、自动定时历史与多人协作；下一包必须先重新审计并冻结 P12C-C，不能从内部账本直接推断公开历史能力已交付。
