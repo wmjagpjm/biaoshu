@@ -20,8 +20,8 @@
 完整阅读 docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/plans/2026-07-13-package-9-delivery-enhancement-plan.md、docs/integration-checklist.md。
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
 当前进度：P12A、P12B-A/B/C/D、P12C-A、P12C-B-A、P12C-B-B1、P12C-B-B2、P12C-B-C1、P12C-B-C2、P12C-B-D1、P12C-B-D2、P12C-B-D3、P12C-C1、P12C-C2、P12C-C3、P9D、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。C3 冻结=`6b9143a`、实现=`5e4f9f6`；后端全量 800、前端全量 284 passed。
-当前执行包：P12C-C3 已交付技术/商务修订历史前端；默认折叠、按需摘要、二次确认、执行时最新 expected、唯一重读、共享令牌和迟到隔离均已闭环。
-下一步：先只读盘点剩余主线并冻结单一最小包；比较 P9C 固定模型运行时门/真实语义验收、MinerU/Docling 生产部署、Word `structure`、更多合法外部标讯源、多人协作/完整版本治理和生产部署治理。不得从 C3 直接合入删除、diff、搜索、跨项目历史或超出最近 10 条的完整历史/保留策略。
+当前执行包：P9C-R1 固定离线模型运行时门已完成全局审计与契约冻结；固定模型提交、10 文件、权重哈希、显式准备唯一联网路径、生产严格离线加载和真实合成集预检边界均已写清，Grok 尚未开始实现。
+下一步：先提交并推送 P9C-R1 契约/计划，再通过本地消息箱下发六文件 failure-first 任务。Grok 不得真实安装/下载、提交或推送；Codex 审查自动化实现后才执行固定依赖、约 91.91 MiB 制品和真实预检。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -496,6 +496,8 @@ frontend/src/features/
 | docs/integration-checklist.md | 联调步骤 |
 | docs/p8e-docling-local-helper-contract.md | P8E 后端来源枚举与本机 Docling 助手冻结契约 |
 | docs/plans/2026-07-15-p8e-docling-local-helper-plan.md | P8E 两阶段受限实施与验收计划 |
+| docs/p9c-fixed-model-runtime-gate-contract.md | P9C-R1 固定提交、显式准备、严格离线加载与真实预检冻结契约 |
+| docs/plans/2026-07-16-p9c-fixed-model-runtime-gate-plan.md | P9C-R1 六文件 failure-first、Grok 自测与 Codex 真实验收计划 |
 | docs/p12a-editor-state-manual-checkpoints-contract.md | P12A 手动检查点只读库冻结契约 |
 | docs/plans/2026-07-15-p12a-editor-state-manual-checkpoints-plan.md | P12A 七文件后端实施与验收计划 |
 | docs/p12b-editor-state-version-foundation-contract.md | P12B-A 全状态版本与可选 CAS 冻结契约 |
@@ -611,8 +613,9 @@ frontend/src/features/
 - **P12C-C1 已完成并推送**：冻结=`26b504e`、实现=`7023ecd`。最近 10 条元数据列表不加载正文，详情按 revision/workspace/project 三重作用域读取并重验规范快照；真实坏时间物化、越界字节、非法来源和正文损坏均固定 500/no-store。Codex 独立 13/201/777 验收通过；无恢复或前端。
 - **P12C-C2 已完成**：冻结=`54af600`、范围修订=`2276366`、实现=`0803250`。严格 expected CAS、C1 目标重验、安全检查点、共享写回、准确 `revision_restore`、双配额和旧库迁移已闭环；Codex 独立 23/121/800 验收通过。
 - **P12C-C3 已完成**：冻结=`6b9143a`、实现=`5e4f9f6`。默认折叠、严格列表/按需摘要、共享令牌/保存链、执行时 expected、唯一重读和 list/detail/restore 迟到隔离已闭环；多轮反假绿后 Codex 独立 21/51/46/284、lint/build 验收通过。无删除、diff、搜索、跨项目历史、超出最近 10 条的完整历史/保留策略或多人协作。
-- **其余未实现主线**：修订删除、diff、搜索、跨项目历史、超出最近 10 条的完整历史/保留策略与多人协作；MinerU/Docling 自动安装、模型打包、常驻服务、真实模型样本验收与完整孙进程治理；P9C 固定模型运行时门与后续真实语义调优；Word `structure`/整章布局；除国能 e 招外的合法外部标讯来源；人力附件/真实证件核验；财务税务/审批/导出/预算/回款/版本、失败尝试与完整身份审计；投标人矩阵明细/版本/结果跟踪；Alembic、PostgreSQL、HTTPS、Key 加密、Docker 和公网 SaaS。下一步先只读盘点并只冻结其中一个最小包。
+- **当前已冻结未实现包**：P9C-R1 固定离线模型运行时门；六文件只收口固定提交、显式准备、严格离线加载、缓存路径确定性与真实合成集预检。当前依赖缺失、缓存为空、真实预检仍为 `model_unavailable`/退出码 2，禁止提前声称就绪。
+- **其余未实现主线**：修订删除、diff、搜索、跨项目历史、超出最近 10 条的完整历史/保留策略与多人协作；MinerU/Docling 自动安装、模型打包、常驻服务、真实模型样本验收与完整孙进程治理；P9C 真实用户语料调优、其他模型/GPU/在线 embedding/自动更新；Word `structure`/整章布局；除国能 e 招外的合法外部标讯来源；人力附件/真实证件核验；财务税务/审批/导出/预算/回款/版本、失败尝试与完整身份审计；投标人矩阵明细/版本/结果跟踪；Alembic、PostgreSQL、HTTPS、Key 加密、Docker 和公网 SaaS。
 - 新任务分工不变：Grok 只负责限定实现与自测，未经 Codex 审查确认不得提交；Codex 负责计划、范围冻结、差异审查、独立测试、验收、中文提交、文档闭环和 GitHub 状态核验。每一包仍按“计划提交 → 实现提交 → 文档闭环提交 → 推送协作分支”执行，禁止合包。
 - GitHub 若出现连接重置，可在当前 PowerShell 进程临时配置 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY=http://127.0.0.1:7890` 与 `NO_PROXY=localhost,127.0.0.1` 后重试；不得把代理或凭据写入仓库。
 
-**换会话可直接：核验分支、HEAD/远端与工作区 → 读本文 §0～§3.1、§4.23、§5、§6、§11、P12C 契约/计划及路线图 → 确认 P12C-C3 冻结 `6b9143a`、实现 `5e4f9f6` 已推送且后端/前端全量 800/284 passed → 全局只读盘点剩余主线并冻结一个最小包。禁止重新实现 P12C-C3/C2/C1/B-D3/B-D2/B-D1/B-C2/B-C1/B-B2/B-B1/B-A/P12C-A/P12B-A/B/C/D/P12A、从 C3 直接扩展删除/diff/搜索/跨项目历史/多人协作、让 Grok commit/push，或由 Codex 冒充 Grok 完成主实现。**
+**换会话可直接：核验分支、HEAD/远端与工作区 → 读本文 §0～§3.1、§4.23、§5、§6、§11、P9C-R1 契约/计划及路线图 → 确认 P12C-C3 已在 `9462415` 闭环且后端/前端全量 800/284 passed → 继续 P9C-R1 六文件 failure-first、Grok 实现、Codex 审查与真实预检。禁止重新实现 P12C-C3/C2/C1/B-D3/D2/D1/C2/C1/B2/B1/A、让 Grok 真实安装/下载或 commit/push、在生产请求隐式下载模型、合入其他模型/GPU/在线 embedding/真实用户语料，或由 Codex 冒充 Grok 完成主实现。**
