@@ -817,10 +817,16 @@ GET /api/projects/{projectId}/editor-state-revisions/page?cursor={opaqueCursor}
 
 SQLite 方言会把 `.limit(11)` 编译成 `LIMIT ? OFFSET ?`，但 OFFSET 绑定恒为 0；源码无 `.offset(`、无非零/主动偏移分页，也无 COUNT。Codex 独立新专项/受影响回归/后端全量为 **34/171/905 passed**，仅 1 条既有 Starlette/httpx 弃用告警；`py_compile`、diff-check、精确四文件和空暂存区通过。消息追溯：原任务/review_request=`msg_b044740a30cc4e82ac4c98c4c42731c4`/`msg_5df53113b2894ea984694c8d21d15601`，返修 task/review_request=`msg_628cbdef5bf24ac09f4f08d676f79d25`/`msg_6a45abaf4cc141d7bcf066c809b7a11f`，Codex 验收回执=`msg_6163277b22da433a8ae672560eeec3b5`。P12F-C 随后已独立冻结，见下节。
 
-## P12F-C 前端修订加载更多（已冻结，等待实现）
+## P12F-C 前端修订加载更多（已完成）
 
 前端首次展开、刷新和恢复后历史重载必须调用 P12F-B `/editor-state-revisions/page`，不能从旧 `{items}` 列表生成游标，也不能同时请求新旧列表。页响应严格精确 `items/nextCursor`，每页最多 10；游标只校验长度、`esrc1_` 前缀和 base64url 外壳，禁止解码或本地生成。
 
 仅 `nextCursor` 非空时显示手动“加载更多”。成功按顺序追加且累计最多 20，跨页 ID 不得重复；失败保留原 items/cursor 和当前详情/比较意图，固定错误后允许同 cursor 重试。按钮需要同步单飞门；折叠、卸载、项目切换、刷新和恢复重载必须用独立代次隔离迟到分页，旧 finally 不得清新状态。
 
-严格三文件：`editorStateRevisionApi.ts`、`EditorStateRevisionPanel.tsx`、`editor-state-revision-history.spec.ts`。E2E 必须证明旧列表零请求、20 条加载、跨页摘要/pair/商务恢复、shape/重复/超限失败保值、双击单飞和 arrived+complete 迟到隔离；所有 Playwright 显式 `--workers=1 --retries=0` 串行。无限滚动、自动预取、搜索/筛选/删除、total/hasMore、页码、跨项目历史、多人协作和后端修改均不在本包。
+冻结=`bb1ae3e`、实现=`fe99f5a`。严格三文件为 `editorStateRevisionApi.ts`、`EditorStateRevisionPanel.tsx`、`editor-state-revision-history.spec.ts`；后端、workspace、hook、共享 `apiFetch` 与其它测试均未改。真实 failure-first **2 failed / 0 passed / 2 did not run**，生产文件在红测前未改；实现后聚焦/完整 history **4/34 passed**。
+
+Codex 两轮审查分别关闭空 cursor 退化、假双击、宽泛计数、Cookie 漏检、禁止旁路未断言，以及任意方法 `/knowledge` 宽放行。最终双击在同一 JS 任务真实触发两次 DOM click，gate 前后当前 cursor 请求精确 1；知识侧栏只精确允许既有 `GET /api/knowledge/folders`。自然 UI 在 load-more 在途时真实禁用刷新/恢复；会话重载仍以独立代次防御性作废旧请求，不用 `force:true` 制造不可达并发。
+
+Codex 独立 P12F-C/history/技术真值/商务真值/checkpoint 为 **4/34/28/18/51 passed**，前端全量 **297 passed（9.6m）**，lint/build/diff-check/精确三文件/空暂存区通过；build 仅既有大 chunk 警告。消息追溯：原任务/首轮回执=`msg_878d37c5db1946a59b7dcc70d605a4ea`/`msg_4fde9fc2e6454d00b7ae806f58a5b198`，返修 1=`msg_0dff84f4f11349da87ff8695ff105a36`/`msg_021c43c667e348948dfad51d6c927298`，返修 2=`msg_8bc571cf0bf544fe8206134e5ec43155`/`msg_319b7051f10f45089a18a1a77beb4d68`，Codex 验收回执=`msg_f83db79a50aa4e3d9e4aa65c9dcc9263`。
+
+无限滚动、自动预取、搜索/筛选/删除、total/hasMore、页码、跨项目历史、多人协作和后端修改仍未进入 P12F-C；后续必须重新审计和独立冻结。

@@ -3,7 +3,7 @@
 模块：P12F-C 双工作区修订历史手动加载更多
 用途：消费 P12F-B 独立后端游标页，让技术标与商务标用户在默认最近 10 条之外按需访问第 11～20 条，同时保持详情、恢复、对比、正文差异和迟到隔离合同不变。
 对接：`editorStateRevisionApi`、`EditorStateRevisionPanel`、`editor-state-revision-history.spec.ts`；后端 `GET /api/projects/{projectId}/editor-state-revisions/page`。
-状态：2026-07-17 已冻结，等待 Grok 按三文件白名单 failure-first 实现；Codex 负责审查、独立验收、中文闭环和提交推送。
+状态：2026-07-17 已完成并推送；冻结=`bb1ae3e`、实现=`fe99f5a`，Codex 独立验收与消息箱闭环见本文 §9。
 
 ## 1. 审计结论与兼容边界
 
@@ -113,3 +113,13 @@ Grok 至少运行 P12F-C 新测试标题、完整 `editor-state-revision-history
 ## 8. 明确未做
 
 本包不做无限滚动、自动加载、搜索、来源筛选、日期筛选、删除、命名、固定、导出、分享、total/hasMore、页码、跨项目历史、多人协作、历史回填或后端变更。P12F-C 完成后若继续扩展，必须另包审计和冻结。
+
+## 9. 实施、审查与验收记录
+
+Grok 原任务=`msg_878d37c5db1946a59b7dcc70d605a4ea`。真实 failure-first 为 **2 failed / 0 passed / 2 did not run**：串行组先证明首屏仍请求旧列表、没有新页完成记录和加载更多能力；红测前两个生产文件未改。首轮实现回执=`msg_4fde9fc2e6454d00b7ae806f58a5b198`，三文件白名单与空暂存区保持不变。
+
+Codex 首轮审查拒绝五处反假绿缝隙：显式空字符串 cursor 静默退化为第一页、所谓“双击”实际只点一次、重开首屏使用宽泛 `>=3`、Cookie 未纳入泄漏快照、四条新测试未精确断言 `forbiddenHits=[]`。第一次返修任务/回执=`msg_0dff84f4f11349da87ff8695ff105a36`/`msg_021c43c667e348948dfad51d6c927298`。随后 Codex 又拒绝 `path.includes("/knowledge")` 对任意方法放行的宽泛测试白名单；第二次返修任务/回执=`msg_8bc571cf0bf544fe8206134e5ec43155`/`msg_319b7051f10f45089a18a1a77beb4d68`，最终只允许技术标壳层既有精确 `GET /api/knowledge/folders`，其它知识路径和写方法进入禁止命中。
+
+最终同步单飞证据在按钮初始可用时，以同一浏览器 JS 任务连续执行两次 DOM `click()`，不使用 `force:true`；gate 到达与释放后当前 cursor 请求数均精确为 1。刷新和恢复在自然 UI 路径上于加载更多在途时真实禁用，不强行点击；首屏重载与恢复实现仍保留防御性代次失效，用于会话切换或程序化进入重载时阻断旧 catch/finally。
+
+Codex 独立串行通过 P12F-C 聚焦/完整 history/技术真值/商务真值/checkpoint **4/34/28/18/51 passed**，前端全量 **297 passed（9.6m）**，全部显式 `--workers=1 --retries=0`；lint、build、diff-check、精确三文件和空暂存区通过，build 仅有既有大 chunk 警告。完整 history 首次独立运行被 Codex 外层 60 秒命令上限终止，无业务失败；确认进程退出后从头重跑得到 **34 passed**，未把中断冒充测试结论。Codex 验收回执=`msg_f83db79a50aa4e3d9e4aa65c9dcc9263`。
