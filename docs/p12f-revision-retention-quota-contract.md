@@ -3,7 +3,14 @@
 模块：P12F-A editor-state 自动修订账本有限保留策略
 用途：在不提高单项目最坏磁盘占用的前提下，为后续游标分页保留超过最近 10 条的小型修订。
 对接：`editor_state_revision_service` 写入同事务裁剪；P12C-C1 默认最近 10 条只读列表。
-状态：2026-07-17 冻结，等待 Grok 按六文件白名单实现；Codex 负责受限审查、独立验收、中文闭环和提交推送。
+状态：2026-07-17 已完成并推送；冻结=`e713fb3`、实现=`24f4cf2`，Codex 独立验收通过。
+
+## 0. 完成记录
+
+- Grok 新账号任务=`msg_5c9bce196836463f8161cfd97ff7b3d0`，首轮 review_request=`msg_63b19b98d56645bb98e96e0affd44524`；严格六文件白名单且未提交、未推送。
+- 真实 failure-first 为 **9 failed / 0 passed**，首个业务失败是旧 `MAX_REVISIONS_PER_PROJECT == 10`；其余失败覆盖缺少总字节常量、列表上限未解耦、非法元数据未拒绝与裁剪投影缺少 `snapshot_bytes`。
+- Codex 首轮审查要求只补强非法元数据零副作用测试；返修 task=`msg_72c9cee33d5446358a29aab701aa5909`，review_request=`msg_7fa5a6f3c971479aa8c2b65f7b37cdaa`。最终精确比较 `id/state_version/snapshot_bytes/source_kind/created_at`，本项目与旁路项目均不变且不读取正文。
+- Codex 独立六文件专项 **121 passed**、P12C/P12D/P12E 受影响回归 **134 passed**、后端串行全量 **871 passed**；均仅 1 条既有 Starlette/httpx 弃用告警。`py_compile`、`git diff --check`、精确六文件与空暂存区通过；验收回执=`msg_4cd3242575cb4c5d865138415e57a028`。
 
 ## 1. 背景与目标
 

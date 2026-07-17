@@ -391,7 +391,7 @@ npm run build
 npx playwright test --workers=1 --retries=0
 ```
 
-P12C-C3 已实现（冻结=`6b9143a`、实现=`5e4f9f6`）。默认折叠零请求，展开只取最近 10 条元数据，详情严格校验后只保留六项有界摘要；revision ID/version/正文不进入可见 DOM、URL、存储或日志。恢复与检查点共用令牌和既有保存链，确认前零 POST、执行时使用最新 expected、成功唯一 editor-state GET；list/detail/restore 迟到以项目会话和详情操作代次隔离。多轮测试返修用真实检查点 create、双项目双 restore 与 `listCompleteLog/detailCompleteLog` 关闭互斥、旧 finally、迟到及 arrived 冒充 fulfill 假绿。Codex 独立结果为 **21 / 51 / 46 / 284 passed**，lint/build/diff/七文件白名单通过；后端沿用 **800 passed**。当时尚无当前状态差异 API；后续 P12D-A/B 已补齐字段摘要及前端入口，P12E-A/B/C 已补齐单修订对当前与双历史修订正文差异。删除、搜索、分页、跨项目历史、超出最近 10 条的完整历史/保留策略和多人协作仍未实现。
+P12C-C3 已实现（冻结=`6b9143a`、实现=`5e4f9f6`）。默认折叠零请求，展开只取最近 10 条元数据，详情严格校验后只保留六项有界摘要；revision ID/version/正文不进入可见 DOM、URL、存储或日志。恢复与检查点共用令牌和既有保存链，确认前零 POST、执行时使用最新 expected、成功唯一 editor-state GET；list/detail/restore 迟到以项目会话和详情操作代次隔离。多轮测试返修用真实检查点 create、双项目双 restore 与 `listCompleteLog/detailCompleteLog` 关闭互斥、旧 finally、迟到及 arrived 冒充 fulfill 假绿。Codex 独立结果为 **21 / 51 / 46 / 284 passed**，lint/build/diff/七文件白名单通过；后端沿用 **800 passed**。当时尚无当前状态差异 API；后续 P12D-A/B 已补齐字段摘要及前端入口，P12E-A/B/C 已补齐单修订对当前与双历史修订正文差异，P12F-A 已补齐最多 20 条/20 MiB 的有限保留。删除、搜索、超过默认 10 条的游标分页、跨项目历史和多人协作仍未实现。
 
 P9C-R1 固定离线模型运行时门独立验收命令（后端；模型只允许显式准备一次，其他命令严格离线）：
 
@@ -723,7 +723,7 @@ P12D-A 已实现并推送（冻结=`2cc6ee3`、实现=`9445fcc`）。GET compari
 
 ## 14. 仍未接（后续）
 
-Celery、MinerU/Docling 自动安装、模型打包、常驻服务、真实模型样本验收与完整孙进程治理、P9B 以外的外部标讯数据源、P9C 的其他模型/GPU/在线 embedding/真实用户语料评测与自动模型更新、M3-D 以外的通用版本历史/任意历史浏览回滚/多人协作、商务 AI 反馈历史服务端化、P10K 以外的财务税务/审批/导出/预算/回款/版本与失败尝试/完整身份审计、P10I 以外的人力附件与真实证件核验、P10G 以外的投标人矩阵明细/版本/结果跟踪与其他合规数据域、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
+Celery、MinerU/Docling 自动安装、模型打包、常驻服务、真实模型样本验收与完整孙进程治理、P9B 以外的外部标讯数据源、P9C 的其他模型/GPU/在线 embedding/真实用户语料评测与自动模型更新、修订默认 10 条之外的游标分页/删除/搜索/跨项目历史/多人协作、商务 AI 反馈历史服务端化、P10K 以外的财务税务/审批/导出/预算/回款/版本与失败尝试/完整身份审计、P10I 以外的人力附件与真实证件核验、P10G 以外的投标人矩阵明细/版本/结果跟踪与其他合规数据域、SSE 事件游标/多工作空间鉴权、标题整章布局语义。
 
 **响应矩阵相关（已接 vs 未扩）：** 多端冲突的版本写保护、409 与双浏览器上下文 E2E 主路径已接；「刷新来源」保留人工映射 E2E 已接；**智能建议人工确认后应用** E2E 已接；**来源超过 80 分页** 已推送（`1289c92`）；**字段级三方合并** MVP + E2E 已推送（`2c7b3e0`，`response-matrix-field-merge.spec.ts`）。仍未接：Word 失效引用在浏览器层的扩展（导出逻辑以后端单测为准）；包 9 交付增强。
 
@@ -783,10 +783,21 @@ Failure-first 为真实 **3 failed / 0 passed**，首个失败是双修订选择
 
 Codex 独立验收：P12E-C 聚焦 **3 passed**；P12E-A/P12D-B/P12C-C3 受影响 history 回归 **27 passed**；前端全量 **293 passed (8.2m)**，全部 `--workers=1 --retries=0`。`npm run lint`、`npm run build`、`git diff --check`、精确三文件与空暂存区均通过。仍未实现分页、搜索、自动批量比较、完整时间线、恢复/删除、导出、分享、缓存、跨项目历史、URL/浏览器存储和多人协作。
 
-## P12F-A 修订有限保留扩容与总字节配额（已冻结，等待实现）
+## P12F-A 修订有限保留扩容与总字节配额（已完成）
 
-契约=`docs/p12f-revision-retention-quota-contract.md`、计划=`docs/plans/2026-07-17-p12f-revision-retention-quota-plan.md`。当前写入账本与默认列表都被同一“10 条”常量限制，分页无法读取已裁掉的历史；本包先把写入保留改为最多 20 条且项目总快照最多 20 MiB，默认列表仍固定最近 10 条。
+契约=`docs/p12f-revision-retention-quota-contract.md`、计划=`docs/plans/2026-07-17-p12f-revision-retention-quota-plan.md`，冻结=`e713fb3`、实现=`24f4cf2`。写入保留已改为最多 20 条且项目总快照最多 20 MiB；默认列表仍固定最近 10 条，既有 GET shape、顺序、详情、恢复和对比语义不变。
 
-Grok 白名单仅两个服务和四个既有后端测试：`editor_state_revision_service.py`、`editor_state_revision_history_service.py`、`test_editor_state_revisions.py`、`test_p12c_revision_history_read.py`、`test_p12c_browser_put_revisions.py`、`test_p12c_revision_restore.py`。必须先红后绿，证明连续最新前缀、计数/字节双上限、无 `snapshot_json` 投影、三重作用域删除、非法元数据零删除与列表兼容。
+Grok 白名单仅两个服务和四个既有后端测试。真实 failure-first **9 failed / 0 passed**，首个业务失败为旧计数常量仍是 10；实现后聚焦 **9 passed**。Codex 首轮审查要求补强非法元数据失败后的精确零副作用测试，最终按契约序比较 `id/state_version/snapshot_bytes/source_kind/created_at`，不读取正文。
 
-本包不新增 API/schema/模型/迁移/前端，不回填已裁历史，不做游标分页、加载更多、搜索、删除、命名、固定、导出、分享、跨项目历史或多人协作。P12F-B 只能在 P12F-A 独立验收后另行冻结。
+独立验收命令（后端；全部串行）：
+
+```powershell
+cd C:\Users\Administrator\biaoshu\backend
+.\.venv\Scripts\python.exe -m pytest -q tests\test_editor_state_revisions.py tests\test_p12c_revision_history_read.py tests\test_p12c_browser_put_revisions.py tests\test_p12c_revision_restore.py --tb=line
+.\.venv\Scripts\python.exe -m pytest -q tests\test_p12c_task_revisions.py tests\test_p12c_revise_revisions.py tests\test_p12c_checkpoint_restore_revisions.py tests\test_p12c_content_fuse_apply_revisions.py tests\test_p12c_content_fuse_consume_revisions.py tests\test_p12c_local_parser_callback_revisions.py tests\test_p12c_personal_callback_revisions.py tests\test_p12d_revision_current_comparison.py tests\test_p12e_revision_body_diff.py tests\test_p12e_revision_pair_body_diff.py --tb=line
+.\.venv\Scripts\python.exe -m pytest -q --tb=line
+```
+
+Codex 独立结果为六文件专项/受影响回归/后端全量 **121/134/871 passed**，均仅 1 条既有 Starlette/httpx 弃用告警；`py_compile`、`git diff --check`、精确六文件和空暂存区通过。消息追溯：首轮 review_request=`msg_63b19b98d56645bb98e96e0affd44524`，返修 task/review_request=`msg_72c9cee33d5446358a29aab701aa5909`/`msg_7fa5a6f3c971479aa8c2b65f7b37cdaa`，Codex 验收回执=`msg_4cd3242575cb4c5d865138415e57a028`。
+
+本包未新增 API/schema/模型/迁移/前端，未回填已裁历史，也未实现游标分页、加载更多、搜索、删除、命名、固定、导出、分享、跨项目历史或多人协作。P12F-B 现在可以另行审计和冻结，但不得直接沿用本包白名单。

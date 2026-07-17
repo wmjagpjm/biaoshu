@@ -7,7 +7,7 @@
 
 # 标书制作者能力补全与角色化演进路线图
 
-> **状态**：阶段 0/1/2 已完成；阶段 3 M3-A=`5d37dba`、M3-B=`e2e5d04`、M3-C 计划=`c63310f`/实现=`b8ff605`、M3-D 计划=`d326c7d`/后端=`6a5f61f`/前端=`b89a387` 均已完成；阶段 4 **包 5** 已推送（`460097a`）；**包 6** 已推送（`1289c92`）；**包 7** 已推送（`2c7b3e0`）；**包 8/P8B/P8C/P8D/P8E** 均已完成（调度=`6db1586`，P8B 计划=`f662674`/后端=`0994cc8`/前端=`80d2579`，P8C 计划=`cabe99d`/后端=`af39ff8`/前端=`1cf5576`，P8D 计划=`30d066f`/助手=`e1fe316`，P8E 计划=`73b1264`/后端=`79b346e`/助手=`e3f9cc4`；两种真实 CLI/模型均需人工准备）；包 9A、P9C-R1 与 P9D 已完成。阶段 5 已完成 P10A 至 P10K；P10K 计划=`2e53007`、后端=`1eaa75e`、前端=`dbf301c`。P11A/P11B/P11C 三个真实数据收口包均已完成。P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/B、P12E-A/B/C 已完成；P12E-C 冻结=`8b40bf4`/实现=`b6a4375`，后端/前端串行全量基线为 **867/293 passed**。
+> **状态**：阶段 0/1/2 已完成；阶段 3 M3-A=`5d37dba`、M3-B=`e2e5d04`、M3-C 计划=`c63310f`/实现=`b8ff605`、M3-D 计划=`d326c7d`/后端=`6a5f61f`/前端=`b89a387` 均已完成；阶段 4 **包 5** 已推送（`460097a`）；**包 6** 已推送（`1289c92`）；**包 7** 已推送（`2c7b3e0`）；**包 8/P8B/P8C/P8D/P8E** 均已完成（调度=`6db1586`，P8B 计划=`f662674`/后端=`0994cc8`/前端=`80d2579`，P8C 计划=`cabe99d`/后端=`af39ff8`/前端=`1cf5576`，P8D 计划=`30d066f`/助手=`e1fe316`，P8E 计划=`73b1264`/后端=`79b346e`/助手=`e3f9cc4`；两种真实 CLI/模型均需人工准备）；包 9A、P9C-R1 与 P9D 已完成。阶段 5 已完成 P10A 至 P10K；P10K 计划=`2e53007`、后端=`1eaa75e`、前端=`dbf301c`。P11A/P11B/P11C 三个真实数据收口包均已完成。P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/B、P12E-A/B/C、P12F-A 已完成；P12F-A 冻结=`e713fb3`/实现=`24f4cf2`，后端/前端串行全量基线为 **871/293 passed**。
 > **当前分支**：`collab/grok-code-codex-review`
 > **协作方式**：Grok 负责限定范围的实现与测试；Codex 负责范围、审查、验收和提交授权。
 
@@ -365,7 +365,7 @@ P8D 与 P8E 本机外置解析助手均已完成并推送：P8D 计划=`30d066f`
 
 **P12E-A 单条修订正文差异预览已完成**：冻结=`5aa205c`、实现=`f9f067e`。只读 GET 返回精确六键和有界章节行差异；前端技术/商务共用按需入口、严格 parser、四意图互斥与 arrived/complete 迟到隔离。Codex 首轮审查复现第 101 个差异章仍进入 difflib，Grok 以真实 **1 failed / 1 passed** 红测返修为 **2 passed**；Codex 独立通过专项/回归/后端全量 **23/27/854**，history/checkpoint/truth/前端全量 **27/51/46/290 passed**。任意历史两两比较、删除、搜索、分页、正文自动恢复和多人协作继续不进入 A 包。
 
-**下一步**：执行已冻结的 P12F-A 修订有限保留与总字节配额包；先在不提高单项目 20 MiB 最坏快照占用的前提下保留最多 20 条小修订，同时保持默认列表 10 条。游标分页 API 与前端加载更多必须留到后续 P12F-B 独立冻结。
+**下一步**：审计并独立冻结 P12F-B 游标分页。在 P12F-A 已交付的最多 20 条/20 MiB 有界保留上，为默认最近 10 条之外的历史增加有界、稳定游标；不得顺带加入搜索、删除、命名、固定、导出、分享、跨项目历史或多人协作。
 
 **P12E-B 已完成并推送**：双修订正文差异后端基础，契约=`docs/p12e-revision-pair-body-diff-contract.md`，计划=`docs/plans/2026-07-17-p12e-revision-pair-body-diff-plan.md`，冻结=`00ef081`、实现=`5a5b08a`。只比较同 workspace/project 的两个历史修订，暂不提供前端入口；Grok 仅改四个后端文件并发送 review_request，Codex 独立验收后提交推送。专项/回归/全量 **13/23/50/867 passed**，合并专项 **86 passed**，仅 1 条既有 Starlette/httpx 弃用告警。
 
@@ -373,7 +373,7 @@ P12E-B 真实 failure-first 为 13 项红测：11 项路由缺失 404、1 项同
 
 **P12E-C 已完成并推送**：前端双修订正文差异选择与展示，契约=`docs/p12e-revision-pair-frontend-contract.md`，计划=`docs/plans/2026-07-17-p12e-revision-pair-frontend-plan.md`，冻结=`8b40bf4`、实现=`b6a4375`。Grok 严格只改 API 封装、共用修订面板和既有 history E2E 三文件；选择只存内存且零请求，比较精确一次无 query/body 的 P12E-B GET。真实 failure-first **3 failed / 0 passed**，实现后聚焦 **3 passed**；Codex 独立通过受影响 history **27 passed**、前端全量 **293 passed (8.2m)**，lint/build/diff-check/白名单通过。严格 parser、中文有界展示、零 ID 泄漏、技术/商务共享、五意图互斥和 A0→A1/项目切换迟到隔离已交付；分页、搜索、恢复、删除、导出、分享、缓存、跨项目历史和多人协作仍不在本包。
 
-**P12F-A 已冻结，等待实现**：契约=`docs/p12f-revision-retention-quota-contract.md`，计划=`docs/plans/2026-07-17-p12f-revision-retention-quota-plan.md`。写入账本最多保留 20 条且项目总快照最多 20 MiB，按 `created_at DESC, id DESC` 保留连续最新前缀；P12C-C1 默认列表上限必须独立固定为 10。只允许修改两个服务和四个既有后端测试文件；不改 API、schema、模型、数据库或前端，不回填旧历史，不实现分页/搜索/删除/多人协作。
+**P12F-A 已完成并推送**：契约=`docs/p12f-revision-retention-quota-contract.md`，计划=`docs/plans/2026-07-17-p12f-revision-retention-quota-plan.md`，冻结=`e713fb3`、实现=`24f4cf2`。写入账本最多保留 20 条且项目总快照最多 20 MiB，按 `created_at DESC, id DESC` 保留连续最新前缀；默认列表上限独立固定为 10。真实 failure-first **9 failed**；Codex 经一轮 test-only 补强后独立通过六文件专项/受影响回归/后端全量 **121/134/871 passed**。本包未改 API、schema、模型、数据库或前端，未回填旧历史，也未实现分页/搜索/删除/多人协作。
 ## P12D-B 完成状态（2026-07-17）
 
 P12D-B 技术/商务共用前端修订对比入口已完成。Grok 任务 `msg_a8258d4b49f44678bf43fe2a2356d583`，仅修改三文件白名单并未提交；Codex 独立通过历史 24、检查点 51、技术/商务真值 46、前端全量 287 passed，lint/build/diff 通过。首轮红测实际为 2 failed / 21 passed / 1 did not run，因串行分组在首个缺失入口失败后跳过一条；该过程偏差已保留为事实，不冒充 3/21。
