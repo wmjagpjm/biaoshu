@@ -829,7 +829,15 @@ Codex 两轮审查分别关闭空 cursor 退化、假双击、宽泛计数、Coo
 
 Codex 独立 P12F-C/history/技术真值/商务真值/checkpoint 为 **4/34/28/18/51 passed**，前端全量 **297 passed（9.6m）**，lint/build/diff-check/精确三文件/空暂存区通过；build 仅既有大 chunk 警告。消息追溯：原任务/首轮回执=`msg_878d37c5db1946a59b7dcc70d605a4ea`/`msg_4fde9fc2e6454d00b7ae806f58a5b198`，返修 1=`msg_0dff84f4f11349da87ff8695ff105a36`/`msg_021c43c667e348948dfad51d6c927298`，返修 2=`msg_8bc571cf0bf544fe8206134e5ec43155`/`msg_319b7051f10f45089a18a1a77beb4d68`，Codex 验收回执=`msg_f83db79a50aa4e3d9e4aa65c9dcc9263`。
 
-无限滚动、自动预取、搜索/筛选/删除、total/hasMore、页码、跨项目历史、多人协作和后端修改仍未进入 P12F-C；后续必须重新审计和独立冻结。
+无限滚动、自动预取、搜索/筛选/删除、total/hasMore、页码、跨项目历史、多人协作和后端修改仍未进入 P12F-C；其中单一来源筛选已由 P12F-D 独立审计冻结，见下节。
+
+## P12F-D 修订来源筛选（已冻结，待实现）
+
+契约=`docs/p12f-revision-source-filter-contract.md`、计划=`docs/plans/2026-07-17-p12f-revision-source-filter-plan.md`。只扩展既有 `/editor-state-revisions/page` 和技术/商务共用面板：无筛选继续 `esrc1 {i,t}`，精确单来源筛选使用 `sourceKind` 与绑定该来源的 `esrc2 {i,s,t}`；两版游标或来源不匹配固定 400，不得静默漏项。
+
+后端继续五列投影、`LIMIT 11`、双键键集分页、no-store 和五域零写；前端只展示“全部来源”及九类固定中文标签，筛选分页仍手动加载且最多 20 条。刷新/恢复保留当前筛选，折叠保留、项目切换重置，旧筛选请求需 arrived+complete 迟到隔离。严格六文件，Grok 先形成后端/前端真实业务红测；Codex 审查、独立全量验收和提交推送。
+
+正文/标题搜索、日期或多来源组合、删除、命名、固定、自动加载、跨项目历史和多人协作不在 P12F-D。
 
 ## P13-A 任务 SSE 工作空间鉴权（已完成）
 
