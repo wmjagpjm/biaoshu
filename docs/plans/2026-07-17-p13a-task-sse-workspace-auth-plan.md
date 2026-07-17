@@ -2,7 +2,7 @@
 
 > **执行者：Grok**：严格按三文件白名单先真实业务红测再实现；Codex 负责受限审查、独立验收、中文文档闭环、提交与推送。
 
-> **状态**：已冻结待实现；后端全量起始基线 **905 passed**。
+> **状态**：已完成并推送；冻结=`e8dfa61`、实现=`1509aa2`，后端全量新基线 **918 passed**。
 
 **目标：** 让单任务 SSE 与普通任务 REST 使用同一工作空间、成员和 bid_writer 角色语义，并让连接前校验及每次快照读取都保持短 Session，不改变原生 EventSource 和既有事件合同。
 
@@ -44,3 +44,11 @@
 ## 6. 明确未做
 
 不修改 `deps.py`/中间件/前端/E2E/数据库；不做事件游标、重放、多任务总线、WebSocket、presence、工作空间 UI、URL 鉴权、审计扩展或任务 schema 变更。本包不是 P12F 搜索/删除的延续。
+
+## 7. 实际执行记录
+
+原任务/首轮 review_request=`msg_7b03139e43024424ab5707426d2b02bf`/`msg_ea83529fa69a42c7a91a88ac775f96d3`。生产文件未改时真实 failure-first 为 **8 failed / 5 passed**；实现后 Grok 专项/指定回归为 **13/72 passed**。
+
+Codex 首轮审查发现测试泄漏断言的恒真 `or`、secret marker 跳过、宽松三参和宽松 404，返修 task/review_request=`msg_b7cb9c7720a646a0976591d5cc4d3baf`/`msg_367b8a5ef9b54e89875bc16ea3b89974`。返修只改新测试，生产两文件内容哈希未动；原始 failure-first 未重跑或篡改。
+
+Codex 独立专项/受影响回归/后端全量 **13/72/918 passed**，仅 1 条既有弃用告警。首次全量被 20 分钟外层时限终止且没有 pytest 失败摘要；确认子进程退出后，以 40 分钟外层干净重跑得到 **918 passed in 1310.97s**。静态、diff、精确三文件与空暂存区门禁通过，验收回执=`msg_c1023b623e3e40fea59ba798676d451d`；Grok 未执行 Git。

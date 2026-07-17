@@ -658,7 +658,7 @@ P12D-A 已实现并推送（冻结=`2cc6ee3`、实现=`9445fcc`）。GET compari
 | 正文图片 | 正文工具栏图标上传 PNG/JPEG/GIF，写入项目内 `biaoshu-image://file_...` 引用 |
 | 导出 | 「生成并下载 Word」（含封面、项目内正文图片及无效引用 warning） |
 
-任务默认异步：`POST /tasks` 立即返回，前端优先订阅 `GET /tasks/{id}/events` 的 `snapshot` / `task` / `heartbeat`；流不可用时立即 GET 一次，再以 2 秒间隔轮询。P13-A 已冻结待实现：required 模式无自定义头时必须使用会话活动工作空间，显式头只能选择成员空间且仅 bid_writer 可读；disabled 继续兼容默认空间/显式头。实现完成前不得把这条写成已验收能力。
+任务默认异步：`POST /tasks` 立即返回，前端优先订阅 `GET /tasks/{id}/events` 的 `snapshot` / `task` / `heartbeat`；流不可用时立即 GET 一次，再以 2 秒间隔轮询。P13-A 已完成：required 模式无自定义头时使用会话活动工作空间，显式头只能选择成员空间且仅 bid_writer 可读；disabled 继续兼容默认空间/显式头。连接前 Session 在流开始前关闭，每帧短 Session 重新校验 workspace/project/task。
 测试可用：`POST /tasks?sync=true`。
 
 ## 8. 商务标六步（MVP）
@@ -723,7 +723,7 @@ P12D-A 已实现并推送（冻结=`2cc6ee3`、实现=`9445fcc`）。GET compari
 
 ## 14. 仍未接（后续）
 
-Celery、MinerU/Docling 自动安装、模型打包、常驻服务、真实模型样本验收与完整孙进程治理、P9B 以外的外部标讯数据源、P9C 的其他模型/GPU/在线 embedding/真实用户语料评测与自动模型更新、修订历史删除/搜索/跨项目历史/多人协作、商务 AI 反馈历史服务端化、P10K 以外的财务税务/审批/导出/预算/回款/版本与失败尝试/完整身份审计、P10I 以外的人力附件与真实证件核验、P10G 以外的投标人矩阵明细/版本/结果跟踪与其他合规数据域、SSE 事件游标/重放/多任务总线/前端工作空间切换 UI、标题整章布局语义。修订默认 10 条之外的后端游标页和前端手动加载更多已由 P12F-B/C 完成；SSE 工作空间鉴权已冻结为 P13-A，完成验收前仍不算已接。
+Celery、MinerU/Docling 自动安装、模型打包、常驻服务、真实模型样本验收与完整孙进程治理、P9B 以外的外部标讯数据源、P9C 的其他模型/GPU/在线 embedding/真实用户语料评测与自动模型更新、修订历史删除/搜索/跨项目历史/多人协作、商务 AI 反馈历史服务端化、P10K 以外的财务税务/审批/导出/预算/回款/版本与失败尝试/完整身份审计、P10I 以外的人力附件与真实证件核验、P10G 以外的投标人矩阵明细/版本/结果跟踪与其他合规数据域、SSE 事件游标/重放/多任务总线/前端工作空间切换 UI、标题整章布局语义。修订游标页/手动加载更多已由 P12F-B/C 完成；SSE 工作空间鉴权已由 P13-A 完成，但不包含上述事件与 UI 扩展。
 
 **响应矩阵相关（已接 vs 未扩）：** 多端冲突的版本写保护、409 与双浏览器上下文 E2E 主路径已接；「刷新来源」保留人工映射 E2E 已接；**智能建议人工确认后应用** E2E 已接；**来源超过 80 分页** 已推送（`1289c92`）；**字段级三方合并** MVP + E2E 已推送（`2c7b3e0`，`response-matrix-field-merge.spec.ts`）。仍未接：Word 失效引用在浏览器层的扩展（导出逻辑以后端单测为准）；包 9 交付增强。
 
@@ -830,3 +830,22 @@ Codex 两轮审查分别关闭空 cursor 退化、假双击、宽泛计数、Coo
 Codex 独立 P12F-C/history/技术真值/商务真值/checkpoint 为 **4/34/28/18/51 passed**，前端全量 **297 passed（9.6m）**，lint/build/diff-check/精确三文件/空暂存区通过；build 仅既有大 chunk 警告。消息追溯：原任务/首轮回执=`msg_878d37c5db1946a59b7dcc70d605a4ea`/`msg_4fde9fc2e6454d00b7ae806f58a5b198`，返修 1=`msg_0dff84f4f11349da87ff8695ff105a36`/`msg_021c43c667e348948dfad51d6c927298`，返修 2=`msg_8bc571cf0bf544fe8206134e5ec43155`/`msg_319b7051f10f45089a18a1a77beb4d68`，Codex 验收回执=`msg_f83db79a50aa4e3d9e4aa65c9dcc9263`。
 
 无限滚动、自动预取、搜索/筛选/删除、total/hasMore、页码、跨项目历史、多人协作和后端修改仍未进入 P12F-C；后续必须重新审计和独立冻结。
+
+## P13-A 任务 SSE 工作空间鉴权（已完成）
+
+冻结=`e8dfa61`，实现=`1509aa2`。required 模式继续由认证中间件负责无会话 401；SSE 路由连接前短 Session 复用统一 `get_workspace_id`，因此 finance/hr/bidder 固定 `role_forbidden`，非成员显式头固定 `workspace_forbidden`，无头原生 EventSource 使用会话 `activeWorkspaceId`。disabled 仍支持默认空间与合法显式头。
+
+连接前 Session 必须在 StreamingResponse 开始前关闭，生成器只捕获已授权 workspace 字符串；每轮 `_read_task_snapshot(workspace_id, project_id, task_id)` 新开短 Session 并再次做三层归属校验。不得为长连接挂 request-scope `get_db`，不得回退默认空间或只按任务主键读取。
+
+自动化验收（后端，串行）：
+
+```powershell
+cd C:\Users\Administrator\biaoshu\backend
+.\.venv\Scripts\python.exe -m pytest -q tests\test_p13a_task_sse_workspace_auth.py
+.\.venv\Scripts\python.exe -m pytest -q tests\test_task_sse.py tests\test_auth_rbac.py tests\test_p12b_delayed_writer_fences.py
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+Codex 独立结果为 **13/72/918 passed**，仅 1 条既有弃用告警；全量完整重跑耗时 1310.97 秒。真实 failure-first **8 failed / 5 passed**；一轮 test-only 返修删除恒真泄漏断言、secret marker 跳过和宽松三参证据。消息追溯：原任务/review=`msg_7b03139e43024424ab5707426d2b02bf`/`msg_ea83529fa69a42c7a91a88ac775f96d3`，返修 task/review=`msg_b7cb9c7720a646a0976591d5cc4d3baf`/`msg_367b8a5ef9b54e89875bc16ea3b89974`，验收回执=`msg_c1023b623e3e40fea59ba798676d451d`。
+
+本包不包含事件游标/重放、多任务总线、WebSocket、presence、前端工作空间切换 UI、URL token、审计扩展或数据库变更。

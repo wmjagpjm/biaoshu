@@ -3,7 +3,7 @@
 模块：P13-A 单任务 SSE 工作空间鉴权与短会话隔离
 用途：关闭 `/tasks/{taskId}/events` 未复用统一角色/成员解析、流内快照未再次按工作空间约束的越权缺口，同时保持个人版、原生 EventSource 与既有 SSE 事件合同不变。
 对接：`app.api.tasks`、`app.api.deps.get_workspace_id`、`app.services.task_service`、认证中间件与 `useProjectPipeline`。
-状态：2026-07-17 已冻结待 Grok 实现；Codex 独立审查、验收、文档闭环、提交并推送。
+状态：2026-07-17 已完成并推送；冻结=`e8dfa61`、实现=`1509aa2`，Codex 独立验收通过。
 
 ## 1. 审计结论与安全边界
 
@@ -111,3 +111,13 @@ cd C:\Users\Administrator\biaoshu\backend
 ## 8. 明确未做
 
 本包不做 SSE 事件游标、`Last-Event-ID`、重放、多任务总线、WebSocket、在线成员/presence、跨标签页保活、轮询改造、前端工作空间切换 UI、query token、审计事件、任务字段扩展、数据库迁移、修订历史搜索/删除或任何 P12F 延伸功能。
+
+## 9. 实际实现与验收闭环
+
+Grok 原任务=`msg_7b03139e43024424ab5707426d2b02bf`、首轮 review_request=`msg_ea83529fa69a42c7a91a88ac775f96d3`。只新建测试且生产两文件与冻结提交一致时，专项真实得到 **8 failed / 5 passed**：三类非 bid_writer 旧实现均错误返回 200；非成员头可读取该空间已知任务；活动空间无头 SSE 错误使用默认空间而 404；旧快照函数也不接受 workspace 参数。上述均为业务断言，不是收集、fixture、依赖或语法假红。
+
+生产实现新增 SSE 专用私有依赖，以一个 `SessionLocal` 显式调用统一 `get_workspace_id` 并做连接前任务归属校验，finally 在 StreamingResponse 前关闭；生成器只捕获 workspace 字符串。`_read_task_snapshot` 每轮新开短 Session，按 workspace/project/task 复用 `get_task`，越界或不存在统一返回 `None`；事件、响应头和前端回退未改。
+
+Codex 首轮审查认定生产方向正确，但拒绝测试中的五类自证式证据：鉴权错误、角色、非成员 workspace 和跨空间 task ID 使用已知恒真的 `or`；secret marker 被主动跳过；生成器三参断言允许额外参数。返修 task/review_request=`msg_b7cb9c7720a646a0976591d5cc4d3baf`/`msg_367b8a5ef9b54e89875bc16ea3b89974`，仅修改新测试，全部改为精确不包含、精确固定 404 和 `args == (workspace, project, task) / kwargs == {}`；未伪造第二次 failure-first。
+
+Codex 独立专项/受影响回归/后端全量为 **13/72/918 passed**，仅 1 条既有 Starlette/httpx 弃用告警。第一次全量没有失败摘要，但被 Codex 外层 20 分钟时限终止；历史全量本就需要约 20～25 分钟，子进程确认退出后以 40 分钟外层干净重跑，最终 **918 passed in 1310.97s**。`py_compile`、`git diff --check`、精确三文件和空暂存区通过；验收回执=`msg_c1023b623e3e40fea59ba798676d451d`。Grok 未提交或推送。
