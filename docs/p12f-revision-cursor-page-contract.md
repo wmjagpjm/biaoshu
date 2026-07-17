@@ -3,7 +3,7 @@
 模块：P12F-B editor-state 修订历史只读键集分页
 用途：在 P12F-A 最多 20 条/20 MiB 有界保留上，提供默认最近 10 条之外的只读访问基础，同时保持 P12C-C1 旧列表合同不变。
 对接：`editor_state_revision_history_service`、`api.editor_state_revisions`、`api.schemas`；P12F-C 前端加载更多只可消费本包新路由。
-状态：2026-07-17 冻结，等待 Grok 按四文件白名单实现；Codex 负责审查、独立验收、中文闭环和提交推送。
+状态：2026-07-17 已完成；冻结=`4ddd896`、实现=`c84a94d`，Codex 已独立验收并推送。
 
 ## 1. 分包与兼容边界
 
@@ -86,7 +86,7 @@ created_at < cursor.created_at
 OR (created_at = cursor.created_at AND id < cursor.id)
 ```
 
-禁止 `OFFSET`、总数查询、全表扫描、随机排序或 Python 侧先加载全部再切片。
+禁止主动/非零 `OFFSET`、总数查询、全表扫描、随机排序或 Python 侧先加载全部再切片。SQLAlchemy SQLite 方言可把单纯 `.limit(11)` 编译为 `LIMIT ? OFFSET ?`，但 OFFSET 绑定必须恒为 0，源码不得调用 `.offset(`；该方言占位不视为偏移分页。
 
 ## 4. SQL、校验与只读安全
 
@@ -124,8 +124,16 @@ Grok 必须先只新建测试得到真实业务红测，再修改三个生产文
 - 新页顶层精确 `items/nextCursor`，未知 `limit/offset/page/source/search/q` 不改变固定页；
 - 游标空白、超长、错前缀、坏 base64、坏 JSON、额外/缺失键、布尔/越界时间、坏 ID、非规范编码均固定 400 且不反射输入；
 - 跨项目/跨 workspace 零泄漏；项目 404 优先级固定；
-- SELECT 五列无正文、LIMIT 11、键集谓词、零 OFFSET/COUNT，lookahead 损坏整页 corrupt；
+- SELECT 五列无正文、LIMIT 11、键集谓词、无主动/非零 OFFSET 且无 COUNT，lookahead 损坏整页 corrupt；
 - GET 前后 editor-state、project、revision、checkpoint、audit 五域完全不变；
 - `py_compile`、`git diff --check`、精确四文件和空暂存区。
 
 Codex 独立运行新专项、既有 P12C-C1/P12F-A 受影响回归和后端全量后才可提交。P12F-C 前端加载更多必须在本包完成后另行冻结。
+
+## 7. 实际实现与验收闭环
+
+Grok 原任务=`msg_b044740a30cc4e82ac4c98c4c42731c4`。生产三文件修改前，新专项真实得到 **27 failed / 3 passed**：静态 `/page` 尚未注册并被动态 `/{revision_id}` 吞为旧 `editor_state_revision_not_found`，页大小常量也不存在；不是收集、导入、fixture、依赖或语法假红。首版实现后专项 **30 passed**，review_request=`msg_5df53113b2894ea984694c8d21d15601`。
+
+Codex 审查发现三类必须关闭的问题：Windows `datetime.fromtimestamp` 对合法最大年份的平台范围风险；编码端未拒绝 pre-1970 存量位置，可能生成解码器必拒的 `nextCursor`；lookahead 损坏测试末尾含已由状态码保证的恒真 `or`。返修任务=`msg_628cbdef5bf24ac09f4f08d676f79d25`，返修 review_request=`msg_6a45abaf4cc141d7bcf066c809b7a11f`。最终转换使用固定 UTC epoch + `timedelta(microseconds=us)`；编码端严格校验 revision ID 与时间闭区间，非法存量位置固定 corrupt；测试覆盖 MIN/MAX 往返、MAX+1 固定 400、pre-1970 第十条有 lookahead 时整页 corrupt，以及固定错误体无部分 items/游标/ID/正文。
+
+Codex 独立结果：新专项 **34 passed**，P12C-C1/P12F-A/P12D/P12E 受影响 7 文件 **171 passed**，后端串行全量 **905 passed**；每组仅 1 条既有 Starlette/httpx 弃用告警。`py_compile`、`git diff --check`、精确四文件白名单和空暂存区通过，验收回执=`msg_6163277b22da433a8ae672560eeec3b5`。P12F-C 前端加载更多、搜索、筛选、删除、total/hasMore、跨项目历史和多人协作仍未实现。

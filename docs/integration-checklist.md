@@ -391,7 +391,7 @@ npm run build
 npx playwright test --workers=1 --retries=0
 ```
 
-P12C-C3 已实现（冻结=`6b9143a`、实现=`5e4f9f6`）。默认折叠零请求，展开只取最近 10 条元数据，详情严格校验后只保留六项有界摘要；revision ID/version/正文不进入可见 DOM、URL、存储或日志。恢复与检查点共用令牌和既有保存链，确认前零 POST、执行时使用最新 expected、成功唯一 editor-state GET；list/detail/restore 迟到以项目会话和详情操作代次隔离。多轮测试返修用真实检查点 create、双项目双 restore 与 `listCompleteLog/detailCompleteLog` 关闭互斥、旧 finally、迟到及 arrived 冒充 fulfill 假绿。Codex 独立结果为 **21 / 51 / 46 / 284 passed**，lint/build/diff/七文件白名单通过；后端沿用 **800 passed**。当时尚无当前状态差异 API；后续 P12D-A/B 已补齐字段摘要及前端入口，P12E-A/B/C 已补齐单修订对当前与双历史修订正文差异，P12F-A 已补齐最多 20 条/20 MiB 的有限保留。删除、搜索、超过默认 10 条的游标分页、跨项目历史和多人协作仍未实现。
+P12C-C3 已实现（冻结=`6b9143a`、实现=`5e4f9f6`）。默认折叠零请求，展开只取最近 10 条元数据，详情严格校验后只保留六项有界摘要；revision ID/version/正文不进入可见 DOM、URL、存储或日志。恢复与检查点共用令牌和既有保存链，确认前零 POST、执行时使用最新 expected、成功唯一 editor-state GET；list/detail/restore 迟到以项目会话和详情操作代次隔离。多轮测试返修用真实检查点 create、双项目双 restore 与 `listCompleteLog/detailCompleteLog` 关闭互斥、旧 finally、迟到及 arrived 冒充 fulfill 假绿。Codex 独立结果为 **21 / 51 / 46 / 284 passed**，lint/build/diff/七文件白名单通过；后端沿用 **800 passed**。当时尚无当前状态差异 API；后续 P12D-A/B 已补齐字段摘要及前端入口，P12E-A/B/C 已补齐单修订对当前与双历史修订正文差异，P12F-A 已补齐最多 20 条/20 MiB 的有限保留，P12F-B 已补齐后端游标页。前端加载更多、删除、搜索、跨项目历史和多人协作仍未实现。
 
 P9C-R1 固定离线模型运行时门独立验收命令（后端；模型只允许显式准备一次，其他命令严格离线）：
 
@@ -802,7 +802,7 @@ Codex 独立结果为六文件专项/受影响回归/后端全量 **121/134/871 
 
 本包未新增 API/schema/模型/迁移/前端，未回填已裁历史，也未实现游标分页、加载更多、搜索、删除、命名、固定、导出、分享、跨项目历史或多人协作。P12F-B 现在可以另行审计和冻结，但不得直接沿用本包白名单。
 
-## P12F-B 后端修订游标页（已冻结，等待实现）
+## P12F-B 后端修订游标页（已完成）
 
 契约=`docs/p12f-revision-cursor-page-contract.md`、计划=`docs/plans/2026-07-17-p12f-revision-cursor-page-plan.md`。新增独立：
 
@@ -813,4 +813,6 @@ GET /api/projects/{projectId}/editor-state-revisions/page?cursor={opaqueCursor}
 
 成功体精确 `items/nextCursor`，固定每页 10 条；查询只投影五列、`LIMIT 11`，按 `created_at DESC,id DESC` 键集分页。游标为 `esrc1_` 版本化规范 base64url，只含 UTC 微秒时间位置和修订 ID；非法固定 400 `editor_state_revision_cursor_invalid`。旧 `/editor-state-revisions` 顶层仅 `{items}`、最多 10 条及未知查询参数兼容语义必须完全不变。
 
-Grok 仅可修改历史服务、路由、schema 和新建 `test_p12f_revision_cursor_page.py`。failure-first 必须是新路由真实 404；最终覆盖 0/1/10/11/20、并列时间稳定、不重不漏、重复确定、非法游标矩阵、跨域、lookahead corrupt、五列/LIMIT 11/零 OFFSET/COUNT、五域零写和旧列表回归。P12F-C 前端加载更多另行冻结。
+冻结=`4ddd896`，实现=`c84a94d`。Grok 真实 failure-first **27 failed / 3 passed**：新静态页当时被动态 revision ID 路由吞掉；实现首轮专项 **30 passed**。Codex 审查后下发一次两文件返修，关闭 Windows `fromtimestamp` 最大年份风险、编码端 pre-1970 不可用游标以及 lookahead 恒真断言。最终覆盖 0/1/10/11/20、MIN/MAX/MAX+1、并列时间稳定、不重不漏、重复确定、非法游标矩阵、跨域、lookahead corrupt、五列/LIMIT 11、五域零写和旧列表回归。
+
+SQLite 方言会把 `.limit(11)` 编译成 `LIMIT ? OFFSET ?`，但 OFFSET 绑定恒为 0；源码无 `.offset(`、无非零/主动偏移分页，也无 COUNT。Codex 独立新专项/受影响回归/后端全量为 **34/171/905 passed**，仅 1 条既有 Starlette/httpx 弃用告警；`py_compile`、diff-check、精确四文件和空暂存区通过。消息追溯：原任务/review_request=`msg_b044740a30cc4e82ac4c98c4c42731c4`/`msg_5df53113b2894ea984694c8d21d15601`，返修 task/review_request=`msg_628cbdef5bf24ac09f4f08d676f79d25`/`msg_6a45abaf4cc141d7bcf066c809b7a11f`，Codex 验收回执=`msg_6163277b22da433a8ae672560eeec3b5`。P12F-C 前端加载更多另行冻结。
