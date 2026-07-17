@@ -2047,6 +2047,21 @@ class EditorStateRevisionListOut(BaseModel):
     items: list[EditorStateRevisionMetaOut]
 
 
+class EditorStateRevisionPageOut(BaseModel):
+    """
+    模块：P12F-B 修订历史游标页
+    用途：固定每页 10 条元数据；顶层精确 items/nextCursor。
+    对接：GET /api/projects/{projectId}/editor-state-revisions/page。
+    二次开发：禁止 total/hasMore/limit/offset/page/projectId；
+      nextCursor 仅 null 或非空 esrc1_ 规范串；列表项复用五键 MetaOut。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    items: list[EditorStateRevisionMetaOut]
+    next_cursor: str | None = Field(serialization_alias="nextCursor")
+
+
 class EditorStateRevisionDetailOut(BaseModel):
     """
     模块：P12C-C1 修订历史详情
