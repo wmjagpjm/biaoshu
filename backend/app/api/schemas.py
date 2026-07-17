@@ -2164,6 +2164,66 @@ class EditorStateRevisionComparisonOut(BaseModel):
     )
 
 
+# P12E-A：修订与当前状态章节正文差异（有界 hunks；无 ID/版本/路径）
+EditorStateBodyDiffKind = Literal["added", "removed", "changed"]
+EditorStateBodyDiffOp = Literal["equal", "delete", "insert"]
+
+
+class EditorStateRevisionBodyDiffHunkOut(BaseModel):
+    """
+    模块：P12E-A 正文差异单行片段
+    用途：仅 op/text 二键；op 限定 equal|delete|insert。
+    对接：GET .../editor-state-revisions/{revisionId}/body-diff items[].hunks。
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    op: EditorStateBodyDiffOp
+    text: str
+
+
+class EditorStateRevisionBodyDiffItemOut(BaseModel):
+    """
+    模块：P12E-A 正文差异单章项
+    用途：仅 ordinal/kind/beforeTitle/afterTitle/hunks 五键。
+    对接：GET .../editor-state-revisions/{revisionId}/body-diff items。
+    二次开发：禁止 chapterId/revisionId/stateVersion 等内部标识。
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    ordinal: int = Field(ge=1)
+    kind: EditorStateBodyDiffKind
+    before_title: str = Field(serialization_alias="beforeTitle")
+    after_title: str = Field(serialization_alias="afterTitle")
+    hunks: list[EditorStateRevisionBodyDiffHunkOut]
+
+
+class EditorStateRevisionBodyDiffOut(BaseModel):
+    """
+    模块：P12E-A 修订与当前状态章节正文差异响应
+    用途：仅 sameBody/changedChapterCount/currentChapterCount/
+      targetChapterCount/truncated/items 六键。
+    对接：GET .../editor-state-revisions/{revisionId}/body-diff。
+    二次开发：禁止 ID、版本、来源、时间、原始快照、异常原文。
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    same_body: bool = Field(serialization_alias="sameBody")
+    changed_chapter_count: int = Field(
+        serialization_alias="changedChapterCount", ge=0
+    )
+    current_chapter_count: int = Field(
+        serialization_alias="currentChapterCount", ge=0
+    )
+    target_chapter_count: int = Field(
+        serialization_alias="targetChapterCount", ge=0
+    )
+    truncated: bool
+    items: list[EditorStateRevisionBodyDiffItemOut]
+
+
 class EditorStateCheckpointCreate(BaseModel):
     """
     模块：P12A 手动检查点创建请求

@@ -1,11 +1,12 @@
 /**
- * 模块：P12C-C3 / P12D-B editor-state 修订历史与对比 API 封装
- * 用途：严格校验 list/detail/restore/comparison 响应 shape；详情仅在 API 栈内解析并压缩为有界摘要。
- * 对接：GET|POST /api/projects/{id}/editor-state-revisions*；comparison 只读 GET；apiFetch。
+ * 模块：P12C-C3 / P12D-B / P12E-A editor-state 修订历史、对比与正文差异 API 封装
+ * 用途：严格校验 list/detail/restore/comparison/body-diff 响应 shape；详情仅在 API 栈内解析并压缩为有界摘要。
+ * 对接：GET|POST /api/projects/{id}/editor-state-revisions*；comparison/body-diff 只读 GET；apiFetch。
  * 二次开发：
  *   - 禁止把原始 snapshot 返回给 React；禁止本地生成 revisionId/version
  *   - 禁止把响应原文、路径、后端 detail、字段值/键名拼进错误文案
  *   - 九类来源白名单；列表最多 10 条；comparison 顶层精确四键 + 13 键有序子序列
+ *   - body-diff 顶层精确六键；item 五键；hunk 二键；固定枚举与计数一致性
  */
 
 import { apiFetch } from "../../shared/lib/api";
@@ -137,6 +138,44 @@ const COMPARISON_SUMMARY_KEYS = [
   "hasParsedMarkdown",
 ] as const;
 
+/** body-diff 顶层精确六键 */
+const BODY_DIFF_TOP_KEYS = [
+  "sameBody",
+  "changedChapterCount",
+  "currentChapterCount",
+  "targetChapterCount",
+  "truncated",
+  "items",
+] as const;
+
+/** body-diff item 精确五键 */
+const BODY_DIFF_ITEM_KEYS = [
+  "ordinal",
+  "kind",
+  "beforeTitle",
+  "afterTitle",
+  "hunks",
+] as const;
+
+/** body-diff hunk 精确二键 */
+const BODY_DIFF_HUNK_KEYS = ["op", "text"] as const;
+
+/** body-diff kind 枚举 */
+const BODY_DIFF_KINDS = ["added", "removed", "changed"] as const;
+
+/** body-diff hunk op 枚举 */
+const BODY_DIFF_OPS = ["equal", "delete", "insert"] as const;
+
+const BODY_DIFF_KIND_SET = new Set<string>(BODY_DIFF_KINDS);
+const BODY_DIFF_OP_SET = new Set<string>(BODY_DIFF_OPS);
+
+/** 与后端展示上限对齐：防止恶意超大响应拖垮页面 */
+const MAX_BODY_DIFF_ITEMS = 100;
+const MAX_BODY_DIFF_HUNKS = 80;
+const MAX_BODY_DIFF_HUNK_TEXT = 2_000;
+const MAX_BODY_DIFF_TITLE = 240;
+const MAX_BODY_DIFF_TOTAL_TEXT = 120_000;
+
 const MAX_LIST_ITEMS = 10;
 
 /** 摘要计数遍历上限，防止恶意深树耗尽页面 */
@@ -230,6 +269,46 @@ export type EditorStateRevisionComparison = {
   changedFields: CanonicalStateFieldKey[];
   currentSummary: EditorStateRevisionSummary;
   targetSummary: EditorStateRevisionSummary;
+};
+
+/** body-diff 章节变更类型 */
+export type BodyDiffKind = (typeof BODY_DIFF_KINDS)[number];
+
+/** body-diff 行操作类型 */
+export type BodyDiffOp = (typeof BODY_DIFF_OPS)[number];
+
+/**
+ * 模块：正文差异 hunk（P12E-A）
+ * 约束：仅 op/text；op 限定 equal|delete|insert。
+ */
+export type EditorStateRevisionBodyDiffHunk = {
+  op: BodyDiffOp;
+  text: string;
+};
+
+/**
+ * 模块：正文差异单章项（P12E-A）
+ * 约束：仅 ordinal/kind/beforeTitle/afterTitle/hunks。
+ */
+export type EditorStateRevisionBodyDiffItem = {
+  ordinal: number;
+  kind: BodyDiffKind;
+  beforeTitle: string;
+  afterTitle: string;
+  hunks: EditorStateRevisionBodyDiffHunk[];
+};
+
+/**
+ * 模块：修订与当前状态章节正文差异（P12E-A）
+ * 约束：顶层精确六键；sameBody 当且仅当 items 为空且 changedChapterCount=0。
+ */
+export type EditorStateRevisionBodyDiff = {
+  sameBody: boolean;
+  changedChapterCount: number;
+  currentChapterCount: number;
+  targetChapterCount: number;
+  truncated: boolean;
+  items: EditorStateRevisionBodyDiffItem[];
 };
 
 /**
@@ -606,6 +685,174 @@ export async function getEditorStateRevisionComparison(
     `/projects/${encodeURIComponent(projectId)}/editor-state-revisions/${encodeURIComponent(revisionId)}/comparison`,
   );
   return parseRevisionComparison(raw);
+}
+
+/**
+ * 用途：严格解析 body-diff hunk；精确二键；op 枚举；text 有界字符串。
+ */
+function parseBodyDiffHunk(
+  raw: unknown,
+  textBudget: { n: number },
+): EditorStateRevisionBodyDiffHunk {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("revision_body_diff_invalid");
+  }
+  const o = raw as Record<string, unknown>;
+  if (!hasExactKeys(o, BODY_DIFF_HUNK_KEYS)) {
+    throw new Error("revision_body_diff_invalid");
+  }
+  if (typeof o.op !== "string" || !BODY_DIFF_OP_SET.has(o.op)) {
+    throw new Error("revision_body_diff_invalid");
+  }
+  if (typeof o.text !== "string") {
+    throw new Error("revision_body_diff_invalid");
+  }
+  if ([...o.text].length > MAX_BODY_DIFF_HUNK_TEXT) {
+    throw new Error("revision_body_diff_invalid");
+  }
+  textBudget.n += [...o.text].length;
+  if (textBudget.n > MAX_BODY_DIFF_TOTAL_TEXT) {
+    throw new Error("revision_body_diff_invalid");
+  }
+  return { op: o.op as BodyDiffOp, text: o.text };
+}
+
+/**
+ * 用途：严格解析 body-diff item；精确五键；ordinal 从 1 递增；kind 枚举；标题有界。
+ */
+function parseBodyDiffItem(
+  raw: unknown,
+  expectedOrdinal: number,
+  textBudget: { n: number },
+): EditorStateRevisionBodyDiffItem {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("revision_body_diff_invalid");
+  }
+  const o = raw as Record<string, unknown>;
+  if (!hasExactKeys(o, BODY_DIFF_ITEM_KEYS)) {
+    throw new Error("revision_body_diff_invalid");
+  }
+  if (
+    typeof o.ordinal !== "number" ||
+    !Number.isSafeInteger(o.ordinal) ||
+    o.ordinal !== expectedOrdinal
+  ) {
+    throw new Error("revision_body_diff_invalid");
+  }
+  if (typeof o.kind !== "string" || !BODY_DIFF_KIND_SET.has(o.kind)) {
+    throw new Error("revision_body_diff_invalid");
+  }
+  if (typeof o.beforeTitle !== "string") {
+    throw new Error("revision_body_diff_invalid");
+  }
+  if (typeof o.afterTitle !== "string") {
+    throw new Error("revision_body_diff_invalid");
+  }
+  if ([...o.beforeTitle].length > MAX_BODY_DIFF_TITLE) {
+    throw new Error("revision_body_diff_invalid");
+  }
+  if ([...o.afterTitle].length > MAX_BODY_DIFF_TITLE) {
+    throw new Error("revision_body_diff_invalid");
+  }
+  if (!Array.isArray(o.hunks)) {
+    throw new Error("revision_body_diff_invalid");
+  }
+  if (o.hunks.length > MAX_BODY_DIFF_HUNKS) {
+    throw new Error("revision_body_diff_invalid");
+  }
+  const hunks = o.hunks.map((h) => parseBodyDiffHunk(h, textBudget));
+  return {
+    ordinal: o.ordinal,
+    kind: o.kind as BodyDiffKind,
+    beforeTitle: o.beforeTitle,
+    afterTitle: o.afterTitle,
+    hunks,
+  };
+}
+
+/**
+ * 用途：严格解析 body-diff 响应；顶层精确六键；计数/截断/hunk 一致性。
+ * 约束：sameBody 当且仅当 items 为空；changedChapterCount === items.length；拒绝未知键。
+ */
+export function parseRevisionBodyDiff(
+  raw: unknown,
+): EditorStateRevisionBodyDiff {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("revision_body_diff_invalid");
+  }
+  const o = raw as Record<string, unknown>;
+  if (!hasExactKeys(o, BODY_DIFF_TOP_KEYS)) {
+    throw new Error("revision_body_diff_invalid");
+  }
+  if (typeof o.sameBody !== "boolean") {
+    throw new Error("revision_body_diff_invalid");
+  }
+  if (!isNonNegativeSafeInt(o.changedChapterCount)) {
+    throw new Error("revision_body_diff_invalid");
+  }
+  if (!isNonNegativeSafeInt(o.currentChapterCount)) {
+    throw new Error("revision_body_diff_invalid");
+  }
+  if (!isNonNegativeSafeInt(o.targetChapterCount)) {
+    throw new Error("revision_body_diff_invalid");
+  }
+  if (typeof o.truncated !== "boolean") {
+    throw new Error("revision_body_diff_invalid");
+  }
+  if (!Array.isArray(o.items)) {
+    throw new Error("revision_body_diff_invalid");
+  }
+  if (o.items.length > MAX_BODY_DIFF_ITEMS) {
+    throw new Error("revision_body_diff_invalid");
+  }
+  if (o.changedChapterCount !== o.items.length) {
+    throw new Error("revision_body_diff_invalid");
+  }
+  if (o.sameBody !== (o.items.length === 0)) {
+    throw new Error("revision_body_diff_invalid");
+  }
+  if (o.sameBody && o.changedChapterCount !== 0) {
+    throw new Error("revision_body_diff_invalid");
+  }
+  const textBudget = { n: 0 };
+  const items = o.items.map((item, idx) =>
+    parseBodyDiffItem(item, idx + 1, textBudget),
+  );
+  return {
+    sameBody: o.sameBody,
+    changedChapterCount: o.changedChapterCount,
+    currentChapterCount: o.currentChapterCount,
+    targetChapterCount: o.targetChapterCount,
+    truncated: o.truncated,
+    items,
+  };
+}
+
+/**
+ * 用途：按需 GET 修订与当前状态章节正文差异；无 body/查询/重试。
+ * 对接：GET /projects/{projectId}/editor-state-revisions/{revisionId}/body-diff
+ */
+export async function getEditorStateRevisionBodyDiff(
+  projectId: string,
+  revisionId: string,
+): Promise<EditorStateRevisionBodyDiff> {
+  if (!isValidRevisionId(revisionId)) {
+    throw new Error("revision_id_invalid");
+  }
+  const raw = await apiFetch<unknown>(
+    `/projects/${encodeURIComponent(projectId)}/editor-state-revisions/${encodeURIComponent(revisionId)}/body-diff`,
+  );
+  return parseRevisionBodyDiff(raw);
+}
+
+/**
+ * 用途：body-diff kind 转固定中文标签；不暴露枚举原值。
+ * changed 返回空串（由标题 + hunk 的 保留/删除/新增 表达）。
+ */
+export function formatBodyDiffKindLabel(kind: BodyDiffKind): string {
+  if (kind === "added") return "新增";
+  if (kind === "removed") return "删除";
+  return "";
 }
 
 /**

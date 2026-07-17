@@ -1,24 +1,28 @@
 /**
- * 模块：P12C-C3 / P12D-B 双工作区共用修订历史折叠面板
- * 用途：默认折叠零请求；展开 list；按需摘要；按需与当前对比；内联二次确认后 restore。
- * 对接：editorStateRevisionApi（含 comparison）；技术/商务 hook 的 restoreRevision 回调。
+ * 模块：P12C-C3 / P12D-B / P12E-A 双工作区共用修订历史折叠面板
+ * 用途：默认折叠零请求；展开 list；按需摘要；按需与当前对比；按需正文差异；内联二次确认后 restore。
+ * 对接：editorStateRevisionApi（含 comparison/body-diff）；技术/商务 hook 的 restoreRevision 回调。
  * 二次开发：
- *   - 不渲染 revisionId/stateVersion/snapshot 正文/内部字段键/字段值
- *   - 项目切换/折叠/卸载用会话代次隔离迟到 list/detail/comparison/restore
- *   - 摘要、比较、恢复确认同一时刻只保留一个当前意图；交叉作废
+ *   - 不渲染 revisionId/stateVersion/snapshot 正文/内部字段键/字段值/op 原值
+ *   - 项目切换/折叠/卸载用会话代次隔离迟到 list/detail/comparison/body-diff/restore
+ *   - 摘要、比较、正文差异、恢复确认同一时刻只保留一个当前意图；交叉作废
  *   - 固定中文脱敏；禁止 console/存储/URL/Cookie/剪贴板/下载/轮询/外网
- *   - 无创建/删除/正文 diff/搜索/分页/自动批量比较
+ *   - 无创建/删除/任意历史两两比较/搜索/分页/自动批量比较
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  formatBodyDiffKindLabel,
   formatCanonicalFieldLabel,
   formatRevisionBytes,
   formatRevisionSourceLabel,
   formatRevisionTime,
+  getEditorStateRevisionBodyDiff,
   getEditorStateRevisionComparison,
   getEditorStateRevisionSummary,
   listEditorStateRevisions,
+  type BodyDiffOp,
+  type EditorStateRevisionBodyDiff,
   type EditorStateRevisionComparison,
   type EditorStateRevisionMeta,
   type EditorStateRevisionSummary,
@@ -33,6 +37,9 @@ const MSG_DETAIL_FAIL = "修订摘要加载失败，请稍后重试";
 const MSG_COMPARE_FAIL = "修订差异加载失败，请稍后重试";
 const MSG_COMPARE_SAME = "与当前版本一致";
 const MSG_COMPARE_DIFF = "与当前版本存在差异";
+const MSG_BODY_DIFF_FAIL = "正文差异加载失败，请稍后重试";
+const MSG_BODY_DIFF_SAME = "章节正文无变化";
+const MSG_BODY_DIFF_TRUNCATED = "差异内容较长，仅显示有界片段";
 const MSG_RESTORE_OK = "已恢复到所选修订";
 const MSG_RESTORE_FAIL = "恢复修订失败，本地内容已保留";
 const MSG_RESTORE_RELOAD_FAIL =
@@ -50,7 +57,7 @@ export type EditorStateRevisionPanelProps = {
   projectId: string;
   /**
    * 全状态阻断、初始加载失败、版本未知或 apiReady=false 时禁用恢复。
-   * 列表/摘要/比较只读仍可刷新（比较不受 disabled 控制，但 restoreBusy 时禁用）。
+   * 列表/摘要/比较/正文差异只读仍可刷新（比较与正文差异不受 disabled 控制，但 restoreBusy 时禁用）。
    */
   disabled: boolean;
   /** 进入既有串行链 POST restore + 唯一 editor-state GET */
@@ -73,6 +80,15 @@ function renderSummaryLine(summary: EditorStateRevisionSummary): string {
   ].join(" · ");
 }
 
+/**
+ * 用途：hunk op → 固定中文，不暴露 equal/delete/insert 原值。
+ */
+function formatHunkOpLabel(op: BodyDiffOp): string {
+  if (op === "equal") return "保留";
+  if (op === "delete") return "删除";
+  return "新增";
+}
+
 export function EditorStateRevisionPanel({
   projectId,
   disabled,
@@ -83,6 +99,7 @@ export function EditorStateRevisionPanel({
   const [listError, setListError] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [comparisonError, setComparisonError] = useState<string | null>(null);
+  const [bodyDiffError, setBodyDiffError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [statusTone, setStatusTone] = useState<"ok" | "err" | null>(null);
   const [listLoading, setListLoading] = useState(false);
@@ -90,6 +107,10 @@ export function EditorStateRevisionPanel({
   const [detailLoadingId, setDetailLoadingId] = useState<string | null>(null);
   /** 仅绑定当前在途 comparison revision */
   const [comparisonLoadingId, setComparisonLoadingId] = useState<string | null>(
+    null,
+  );
+  /** 仅绑定当前在途 body-diff revision */
+  const [bodyDiffLoadingId, setBodyDiffLoadingId] = useState<string | null>(
     null,
   );
   const [restoreBusy, setRestoreBusy] = useState(false);
@@ -108,20 +129,30 @@ export function EditorStateRevisionPanel({
   >(null);
   const [comparison, setComparison] =
     useState<EditorStateRevisionComparison | null>(null);
+  /** 当前展开正文差异的修订 id（仅内存） */
+  const [bodyDiffRevisionId, setBodyDiffRevisionId] = useState<string | null>(
+    null,
+  );
+  const [bodyDiff, setBodyDiff] =
+    useState<EditorStateRevisionBodyDiff | null>(null);
 
   /**
    * 项目会话代次：projectId 变化或折叠时递增，隔离迟到 list/restore。
    */
   const sessionRef = useRef(0);
   /**
-   * 详情请求代次：项目切换/折叠/刷新/另一项/再次点击/恢复/比较均递增；
+   * 详情请求代次：项目切换/折叠/刷新/另一项/再次点击/恢复/比较/正文差异均递增；
    * 旧 detail 的 try/catch/finally 不得写 summary/error/loading。
    */
   const detailGenRef = useRef(0);
   /**
-   * 比较请求代次：与 detail 交叉作废；项目切换/折叠/刷新/恢复/列表重载/另一项均递增。
+   * 比较请求代次：与 detail/body-diff 交叉作废；项目切换/折叠/刷新/恢复/列表重载/另一项均递增。
    */
   const comparisonGenRef = useRef(0);
+  /**
+   * 正文差异请求代次：与 detail/comparison 交叉作废。
+   */
+  const bodyDiffGenRef = useRef(0);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -144,6 +175,13 @@ export function EditorStateRevisionPanel({
     setComparisonLoadingId(null);
   }, []);
 
+  const clearBodyDiffState = useCallback(() => {
+    setBodyDiffRevisionId(null);
+    setBodyDiff(null);
+    setBodyDiffError(null);
+    setBodyDiffLoadingId(null);
+  }, []);
+
   const invalidateDetail = useCallback(() => {
     detailGenRef.current += 1;
     setDetailLoadingId(null);
@@ -154,42 +192,55 @@ export function EditorStateRevisionPanel({
     setComparisonLoadingId(null);
   }, []);
 
-  // 项目切换：重置面板，作废在途 list/detail/comparison/restore
+  const invalidateBodyDiff = useCallback(() => {
+    bodyDiffGenRef.current += 1;
+    setBodyDiffLoadingId(null);
+  }, []);
+
+  // 项目切换：重置面板，作废在途 list/detail/comparison/body-diff/restore
   useEffect(() => {
     sessionRef.current += 1;
     detailGenRef.current += 1;
     comparisonGenRef.current += 1;
+    bodyDiffGenRef.current += 1;
     setExpanded(false);
     setItems([]);
     setListError(null);
     setDetailError(null);
     setComparisonError(null);
+    setBodyDiffError(null);
     setStatusMessage(null);
     setStatusTone(null);
     setListLoading(false);
     setDetailLoadingId(null);
     setComparisonLoadingId(null);
+    setBodyDiffLoadingId(null);
     setRestoreBusy(false);
     setPendingRestoreId(null);
     setSummaryRevisionId(null);
     setSummary(null);
     setComparisonRevisionId(null);
     setComparison(null);
+    setBodyDiffRevisionId(null);
+    setBodyDiff(null);
   }, [projectId]);
 
   const loadList = useCallback(
     async (session: number) => {
       if (!projectId) return;
-      // 刷新/重载列表作废在途 detail/comparison，避免迟到结果覆盖新会话
+      // 刷新/重载列表作废在途 detail/comparison/body-diff，避免迟到结果覆盖新会话
       detailGenRef.current += 1;
       comparisonGenRef.current += 1;
+      bodyDiffGenRef.current += 1;
       setDetailLoadingId(null);
       setComparisonLoadingId(null);
+      setBodyDiffLoadingId(null);
       setListLoading(true);
       setListError(null);
       setPendingRestoreId(null);
       clearSummaryState();
       clearComparisonState();
+      clearBodyDiffState();
       try {
         const next = await listEditorStateRevisions(projectId);
         if (!mountedRef.current || session !== sessionRef.current) return;
@@ -204,7 +255,7 @@ export function EditorStateRevisionPanel({
         }
       }
     },
-    [projectId, clearSummaryState, clearComparisonState],
+    [projectId, clearSummaryState, clearComparisonState, clearBodyDiffState],
   );
 
   const handleToggle = useCallback(() => {
@@ -212,14 +263,17 @@ export function EditorStateRevisionPanel({
       sessionRef.current += 1;
       detailGenRef.current += 1;
       comparisonGenRef.current += 1;
+      bodyDiffGenRef.current += 1;
       setExpanded(false);
       setListLoading(false);
       setDetailLoadingId(null);
       setComparisonLoadingId(null);
+      setBodyDiffLoadingId(null);
       setRestoreBusy(false);
       setPendingRestoreId(null);
       clearSummaryState();
       clearComparisonState();
+      clearBodyDiffState();
       return;
     }
     const session = sessionRef.current;
@@ -229,11 +283,18 @@ export function EditorStateRevisionPanel({
     setPendingRestoreId(null);
     clearSummaryState();
     clearComparisonState();
+    clearBodyDiffState();
     void loadList(session);
-  }, [expanded, loadList, clearSummaryState, clearComparisonState]);
+  }, [
+    expanded,
+    loadList,
+    clearSummaryState,
+    clearComparisonState,
+    clearBodyDiffState,
+  ]);
 
   const handleRefresh = useCallback(() => {
-    // 允许详情/比较挂起时刷新：loadList 会递增代次作废旧结果
+    // 允许详情/比较/正文差异挂起时刷新：loadList 会递增代次作废旧结果
     if (!expanded || listLoading || restoreBusy) return;
     const session = sessionRef.current;
     setStatusMessage(null);
@@ -244,9 +305,11 @@ export function EditorStateRevisionPanel({
   const handleSummaryClick = useCallback(
     async (item: ListItem) => {
       if (!expanded || restoreBusy) return;
-      // 点击摘要：作废在途比较并清除比较结果
+      // 点击摘要：作废在途比较/正文差异并清除其结果
       invalidateComparison();
       clearComparisonState();
+      invalidateBodyDiff();
+      clearBodyDiffState();
       // 再次点击同一项：清空摘要并作废在途
       if (summaryRevisionId === item.revisionId) {
         detailGenRef.current += 1;
@@ -287,6 +350,8 @@ export function EditorStateRevisionPanel({
       projectId,
       invalidateComparison,
       clearComparisonState,
+      invalidateBodyDiff,
+      clearBodyDiffState,
     ],
   );
 
@@ -294,9 +359,11 @@ export function EditorStateRevisionPanel({
     async (item: ListItem) => {
       // 比较不受 disabled 控制，但恢复执行期间禁用
       if (!expanded || restoreBusy) return;
-      // 点击比较：作废在途摘要、清除摘要与恢复确认
+      // 点击比较：作废在途摘要/正文差异、清除其结果与恢复确认
       invalidateDetail();
       clearSummaryState();
+      invalidateBodyDiff();
+      clearBodyDiffState();
       setPendingRestoreId(null);
       setStatusMessage(null);
       setStatusTone(null);
@@ -355,17 +422,93 @@ export function EditorStateRevisionPanel({
       projectId,
       invalidateDetail,
       clearSummaryState,
+      invalidateBodyDiff,
+      clearBodyDiffState,
+    ],
+  );
+
+  const handleBodyDiffClick = useCallback(
+    async (item: ListItem) => {
+      // 正文差异不受 disabled 控制，但恢复执行期间禁用
+      if (!expanded || restoreBusy) return;
+      // 点击正文差异：作废在途摘要/比较、清除其结果与恢复确认
+      invalidateDetail();
+      clearSummaryState();
+      invalidateComparison();
+      clearComparisonState();
+      setPendingRestoreId(null);
+      setStatusMessage(null);
+      setStatusTone(null);
+      // 再次点击同一项：关闭结果并作废在途
+      if (bodyDiffRevisionId === item.revisionId) {
+        bodyDiffGenRef.current += 1;
+        setBodyDiffLoadingId(null);
+        setBodyDiffRevisionId(null);
+        setBodyDiff(null);
+        setBodyDiffError(null);
+        return;
+      }
+      const myGen = ++bodyDiffGenRef.current;
+      const session = sessionRef.current;
+      setBodyDiffRevisionId(item.revisionId);
+      setBodyDiff(null);
+      setBodyDiffError(null);
+      setBodyDiffLoadingId(item.revisionId);
+      try {
+        const next = await getEditorStateRevisionBodyDiff(
+          projectId,
+          item.revisionId,
+        );
+        if (
+          !mountedRef.current ||
+          myGen !== bodyDiffGenRef.current ||
+          session !== sessionRef.current
+        ) {
+          return;
+        }
+        setBodyDiff(next);
+      } catch {
+        if (
+          !mountedRef.current ||
+          myGen !== bodyDiffGenRef.current ||
+          session !== sessionRef.current
+        ) {
+          return;
+        }
+        setBodyDiff(null);
+        setBodyDiffError(MSG_BODY_DIFF_FAIL);
+      } finally {
+        if (
+          mountedRef.current &&
+          myGen === bodyDiffGenRef.current &&
+          session === sessionRef.current
+        ) {
+          setBodyDiffLoadingId(null);
+        }
+      }
+    },
+    [
+      expanded,
+      restoreBusy,
+      bodyDiffRevisionId,
+      projectId,
+      invalidateDetail,
+      clearSummaryState,
+      invalidateComparison,
+      clearComparisonState,
     ],
   );
 
   const handleRestoreClick = useCallback(
     (revisionId: string) => {
       if (disabled || restoreBusy) return;
-      // 恢复：立即清摘要/比较/detail error 并作废在途 detail 与 comparison
+      // 恢复：立即清摘要/比较/正文差异/detail error 并作废在途
       invalidateDetail();
       invalidateComparison();
+      invalidateBodyDiff();
       clearSummaryState();
       clearComparisonState();
+      clearBodyDiffState();
       setPendingRestoreId(revisionId);
       setStatusMessage(null);
       setStatusTone(null);
@@ -375,8 +518,10 @@ export function EditorStateRevisionPanel({
       restoreBusy,
       invalidateDetail,
       invalidateComparison,
+      invalidateBodyDiff,
       clearSummaryState,
       clearComparisonState,
+      clearBodyDiffState,
     ],
   );
 
@@ -391,11 +536,13 @@ export function EditorStateRevisionPanel({
     }
     const session = sessionRef.current;
     const revisionId = pendingRestoreId;
-    // 确认恢复：作废在途 detail/comparison，清摘要/比较/确认相关态
+    // 确认恢复：作废在途 detail/comparison/body-diff，清摘要/比较/正文差异/确认相关态
     invalidateDetail();
     invalidateComparison();
+    invalidateBodyDiff();
     clearSummaryState();
     clearComparisonState();
+    clearBodyDiffState();
     setRestoreBusy(true);
     setStatusMessage(null);
     setStatusTone(null);
@@ -405,6 +552,7 @@ export function EditorStateRevisionPanel({
       setPendingRestoreId(null);
       clearSummaryState();
       clearComparisonState();
+      clearBodyDiffState();
       if (outcome.status === "success") {
         setStatusMessage(MSG_RESTORE_OK);
         setStatusTone("ok");
@@ -429,6 +577,7 @@ export function EditorStateRevisionPanel({
       setPendingRestoreId(null);
       clearSummaryState();
       clearComparisonState();
+      clearBodyDiffState();
       setStatusMessage(MSG_RESTORE_FAIL);
       setStatusTone("err");
     } finally {
@@ -445,8 +594,10 @@ export function EditorStateRevisionPanel({
     loadList,
     invalidateDetail,
     invalidateComparison,
+    invalidateBodyDiff,
     clearSummaryState,
     clearComparisonState,
+    clearBodyDiffState,
   ]);
 
   const handleCancelRestore = useCallback(() => {
@@ -455,8 +606,9 @@ export function EditorStateRevisionPanel({
   }, [restoreBusy]);
 
   const restoreDisabled = disabled || restoreBusy || listLoading;
-  /** 比较不受 disabled 控制，仅 restoreBusy 期间禁用 */
+  /** 比较/正文差异不受 disabled 控制，仅 restoreBusy 期间禁用 */
   const compareDisabled = restoreBusy;
+  const bodyDiffDisabled = restoreBusy;
 
   return (
     <div
@@ -544,6 +696,14 @@ export function EditorStateRevisionPanel({
               {comparisonError}
             </p>
           ) : null}
+          {bodyDiffError ? (
+            <p
+              data-testid="editor-state-revision-body-diff-error"
+              style={{ margin: "0 0 8px", color: "var(--danger)" }}
+            >
+              {bodyDiffError}
+            </p>
+          ) : null}
           {listLoading && items.length === 0 ? (
             <p
               data-testid="editor-state-revision-list-loading"
@@ -577,6 +737,8 @@ export function EditorStateRevisionPanel({
                 summaryRevisionId === item.revisionId && summary != null;
               const showingComparison =
                 comparisonRevisionId === item.revisionId && comparison != null;
+              const showingBodyDiff =
+                bodyDiffRevisionId === item.revisionId && bodyDiff != null;
               return (
                 <li
                   key={item.revisionId}
@@ -675,6 +837,99 @@ export function EditorStateRevisionPanel({
                       </p>
                     </div>
                   ) : null}
+                  {showingBodyDiff ? (
+                    <div
+                      data-testid={`editor-state-revision-body-diff-result-${index}`}
+                      style={{
+                        marginTop: 8,
+                        fontSize: 13,
+                        color: "var(--text-muted, #4b5563)",
+                      }}
+                    >
+                      <p
+                        data-testid={`editor-state-revision-body-diff-status-${index}`}
+                        style={{ margin: "0 0 6px", fontWeight: 600 }}
+                      >
+                        {bodyDiff.sameBody
+                          ? MSG_BODY_DIFF_SAME
+                          : `共 ${bodyDiff.changedChapterCount} 章正文有变化`}
+                      </p>
+                      {bodyDiff.truncated ? (
+                        <p
+                          data-testid={`editor-state-revision-body-diff-truncated-${index}`}
+                          style={{ margin: "0 0 6px" }}
+                        >
+                          {MSG_BODY_DIFF_TRUNCATED}
+                        </p>
+                      ) : null}
+                      {!bodyDiff.sameBody
+                        ? bodyDiff.items.map((diffItem) => (
+                            <div
+                              key={diffItem.ordinal}
+                              data-testid={`editor-state-revision-body-diff-item-${index}-${diffItem.ordinal}`}
+                              style={{
+                                marginBottom: 8,
+                                padding: "6px 8px",
+                                borderRadius: 4,
+                                border: "1px solid var(--border, #e5e7eb)",
+                              }}
+                            >
+                              {formatBodyDiffKindLabel(diffItem.kind) ? (
+                                <p
+                                  data-testid={`editor-state-revision-body-diff-item-kind-${index}-${diffItem.ordinal}`}
+                                  style={{ margin: "0 0 4px", fontWeight: 600 }}
+                                >
+                                  {formatBodyDiffKindLabel(diffItem.kind)}
+                                </p>
+                              ) : null}
+                              <p
+                                style={{ margin: "0 0 4px" }}
+                                data-testid={`editor-state-revision-body-diff-item-titles-${index}-${diffItem.ordinal}`}
+                              >
+                                {diffItem.beforeTitle
+                                  ? `修订：${diffItem.beforeTitle}`
+                                  : "修订：（无标题）"}
+                                {" → "}
+                                {diffItem.afterTitle
+                                  ? `当前：${diffItem.afterTitle}`
+                                  : "当前：（无标题）"}
+                              </p>
+                              <ul
+                                style={{
+                                  listStyle: "none",
+                                  margin: 0,
+                                  padding: 0,
+                                }}
+                              >
+                                {diffItem.hunks.map((hunk, hIdx) => (
+                                  <li
+                                    key={hIdx}
+                                    data-testid={`editor-state-revision-body-diff-hunk-${index}-${diffItem.ordinal}-${hIdx}`}
+                                    style={{
+                                      marginTop: 4,
+                                      whiteSpace: "pre-wrap",
+                                      wordBreak: "break-word",
+                                    }}
+                                  >
+                                    <span
+                                      data-testid={`editor-state-revision-body-diff-hunk-op-${index}-${diffItem.ordinal}-${hIdx}`}
+                                    >
+                                      {formatHunkOpLabel(hunk.op)}
+                                    </span>
+                                    {": "}
+                                    <span
+                                      data-testid={`editor-state-revision-body-diff-hunk-text-${index}-${diffItem.ordinal}-${hIdx}`}
+                                    >
+                                      {hunk.text}
+                                    </span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          ))
+                        : null}
+                    </div>
+                  ) : null}
                   {confirming ? (
                     <div
                       data-testid={`editor-state-revision-confirm-${index}`}
@@ -746,6 +1001,19 @@ export function EditorStateRevisionPanel({
                         {comparisonLoadingId === item.revisionId
                           ? "正在对比…"
                           : "与当前对比"}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        data-testid={`editor-state-revision-body-diff-${index}`}
+                        disabled={bodyDiffDisabled}
+                        onClick={() => {
+                          void handleBodyDiffClick(item);
+                        }}
+                      >
+                        {bodyDiffLoadingId === item.revisionId
+                          ? "加载正文差异…"
+                          : "查看正文差异"}
                       </button>
                       <button
                         type="button"

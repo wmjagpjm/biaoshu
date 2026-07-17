@@ -1,16 +1,17 @@
 """
-模块：P12C-C1/C2/P12D-A editor-state 修订历史只读、受限恢复与差异摘要路由
-用途：项目最近 10 条修订元数据列表、单条按需详情、单条受限恢复、与当前状态差异摘要。
+模块：P12C-C1/C2/P12D-A/P12E-A editor-state 修订历史只读、受限恢复、差异摘要与正文差异路由
+用途：项目最近 10 条修订元数据列表、单条按需详情、单条受限恢复、与当前状态差异摘要、章节正文差异。
 对接：/api/projects/{projectId}/editor-state-revisions*；
   editor_state_revision_history_service；
   editor_state_revision_restore_service；
-  editor_state_revision_comparison_service；deps.get_workspace_id。
+  editor_state_revision_comparison_service；
+  editor_state_revision_body_diff_service；deps.get_workspace_id。
 二次开发：
   - 复用 get_workspace_id（disabled 兼容，required 仅 bid_writer）；
   - POST 继续既有 CSRF；所有成功/业务错误 Cache-Control: no-store；
   - 错误固定 code/message（409 另含 currentStateVersion），不反射 ID/正文/路径/SQL；
   - 未知查询参数不得改变固定排序/上限/来源全集/正文不可搜索边界；
-  - comparison 只读，禁止写库/锁/审计。
+  - comparison/body-diff 只读，禁止写库/锁/审计。
 """
 
 from __future__ import annotations
@@ -22,6 +23,9 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_workspace_id
 from app.api.schemas import (
+    EditorStateRevisionBodyDiffHunkOut,
+    EditorStateRevisionBodyDiffItemOut,
+    EditorStateRevisionBodyDiffOut,
     EditorStateRevisionComparisonOut,
     EditorStateRevisionComparisonSummaryOut,
     EditorStateRevisionDetailOut,
@@ -32,10 +36,14 @@ from app.api.schemas import (
 )
 from app.core.database import get_db
 from app.services import (
+    editor_state_revision_body_diff_service,
     editor_state_revision_comparison_service,
     editor_state_revision_history_service,
     editor_state_revision_restore_service,
     editor_state_service,
+)
+from app.services.editor_state_revision_body_diff_service import (
+    EditorStateRevisionBodyDiffError,
 )
 from app.services.editor_state_revision_comparison_service import (
     EditorStateRevisionComparisonError,
@@ -78,6 +86,15 @@ def _raise_restore_error(exc: EditorStateRevisionRestoreError) -> None:
 
 def _raise_comparison_error(exc: EditorStateRevisionComparisonError) -> None:
     """用途：映射差异摘要服务层固定错误。"""
+    raise HTTPException(
+        status_code=exc.status_code,
+        detail=exc.as_detail(),
+        headers={"Cache-Control": "no-store"},
+    ) from None
+
+
+def _raise_body_diff_error(exc: EditorStateRevisionBodyDiffError) -> None:
+    """用途：映射正文差异服务层固定错误。"""
     raise HTTPException(
         status_code=exc.status_code,
         detail=exc.as_detail(),
@@ -197,6 +214,60 @@ def compare_editor_state_revision_with_current(
         changed_fields=data["changed_fields"],
         current_summary=_summary(data["current_summary"]),
         target_summary=_summary(data["target_summary"]),
+    )
+
+
+@router.get(
+    "/{project_id}/editor-state-revisions/{revision_id}/body-diff",
+    response_model=EditorStateRevisionBodyDiffOut,
+)
+def compare_editor_state_revision_body_with_current(
+    project_id: str,
+    revision_id: str,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    workspace_id: Annotated[str, Depends(get_workspace_id)],
+) -> EditorStateRevisionBodyDiffOut:
+    """
+    用途：只读比较目标修订与当前 chapters，返回有界行差异。
+    对接：P12E-A；editor_state_revision_body_diff_service。
+    二次开发：历史 404/corrupt 原样映射；其他失败固定 body_diff_failed；全程 no-store。
+    """
+    _no_store(response)
+    try:
+        data = (
+            editor_state_revision_body_diff_service.compare_revision_body_with_current(
+                db, workspace_id, project_id, revision_id
+            )
+        )
+    except EditorStateRevisionHistoryError as exc:
+        _raise_history_error(exc)
+    except EditorStateRevisionBodyDiffError as exc:
+        _raise_body_diff_error(exc)
+
+    items: list[EditorStateRevisionBodyDiffItemOut] = []
+    for item in data["items"]:
+        items.append(
+            EditorStateRevisionBodyDiffItemOut(
+                ordinal=item["ordinal"],
+                kind=item["kind"],
+                before_title=item["before_title"],
+                after_title=item["after_title"],
+                hunks=[
+                    EditorStateRevisionBodyDiffHunkOut(
+                        op=h["op"], text=h["text"]
+                    )
+                    for h in item["hunks"]
+                ],
+            )
+        )
+    return EditorStateRevisionBodyDiffOut(
+        same_body=data["same_body"],
+        changed_chapter_count=data["changed_chapter_count"],
+        current_chapter_count=data["current_chapter_count"],
+        target_chapter_count=data["target_chapter_count"],
+        truncated=data["truncated"],
+        items=items,
     )
 
 
