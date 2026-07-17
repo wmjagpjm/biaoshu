@@ -5,10 +5,10 @@
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
 > **协作分支功能基线**：P12E-A 冻结=`5aa205c`、实现=`f9f067e`；P12E-B 冻结=`00ef081`、实现=`5a5b08a`、文档闭环见当前 HEAD；P12D-B 冻结=`fc19d93`、实现=`35ab377`、验收闭环=`c7cf67f`；P12D-A 冻结=`2cc6ee3`、实现=`9445fcc`；P9C-R1 冻结=`cd70ef0`、实现=`b53dcce`；P12C-C3 冻结=`6b9143a`、实现=`5e4f9f6`；P12C-C2 冻结=`54af600`、范围修订=`2276366`、实现=`0803250`；P12C-C1 冻结=`26b504e`、实现=`7023ecd`；P12C-B-D3 冻结=`1d44484`、实现=`b91a7ff`；P12C-B-D2 冻结=`6b83fc1`、实现=`f256f5b`；P12C-B-D1 冻结=`e8ffaeb`、实现=`a6a28f6`；P12C-B-C2 冻结=`52bbabf`、实现=`82cc82e`；P12C-B-C1 冻结=`76834f5`、实现=`1d0ce0e`；P12C-B-B2 冻结=`3a30c03`、实现=`5149385`；P12C-B-B1 冻结=`05864f6`、实现=`5a0d1c0`；P12C-B-A 冻结=`fbf93c0`、实现=`acf3139`；P12C-A 冻结=`daa8c43`、实现=`226e1c1`；P12B-D 冻结=`613818f`、D1 后端=`551caba`、D2 前端=`0f81dd6`；其余既有功能基线见本文 §11。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
-> **最新增量基线**：P12E-A 已交付单条修订对当前状态的只读有界正文差异、技术/商务共用按需入口、严格解析、四意图互斥和 arrived/complete 迟到隔离；P12E-B 已交付双修订正文差异后端基础，暂不包含前端双修订选择器。
+> **最新增量基线**：P12E-A 已交付单条修订对当前状态的只读有界正文差异、技术/商务共用按需入口、严格解析、四意图互斥和 arrived/complete 迟到隔离；P12E-B 已交付双修订正文差异后端基础；P12E-C 已冻结前端双修订选择与展示契约，等待 Grok 实现。
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **本地状态**：P12E-A 实现 `f9f067e`、P12E-B 实现 `5a5b08a` 已推送；本文档闭环完成后必须再次核对 HEAD、远端一致且工作区干净。固定模型缓存与验收日志仅在本机且被 Git 忽略。
-> **验收基线**：P12E-B 专项/P12E-A 专项/P12D-P12C 受影响回归/后端串行全量 **13/23/50/867 passed**；Codex 合并重跑三组共 **86 passed**，仅 1 条既有 Starlette/httpx 弃用告警。P12E-A history/checkpoint/truth/前端单 worker 零重试全量仍为 **27/51/46/290 passed**；P12D-B 为 24/51/46/287，P12D-A 为 14/132/831。P9C-R1 专项/语义/知识库完整 **17/21/28**，真实预检 Recall@5=`1.0`、NDCG@5=`0.927295`。**所有 Playwright E2E 共用 SQLite 重置库，必须逐条串行运行，禁止并行。**
+> **本地状态**：P12E-A 实现 `f9f067e`、P12E-B 实现 `5a5b08a` 已推送；P12E-C 仅完成契约/计划冻结，尚未改代码。本文档闭环完成后必须再次核对 HEAD、远端一致且工作区干净。固定模型缓存与验收日志仅在本机且被 Git 忽略。
+> **验收基线**：P12E-B 专项/P12E-A 专项/P12D-P12C 受影响回归/后端串行全量 **13/23/50/867 passed**；Codex 合并重跑三组共 **86 passed**，仅 1 条既有 Starlette/httpx 弃用告警。P12E-A history/checkpoint/truth/前端单 worker 零重试全量仍为 **27/51/46/290 passed**；P12E-C 尚未实现，前端基线仍为 290。P12D-B 为 24/51/46/287，P12D-A 为 14/132/831。P9C-R1 专项/语义/知识库完整 **17/21/28**，真实预检 Recall@5=`1.0`、NDCG@5=`0.927295`。**所有 Playwright E2E 共用 SQLite 重置库，必须逐条串行运行，禁止并行。**
 
 ---
 
@@ -20,9 +20,9 @@
 完整阅读 docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/plans/2026-07-13-package-9-delivery-enhancement-plan.md、docs/integration-checklist.md。
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
 当前进度：P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/P12D-B、P12E-A/P12E-B、P9D、P9C-R1、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。P12E-A 实现=`f9f067e`；P12E-B 实现=`5a5b08a`；后端全量 867、前端全量 290 passed。
-当前状态：P12D-B 前端按需“与当前对比”、P12E-A 单条修订正文差异和 P12E-B 双修订正文差异后端基础均已完成并推送；P12E-B 实现=`5a5b08a`。
-当前执行包：P12E-B 已完成，冻结=`00ef081`、实现=`5a5b08a`；Grok 只实现四个后端文件并发送 review_request，Codex 已独立审查、验收、提交和推送；不得让 Grok 提交或推送。
-下一步：先审计剩余版本历史需求与产品优先级，再单独冻结下一包；前端双修订选择器、分页、搜索、恢复和多人协作必须另行冻结。
+当前状态：P12D-B 前端按需“与当前对比”、P12E-A 单条修订正文差异和 P12E-B 双修订正文差异后端基础均已完成并推送；P12E-B 实现=`5a5b08a`；P12E-C 前端双修订选择与展示已冻结，等待 Grok。
+当前执行包：P12E-C 前端双修订选择与展示，契约=`docs/p12e-revision-pair-frontend-contract.md`、计划=`docs/plans/2026-07-17-p12e-revision-pair-frontend-plan.md`；Grok 只允许修改三个前端文件并发送 review_request，Codex 独立审查、验收、提交和推送；不得让 Grok 提交或推送。
+下一步：完成 P12E-C 的真实 failure-first、受限实现和独立验收；分页、搜索、恢复、删除、导出、分享、缓存、跨项目历史和多人协作必须另行冻结。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
