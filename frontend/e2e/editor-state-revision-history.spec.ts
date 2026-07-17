@@ -1,8 +1,10 @@
 /**
- * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C 双工作区修订历史、对比与正文差异前端 E2E
+ * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C 双工作区修订历史、对比、正文差异与游标分页前端 E2E
  * 用途：技术标/商务标证明默认折叠零请求、按需列表/摘要/对比/正文差异、双修订正文差异、
- *       二次确认 restore、执行时 expected、唯一 editor-state GET、失败阻断、迟到隔离与数据最小化。
- * 对接：Playwright chromium headless workers=1 retries=0；route 探针（含 comparison/body-diff/pair arrived/complete）。
+ *       二次确认 restore、游标页首屏与加载更多、执行时 expected、唯一 editor-state GET、
+ *       失败阻断、迟到隔离与数据最小化。
+ * 对接：Playwright chromium headless workers=1 retries=0；route 探针
+ *       （含 comparison/body-diff/pair/page arrived/complete/cursor）。
  * 二次开发：禁止固定 sleep、.or(...)、>=1 冒充、宽泛状态码、route fallback 假成功。
  */
 import {
@@ -51,6 +53,15 @@ const MSG_BODY_DIFF_TRUNCATED = "差异内容较长，仅显示有界片段";
 const MSG_PAIR_BODY_DIFF_FAIL = "双修订差异加载失败，请稍后重试";
 const MSG_PAIR_BODY_DIFF_SAME = "两条修订正文一致";
 const MSG_PAIR_BODY_DIFF_TRUNCATED = "差异内容较长，仅显示有界片段";
+/** P12F-C 加载更多固定失败文案 */
+const MSG_LOAD_MORE_FAIL = "更多修订加载失败，请稍后重试";
+/**
+ * 探针侧第二页不透明游标（外壳合法：esrc1_ + base64url 无 =）。
+ * 前端不得解码；仅原样回传。
+ */
+const PAGE_CURSOR_SECOND = "esrc1_cGFnZTJjdXJzb3Jmb3JyZXZoaXN0";
+/** 故意非法游标（缺前缀）——仅用于服务端/前端失败路径 */
+const PAGE_CURSOR_BAD_SHAPE = "not_a_valid_cursor_value";
 const MSG_RESTORE_OK = "已恢复到所选修订";
 const MSG_RESTORE_BLOCKED =
   "当前无法恢复，请先处理版本冲突或重新载入";
@@ -185,10 +196,26 @@ type PutMode =
     };
 
 type ListMode = { kind: "ok" } | { kind: "hold"; gate: HoldGate };
+/** P12F-C 游标页模式：正常 / 挂起 / HTTP 错误 */
+type PageMode =
+  | { kind: "ok" }
+  | { kind: "hold"; gate: HoldGate }
+  | { kind: "http_error"; status: number };
 type DetailMode = { kind: "ok" } | { kind: "hold"; gate: HoldGate };
 type ComparisonMode = { kind: "ok" } | { kind: "hold"; gate: HoldGate };
 type BodyDiffMode = { kind: "ok" } | { kind: "hold"; gate: HoldGate };
 type PairBodyDiffMode = { kind: "ok" } | { kind: "hold"; gate: HoldGate };
+
+/** page 探针到达记录：含 cursor 与查询键，供精确零旁路断言 */
+type PageProbeHit = {
+  projectId: string;
+  cursor: string | null;
+  method: string;
+  path: string;
+  postData: string | null;
+  queryKeys: string[];
+  search: string;
+};
 
 type ComparisonSummary = {
   outlineNodeCount: number;
@@ -255,6 +282,10 @@ type ProbeState = {
   listLog: string[];
   /** list 响应已 fulfill（await json 返回后）——用于证明迟到响应真正完成 */
   listCompleteLog: string[];
+  /** P12F-C page 到达（gate 前），含 cursor */
+  pageLog: PageProbeHit[];
+  /** P12F-C page 响应已 fulfill（await json 返回后） */
+  pageCompleteLog: Array<{ projectId: string; cursor: string | null }>;
   detailLog: Array<{ projectId: string; revisionId: string }>;
   /** detail 响应已 fulfill（await json 返回后）——用于证明迟到响应真正完成 */
   detailCompleteLog: Array<{ projectId: string; revisionId: string }>;
@@ -300,12 +331,16 @@ type ProbeState = {
   putMode: PutMode;
   restoreMode: RestoreMode;
   listMode: ListMode;
+  pageMode: PageMode;
   detailMode: DetailMode;
   comparisonMode: ComparisonMode;
   bodyDiffMode: BodyDiffMode;
   pairBodyDiffMode: PairBodyDiffMode;
   restoreModeByProject: Record<string, RestoreMode>;
   listModeByProject: Record<string, ListMode>;
+  pageModeByProject: Record<string, PageMode>;
+  /** 按 cursor 固定 page hold/错误（第二页） */
+  pageModeByCursor: Record<string, PageMode>;
   detailModeByProject: Record<string, DetailMode>;
   detailModeByRevisionId: Record<string, DetailMode>;
   comparisonModeByProject: Record<string, ComparisonMode>;
@@ -316,6 +351,11 @@ type ProbeState = {
   /** 按 before::after 固定 pair hold */
   pairBodyDiffModeByPairKey: Record<string, PairBodyDiffMode>;
   listResponseOverride: unknown | null;
+  pageResponseOverride: unknown | null;
+  /** 按 cursor 键固定 page 响应（null cursor 用 ""） */
+  pageResponseByCursor: Record<string, unknown>;
+  /** 自定义第二页游标；默认 PAGE_CURSOR_SECOND */
+  pageSecondCursor: string;
   detailResponseOverride: unknown | null;
   restoreResponseOverride: unknown | null;
   comparisonResponseOverride: unknown | null;
@@ -492,6 +532,8 @@ function createProbeState(mode: Mode): ProbeState {
     restoreLog: [],
     listLog: [],
     listCompleteLog: [],
+    pageLog: [],
+    pageCompleteLog: [],
     detailLog: [],
     detailCompleteLog: [],
     comparisonLog: [],
@@ -504,12 +546,15 @@ function createProbeState(mode: Mode): ProbeState {
     putMode: { kind: "ok" },
     restoreMode: { kind: "ok" },
     listMode: { kind: "ok" },
+    pageMode: { kind: "ok" },
     detailMode: { kind: "ok" },
     comparisonMode: { kind: "ok" },
     bodyDiffMode: { kind: "ok" },
     pairBodyDiffMode: { kind: "ok" },
     restoreModeByProject: {},
     listModeByProject: {},
+    pageModeByProject: {},
+    pageModeByCursor: {},
     detailModeByProject: {},
     detailModeByRevisionId: {},
     comparisonModeByProject: {},
@@ -519,6 +564,9 @@ function createProbeState(mode: Mode): ProbeState {
     pairBodyDiffModeByProject: {},
     pairBodyDiffModeByPairKey: {},
     listResponseOverride: null,
+    pageResponseOverride: null,
+    pageResponseByCursor: {},
+    pageSecondCursor: PAGE_CURSOR_SECOND,
     detailResponseOverride: null,
     restoreResponseOverride: null,
     comparisonResponseOverride: null,
@@ -542,6 +590,61 @@ function resolveRestoreMode(state: ProbeState, projectId: string): RestoreMode {
 
 function resolveListMode(state: ProbeState, projectId: string): ListMode {
   return state.listModeByProject[projectId] ?? state.listMode;
+}
+
+/** 用途：解析 page 模式；带 cursor 时优先 pageModeByCursor */
+function resolvePageMode(
+  state: ProbeState,
+  projectId: string,
+  cursor: string | null,
+): PageMode {
+  if (cursor && state.pageModeByCursor[cursor]) {
+    return state.pageModeByCursor[cursor];
+  }
+  return state.pageModeByProject[projectId] ?? state.pageMode;
+}
+
+/** 用途：统计某项目 page 到达次数 */
+function pageHitCount(state: ProbeState, projectId: string): number {
+  return state.pageLog.filter((h) => h.projectId === projectId).length;
+}
+
+/** 用途：统计某项目 page 完成次数 */
+function pageCompleteCount(state: ProbeState, projectId: string): number {
+  return state.pageCompleteLog.filter((h) => h.projectId === projectId).length;
+}
+
+/** 用途：统计带指定 cursor（null=首屏）的 page 到达次数 */
+function pageHitCountForCursor(
+  state: ProbeState,
+  projectId: string,
+  cursor: string | null,
+): number {
+  return state.pageLog.filter(
+    (h) => h.projectId === projectId && h.cursor === cursor,
+  ).length;
+}
+
+/**
+ * 用途：构建默认游标页响应；首屏最多 10 条，超出则返回固定 opaque nextCursor。
+ */
+function buildDefaultPagePayload(
+  state: ProbeState,
+  projectId: string,
+  cursor: string | null,
+): { items: RevisionMeta[]; nextCursor: string | null } | { error: "cursor" } {
+  const all = state.revisions[projectId] || [];
+  if (cursor == null) {
+    const items = all.slice(0, 10);
+    const nextCursor =
+      all.length > 10 ? state.pageSecondCursor : null;
+    return { items, nextCursor };
+  }
+  if (cursor === state.pageSecondCursor) {
+    const items = all.slice(10, 20);
+    return { items, nextCursor: null };
+  }
+  return { error: "cursor" };
 }
 
 function resolveDetailMode(
@@ -1181,6 +1284,89 @@ async function installRoutes(page: Page, state: ProbeState) {
       }
     }
 
+    // P12F-C 游标页：必须在旧 list 与 detail 之前匹配，避免 path 段 "page" 被当 revisionId
+    const revPageMatch = path.match(
+      /^\/api\/projects\/([^/]+)\/editor-state-revisions\/page\/?$/,
+    );
+    if (revPageMatch) {
+      const pid = revPageMatch[1];
+      const queryKeys = [...url.searchParams.keys()];
+      const rawCursor = url.searchParams.get("cursor");
+      const cursor =
+        rawCursor === null || rawCursor === "" ? null : rawCursor;
+      const postData = req.postData();
+      if (!known.has(pid)) {
+        state.forbiddenHits.push(`${method} ${path}`);
+        await json(route, { detail: "not_found" }, 404);
+        return;
+      }
+      if (method !== "GET") {
+        state.forbiddenHits.push(`${method} ${path}`);
+        await json(route, { detail: "method_not_allowed" }, 405);
+        return;
+      }
+      // arrived：gate 前记录，含 cursor 与查询键
+      state.pageLog.push({
+        projectId: pid,
+        cursor,
+        method,
+        path,
+        postData,
+        queryKeys,
+        search: url.search,
+      });
+      const pageMode = resolvePageMode(state, pid, cursor);
+      if (pageMode.kind === "hold") {
+        await pageMode.gate.wait();
+      }
+      if (pageMode.kind === "http_error") {
+        await json(
+          route,
+          {
+            detail: {
+              code: "editor_state_revision_page_error",
+              message: "page error",
+            },
+          },
+          pageMode.status,
+        );
+        state.pageCompleteLog.push({ projectId: pid, cursor });
+        return;
+      }
+      if (state.pageResponseOverride != null) {
+        await json(route, state.pageResponseOverride);
+        state.pageCompleteLog.push({ projectId: pid, cursor });
+        return;
+      }
+      const cursorKey = cursor ?? "";
+      if (state.pageResponseByCursor[cursorKey] != null) {
+        await json(route, state.pageResponseByCursor[cursorKey]);
+        state.pageCompleteLog.push({ projectId: pid, cursor });
+        return;
+      }
+      const built = buildDefaultPagePayload(state, pid, cursor);
+      if ("error" in built) {
+        await json(
+          route,
+          {
+            detail: {
+              code: "editor_state_revision_cursor_invalid",
+              message: "修订分页游标无效",
+            },
+          },
+          400,
+        );
+        state.pageCompleteLog.push({ projectId: pid, cursor });
+        return;
+      }
+      await json(route, {
+        items: built.items,
+        nextCursor: built.nextCursor,
+      });
+      state.pageCompleteLog.push({ projectId: pid, cursor });
+      return;
+    }
+
     const revListMatch = path.match(
       /^\/api\/projects\/([^/]+)\/editor-state-revisions\/?$/,
     );
@@ -1202,7 +1388,10 @@ async function installRoutes(page: Page, state: ProbeState) {
           state.listCompleteLog.push(pid);
           return;
         }
-        await json(route, { items: state.revisions[pid] || [] });
+        // 旧列表仍固定最近 10 条，不含游标（P12C 合同）
+        await json(route, {
+          items: (state.revisions[pid] || []).slice(0, 10),
+        });
         state.listCompleteLog.push(pid);
         return;
       }
@@ -1590,7 +1779,7 @@ async function installRoutes(page: Page, state: ProbeState) {
           ? techRestoredEditor(prev, restoredVersion)
           : bizRestoredEditor(prev, restoredVersion);
 
-      // 恢复成功后可在列表追加 revision_restore 时间点
+      // 恢复成功后在列表头部追加 revision_restore 时间点；保留上限 20（P12F-A）
       const newMeta: RevisionMeta = {
         revisionId: allocateRevisionId(state),
         stateVersion: restoredVersion,
@@ -1600,7 +1789,7 @@ async function installRoutes(page: Page, state: ProbeState) {
       };
       state.revisions[pid] = [newMeta, ...(state.revisions[pid] || [])].slice(
         0,
-        10,
+        20,
       );
 
       state.restoreLog.push({
@@ -1659,6 +1848,12 @@ async function installRoutes(page: Page, state: ProbeState) {
       }
       await json(route, detail);
       state.detailCompleteLog.push({ projectId: pid, revisionId });
+      return;
+    }
+
+    // 技术标壳层知识侧栏：仅精确 GET /api/knowledge/folders 良性；禁止 includes/写方法成功体
+    if (method === "GET" && path === "/api/knowledge/folders") {
+      await json(route, []);
       return;
     }
 
@@ -1753,6 +1948,9 @@ async function assertNoIdLeak(
     expect(html).not.toContain(editor.stateVersion);
   }
   expect(html).not.toContain(SNAPSHOT_BODY_LEAK);
+  // 游标不得进入 DOM
+  expect(html).not.toContain(PAGE_CURSOR_SECOND);
+  expect(html).not.toContain("esrc1_");
   const storage = await page.evaluate(() => {
     const ls: string[] = [];
     const ss: string[] = [];
@@ -1764,14 +1962,33 @@ async function assertNoIdLeak(
       const k = sessionStorage.key(i);
       if (k) ss.push(`${k}=${sessionStorage.getItem(k)}`);
     }
-    return { ls, ss, href: location.href };
+    // Cookie 纳入零泄漏证据（与 local/sessionStorage 同检）
+    return { ls, ss, href: location.href, cookie: document.cookie };
   });
   const blob = JSON.stringify(storage);
   expect(blob).not.toMatch(/esr_[0-9a-f]{32}/);
   expect(blob).not.toMatch(/esv_[0-9a-f]{32}/);
   expect(blob).not.toContain(SNAPSHOT_BODY_LEAK);
+  expect(blob).not.toContain(PAGE_CURSOR_SECOND);
+  expect(blob).not.toContain("esrc1_");
+  // Cookie 字符串同样禁止 revision ID / stateVersion / 游标 / 正文探针
+  const cookieBlob = storage.cookie ?? "";
+  for (const list of Object.values(state.revisions)) {
+    for (const item of list) {
+      expect(cookieBlob).not.toContain(item.revisionId);
+      expect(cookieBlob).not.toContain(item.stateVersion);
+    }
+  }
+  for (const editor of Object.values(state.projects)) {
+    expect(cookieBlob).not.toContain(editor.stateVersion);
+  }
+  expect(cookieBlob).not.toMatch(/esr_[0-9a-f]{32}/);
+  expect(cookieBlob).not.toMatch(/esv_[0-9a-f]{32}/);
+  expect(cookieBlob).not.toContain(SNAPSHOT_BODY_LEAK);
+  expect(cookieBlob).not.toContain(PAGE_CURSOR_SECOND);
+  expect(cookieBlob).not.toContain("esrc1_");
 
-  // console 不得出现 revisionId / stateVersion / snapshot 正文探针
+  // console 不得出现 revisionId / stateVersion / snapshot 正文探针 / 游标
   const consoleBlob = consoleLogs.join("\n");
   for (const list of Object.values(state.revisions)) {
     for (const item of list) {
@@ -1786,6 +2003,8 @@ async function assertNoIdLeak(
   expect(consoleBlob).not.toMatch(/esv_[0-9a-f]{32}/);
   expect(consoleBlob).not.toContain(SNAPSHOT_BODY_LEAK);
   expect(consoleBlob).not.toMatch(/\bsnapshot\b/i);
+  expect(consoleBlob).not.toContain(PAGE_CURSOR_SECOND);
+  expect(consoleBlob).not.toContain("esrc1_");
 }
 
 function debounceMs(mode: Mode) {
@@ -1866,10 +2085,11 @@ test.describe("P12C-C3 技术标修订历史", () => {
 
     await expandRevisionPanel(page);
     await expect
-      .poll(() => state.listLog.filter((p) => p === TECH_A).length, {
+      .poll(() => pageHitCount(state, TECH_A), {
         timeout: 10_000,
       })
       .toBe(1);
+    expect(state.listLog.length).toBe(0);
     expect(state.detailLog.length).toBe(0);
     expect(state.restoreLog.length).toBe(0);
 
@@ -1892,10 +2112,11 @@ test.describe("P12C-C3 技术标修订历史", () => {
 
     await page.getByTestId("editor-state-revision-refresh").click();
     await expect
-      .poll(() => state.listLog.filter((p) => p === TECH_A).length, {
+      .poll(() => pageHitCount(state, TECH_A), {
         timeout: 10_000,
       })
       .toBe(2);
+    expect(state.listLog.length).toBe(0);
 
     expect(state.externalHits).toEqual([]);
     expect(guards.pageErrors).toEqual([]);
@@ -1914,8 +2135,9 @@ test.describe("P12C-C3 技术标修订历史", () => {
     await openWorkspace(page, "tech", TECH_A);
     await expandRevisionPanel(page);
     await expect
-      .poll(() => state.listLog.length, { timeout: 10_000 })
+      .poll(() => pageHitCount(state, TECH_A) + pageHitCount(state, BIZ_A) + pageHitCount(state, TECH_B) + pageHitCount(state, BIZ_B), { timeout: 10_000 })
       .toBe(1);
+    expect(state.listLog.length).toBe(0);
 
     await page.getByTestId("editor-state-revision-summary-0").click();
     await expect
@@ -1952,8 +2174,9 @@ test.describe("P12C-C3 技术标修订历史", () => {
     await expect(page.getByTestId("editor-state-revision-body")).toHaveCount(0);
     await expandRevisionPanel(page);
     await expect
-      .poll(() => state.listLog.length, { timeout: 10_000 })
+      .poll(() => pageHitCount(state, TECH_A) + pageHitCount(state, BIZ_A) + pageHitCount(state, TECH_B) + pageHitCount(state, BIZ_B), { timeout: 10_000 })
       .toBe(2);
+    expect(state.listLog.length).toBe(0);
     await expect(
       page.getByTestId("editor-state-revision-summary-body-0"),
     ).toHaveCount(0);
@@ -2060,7 +2283,8 @@ test.describe("P12C-C3 技术标修订历史", () => {
 
     await openWorkspace(page, "tech", TECH_A);
     await expandRevisionPanel(page);
-    await expect.poll(() => state.listLog.length, { timeout: 10_000 }).toBe(1);
+    await expect.poll(() => pageHitCount(state, TECH_A) + pageHitCount(state, BIZ_A), { timeout: 10_000 }).toBe(1);
+    expect(state.listLog.length).toBe(0);
 
     const hold = createHoldGate();
     state.putMode = { kind: "hold", gate: hold, then: "ok" };
@@ -2111,12 +2335,13 @@ test.describe("P12C-C3 技术标修订历史", () => {
 
     await openWorkspace(page, "tech", TECH_A);
     await expandRevisionPanel(page);
-    await expect.poll(() => state.listLog.length, { timeout: 10_000 }).toBe(1);
+    await expect.poll(() => pageHitCount(state, TECH_A) + pageHitCount(state, BIZ_A), { timeout: 10_000 }).toBe(1);
+    expect(state.listLog.length).toBe(0);
 
     const getsBefore = state.editorGetLog.filter(
       (g) => g.projectId === TECH_A,
     ).length;
-    const listBefore = state.listLog.filter((p) => p === TECH_A).length;
+    const pageBefore = pageHitCount(state, TECH_A);
 
     await page.getByTestId("editor-state-revision-restore-0").click();
     expect(state.restoreLog.length).toBe(0);
@@ -2137,11 +2362,11 @@ test.describe("P12C-C3 技术标修订历史", () => {
       .toBe(1);
 
     await expect
-      .poll(
-        () => state.listLog.filter((p) => p === TECH_A).length - listBefore,
-        { timeout: 10_000 },
-      )
+      .poll(() => pageHitCount(state, TECH_A) - pageBefore, {
+        timeout: 10_000,
+      })
       .toBe(1);
+    expect(state.listLog.length).toBe(0);
 
     await expect
       .poll(async () => readContent(page, "tech"), { timeout: 10_000 })
@@ -2354,47 +2579,43 @@ test.describe("P12C-C3 技术标修订历史", () => {
       .toBe(RESTORED_TECH);
   });
 
-  test("迟到 list：折叠后释放不得污染", async ({ page }) => {
+  test("迟到 page：折叠后释放不得污染", async ({ page }) => {
     const state = createProbeState("tech");
     seedRevisions(state, TECH_A, 1);
-    const listGate = createHoldGate();
-    state.listMode = { kind: "hold", gate: listGate };
+    const pageGate = createHoldGate();
+    state.pageMode = { kind: "hold", gate: pageGate };
     await installRuntimeErrorGuards(page);
     await installRoutes(page, state);
 
     await openWorkspace(page, "tech", TECH_A);
     await page.getByTestId("editor-state-revision-toggle").click();
-    await listGate.waitUntilEntered(1);
-    expect(state.listLog.filter((p) => p === TECH_A).length).toBe(1);
+    await pageGate.waitUntilEntered(1);
+    expect(pageHitCount(state, TECH_A)).toBe(1);
     // 挂起期间尚未 fulfill
-    expect(state.listCompleteLog.filter((p) => p === TECH_A).length).toBe(0);
+    expect(pageCompleteCount(state, TECH_A)).toBe(0);
+    expect(state.listLog.length).toBe(0);
 
     await page.getByTestId("editor-state-revision-toggle").click();
     await expect(page.getByTestId("editor-state-revision-body")).toHaveCount(0);
 
-    listGate.release();
-    state.listMode = { kind: "ok" };
-    // 必须等迟到 list 真正 fulfill 后再断言内容未污染（不能只 poll arrived listLog）
+    pageGate.release();
+    state.pageMode = { kind: "ok" };
+    // 必须等迟到 page 真正 fulfill 后再断言内容未污染
     await expect
-      .poll(
-        () => state.listCompleteLog.filter((p) => p === TECH_A).length,
-        { timeout: 10_000 },
-      )
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
       .toBe(1);
     expect(await readContent(page, "tech")).toBe(TECH_OVERVIEW);
     await expect(page.getByTestId("editor-state-revision-body")).toHaveCount(0);
 
     await expandRevisionPanel(page);
     await expect
-      .poll(() => state.listLog.filter((p) => p === TECH_A).length, {
+      .poll(() => pageHitCount(state, TECH_A), {
         timeout: 10_000,
       })
       .toBe(2);
+    expect(state.listLog.length).toBe(0);
     await expect
-      .poll(
-        () => state.listCompleteLog.filter((p) => p === TECH_A).length,
-        { timeout: 10_000 },
-      )
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
       .toBe(2);
     await expect(
       page.getByTestId("editor-state-revision-item-0"),
@@ -2439,7 +2660,7 @@ test.describe("P12C-C3 技术标修订历史", () => {
     const getsBBefore = state.editorGetLog.filter(
       (g) => g.projectId === TECH_B,
     ).length;
-    const listBBefore = state.listLog.filter((p) => p === TECH_B).length;
+    const pageBBefore = pageHitCount(state, TECH_B);
     const cpBefore = state.checkpointCreateLog.length;
     const putsBefore = state.putLog.length;
 
@@ -2464,7 +2685,8 @@ test.describe("P12C-C3 技术标修订历史", () => {
     expect(
       state.editorGetLog.filter((g) => g.projectId === TECH_B).length,
     ).toBe(getsBBefore);
-    expect(state.listLog.filter((p) => p === TECH_B).length).toBe(listBBefore);
+    expect(pageHitCount(state, TECH_B)).toBe(pageBBefore);
+    expect(state.listLog.length).toBe(0);
 
     // B restore 仍挂起：点击 create 必须先见固定失败文案，再断言无 POST/额外 PUT
     await page.getByTestId("editor-state-checkpoint-toggle").click();
@@ -2517,7 +2739,8 @@ test.describe("P12C-C3 技术标修订历史", () => {
 
     await openWorkspace(page, "tech", TECH_A);
     await expandRevisionPanel(page);
-    await expect.poll(() => state.listLog.length, { timeout: 10_000 }).toBe(1);
+    await expect.poll(() => pageHitCount(state, TECH_A) + pageHitCount(state, BIZ_A), { timeout: 10_000 }).toBe(1);
+    expect(state.listLog.length).toBe(0);
 
     // 详情 A0 挂起 → 点 B(索引1) 摘要成功 → 释放 A0 不得覆盖
     const revA0 = state.revisions[TECH_A][0].revisionId;
@@ -2579,10 +2802,11 @@ test.describe("P12C-C3 技术标修订历史", () => {
     await openWorkspace(page, "tech", TECH_B);
     await expandRevisionPanel(page);
     await expect
-      .poll(() => state.listCompleteLog.filter((p) => p === TECH_B).length, {
+      .poll(() => pageCompleteCount(state, TECH_B), {
         timeout: 10_000,
       })
       .toBe(1);
+    expect(state.listLog.length).toBe(0);
     expect(await readContent(page, "tech")).toBe(TECH_OVERVIEW_B);
     await expect(
       page.getByTestId("editor-state-revision-source-0"),
@@ -2635,14 +2859,15 @@ test.describe("P12C-C3 技术标修订历史", () => {
     ).toBe(detailBCompleteBefore);
   });
 
-  test("list shape 非法固定失败无泄漏；检查点面板仍存在", async ({ page }) => {
+  test("page shape 非法固定失败无泄漏；检查点面板仍存在", async ({ page }) => {
     const state = createProbeState("tech");
     seedRevisions(state, TECH_A, 1);
     await installRuntimeErrorGuards(page);
     await installRoutes(page, state);
 
-    state.listResponseOverride = {
+    state.pageResponseOverride = {
       items: state.revisions[TECH_A],
+      nextCursor: null,
       total: 1,
       snapshot: "LEAK_LIST_TOP",
     };
@@ -2652,8 +2877,9 @@ test.describe("P12C-C3 技术标修订历史", () => {
     ).toBeVisible();
     await page.getByTestId("editor-state-revision-toggle").click();
     await expect
-      .poll(() => state.listLog.length, { timeout: 10_000 })
+      .poll(() => pageHitCount(state, TECH_A), { timeout: 10_000 })
       .toBe(1);
+    expect(state.listLog.length).toBe(0);
     await expect(
       page.getByTestId("editor-state-revision-list-error"),
     ).toContainText(MSG_LIST_FAIL);
@@ -2661,18 +2887,20 @@ test.describe("P12C-C3 技术标修订历史", () => {
     expect(html).not.toContain("LEAK_LIST_TOP");
     expect(html).not.toContain(state.revisions[TECH_A][0].revisionId);
 
-    state.listResponseOverride = {
+    state.pageResponseOverride = {
       items: [
         {
           ...state.revisions[TECH_A][0],
           snapshot: "LEAK_META",
         },
       ],
+      nextCursor: null,
     };
     await page.getByTestId("editor-state-revision-refresh").click();
     await expect
-      .poll(() => state.listLog.length, { timeout: 10_000 })
+      .poll(() => pageHitCount(state, TECH_A), { timeout: 10_000 })
       .toBe(2);
+    expect(state.listLog.length).toBe(0);
     await expect(
       page.getByTestId("editor-state-revision-list-error"),
     ).toContainText(MSG_LIST_FAIL);
@@ -2680,7 +2908,7 @@ test.describe("P12C-C3 技术标修订历史", () => {
     expect(html).not.toContain("LEAK_META");
 
     // 超 10 条
-    state.listResponseOverride = {
+    state.pageResponseOverride = {
       items: Array.from({ length: 11 }, (_, i) => ({
         revisionId: seedRevisionId(100 + i),
         stateVersion: seedStateVersion(100 + i),
@@ -2688,11 +2916,13 @@ test.describe("P12C-C3 技术标修订历史", () => {
         sourceKind: "browser_put",
         createdAt: "2026-07-16T00:00:00.000Z",
       })),
+      nextCursor: null,
     };
     await page.getByTestId("editor-state-revision-refresh").click();
     await expect
-      .poll(() => state.listLog.length, { timeout: 10_000 })
+      .poll(() => pageHitCount(state, TECH_A), { timeout: 10_000 })
       .toBe(3);
+    expect(state.listLog.length).toBe(0);
     await expect(
       page.getByTestId("editor-state-revision-list-error"),
     ).toContainText(MSG_LIST_FAIL);
@@ -2763,10 +2993,11 @@ test.describe("P12C-C3 技术标修订历史", () => {
 
     await expandRevisionPanel(page);
     await expect
-      .poll(() => state.listLog.filter((p) => p === TECH_A).length, {
+      .poll(() => pageHitCount(state, TECH_A), {
         timeout: 10_000,
       })
       .toBe(1);
+    expect(state.listLog.length).toBe(0);
     // 展开后仍无自动 comparison
     expect(state.comparisonLog.length).toBe(0);
 
@@ -3086,10 +3317,11 @@ test.describe("P12C-C3 技术标修订历史", () => {
     await openWorkspace(page, "tech", TECH_A);
     await expandRevisionPanel(page);
     await expect
-      .poll(() => state.listCompleteLog.filter((p) => p === TECH_A).length, {
+      .poll(() => pageCompleteCount(state, TECH_A), {
         timeout: 10_000,
       })
       .toBe(1);
+    expect(state.listLog.length).toBe(0);
 
     // A0 挂起 → A1 成功 → 释放 A0 不得覆盖
     await page.getByTestId("editor-state-revision-compare-0").click();
@@ -3140,10 +3372,11 @@ test.describe("P12C-C3 技术标修订历史", () => {
     await expect(page.getByTestId("editor-state-revision-body")).toHaveCount(0);
     await expandRevisionPanel(page);
     await expect
-      .poll(() => state.listCompleteLog.filter((p) => p === TECH_A).length, {
+      .poll(() => pageCompleteCount(state, TECH_A), {
         timeout: 10_000,
       })
       .toBe(2);
+    expect(state.listLog.length).toBe(0);
     await expect(
       page.getByTestId("editor-state-revision-comparison-0"),
     ).toHaveCount(0);
@@ -3163,10 +3396,11 @@ test.describe("P12C-C3 技术标修订历史", () => {
     ).toBeVisible();
     await page.getByTestId("editor-state-revision-refresh").click();
     await expect
-      .poll(() => state.listCompleteLog.filter((p) => p === TECH_A).length, {
+      .poll(() => pageCompleteCount(state, TECH_A), {
         timeout: 10_000,
       })
       .toBe(3);
+    expect(state.listLog.length).toBe(0);
     await expect(
       page.getByTestId("editor-state-revision-comparison-1"),
     ).toHaveCount(0);
@@ -3230,10 +3464,11 @@ test.describe("P12C-C3 技术标修订历史", () => {
     await openWorkspace(page, "tech", TECH_B);
     await expandRevisionPanel(page);
     await expect
-      .poll(() => state.listCompleteLog.filter((p) => p === TECH_B).length, {
+      .poll(() => pageCompleteCount(state, TECH_B), {
         timeout: 10_000,
       })
       .toBe(1);
+    expect(state.listLog.length).toBe(0);
     expect(await readContent(page, "tech")).toBe(TECH_OVERVIEW_B);
     await expect(
       page.getByTestId("editor-state-revision-comparison-0"),
@@ -3297,10 +3532,11 @@ test.describe("P12C-C3 商务标修订历史", () => {
 
     await expandRevisionPanel(page);
     await expect
-      .poll(() => state.listLog.filter((p) => p === BIZ_A).length, {
+      .poll(() => pageHitCount(state, BIZ_A), {
         timeout: 10_000,
       })
       .toBe(1);
+    expect(state.listLog.length).toBe(0);
     await expect(
       page.getByTestId("editor-state-revision-source-0"),
     ).toHaveText(SOURCE_LABELS.revise);
@@ -3390,34 +3626,30 @@ test.describe("P12C-C3 商务标修订历史", () => {
       page.getByTestId("editor-state-revision-restore-0"),
     ).toBeDisabled();
 
-    // A→B 迟到 list：必须在 A 真正发出 list 并 waitUntilEntered 后再切 B
-    // listLog 在 gate.wait 前已写入，释放后只能靠 listCompleteLog 证明真正 fulfill
-    const listGateA = createHoldGate();
-    state.listModeByProject[BIZ_A] = { kind: "hold", gate: listGateA };
-    // 项目仍在 A：真实点击刷新触发 A list 挂起；先记录 release 前 completion 基线
-    const listCompleteABefore = state.listCompleteLog.filter(
-      (p) => p === BIZ_A,
-    ).length;
+    // A→B 迟到 page：必须在 A 真正发出 page 并 waitUntilEntered 后再切 B
+    // pageLog 在 gate.wait 前已写入，释放后只能靠 pageCompleteLog 证明真正 fulfill
+    const pageGateA = createHoldGate();
+    state.pageModeByProject[BIZ_A] = { kind: "hold", gate: pageGateA };
+    // 项目仍在 A：真实点击刷新触发 A page 挂起；先记录 release 前 completion 基线
+    const pageCompleteABefore = pageCompleteCount(state, BIZ_A);
     await page.getByTestId("editor-state-revision-refresh").click();
-    await listGateA.waitUntilEntered(1);
-    expect(state.listLog.filter((p) => p === BIZ_A).length).toBe(2);
+    await pageGateA.waitUntilEntered(1);
+    expect(pageHitCount(state, BIZ_A)).toBe(2);
     // 挂起期间尚未 fulfill（arrived 已是 2，不能当作 completion 证据）
-    expect(state.listCompleteLog.filter((p) => p === BIZ_A).length).toBe(
-      listCompleteABefore,
-    );
+    expect(pageCompleteCount(state, BIZ_A)).toBe(pageCompleteABefore);
+    expect(state.listLog.length).toBe(0);
 
     await openWorkspace(page, "biz", BIZ_B);
     await expandRevisionPanel(page);
-    // 等 B 的 list 真正完成后再拍快照
+    // 等 B 的 page 真正完成后再拍快照
     await expect
-      .poll(() => state.listCompleteLog.filter((p) => p === BIZ_B).length, {
+      .poll(() => pageCompleteCount(state, BIZ_B), {
         timeout: 10_000,
       })
       .toBe(1);
-    const listBSnapshot = state.listLog.filter((p) => p === BIZ_B).length;
-    const listCompleteBSnapshot = state.listCompleteLog.filter(
-      (p) => p === BIZ_B,
-    ).length;
+    expect(state.listLog.length).toBe(0);
+    const pageBSnapshot = pageHitCount(state, BIZ_B);
+    const pageCompleteBSnapshot = pageCompleteCount(state, BIZ_B);
     const sourceB = await page
       .getByTestId("editor-state-revision-source-0")
       .innerText();
@@ -3431,20 +3663,15 @@ test.describe("P12C-C3 商务标修订历史", () => {
       page.getByTestId("editor-state-revision-list-error"),
     ).toHaveCount(0);
 
-    listGateA.release();
-    delete state.listModeByProject[BIZ_A];
-    // 必须等迟到 list 真正 fulfill 后再断言 B 未污染（不能只 poll arrived listLog）
+    pageGateA.release();
+    delete state.pageModeByProject[BIZ_A];
+    // 必须等迟到 page 真正 fulfill 后再断言 B 未污染
     await expect
-      .poll(
-        () => state.listCompleteLog.filter((p) => p === BIZ_A).length,
-        { timeout: 10_000 },
-      )
-      .toBe(listCompleteABefore + 1);
+      .poll(() => pageCompleteCount(state, BIZ_A), { timeout: 10_000 })
+      .toBe(pageCompleteABefore + 1);
     // B 列表/完成/来源/提示/正文不变
-    expect(state.listLog.filter((p) => p === BIZ_B).length).toBe(listBSnapshot);
-    expect(state.listCompleteLog.filter((p) => p === BIZ_B).length).toBe(
-      listCompleteBSnapshot,
-    );
+    expect(pageHitCount(state, BIZ_B)).toBe(pageBSnapshot);
+    expect(pageCompleteCount(state, BIZ_B)).toBe(pageCompleteBSnapshot);
     expect(await readContent(page, "biz")).toBe(BIZ_MD_B);
     await expect(
       page.getByTestId("editor-state-revision-source-0"),
@@ -3490,10 +3717,11 @@ test.describe("P12C-C3 商务标修订历史", () => {
     expect(state.comparisonLog.length).toBe(0);
     await expandRevisionPanel(page);
     await expect
-      .poll(() => state.listCompleteLog.filter((p) => p === BIZ_A).length, {
+      .poll(() => pageCompleteCount(state, BIZ_A), {
         timeout: 10_000,
       })
       .toBe(1);
+    expect(state.listLog.length).toBe(0);
     expect(state.comparisonLog.length).toBe(0);
 
     const bodyBefore = await readContent(page, "biz");
@@ -3605,10 +3833,11 @@ test.describe("P12E-A 技术标正文差异-成功与严格解析", () => {
 
     await expandRevisionPanel(page);
     await expect
-      .poll(() => state.listLog.filter((p) => p === TECH_A).length, {
+      .poll(() => pageHitCount(state, TECH_A), {
         timeout: 10_000,
       })
       .toBe(1);
+    expect(state.listLog.length).toBe(0);
     expect(state.bodyDiffLog.length).toBe(0);
 
     const getsBefore = state.editorGetLog.filter(
@@ -3923,10 +4152,11 @@ test.describe("P12E-A 技术标正文差异-迟到隔离", () => {
     await openWorkspace(page, "tech", TECH_A);
     await expandRevisionPanel(page);
     await expect
-      .poll(() => state.listCompleteLog.filter((p) => p === TECH_A).length, {
+      .poll(() => pageCompleteCount(state, TECH_A), {
         timeout: 10_000,
       })
       .toBe(1);
+    expect(state.listLog.length).toBe(0);
 
     // A0 挂起 → A1 成功 → 释放 A0 不得覆盖
     await page.getByTestId("editor-state-revision-body-diff-0").click();
@@ -3976,10 +4206,11 @@ test.describe("P12E-A 技术标正文差异-迟到隔离", () => {
     await expect(page.getByTestId("editor-state-revision-body")).toHaveCount(0);
     await expandRevisionPanel(page);
     await expect
-      .poll(() => state.listCompleteLog.filter((p) => p === TECH_A).length, {
+      .poll(() => pageCompleteCount(state, TECH_A), {
         timeout: 10_000,
       })
       .toBe(2);
+    expect(state.listLog.length).toBe(0);
     await expect(
       page.getByTestId("editor-state-revision-body-diff-result-0"),
     ).toHaveCount(0);
@@ -3999,10 +4230,11 @@ test.describe("P12E-A 技术标正文差异-迟到隔离", () => {
     ).toBeVisible();
     await page.getByTestId("editor-state-revision-refresh").click();
     await expect
-      .poll(() => state.listCompleteLog.filter((p) => p === TECH_A).length, {
+      .poll(() => pageCompleteCount(state, TECH_A), {
         timeout: 10_000,
       })
       .toBe(3);
+    expect(state.listLog.length).toBe(0);
     await expect(
       page.getByTestId("editor-state-revision-body-diff-result-1"),
     ).toHaveCount(0);
@@ -4091,10 +4323,11 @@ test.describe("P12E-A 技术标正文差异-迟到隔离", () => {
     await openWorkspace(page, "tech", TECH_B);
     await expandRevisionPanel(page);
     await expect
-      .poll(() => state.listCompleteLog.filter((p) => p === TECH_B).length, {
+      .poll(() => pageCompleteCount(state, TECH_B), {
         timeout: 10_000,
       })
       .toBe(1);
+    expect(state.listLog.length).toBe(0);
     expect(await readContent(page, "tech")).toBe(TECH_OVERVIEW_B);
     await expect(
       page.getByTestId("editor-state-revision-body-diff-result-0"),
@@ -4169,10 +4402,11 @@ test.describe("P12E-A 商务标正文差异-共享入口", () => {
     expect(state.bodyDiffLog.length).toBe(0);
     await expandRevisionPanel(page);
     await expect
-      .poll(() => state.listCompleteLog.filter((p) => p === BIZ_A).length, {
+      .poll(() => pageCompleteCount(state, BIZ_A), {
         timeout: 10_000,
       })
       .toBe(1);
+    expect(state.listLog.length).toBe(0);
     expect(state.bodyDiffLog.length).toBe(0);
 
     const bodyBefore = await readContent(page, "biz");
@@ -4286,10 +4520,11 @@ test.describe("P12E-C 技术标双修订正文差异-成功与严格解析", () 
 
     await expandRevisionPanel(page);
     await expect
-      .poll(() => state.listLog.filter((p) => p === TECH_A).length, {
+      .poll(() => pageHitCount(state, TECH_A), {
         timeout: 10_000,
       })
       .toBe(1);
+    expect(state.listLog.length).toBe(0);
     expect(state.pairBodyDiffLog.length).toBe(0);
 
     const getsBefore = state.editorGetLog.filter(
@@ -4769,10 +5004,11 @@ test.describe("P12E-C 技术标双修订正文差异-迟到隔离", () => {
     await openWorkspace(page, "tech", TECH_A);
     await expandRevisionPanel(page);
     await expect
-      .poll(() => state.listCompleteLog.filter((p) => p === TECH_A).length, {
+      .poll(() => pageCompleteCount(state, TECH_A), {
         timeout: 10_000,
       })
       .toBe(1);
+    expect(state.listLog.length).toBe(0);
 
     // A0 挂起 → 重选 A1 成功 → 释放 A0 不得覆盖
     await page
@@ -4848,10 +5084,11 @@ test.describe("P12E-C 技术标双修订正文差异-迟到隔离", () => {
     await expect(page.getByTestId("editor-state-revision-body")).toHaveCount(0);
     await expandRevisionPanel(page);
     await expect
-      .poll(() => state.listCompleteLog.filter((p) => p === TECH_A).length, {
+      .poll(() => pageCompleteCount(state, TECH_A), {
         timeout: 10_000,
       })
       .toBe(2);
+    expect(state.listLog.length).toBe(0);
     await expect(
       page.getByTestId("editor-state-revision-pair-result"),
     ).toHaveCount(0);
@@ -4882,10 +5119,11 @@ test.describe("P12E-C 技术标双修订正文差异-迟到隔离", () => {
     ).toBeVisible();
     await page.getByTestId("editor-state-revision-refresh").click();
     await expect
-      .poll(() => state.listCompleteLog.filter((p) => p === TECH_A).length, {
+      .poll(() => pageCompleteCount(state, TECH_A), {
         timeout: 10_000,
       })
       .toBe(3);
+    expect(state.listLog.length).toBe(0);
     await expect(
       page.getByTestId("editor-state-revision-pair-result"),
     ).toHaveCount(0);
@@ -5030,10 +5268,11 @@ test.describe("P12E-C 技术标双修订正文差异-迟到隔离", () => {
     await openWorkspace(page, "tech", TECH_B);
     await expandRevisionPanel(page);
     await expect
-      .poll(() => state.listCompleteLog.filter((p) => p === TECH_B).length, {
+      .poll(() => pageCompleteCount(state, TECH_B), {
         timeout: 10_000,
       })
       .toBe(1);
+    expect(state.listLog.length).toBe(0);
     expect(await readContent(page, "tech")).toBe(TECH_OVERVIEW_B);
     await expect(
       page.getByTestId("editor-state-revision-pair-result"),
@@ -5116,10 +5355,11 @@ test.describe("P12E-C 商务标双修订正文差异-共享入口", () => {
     expect(state.pairBodyDiffLog.length).toBe(0);
     await expandRevisionPanel(page);
     await expect
-      .poll(() => state.listCompleteLog.filter((p) => p === BIZ_A).length, {
+      .poll(() => pageCompleteCount(state, BIZ_A), {
         timeout: 10_000,
       })
       .toBe(1);
+    expect(state.listLog.length).toBe(0);
     expect(state.pairBodyDiffLog.length).toBe(0);
 
     const bodyBefore = await readContent(page, "biz");
@@ -5183,6 +5423,831 @@ test.describe("P12E-C 商务标双修订正文差异-共享入口", () => {
     expect(state.externalHits.length).toBe(externalBefore);
     expect(state.pairBodyDiffLog.length).toBe(1);
 
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+    await assertNoIdLeak(page, state, guards.consoleLogs);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P12F-C 修订历史游标页加载更多
+// ---------------------------------------------------------------------------
+test.describe("P12F-C 技术标修订历史加载更多", () => {
+  test.describe.configure({ mode: "serial" });
+
+  test("P12F-C 技术标：默认折叠零请求；展开精确一次无 cursor 页 GET；旧列表 0；20 条加载后顺序/无重复/按钮消失", async ({
+    page,
+  }) => {
+    const state = createProbeState("tech");
+    const seeded = seedRevisions(state, TECH_A, 20);
+    expect(seeded).toHaveLength(20);
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+
+    await openWorkspace(page, "tech", TECH_A);
+    // 默认折叠：新旧列表均为 0
+    expect(state.listLog.length).toBe(0);
+    expect(state.pageLog.length).toBe(0);
+    expect(state.detailLog.length).toBe(0);
+    await expect(page.getByTestId("editor-state-revision-body")).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-load-more"),
+    ).toHaveCount(0);
+
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageHitCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(1);
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(1);
+    // 旧列表精确 0
+    expect(state.listLog.length).toBe(0);
+    expect(pageHitCountForCursor(state, TECH_A, null)).toBe(1);
+    const firstHit = state.pageLog[0];
+    expect(firstHit.method).toBe("GET");
+    expect(firstHit.postData).toBeNull();
+    expect(firstHit.cursor).toBeNull();
+    expect(firstHit.queryKeys).toEqual([]);
+    expect(firstHit.search).toBe("");
+    expect(firstHit.path).toMatch(/\/editor-state-revisions\/page\/?$/);
+
+    for (let i = 0; i < 10; i++) {
+      await expect(
+        page.getByTestId(`editor-state-revision-item-${i}`),
+      ).toBeVisible();
+    }
+    await expect(page.getByTestId("editor-state-revision-item-10")).toHaveCount(
+      0,
+    );
+    await expect(
+      page.getByTestId("editor-state-revision-load-more"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-load-more"),
+    ).toHaveText("加载更多");
+
+    await page.getByTestId("editor-state-revision-load-more").click();
+    await expect
+      .poll(() => pageHitCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(2);
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(2);
+    expect(pageHitCountForCursor(state, TECH_A, PAGE_CURSOR_SECOND)).toBe(1);
+    const secondHit = state.pageLog[1];
+    expect(secondHit.method).toBe("GET");
+    expect(secondHit.postData).toBeNull();
+    expect(secondHit.cursor).toBe(PAGE_CURSOR_SECOND);
+    expect(secondHit.queryKeys).toEqual(["cursor"]);
+    expect(secondHit.search).toBe(
+      `?cursor=${encodeURIComponent(PAGE_CURSOR_SECOND)}`,
+    );
+    // 禁止客户端分页/搜索旁路参数
+    for (const banned of [
+      "limit",
+      "offset",
+      "page",
+      "total",
+      "hasMore",
+      "source",
+      "search",
+      "q",
+    ]) {
+      expect(secondHit.queryKeys).not.toContain(banned);
+    }
+    // 旧列表仍为 0
+    expect(state.listLog.length).toBe(0);
+
+    for (let i = 0; i < 20; i++) {
+      await expect(
+        page.getByTestId(`editor-state-revision-item-${i}`),
+      ).toBeVisible();
+    }
+    await expect(page.getByTestId("editor-state-revision-item-20")).toHaveCount(
+      0,
+    );
+    // 按钮消失
+    await expect(
+      page.getByTestId("editor-state-revision-load-more"),
+    ).toHaveCount(0);
+    // 顺序与来源标签不因追加改变前 10 条
+    for (let i = 0; i < 20; i++) {
+      const label = SOURCE_LABELS[seeded[i].sourceKind];
+      await expect(
+        page.getByTestId(`editor-state-revision-source-${i}`),
+      ).toHaveText(label);
+    }
+
+    expect(state.forbiddenHits).toEqual([]);
+    expect(state.externalHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+    await assertNoIdLeak(page, state, guards.consoleLogs);
+  });
+
+  test("P12F-C 技术标：第二页摘要与跨页 pair；HTTP/shape/额外键/超10/坏cursor/页内重复/跨页重复/超20 保值重试；双击单飞；load-more 期间刷新禁用", async ({
+    page,
+  }) => {
+    const state = createProbeState("tech");
+    const seeded = seedRevisions(state, TECH_A, 20);
+    // 第二页项注入可区分章节，供摘要/pair
+    const rev10 = seeded[10];
+    const rev0 = seeded[0];
+    state.details[rev10.revisionId].snapshot = {
+      ...state.details[rev10.revisionId].snapshot,
+      chapters: [
+        {
+          id: "p12fc_ch",
+          title: "第二页章节",
+          body: "P12FC_PAGE2_BODY",
+        },
+      ],
+      outline: [{ id: "o1", title: "第二页大纲", children: [] }],
+      facts: [{ id: "f1", text: "第二页事实" }],
+    };
+    state.details[rev0.revisionId].snapshot = {
+      ...state.details[rev0.revisionId].snapshot,
+      chapters: [
+        {
+          id: "p12fc_ch0",
+          title: "第一页章节",
+          body: "P12FC_PAGE1_BODY",
+        },
+      ],
+    };
+
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+
+    await openWorkspace(page, "tech", TECH_A);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(1);
+    expect(state.listLog.length).toBe(0);
+
+    // 加载第二页
+    await page.getByTestId("editor-state-revision-load-more").click();
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(2);
+    await expect(
+      page.getByTestId("editor-state-revision-item-10"),
+    ).toBeVisible();
+
+    // 第二页按需摘要
+    await page.getByTestId("editor-state-revision-summary-10").click();
+    await expect
+      .poll(() => state.detailCompleteLog.length, { timeout: 10_000 })
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-summary-body-10"),
+    ).toContainText("章节 1");
+    await expect(
+      page.getByTestId("editor-state-revision-summary-body-10"),
+    ).toContainText("大纲节点 1");
+    // 正文不泄漏
+    const summaryText = await page
+      .getByTestId("editor-state-revision-summary-body-10")
+      .innerText();
+    expect(summaryText).not.toContain("P12FC_PAGE2_BODY");
+    expect(summaryText).not.toContain(rev10.revisionId);
+
+    // 跨页 pair：第 0 条与第 10 条
+    await page.getByTestId("editor-state-revision-pair-select-before-0").click();
+    await page.getByTestId("editor-state-revision-pair-select-after-10").click();
+    await page.getByTestId("editor-state-revision-pair-compare").click();
+    await expect
+      .poll(() => state.pairBodyDiffCompleteLog.length, { timeout: 10_000 })
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-pair-result"),
+    ).toBeVisible();
+    expect(state.pairBodyDiffLog[0].beforeRevisionId).toBe(rev0.revisionId);
+    expect(state.pairBodyDiffLog[0].afterRevisionId).toBe(rev10.revisionId);
+
+    // ---- 失败保值：HTTP 500 ----
+    // 重新展开以拿到 nextCursor（当前 20 条后无按钮）；用 11 条场景重测失败路径
+    // 折叠后用 override 构造 10 条 + cursor，再失败
+    await page.getByTestId("editor-state-revision-toggle").click();
+    await expect(page.getByTestId("editor-state-revision-body")).toHaveCount(0);
+
+    // 重置为 11 条以便有 load-more
+    seedRevisions(state, TECH_A, 11);
+    state.pageLog.length = 0;
+    state.pageCompleteLog.length = 0;
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-load-more"),
+    ).toBeVisible();
+
+    // HTTP 失败
+    state.pageModeByCursor[PAGE_CURSOR_SECOND] = {
+      kind: "http_error",
+      status: 500,
+    };
+    const pageBeforeHttp = pageHitCount(state, TECH_A);
+    await page.getByTestId("editor-state-revision-load-more").click();
+    await expect
+      .poll(() => pageHitCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(pageBeforeHttp + 1);
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(pageBeforeHttp + 1);
+    await expect(
+      page.getByTestId("editor-state-revision-load-more-error"),
+    ).toHaveText(MSG_LOAD_MORE_FAIL);
+    // 原 10 条保留
+    for (let i = 0; i < 10; i++) {
+      await expect(
+        page.getByTestId(`editor-state-revision-item-${i}`),
+      ).toBeVisible();
+    }
+    await expect(page.getByTestId("editor-state-revision-item-10")).toHaveCount(
+      0,
+    );
+    // 同 cursor 可重试
+    state.pageModeByCursor[PAGE_CURSOR_SECOND] = { kind: "ok" };
+    await page.getByTestId("editor-state-revision-load-more").click();
+    await expect
+      .poll(() => pageHitCountForCursor(state, TECH_A, PAGE_CURSOR_SECOND), {
+        timeout: 10_000,
+      })
+      .toBe(2);
+    await expect(
+      page.getByTestId("editor-state-revision-item-10"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-load-more-error"),
+    ).toHaveCount(0);
+
+    // shape 非法：折叠重开，用 override
+    await page.getByTestId("editor-state-revision-toggle").click();
+    seedRevisions(state, TECH_A, 11);
+    state.pageLog.length = 0;
+    state.pageCompleteLog.length = 0;
+    await expandRevisionPanel(page);
+    await expect.poll(() => pageCompleteCount(state, TECH_A)).toBe(1);
+    state.pageResponseByCursor[PAGE_CURSOR_SECOND] = {
+      items: state.revisions[TECH_A].slice(10, 11),
+      // 缺 nextCursor
+    };
+    await page.getByTestId("editor-state-revision-load-more").click();
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(2);
+    await expect(
+      page.getByTestId("editor-state-revision-load-more-error"),
+    ).toHaveText(MSG_LOAD_MORE_FAIL);
+    await expect(page.getByTestId("editor-state-revision-item-0")).toBeVisible();
+    await expect(page.getByTestId("editor-state-revision-item-10")).toHaveCount(
+      0,
+    );
+
+    // 额外键
+    state.pageResponseByCursor[PAGE_CURSOR_SECOND] = {
+      items: state.revisions[TECH_A].slice(10, 11),
+      nextCursor: null,
+      total: 11,
+    };
+    await page.getByTestId("editor-state-revision-load-more").click();
+    await expect
+      .poll(() => pageHitCountForCursor(state, TECH_A, PAGE_CURSOR_SECOND), {
+        timeout: 10_000,
+      })
+      .toBe(2);
+    await expect(
+      page.getByTestId("editor-state-revision-load-more-error"),
+    ).toHaveText(MSG_LOAD_MORE_FAIL);
+    await expect(page.getByTestId("editor-state-revision-item-10")).toHaveCount(
+      0,
+    );
+
+    // 超 10
+    const eleven = seedRevisions(state, TECH_A, 12).slice(0, 11);
+    // re-seed 会重置列表；重新展开
+    await page.getByTestId("editor-state-revision-toggle").click();
+    seedRevisions(state, TECH_A, 11);
+    state.pageLog.length = 0;
+    state.pageCompleteLog.length = 0;
+    delete state.pageResponseByCursor[PAGE_CURSOR_SECOND];
+    await expandRevisionPanel(page);
+    await expect.poll(() => pageCompleteCount(state, TECH_A)).toBe(1);
+    state.pageResponseByCursor[PAGE_CURSOR_SECOND] = {
+      items: eleven,
+      nextCursor: null,
+    };
+    await page.getByTestId("editor-state-revision-load-more").click();
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(2);
+    await expect(
+      page.getByTestId("editor-state-revision-load-more-error"),
+    ).toHaveText(MSG_LOAD_MORE_FAIL);
+    await expect(page.getByTestId("editor-state-revision-item-10")).toHaveCount(
+      0,
+    );
+
+    // 坏 cursor 外壳：首屏返回非法 nextCursor → 前端 parser 应整页失败
+    await page.getByTestId("editor-state-revision-toggle").click();
+    seedRevisions(state, TECH_A, 11);
+    state.pageLog.length = 0;
+    state.pageCompleteLog.length = 0;
+    delete state.pageResponseByCursor[PAGE_CURSOR_SECOND];
+    state.pageResponseOverride = {
+      items: state.revisions[TECH_A].slice(0, 10),
+      nextCursor: PAGE_CURSOR_BAD_SHAPE,
+    };
+    await expandRevisionPanel(page);
+    await expect.poll(() => pageCompleteCount(state, TECH_A)).toBe(1);
+    // 非法 nextCursor → 首屏固定失败
+    await expect(
+      page.getByTestId("editor-state-revision-list-error"),
+    ).toHaveText(MSG_LIST_FAIL);
+    await expect(page.getByTestId("editor-state-revision-item-0")).toHaveCount(
+      0,
+    );
+    state.pageResponseOverride = null;
+
+    // 页内重复 ID
+    await page.getByTestId("editor-state-revision-toggle").click();
+    const seeded11 = seedRevisions(state, TECH_A, 11);
+    state.pageLog.length = 0;
+    state.pageCompleteLog.length = 0;
+    await expandRevisionPanel(page);
+    await expect.poll(() => pageCompleteCount(state, TECH_A)).toBe(1);
+    const dupMeta = { ...seeded11[10] };
+    state.pageResponseByCursor[PAGE_CURSOR_SECOND] = {
+      items: [dupMeta, { ...dupMeta }],
+      nextCursor: null,
+    };
+    // 非空 nextCursor 要求恰好 10 条——此处 nextCursor null 允许 <10，但页内 ID 重复应失败
+    // 实际上 2 条重复：parser 应拒
+    await page.getByTestId("editor-state-revision-load-more").click();
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(2);
+    await expect(
+      page.getByTestId("editor-state-revision-load-more-error"),
+    ).toHaveText(MSG_LOAD_MORE_FAIL);
+    await expect(page.getByTestId("editor-state-revision-item-0")).toBeVisible();
+    await expect(page.getByTestId("editor-state-revision-item-10")).toHaveCount(
+      0,
+    );
+
+    // 跨页重复：第二页返回与第一页相同的 ID
+    delete state.pageResponseByCursor[PAGE_CURSOR_SECOND];
+    state.pageResponseByCursor[PAGE_CURSOR_SECOND] = {
+      items: [seeded11[0]],
+      nextCursor: null,
+    };
+    await page.getByTestId("editor-state-revision-load-more").click();
+    await expect
+      .poll(() => pageHitCountForCursor(state, TECH_A, PAGE_CURSOR_SECOND), {
+        timeout: 10_000,
+      })
+      .toBe(2);
+    await expect(
+      page.getByTestId("editor-state-revision-load-more-error"),
+    ).toHaveText(MSG_LOAD_MORE_FAIL);
+    await expect(page.getByTestId("editor-state-revision-item-10")).toHaveCount(
+      0,
+    );
+
+    // 超 20：先成功加载到 20，再伪造第三页 cursor
+    await page.getByTestId("editor-state-revision-toggle").click();
+    seedRevisions(state, TECH_A, 20);
+    state.pageLog.length = 0;
+    state.pageCompleteLog.length = 0;
+    delete state.pageResponseByCursor[PAGE_CURSOR_SECOND];
+    // 第二页返回 10 条且仍带 nextCursor → 前端应视作超限/第三页游标失败
+    state.pageResponseByCursor[PAGE_CURSOR_SECOND] = {
+      items: state.revisions[TECH_A].slice(10, 20),
+      nextCursor: "esrc1_dGhpcmRwYWdlY3Vyc29yYmFk",
+    };
+    await expandRevisionPanel(page);
+    await expect.poll(() => pageCompleteCount(state, TECH_A)).toBe(1);
+    await page.getByTestId("editor-state-revision-load-more").click();
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(2);
+    // 20 + 非空 nextCursor 固定失败，保留原 10
+    await expect(
+      page.getByTestId("editor-state-revision-load-more-error"),
+    ).toHaveText(MSG_LOAD_MORE_FAIL);
+    await expect(page.getByTestId("editor-state-revision-item-0")).toBeVisible();
+    await expect(page.getByTestId("editor-state-revision-item-10")).toHaveCount(
+      0,
+    );
+
+    // 双击单飞：同一浏览器 JS 任务内连续 DOM click() 两次，证明同步 ref 门拦截
+    await page.getByTestId("editor-state-revision-toggle").click();
+    seedRevisions(state, TECH_A, 11);
+    state.pageLog.length = 0;
+    state.pageCompleteLog.length = 0;
+    delete state.pageResponseByCursor[PAGE_CURSOR_SECOND];
+    const loadGate = createHoldGate();
+    state.pageModeByCursor[PAGE_CURSOR_SECOND] = {
+      kind: "hold",
+      gate: loadGate,
+    };
+    await expandRevisionPanel(page);
+    await expect.poll(() => pageCompleteCount(state, TECH_A)).toBe(1);
+    const loadBtn = page.getByTestId("editor-state-revision-load-more");
+    await expect(loadBtn).toBeEnabled();
+    await expect(loadBtn).toHaveText("加载更多");
+    // 禁止 force:true；必须真实触发两次 DOM click，且在同一 JS 任务内
+    await loadBtn.evaluate((el: HTMLElement) => {
+      el.click();
+      el.click();
+    });
+    await loadGate.waitUntilEntered(1);
+    // gate 到达后该 cursor 请求精确为 1（第二击被同步 ref 拦截）
+    expect(pageHitCountForCursor(state, TECH_A, PAGE_CURSOR_SECOND)).toBe(1);
+    // 在途文案
+    await expect(loadBtn).toHaveText("加载更多…");
+    await expect(loadBtn).toBeDisabled();
+    // 刷新在途禁用
+    await expect(
+      page.getByTestId("editor-state-revision-refresh"),
+    ).toBeDisabled();
+    // 恢复禁用
+    await expect(
+      page.getByTestId("editor-state-revision-restore-0"),
+    ).toBeDisabled();
+    loadGate.release();
+    state.pageModeByCursor[PAGE_CURSOR_SECOND] = { kind: "ok" };
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(2);
+    // 释放后仍不得追加第二请求
+    expect(pageHitCountForCursor(state, TECH_A, PAGE_CURSOR_SECOND)).toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-item-10"),
+    ).toBeVisible();
+
+    expect(state.listLog.length).toBe(0);
+    expect(state.forbiddenHits).toEqual([]);
+    expect(state.externalHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+    await assertNoIdLeak(page, state, guards.consoleLogs);
+  });
+
+  test("P12F-C 技术标：load-more arrived+complete 迟到隔离（折叠/刷新/项目切换）；旧 finally 不污染", async ({
+    page,
+  }) => {
+    const state = createProbeState("tech");
+    seedRevisions(state, TECH_A, 11);
+    seedRevisions(state, TECH_B, 11, ["task"]);
+    const loadGate = createHoldGate();
+    state.pageModeByCursor[PAGE_CURSOR_SECOND] = {
+      kind: "hold",
+      gate: loadGate,
+    };
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+
+    await openWorkspace(page, "tech", TECH_A);
+    await expandRevisionPanel(page);
+    await expect.poll(() => pageCompleteCount(state, TECH_A)).toBe(1);
+
+    // 发起 load-more 并挂起
+    await page.getByTestId("editor-state-revision-load-more").click();
+    await loadGate.waitUntilEntered(1);
+    expect(pageHitCountForCursor(state, TECH_A, PAGE_CURSOR_SECOND)).toBe(1);
+    expect(
+      state.pageCompleteLog.filter(
+        (h) => h.projectId === TECH_A && h.cursor === PAGE_CURSOR_SECOND,
+      ).length,
+    ).toBe(0);
+    // 在途：刷新/恢复真实 disabled（不得 force:true）
+    await expect(
+      page.getByTestId("editor-state-revision-refresh"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-restore-0"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-load-more"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-load-more"),
+    ).toHaveText("加载更多…");
+
+    // 折叠作废
+    await page.getByTestId("editor-state-revision-toggle").click();
+    await expect(page.getByTestId("editor-state-revision-body")).toHaveCount(0);
+    loadGate.release();
+    // 必须等迟到 complete
+    await expect
+      .poll(
+        () =>
+          state.pageCompleteLog.filter(
+            (h) => h.projectId === TECH_A && h.cursor === PAGE_CURSOR_SECOND,
+          ).length,
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect(page.getByTestId("editor-state-revision-body")).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-load-more-error"),
+    ).toHaveCount(0);
+
+    // 刷新作废：先正常展开，再挂起 load-more，断言刷新 disabled；
+    // 然后折叠作废；重新展开后点刷新，确认只发首屏且无第二页污染。
+    const loadGate2 = createHoldGate();
+    state.pageModeByCursor[PAGE_CURSOR_SECOND] = {
+      kind: "hold",
+      gate: loadGate2,
+    };
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageHitCountForCursor(state, TECH_A, null), {
+        timeout: 10_000,
+      })
+      .toBe(2);
+    await page.getByTestId("editor-state-revision-load-more").click();
+    await loadGate2.waitUntilEntered(1);
+    await expect(
+      page.getByTestId("editor-state-revision-refresh"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-restore-0"),
+    ).toBeDisabled();
+    // 折叠作废在途 load-more
+    await page.getByTestId("editor-state-revision-toggle").click();
+    loadGate2.release();
+    await expect
+      .poll(
+        () =>
+          state.pageCompleteLog.filter(
+            (h) => h.projectId === TECH_A && h.cursor === PAGE_CURSOR_SECOND,
+          ).length,
+        { timeout: 10_000 },
+      )
+      .toBe(2);
+    // 重新展开后点刷新：精确一次首屏，旧列表 0
+    state.pageModeByCursor[PAGE_CURSOR_SECOND] = { kind: "ok" };
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageHitCountForCursor(state, TECH_A, null), {
+        timeout: 10_000,
+      })
+      .toBe(3);
+    const firstBeforeRefresh = pageHitCountForCursor(state, TECH_A, null);
+    await page.getByTestId("editor-state-revision-refresh").click();
+    await expect
+      .poll(() => pageHitCountForCursor(state, TECH_A, null), {
+        timeout: 10_000,
+      })
+      .toBe(firstBeforeRefresh + 1);
+    const refreshHit = state.pageLog[state.pageLog.length - 1];
+    expect(refreshHit.cursor).toBeNull();
+    expect(refreshHit.queryKeys).toEqual([]);
+    await expect(page.getByTestId("editor-state-revision-item-0")).toBeVisible();
+    await expect(page.getByTestId("editor-state-revision-item-10")).toHaveCount(
+      0,
+    );
+    await expect(
+      page.getByTestId("editor-state-revision-load-more"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-load-more-error"),
+    ).toHaveCount(0);
+
+    // 项目切换迟到
+    const loadGate3 = createHoldGate();
+    state.pageModeByCursor[PAGE_CURSOR_SECOND] = {
+      kind: "hold",
+      gate: loadGate3,
+    };
+    await page.getByTestId("editor-state-revision-load-more").click();
+    await loadGate3.waitUntilEntered(1);
+    // 切到 B
+    await openWorkspace(page, "tech", TECH_B);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageHitCountForCursor(state, TECH_B, null), {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    loadGate3.release();
+    await expect
+      .poll(
+        () =>
+          state.pageCompleteLog.filter(
+            (h) => h.projectId === TECH_A && h.cursor === PAGE_CURSOR_SECOND,
+          ).length,
+        { timeout: 10_000 },
+      )
+      .toBe(3);
+    // B 仅 10 条，不被 A 的第二页污染
+    await expect(page.getByTestId("editor-state-revision-item-0")).toBeVisible();
+    await expect(page.getByTestId("editor-state-revision-item-10")).toHaveCount(
+      0,
+    );
+    await expect(
+      page.getByTestId("editor-state-revision-load-more-error"),
+    ).toHaveCount(0);
+    expect(state.listLog.length).toBe(0);
+    expect(state.forbiddenHits).toEqual([]);
+    expect(state.externalHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+    await assertNoIdLeak(page, state, guards.consoleLogs);
+  });
+});
+
+test.describe("P12F-C 商务标修订历史加载更多", () => {
+  test.describe.configure({ mode: "serial" });
+
+  test("P12F-C 商务标：第二页恢复执行时 expected、唯一 editor-state GET、成功只重载第一页；恢复后迟到 load-more 隔离", async ({
+    page,
+  }) => {
+    const state = createProbeState("biz");
+    const seeded = seedRevisions(state, BIZ_A, 11, [
+      "callback",
+      "task",
+      "revise",
+      "browser_put",
+      "local_parser",
+      "content_fuse_apply",
+      "content_fuse_consume",
+      "checkpoint_restore",
+      "revision_restore",
+      "browser_put",
+      "task",
+    ]);
+    const page2Meta = seeded[10];
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+    await page.clock.install();
+
+    await openWorkspace(page, "biz", BIZ_A);
+    expect(state.listLog.length).toBe(0);
+    expect(state.pageLog.length).toBe(0);
+
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageCompleteCount(state, BIZ_A), { timeout: 10_000 })
+      .toBe(1);
+    expect(state.listLog.length).toBe(0);
+
+    await page.getByTestId("editor-state-revision-load-more").click();
+    await expect
+      .poll(() => pageCompleteCount(state, BIZ_A), { timeout: 10_000 })
+      .toBe(2);
+    await expect(
+      page.getByTestId("editor-state-revision-item-10"),
+    ).toBeVisible();
+
+    const getsBefore = state.editorGetLog.filter(
+      (g) => g.projectId === BIZ_A,
+    ).length;
+    const pageBeforeRestore = pageHitCount(state, BIZ_A);
+    // 执行时 expected：确认前捕获当前 editor 版本（restore 成功后服务端版本会变）
+    const expectedAtConfirm = state.projects[BIZ_A].stateVersion;
+
+    await page.getByTestId("editor-state-revision-restore-10").click();
+    expect(state.restoreLog.length).toBe(0);
+    await expect(
+      page.getByTestId("editor-state-revision-confirm-10"),
+    ).toContainText(RESTORE_CONFIRM);
+    await page.getByTestId("editor-state-revision-confirm-restore-10").click();
+
+    await expect
+      .poll(() => state.restoreLog.length, { timeout: 10_000 })
+      .toBe(1);
+    expect(state.restoreLog[0].revisionId).toBe(page2Meta.revisionId);
+    expect(state.restoreLog[0].body).toEqual({
+      expectedStateVersion: expectedAtConfirm,
+    });
+    expect(Object.keys(state.restoreLog[0].body).sort()).toEqual([
+      "expectedStateVersion",
+    ]);
+    // 不得误用修订自身 stateVersion 作为 expected
+    expect(expectedAtConfirm).not.toBe(page2Meta.stateVersion);
+
+    await expect
+      .poll(
+        () =>
+          state.editorGetLog.filter((g) => g.projectId === BIZ_A).length -
+          getsBefore,
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+
+    // 成功后只重载第一页
+    await expect
+      .poll(() => pageHitCount(state, BIZ_A) - pageBeforeRestore, {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    const reloadHit = state.pageLog[state.pageLog.length - 1];
+    expect(reloadHit.cursor).toBeNull();
+    expect(reloadHit.queryKeys).toEqual([]);
+    // 旧列表仍 0
+    expect(state.listLog.length).toBe(0);
+    // UI 回到第一页（最多 10 条）；有 nextCursor 时按钮仍在
+    await expect(page.getByTestId("editor-state-revision-item-0")).toBeVisible();
+    await expect(page.getByTestId("editor-state-revision-item-10")).toHaveCount(
+      0,
+    );
+    await expect
+      .poll(async () => readContent(page, "biz"), { timeout: 10_000 })
+      .toBe(RESTORED_BIZ);
+
+    // 恢复后仍可加载更多（探针保留上限 20，首屏有 nextCursor）
+    await expect(
+      page.getByTestId("editor-state-revision-load-more"),
+    ).toBeVisible();
+
+    // 迟到隔离：load-more 挂起期间恢复/刷新真实 disabled；折叠作废后再释放
+    const lateGate = createHoldGate();
+    state.pageModeByCursor[PAGE_CURSOR_SECOND] = {
+      kind: "hold",
+      gate: lateGate,
+    };
+    await page.getByTestId("editor-state-revision-load-more").click();
+    await lateGate.waitUntilEntered(1);
+    await expect(
+      page.getByTestId("editor-state-revision-refresh"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-restore-0"),
+    ).toBeDisabled();
+    const completeSecondBefore = state.pageCompleteLog.filter(
+      (h) => h.projectId === BIZ_A && h.cursor === PAGE_CURSOR_SECOND,
+    ).length;
+
+    // 折叠作废在途 load-more；再展开并成功恢复第 0 条，只重载第一页
+    await page.getByTestId("editor-state-revision-toggle").click();
+    await expect(page.getByTestId("editor-state-revision-body")).toHaveCount(0);
+    lateGate.release();
+    await expect
+      .poll(
+        () =>
+          state.pageCompleteLog.filter(
+            (h) => h.projectId === BIZ_A && h.cursor === PAGE_CURSOR_SECOND,
+          ).length,
+        { timeout: 10_000 },
+      )
+      .toBe(completeSecondBefore + 1);
+
+    state.pageModeByCursor[PAGE_CURSOR_SECOND] = { kind: "ok" };
+    // 重开前捕获首屏 arrived/complete 基线，重开后精确 +1（禁止宽泛 >=）
+    const firstPageHitBeforeReopen = pageHitCountForCursor(state, BIZ_A, null);
+    const firstPageCompleteBeforeReopen = state.pageCompleteLog.filter(
+      (h) => h.projectId === BIZ_A && h.cursor === null,
+    ).length;
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageHitCountForCursor(state, BIZ_A, null), {
+        timeout: 10_000,
+      })
+      .toBe(firstPageHitBeforeReopen + 1);
+    await expect
+      .poll(
+        () =>
+          state.pageCompleteLog.filter(
+            (h) => h.projectId === BIZ_A && h.cursor === null,
+          ).length,
+        { timeout: 10_000 },
+      )
+      .toBe(firstPageCompleteBeforeReopen + 1);
+    // 折叠后迟到结果不得把第二页渲染出来
+    await expect(page.getByTestId("editor-state-revision-item-10")).toHaveCount(
+      0,
+    );
+    await expect(
+      page.getByTestId("editor-state-revision-load-more-error"),
+    ).toHaveCount(0);
+
+    // 再次恢复：成功后仍只重载第一页
+    const pageBeforeSecondRestore = pageHitCount(state, BIZ_A);
+    await page.getByTestId("editor-state-revision-restore-0").click();
+    await page.getByTestId("editor-state-revision-confirm-restore-0").click();
+    await expect
+      .poll(() => state.restoreLog.length, { timeout: 10_000 })
+      .toBe(2);
+    await expect
+      .poll(() => pageHitCount(state, BIZ_A) - pageBeforeSecondRestore, {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    expect(state.pageLog[state.pageLog.length - 1].cursor).toBeNull();
+    await expect(page.getByTestId("editor-state-revision-item-10")).toHaveCount(
+      0,
+    );
+
+    expect(state.listLog.length).toBe(0);
+    expect(state.forbiddenHits).toEqual([]);
+    expect(state.externalHits).toEqual([]);
     expect(guards.pageErrors).toEqual([]);
     expect(await guards.readUnhandled()).toEqual([]);
     await assertNoIdLeak(page, state, guards.consoleLogs);

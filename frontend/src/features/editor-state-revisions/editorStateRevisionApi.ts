@@ -1,12 +1,13 @@
 /**
- * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C editor-state 修订历史、对比与正文差异 API 封装
- * 用途：严格校验 list/detail/restore/comparison/body-diff/pair-body-diff 响应 shape；详情仅在 API 栈内解析并压缩为有界摘要。
- * 对接：GET|POST /api/projects/{id}/editor-state-revisions*；comparison/body-diff/pair 只读 GET；apiFetch。
+ * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C editor-state 修订历史、对比、正文差异与游标页 API 封装
+ * 用途：严格校验 list/page/detail/restore/comparison/body-diff/pair-body-diff 响应 shape；详情仅在 API 栈内解析并压缩为有界摘要。
+ * 对接：GET|POST /api/projects/{id}/editor-state-revisions*；page 游标分页；comparison/body-diff/pair 只读 GET；apiFetch。
  * 二次开发：
- *   - 禁止把原始 snapshot 返回给 React；禁止本地生成 revisionId/version
- *   - 禁止把响应原文、路径、后端 detail、字段值/键名拼进错误文案
- *   - 九类来源白名单；列表最多 10 条；comparison 顶层精确四键 + 13 键有序子序列
+ *   - 禁止把原始 snapshot 返回给 React；禁止本地生成 revisionId/version/cursor
+ *   - 禁止把响应原文、路径、后端 detail、字段值/键名/游标拼进错误文案
+ *   - 九类来源白名单；旧列表/页最多 10 条；comparison 顶层精确四键 + 13 键有序子序列
  *   - body-diff 顶层精确六键（current/target）；pair 顶层精确六键（before/after）；item 五键；hunk 二键
+ *   - page 顶层精确 items/nextCursor；游标仅外壳校验，禁止解码/本地生成
  */
 
 import { apiFetch } from "../../shared/lib/api";
@@ -78,6 +79,18 @@ const RESTORE_KEYS = [
 
 /** list 顶层精确仅 items */
 const LIST_TOP_KEYS = ["items"] as const;
+
+/** page 顶层精确 items + nextCursor */
+const PAGE_TOP_KEYS = ["items", "nextCursor"] as const;
+
+/** 游标完整长度上限（与后端合同对齐） */
+const MAX_PAGE_CURSOR_LEN = 192;
+
+/** 游标版本前缀 */
+const PAGE_CURSOR_PREFIX = "esrc1_";
+
+/** base64url 安全字符（无 =） */
+const PAGE_CURSOR_BODY_RE = /^[A-Za-z0-9_-]+$/;
 
 /** 权威 13 键（与后端 CANONICAL_STATE_KEYS 对齐） */
 const CANONICAL_SNAPSHOT_KEYS = [
@@ -188,6 +201,9 @@ const MAX_BODY_DIFF_TOTAL_TEXT = 120_000;
 
 const MAX_LIST_ITEMS = 10;
 
+/** P12F-A 保留上限：前端累计最多 20 条 */
+export const MAX_RETAINED_REVISIONS = 20;
+
 /** 摘要计数遍历上限，防止恶意深树耗尽页面 */
 const MAX_COUNT_NODES = 10_000;
 const MAX_COUNT_DEPTH = 32;
@@ -246,6 +262,15 @@ export type EditorStateRevisionMeta = {
   snapshotBytes: number;
   sourceKind: RevisionSourceKind;
   createdAt: string;
+};
+
+/**
+ * 模块：游标页响应（P12F-C）
+ * 约束：顶层仅 items/nextCursor；items 最多 10；非空 nextCursor 时 items 恰好 10。
+ */
+export type EditorStateRevisionPage = {
+  items: EditorStateRevisionMeta[];
+  nextCursor: string | null;
 };
 
 /**
@@ -627,6 +652,7 @@ export function parseRevisionComparison(
 /**
  * 用途：GET 最近 10 条元数据；不请求详情 snapshot。
  * 对接：GET /projects/{projectId}/editor-state-revisions
+ * 说明：P12F-C 面板首屏改用 listEditorStateRevisionPage；本函数保留兼容。
  */
 export async function listEditorStateRevisions(
   projectId: string,
@@ -648,6 +674,83 @@ export async function listEditorStateRevisions(
     throw new Error("revision_list_invalid");
   }
   return o.items.map((item) => parseRevisionMeta(item));
+}
+
+/**
+ * 用途：校验不透明游标外壳；禁止解码或本地生成。
+ * 规则：完整长度 ≤192、无首尾空白、前缀 esrc1_、其余仅 base64url 安全字符且无 =。
+ */
+export function isValidPageCursor(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  if (value.length === 0 || value.length > MAX_PAGE_CURSOR_LEN) return false;
+  if (value.trim() !== value) return false;
+  if (!value.startsWith(PAGE_CURSOR_PREFIX)) return false;
+  const body = value.slice(PAGE_CURSOR_PREFIX.length);
+  if (body.length === 0) return false;
+  if (body.includes("=")) return false;
+  return PAGE_CURSOR_BODY_RE.test(body);
+}
+
+/**
+ * 用途：严格解析游标页；顶层精确 items/nextCursor；页内 ID 唯一；非空游标时恰好 10 条。
+ * 约束：失败固定抛错，不携带响应原文/游标/ID。
+ */
+export function parseRevisionPage(raw: unknown): EditorStateRevisionPage {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("revision_page_invalid");
+  }
+  const o = raw as Record<string, unknown>;
+  if (!hasExactKeys(o, PAGE_TOP_KEYS)) {
+    throw new Error("revision_page_invalid");
+  }
+  if (!Array.isArray(o.items)) {
+    throw new Error("revision_page_invalid");
+  }
+  if (o.items.length > MAX_LIST_ITEMS) {
+    throw new Error("revision_page_invalid");
+  }
+  const items = o.items.map((item) => parseRevisionMeta(item));
+  const seen = new Set<string>();
+  for (const meta of items) {
+    if (seen.has(meta.revisionId)) {
+      throw new Error("revision_page_invalid");
+    }
+    seen.add(meta.revisionId);
+  }
+  let nextCursor: string | null;
+  if (o.nextCursor === null) {
+    nextCursor = null;
+  } else if (isValidPageCursor(o.nextCursor)) {
+    nextCursor = o.nextCursor;
+  } else {
+    throw new Error("revision_page_invalid");
+  }
+  // 非空 nextCursor 时本页必须恰好 10 条
+  if (nextCursor !== null && items.length !== MAX_LIST_ITEMS) {
+    throw new Error("revision_page_invalid");
+  }
+  return { items, nextCursor };
+}
+
+/**
+ * 用途：GET 游标页；首次无 query；后续仅 cursor=encodeURIComponent(opaque)。
+ * 对接：GET /projects/{projectId}/editor-state-revisions/page[?cursor=]
+ * 约束：禁止 limit/offset/page/total/hasMore/source/search/q；无 body。
+ */
+export async function listEditorStateRevisionPage(
+  projectId: string,
+  cursor?: string | null,
+): Promise<EditorStateRevisionPage> {
+  let path = `/projects/${encodeURIComponent(projectId)}/editor-state-revisions/page`;
+  // null/undefined → 首屏无 query；空字符串或其它非法游标 → 固定错误，不得静默退化成第一页
+  if (cursor != null) {
+    if (!isValidPageCursor(cursor)) {
+      throw new Error("revision_page_cursor_invalid");
+    }
+    path += `?cursor=${encodeURIComponent(cursor)}`;
+  }
+  const raw = await apiFetch<unknown>(path);
+  return parseRevisionPage(raw);
 }
 
 /**

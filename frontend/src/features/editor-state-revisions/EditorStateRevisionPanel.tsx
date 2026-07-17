@@ -1,14 +1,14 @@
 /**
- * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C 双工作区共用修订历史折叠面板
- * 用途：默认折叠零请求；展开 list；按需摘要；按需与当前对比；按需正文差异；
- *       内存双侧修订选择与双修订正文差异；内联二次确认后 restore。
- * 对接：editorStateRevisionApi（含 comparison/body-diff/pair）；技术/商务 hook 的 restoreRevision 回调。
+ * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C 双工作区共用修订历史折叠面板
+ * 用途：默认折叠零请求；展开游标页；手动加载更多至最多 20 条；按需摘要；按需与当前对比；
+ *       按需正文差异；内存双侧修订选择与双修订正文差异；内联二次确认后 restore。
+ * 对接：editorStateRevisionApi（含 page/comparison/body-diff/pair）；技术/商务 hook 的 restoreRevision 回调。
  * 二次开发：
- *   - 不渲染 revisionId/stateVersion/snapshot 正文/内部字段键/字段值/op 原值
- *   - 项目切换/折叠/卸载用会话代次隔离迟到 list/detail/comparison/body-diff/pair/restore
+ *   - 不渲染 revisionId/stateVersion/cursor/snapshot 正文/内部字段键/字段值/op 原值
+ *   - 项目切换/折叠/卸载用会话代次隔离迟到 page/load-more/detail/comparison/body-diff/pair/restore
  *   - 摘要、比较、正文差异、双修订差异、恢复确认同一时刻只保留一个当前意图；交叉作废
  *   - 固定中文脱敏；禁止 console/存储/URL/Cookie/剪贴板/下载/轮询/外网
- *   - 无创建/删除/搜索/分页/自动批量比较；双修订选择仅内存
+ *   - 无创建/删除/搜索/自动分页/预取；双修订选择仅内存；游标仅内存 + 规定 API 查询
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -22,7 +22,8 @@ import {
   getEditorStateRevisionComparison,
   getEditorStateRevisionPairBodyDiff,
   getEditorStateRevisionSummary,
-  listEditorStateRevisions,
+  listEditorStateRevisionPage,
+  MAX_RETAINED_REVISIONS,
   type BodyDiffOp,
   type EditorStateRevisionBodyDiff,
   type EditorStateRevisionComparison,
@@ -36,6 +37,7 @@ export const REVISION_RESTORE_CONFIRM_TEXT =
   "服务器当前内容会先保存为安全检查点，恢复替换技术标和商务标全部编辑态，尚未保存的本地修改不会写入。";
 
 const MSG_LIST_FAIL = "修订历史加载失败，请稍后重试";
+const MSG_LOAD_MORE_FAIL = "更多修订加载失败，请稍后重试";
 const MSG_DETAIL_FAIL = "修订摘要加载失败，请稍后重试";
 const MSG_COMPARE_FAIL = "修订差异加载失败，请稍后重试";
 const MSG_COMPARE_SAME = "与当前版本一致";
@@ -102,7 +104,10 @@ export function EditorStateRevisionPanel({
 }: EditorStateRevisionPanelProps) {
   const [expanded, setExpanded] = useState(false);
   const [items, setItems] = useState<ListItem[]>([]);
+  /** 服务端 nextCursor；仅内存，不渲染 */
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [comparisonError, setComparisonError] = useState<string | null>(null);
   const [bodyDiffError, setBodyDiffError] = useState<string | null>(null);
@@ -112,6 +117,7 @@ export function EditorStateRevisionPanel({
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [statusTone, setStatusTone] = useState<"ok" | "err" | null>(null);
   const [listLoading, setListLoading] = useState(false);
+  const [loadMoreLoading, setLoadMoreLoading] = useState(false);
   /** 仅绑定当前在途详情 revision（允许挂起时点另一项/刷新/恢复） */
   const [detailLoadingId, setDetailLoadingId] = useState<string | null>(null);
   /** 仅绑定当前在途 comparison revision */
@@ -174,7 +180,22 @@ export function EditorStateRevisionPanel({
    * 重选/清除/折叠/刷新/项目切换均递增。
    */
   const pairBodyDiffGenRef = useRef(0);
+  /**
+   * 加载更多请求代次：折叠/卸载/项目切换/首屏重载/恢复重载递增；
+   * 旧 load-more 的 try/catch/finally 不得写 items/error/loading/cursor。
+   */
+  const loadMoreGenRef = useRef(0);
+  /** 同步在途门：连续点击/双击不得产生第二个在途请求 */
+  const loadMoreInFlightRef = useRef(false);
+  /** items 同步镜像，供 load-more 合并校验（避免闭包过期） */
+  const itemsRef = useRef<ListItem[]>([]);
+  /** nextCursor 同步镜像 */
+  const nextCursorRef = useRef<string | null>(null);
   const mountedRef = useRef(true);
+
+  // 保持 ref 与 state 同步
+  itemsRef.current = items;
+  nextCursorRef.current = nextCursor;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -231,16 +252,20 @@ export function EditorStateRevisionPanel({
     setPairBodyDiffLoading(false);
   }, []);
 
-  // 项目切换：重置面板，作废在途 list/detail/comparison/body-diff/pair/restore
+  // 项目切换：重置面板，作废在途 page/load-more/detail/comparison/body-diff/pair/restore
   useEffect(() => {
     sessionRef.current += 1;
     detailGenRef.current += 1;
     comparisonGenRef.current += 1;
     bodyDiffGenRef.current += 1;
     pairBodyDiffGenRef.current += 1;
+    loadMoreGenRef.current += 1;
+    loadMoreInFlightRef.current = false;
     setExpanded(false);
     setItems([]);
+    setNextCursor(null);
     setListError(null);
+    setLoadMoreError(null);
     setDetailError(null);
     setComparisonError(null);
     setBodyDiffError(null);
@@ -248,6 +273,7 @@ export function EditorStateRevisionPanel({
     setStatusMessage(null);
     setStatusTone(null);
     setListLoading(false);
+    setLoadMoreLoading(false);
     setDetailLoadingId(null);
     setComparisonLoadingId(null);
     setBodyDiffLoadingId(null);
@@ -268,15 +294,20 @@ export function EditorStateRevisionPanel({
   const loadList = useCallback(
     async (session: number) => {
       if (!projectId) return;
-      // 刷新/重载列表作废在途 detail/comparison/body-diff/pair，避免迟到结果覆盖新会话
+      // 刷新/重载第一页：作废在途 detail/comparison/body-diff/pair/load-more
       detailGenRef.current += 1;
       comparisonGenRef.current += 1;
       bodyDiffGenRef.current += 1;
       pairBodyDiffGenRef.current += 1;
+      loadMoreGenRef.current += 1;
+      loadMoreInFlightRef.current = false;
       setDetailLoadingId(null);
       setComparisonLoadingId(null);
       setBodyDiffLoadingId(null);
       setPairBodyDiffLoading(false);
+      setLoadMoreLoading(false);
+      setLoadMoreError(null);
+      setNextCursor(null);
       setListLoading(true);
       setListError(null);
       setPendingRestoreId(null);
@@ -285,13 +316,16 @@ export function EditorStateRevisionPanel({
       clearBodyDiffState();
       clearPairBodyDiffState();
       try {
-        const next = await listEditorStateRevisions(projectId);
+        // 首屏改用游标页，禁止同时请求旧列表
+        const page = await listEditorStateRevisionPage(projectId);
         if (!mountedRef.current || session !== sessionRef.current) return;
-        setItems(next);
+        setItems(page.items);
+        setNextCursor(page.nextCursor);
       } catch {
         if (!mountedRef.current || session !== sessionRef.current) return;
         setListError(MSG_LIST_FAIL);
         setItems([]);
+        setNextCursor(null);
       } finally {
         if (mountedRef.current && session === sessionRef.current) {
           setListLoading(false);
@@ -307,6 +341,73 @@ export function EditorStateRevisionPanel({
     ],
   );
 
+  /**
+   * 用途：手动加载更多；同步在途门 + 代次；成功顺序追加；失败保值可重试。
+   */
+  const handleLoadMore = useCallback(async () => {
+    if (!expanded || !projectId) return;
+    if (listLoading || restoreBusy || loadMoreLoading) return;
+    const cursor = nextCursorRef.current;
+    if (!cursor) return;
+    // 同步单飞：双击/连点不得产生第二请求
+    if (loadMoreInFlightRef.current) return;
+    loadMoreInFlightRef.current = true;
+    const myGen = ++loadMoreGenRef.current;
+    const session = sessionRef.current;
+    setLoadMoreLoading(true);
+    setLoadMoreError(null);
+    try {
+      const page = await listEditorStateRevisionPage(projectId, cursor);
+      if (
+        !mountedRef.current ||
+        myGen !== loadMoreGenRef.current ||
+        session !== sessionRef.current
+      ) {
+        return;
+      }
+      const prev = itemsRef.current;
+      const existingIds = new Set(prev.map((it) => it.revisionId));
+      for (const it of page.items) {
+        if (existingIds.has(it.revisionId)) {
+          throw new Error("revision_load_more_duplicate");
+        }
+        existingIds.add(it.revisionId);
+      }
+      const merged = [...prev, ...page.items];
+      // 超过保留上限，或满 20 仍带第三页游标：固定失败
+      if (merged.length > MAX_RETAINED_REVISIONS) {
+        throw new Error("revision_load_more_over_cap");
+      }
+      if (merged.length === MAX_RETAINED_REVISIONS && page.nextCursor != null) {
+        throw new Error("revision_load_more_third_page");
+      }
+      setItems(merged);
+      setNextCursor(page.nextCursor);
+      setLoadMoreError(null);
+    } catch {
+      if (
+        !mountedRef.current ||
+        myGen !== loadMoreGenRef.current ||
+        session !== sessionRef.current
+      ) {
+        return;
+      }
+      // 失败：保留原 items 与原 cursor，固定错误，可同 cursor 重试
+      setLoadMoreError(MSG_LOAD_MORE_FAIL);
+    } finally {
+      if (myGen === loadMoreGenRef.current) {
+        loadMoreInFlightRef.current = false;
+      }
+      if (
+        mountedRef.current &&
+        myGen === loadMoreGenRef.current &&
+        session === sessionRef.current
+      ) {
+        setLoadMoreLoading(false);
+      }
+    }
+  }, [expanded, projectId, listLoading, restoreBusy, loadMoreLoading]);
+
   const handleToggle = useCallback(() => {
     if (expanded) {
       sessionRef.current += 1;
@@ -314,8 +415,13 @@ export function EditorStateRevisionPanel({
       comparisonGenRef.current += 1;
       bodyDiffGenRef.current += 1;
       pairBodyDiffGenRef.current += 1;
+      loadMoreGenRef.current += 1;
+      loadMoreInFlightRef.current = false;
       setExpanded(false);
       setListLoading(false);
+      setLoadMoreLoading(false);
+      setLoadMoreError(null);
+      setNextCursor(null);
       setDetailLoadingId(null);
       setComparisonLoadingId(null);
       setBodyDiffLoadingId(null);
@@ -333,6 +439,7 @@ export function EditorStateRevisionPanel({
     setStatusMessage(null);
     setStatusTone(null);
     setPendingRestoreId(null);
+    setLoadMoreError(null);
     clearSummaryState();
     clearComparisonState();
     clearBodyDiffState();
@@ -349,12 +456,13 @@ export function EditorStateRevisionPanel({
 
   const handleRefresh = useCallback(() => {
     // 允许详情/比较/正文差异挂起时刷新：loadList 会递增代次作废旧结果
-    if (!expanded || listLoading || restoreBusy) return;
+    // 加载更多在途时禁用刷新，避免列表替换与追加并发
+    if (!expanded || listLoading || restoreBusy || loadMoreLoading) return;
     const session = sessionRef.current;
     setStatusMessage(null);
     setStatusTone(null);
     void loadList(session);
-  }, [expanded, listLoading, restoreBusy, loadList]);
+  }, [expanded, listLoading, restoreBusy, loadMoreLoading, loadList]);
 
   const handleSummaryClick = useCallback(
     async (item: ListItem) => {
@@ -681,7 +789,7 @@ export function EditorStateRevisionPanel({
 
   const handleRestoreClick = useCallback(
     (revisionId: string) => {
-      if (disabled || restoreBusy) return;
+      if (disabled || restoreBusy || loadMoreLoading) return;
       // 恢复：立即清摘要/比较/正文差异/pair/detail error 并作废在途
       invalidateDetail();
       invalidateComparison();
@@ -698,6 +806,7 @@ export function EditorStateRevisionPanel({
     [
       disabled,
       restoreBusy,
+      loadMoreLoading,
       invalidateDetail,
       invalidateComparison,
       invalidateBodyDiff,
@@ -713,6 +822,7 @@ export function EditorStateRevisionPanel({
     if (
       disabled ||
       restoreBusy ||
+      loadMoreLoading ||
       !pendingRestoreId ||
       !expanded
     ) {
@@ -720,11 +830,15 @@ export function EditorStateRevisionPanel({
     }
     const session = sessionRef.current;
     const revisionId = pendingRestoreId;
-    // 确认恢复：作废在途 detail/comparison/body-diff/pair，清摘要/比较/正文差异/确认相关态
+    // 确认恢复：作废在途 detail/comparison/body-diff/pair/load-more，清摘要/比较/正文差异/确认相关态
     invalidateDetail();
     invalidateComparison();
     invalidateBodyDiff();
     invalidatePairBodyDiff();
+    loadMoreGenRef.current += 1;
+    loadMoreInFlightRef.current = false;
+    setLoadMoreLoading(false);
+    setLoadMoreError(null);
     clearSummaryState();
     clearComparisonState();
     clearBodyDiffState();
@@ -776,6 +890,7 @@ export function EditorStateRevisionPanel({
   }, [
     disabled,
     restoreBusy,
+    loadMoreLoading,
     pendingRestoreId,
     expanded,
     restoreRevision,
@@ -795,7 +910,9 @@ export function EditorStateRevisionPanel({
     setPendingRestoreId(null);
   }, [restoreBusy]);
 
-  const restoreDisabled = disabled || restoreBusy || listLoading;
+  // 恢复：全状态阻断 / 首屏加载 / 加载更多在途时禁用
+  const restoreDisabled =
+    disabled || restoreBusy || listLoading || loadMoreLoading;
   /** 比较/正文差异/pair 不受 disabled 控制，仅 restoreBusy 期间禁用 */
   const compareDisabled = restoreBusy;
   const bodyDiffDisabled = restoreBusy;
@@ -806,6 +923,9 @@ export function EditorStateRevisionPanel({
     pairBeforeId !== pairAfterId &&
     !restoreBusy &&
     !pairBodyDiffLoading;
+  const showLoadMore = nextCursor != null;
+  const loadMoreDisabled =
+    loadMoreLoading || listLoading || restoreBusy || !nextCursor;
 
   return (
     <div
@@ -841,7 +961,7 @@ export function EditorStateRevisionPanel({
               type="button"
               className="btn btn-ghost btn-sm"
               data-testid="editor-state-revision-refresh"
-              disabled={listLoading || restoreBusy}
+              disabled={listLoading || restoreBusy || loadMoreLoading}
               onClick={handleRefresh}
             >
               刷新
@@ -875,6 +995,14 @@ export function EditorStateRevisionPanel({
               style={{ margin: "0 0 8px", color: "var(--danger)" }}
             >
               {listError}
+            </p>
+          ) : null}
+          {loadMoreError ? (
+            <p
+              data-testid="editor-state-revision-load-more-error"
+              style={{ margin: "0 0 8px", color: "var(--danger)" }}
+            >
+              {loadMoreError}
             </p>
           ) : null}
           {detailError ? (
@@ -1399,6 +1527,21 @@ export function EditorStateRevisionPanel({
               );
             })}
           </ul>
+          {showLoadMore ? (
+            <div style={{ marginTop: 10 }}>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                data-testid="editor-state-revision-load-more"
+                disabled={loadMoreDisabled}
+                onClick={() => {
+                  void handleLoadMore();
+                }}
+              >
+                {loadMoreLoading ? "加载更多…" : "加载更多"}
+              </button>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>
