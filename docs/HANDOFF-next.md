@@ -1,13 +1,13 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-17（P12E-C 双修订正文差异前端已完成、验收并推送）
+> **交接日期**：2026-07-17（P12E-C 已完成；P12F-A 有限保留与字节配额已冻结，等待 Grok）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
 > **协作分支功能基线**：P12E-A 冻结=`5aa205c`、实现=`f9f067e`；P12E-B 冻结=`00ef081`、实现=`5a5b08a`；P12E-C 冻结=`8b40bf4`、实现=`b6a4375`、文档闭环见当前 HEAD；P12D-B 冻结=`fc19d93`、实现=`35ab377`、验收闭环=`c7cf67f`；P12D-A 冻结=`2cc6ee3`、实现=`9445fcc`；P9C-R1 冻结=`cd70ef0`、实现=`b53dcce`；P12C-C3 冻结=`6b9143a`、实现=`5e4f9f6`；P12C-C2 冻结=`54af600`、范围修订=`2276366`、实现=`0803250`；P12C-C1 冻结=`26b504e`、实现=`7023ecd`；P12C-B-D3 冻结=`1d44484`、实现=`b91a7ff`；P12C-B-D2 冻结=`6b83fc1`、实现=`f256f5b`；P12C-B-D1 冻结=`e8ffaeb`、实现=`a6a28f6`；P12C-B-C2 冻结=`52bbabf`、实现=`82cc82e`；P12C-B-C1 冻结=`76834f5`、实现=`1d0ce0e`；P12C-B-B2 冻结=`3a30c03`、实现=`5149385`；P12C-B-B1 冻结=`05864f6`、实现=`5a0d1c0`；P12C-B-A 冻结=`fbf93c0`、实现=`acf3139`；P12C-A 冻结=`daa8c43`、实现=`226e1c1`；P12B-D 冻结=`613818f`、D1 后端=`551caba`、D2 前端=`0f81dd6`；其余既有功能基线见本文 §11。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
-> **最新增量基线**：P12E-A 已交付单条修订对当前状态的只读有界正文差异；P12E-B 已交付双修订正文差异后端；P12E-C 已交付技术/商务共用的内存双侧选择、严格 pair parser、单次 GET、有界中文展示、五意图互斥和 arrived/complete 迟到隔离。
+> **最新增量基线**：P12E-A 已交付单条修订对当前状态的只读有界正文差异；P12E-B/C 已交付双历史修订正文差异后端与共用前端；P12F-A 已冻结“最多 20 条且总快照最多 20 MiB、默认列表仍为 10 条”的磁盘有界保留基础。
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **本地状态**：P12E-A 实现 `f9f067e`、P12E-B 实现 `5a5b08a`、P12E-C 实现 `b6a4375` 均已推送；本文档闭环完成后必须再次核对 HEAD、远端一致且工作区干净。固定模型缓存与验收日志仅在本机且被 Git 忽略。
+> **本地状态**：P12E-A 实现 `f9f067e`、P12E-B 实现 `5a5b08a`、P12E-C 实现 `b6a4375` 均已推送；当前只新增/更新 P12F-A 契约、计划和交接文档，尚未修改生产代码。冻结提交后必须核对 HEAD、远端一致且工作区干净。固定模型缓存与验收日志仅在本机且被 Git 忽略。
 > **验收基线**：P12E-B 专项/P12E-A 专项/P12D-P12C 受影响回归/后端串行全量 **13/23/50/867 passed**；Codex 合并重跑三组共 **86 passed**，仅 1 条既有 Starlette/httpx 弃用告警。P12E-C 聚焦/受影响 history/前端全量为 **3/27/293 passed**，Playwright 全部单 worker、零重试；lint/build/diff-check/三文件白名单通过。P12D-B 为 24/51/46/287，P12D-A 为 14/132/831。P9C-R1 专项/语义/知识库完整 **17/21/28**，真实预检 Recall@5=`1.0`、NDCG@5=`0.927295`。**所有 Playwright E2E 共用 SQLite 重置库，必须逐条串行运行，禁止并行。**
 
 ---
@@ -21,8 +21,8 @@
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
 当前进度：P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/P12D-B、P12E-A/P12E-B/P12E-C、P9D、P9C-R1、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。P12E-C 冻结=`8b40bf4`、实现=`b6a4375`；后端全量 867、前端全量 293 passed。
 当前状态：P12D-B 当前对比、P12E-A 单修订正文差异、P12E-B 双修订后端和 P12E-C 双修订前端均已完成并推送；P12E-C 独立验收为聚焦/受影响 history/前端全量 3/27/293 passed。
-当前执行状态：P12E-C 已闭环；下一实现包尚未冻结。先对照路线图和现有代码审计剩余主线，再编写独立中文契约/计划和精确白名单，通过消息箱交 Grok 实现。
-下一步：审计版本历史之后的剩余主线并冻结最小独立包；分页、搜索、恢复、删除、导出、分享、缓存、跨项目历史和多人协作不得未经新契约直接混入。
+当前执行包：P12F-A 修订有限保留扩容与总字节配额，契约=`docs/p12f-revision-retention-quota-contract.md`、计划=`docs/plans/2026-07-17-p12f-revision-retention-quota-plan.md`。Grok 只允许修改两个服务和四个既有后端测试文件，不得提交或推送。
+下一步：P12F-A 先真实红测，再把保留策略改为最多 20 条且总快照最多 20 MiB，同时保持默认 GET 最近 10 条；游标分页 API/前端加载更多必须留到后续 P12F-B 独立冻结。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -664,3 +664,13 @@ Grok 只修改 API 封装、共用面板和既有 history E2E 三文件；任务
 真实 failure-first 为 **3 failed / 0 passed**，首个失败是生产面板没有双修订选择按钮；不是收集、fixture、依赖、白页或服务启动错误。实现后聚焦 **3 passed**。Codex 独立通过 P12E-C 聚焦 **3**、P12E-A/P12D-B/P12C-C3 history 回归 **27**、前端全量 **293 passed (8.2m)**；全部 Playwright 使用 `--workers=1 --retries=0`。lint、build、diff-check、精确三文件和空暂存区均通过。
 
 本包没有实现分页、搜索、自动批量比较、完整时间线、恢复/删除、导出、分享、缓存、跨项目历史、URL/浏览器存储或多人协作。下一包必须先审计剩余主线并重新冻结，不得直接扩大 P12E-C。
+
+## P12F-A 冻结交接（2026-07-17）
+
+P12F-A 契约=`docs/p12f-revision-retention-quota-contract.md`、计划=`docs/plans/2026-07-17-p12f-revision-retention-quota-plan.md`。选择本包的原因是当前写入事务已把每项目修订裁成 10 条，直接做分页只能产生无法访问更老数据的假入口。
+
+冻结目标：常规小快照最多保留最近 20 条，同时以项目总 `snapshot_bytes <= 20 MiB` 约束最坏磁盘占用；按 `created_at DESC, id DESC` 保留连续最新前缀，达到任一上限后删除该条及所有更旧行。默认历史 GET 必须继续只返回最近 10 条，响应 shape 不变。
+
+Grok 只允许修改 `backend/app/services/editor_state_revision_service.py`、`backend/app/services/editor_state_revision_history_service.py` 和四个既有测试 `test_editor_state_revisions.py`、`test_p12c_revision_history_read.py`、`test_p12c_browser_put_revisions.py`、`test_p12c_revision_restore.py`。必须先写真实红测；禁止 API/schema/模型/迁移/前端/新增文件，禁止提交或推送。
+
+P12F-A 不回填已裁历史，也不实现分页 API、前端加载更多、搜索、删除、命名、固定、导出、分享、跨项目历史或多人协作。验收通过后再独立冻结 P12F-B 游标分页。

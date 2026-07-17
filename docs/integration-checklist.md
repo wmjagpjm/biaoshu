@@ -782,3 +782,11 @@ Failure-first 真实分解：13 项红测中 11 项为新路由不存在的 HTTP
 Failure-first 为真实 **3 failed / 0 passed**，首个失败是双修订选择按钮尚不存在；实现后 Grok 聚焦 **3 passed**。最终 review_request=`msg_fa38202aa5d641d5b111d914995d6f4f`，Grok 未提交/推送。
 
 Codex 独立验收：P12E-C 聚焦 **3 passed**；P12E-A/P12D-B/P12C-C3 受影响 history 回归 **27 passed**；前端全量 **293 passed (8.2m)**，全部 `--workers=1 --retries=0`。`npm run lint`、`npm run build`、`git diff --check`、精确三文件与空暂存区均通过。仍未实现分页、搜索、自动批量比较、完整时间线、恢复/删除、导出、分享、缓存、跨项目历史、URL/浏览器存储和多人协作。
+
+## P12F-A 修订有限保留扩容与总字节配额（已冻结，等待实现）
+
+契约=`docs/p12f-revision-retention-quota-contract.md`、计划=`docs/plans/2026-07-17-p12f-revision-retention-quota-plan.md`。当前写入账本与默认列表都被同一“10 条”常量限制，分页无法读取已裁掉的历史；本包先把写入保留改为最多 20 条且项目总快照最多 20 MiB，默认列表仍固定最近 10 条。
+
+Grok 白名单仅两个服务和四个既有后端测试：`editor_state_revision_service.py`、`editor_state_revision_history_service.py`、`test_editor_state_revisions.py`、`test_p12c_revision_history_read.py`、`test_p12c_browser_put_revisions.py`、`test_p12c_revision_restore.py`。必须先红后绿，证明连续最新前缀、计数/字节双上限、无 `snapshot_json` 投影、三重作用域删除、非法元数据零删除与列表兼容。
+
+本包不新增 API/schema/模型/迁移/前端，不回填已裁历史，不做游标分页、加载更多、搜索、删除、命名、固定、导出、分享、跨项目历史或多人协作。P12F-B 只能在 P12F-A 独立验收后另行冻结。

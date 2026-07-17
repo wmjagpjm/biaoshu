@@ -365,13 +365,15 @@ P8D 与 P8E 本机外置解析助手均已完成并推送：P8D 计划=`30d066f`
 
 **P12E-A 单条修订正文差异预览已完成**：冻结=`5aa205c`、实现=`f9f067e`。只读 GET 返回精确六键和有界章节行差异；前端技术/商务共用按需入口、严格 parser、四意图互斥与 arrived/complete 迟到隔离。Codex 首轮审查复现第 101 个差异章仍进入 difflib，Grok 以真实 **1 failed / 1 passed** 红测返修为 **2 passed**；Codex 独立通过专项/回归/后端全量 **23/27/854**，history/checkpoint/truth/前端全量 **27/51/46/290 passed**。任意历史两两比较、删除、搜索、分页、正文自动恢复和多人协作继续不进入 A 包。
 
-**下一步**：对照阶段目标、现有交付和未实现边界审计剩余主线，另行冻结最小独立包；不得未经契约把 P12E-C 扩成完整时间线、删除、搜索、分页、恢复或多人协作。
+**下一步**：执行已冻结的 P12F-A 修订有限保留与总字节配额包；先在不提高单项目 20 MiB 最坏快照占用的前提下保留最多 20 条小修订，同时保持默认列表 10 条。游标分页 API 与前端加载更多必须留到后续 P12F-B 独立冻结。
 
 **P12E-B 已完成并推送**：双修订正文差异后端基础，契约=`docs/p12e-revision-pair-body-diff-contract.md`，计划=`docs/plans/2026-07-17-p12e-revision-pair-body-diff-plan.md`，冻结=`00ef081`、实现=`5a5b08a`。只比较同 workspace/project 的两个历史修订，暂不提供前端入口；Grok 仅改四个后端文件并发送 review_request，Codex 独立验收后提交推送。专项/回归/全量 **13/23/50/867 passed**，合并专项 **86 passed**，仅 1 条既有 Starlette/httpx 弃用告警。
 
 P12E-B 真实 failure-first 为 13 项红测：11 项路由缺失 404、1 项同正文夹具 `stateVersion` 碰撞、1 项 AST 缺少入口；夹具修正后 13 项通过。后端服务复用 P12E-A 的完整值扫描、章节配对、有界 difflib 和脱敏错误，新增路径不读当前 editor-state、不写五域。前端选择器、分页/搜索、恢复/删除/导出/分享、跨项目历史、缓存和多人协作继续留待独立规划。
 
 **P12E-C 已完成并推送**：前端双修订正文差异选择与展示，契约=`docs/p12e-revision-pair-frontend-contract.md`，计划=`docs/plans/2026-07-17-p12e-revision-pair-frontend-plan.md`，冻结=`8b40bf4`、实现=`b6a4375`。Grok 严格只改 API 封装、共用修订面板和既有 history E2E 三文件；选择只存内存且零请求，比较精确一次无 query/body 的 P12E-B GET。真实 failure-first **3 failed / 0 passed**，实现后聚焦 **3 passed**；Codex 独立通过受影响 history **27 passed**、前端全量 **293 passed (8.2m)**，lint/build/diff-check/白名单通过。严格 parser、中文有界展示、零 ID 泄漏、技术/商务共享、五意图互斥和 A0→A1/项目切换迟到隔离已交付；分页、搜索、恢复、删除、导出、分享、缓存、跨项目历史和多人协作仍不在本包。
+
+**P12F-A 已冻结，等待实现**：契约=`docs/p12f-revision-retention-quota-contract.md`，计划=`docs/plans/2026-07-17-p12f-revision-retention-quota-plan.md`。写入账本最多保留 20 条且项目总快照最多 20 MiB，按 `created_at DESC, id DESC` 保留连续最新前缀；P12C-C1 默认列表上限必须独立固定为 10。只允许修改两个服务和四个既有后端测试文件；不改 API、schema、模型、数据库或前端，不回填旧历史，不实现分页/搜索/删除/多人协作。
 ## P12D-B 完成状态（2026-07-17）
 
 P12D-B 技术/商务共用前端修订对比入口已完成。Grok 任务 `msg_a8258d4b49f44678bf43fe2a2356d583`，仅修改三文件白名单并未提交；Codex 独立通过历史 24、检查点 51、技术/商务真值 46、前端全量 287 passed，lint/build/diff 通过。首轮红测实际为 2 failed / 21 passed / 1 did not run，因串行分组在首个缺失入口失败后跳过一条；该过程偏差已保留为事实，不冒充 3/21。
