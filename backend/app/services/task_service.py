@@ -9,8 +9,8 @@
   - POST/GET /api/projects/{id}/tasks；GET .../tasks/{id}/events；POST .../tasks/{id}/cancel
   - knowledge_service、export_service、llm_service、editor_state_service、fuse_context_service
   - 前端 useProjectPipeline
-二次开发：可换 Redis/Celery；SSE 必须短 Session 读库，勿跨线程共享 Session；analyze 禁止注入知识库；
-  response_match / content_fuse 仅产生待确认建议，不得直接写 editor-state。
+二次开发：可换 Redis/Celery；SSE 必须短 Session 读库并带 workspace 三层校验，勿跨线程共享 Session；
+  analyze 禁止注入知识库；response_match / content_fuse 仅产生待确认建议，不得直接写 editor-state。
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ from app.services import (
 )
 from app.services.export_service import build_docx_bytes
 from app.services.llm_service import LlmCallError, LlmConfigError
-from app.services.project_service import get_project, update_project
+from app.services.project_service import ProjectNotFoundError, get_project, update_project
 
 ALLOWED_TYPES = frozenset(
     {
@@ -165,14 +165,25 @@ def task_to_dict(task: ProjectTaskRow) -> dict:
     }
 
 
-def _read_task_snapshot(project_id: str, task_id: str) -> dict | None:
-    """用途：用独立短 Session 读取 SSE 所需任务快照，避免长连接持有请求 Session。"""
+def _read_task_snapshot(
+    workspace_id: str, project_id: str, task_id: str
+) -> dict | None:
+    """
+    用途：用独立短 Session 按 workspace/project/task 三层读取 SSE 快照。
+    对接：tasks.stream_task_events 每轮 run_in_threadpool；复用 get_task 归属校验。
+    二次开发：
+      - 必须显式接收已授权 workspace_id，禁止回退默认空间或只按任务主键读取
+      - ProjectNotFoundError / KeyError 一律返回 None，finally 关闭会话
+      - 不得跨轮次复用或共享 Session
+    """
     db = SessionLocal()
     try:
-        task = db.get(ProjectTaskRow, task_id)
-        if task is None or task.project_id != project_id:
-            return None
+        task = get_task(db, workspace_id, project_id, task_id)
         return task_to_dict(task)
+    except ProjectNotFoundError:
+        return None
+    except KeyError:
+        return None
     finally:
         db.close()
 

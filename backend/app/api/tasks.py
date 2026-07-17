@@ -2,7 +2,10 @@
 模块：项目任务路由
 用途：创建/查询/列表/取消任务，并为单任务提供 SSE 状态流；默认异步，?sync=1 同步执行。
 对接：POST/GET /api/projects/{id}/tasks；GET .../tasks/{id}/events；POST .../tasks/{id}/cancel
-二次开发：SSE 只读数据库快照；多任务总线、事件游标和鉴权升级须独立设计。
+二次开发：
+  - SSE 连接前经私有依赖短 Session 复用 get_workspace_id（required=活动空间+bid_writer；disabled=默认/显式头）
+  - 长连接不得挂 request-scope get_db，不得捕获 Session/ORM 行；流内每轮短 Session 再校验 workspace
+  - 多任务总线、事件游标、URL token 鉴权须独立设计，禁止并入本路由
 """
 
 import asyncio
@@ -16,10 +19,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_workspace_id
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.database import SessionLocal, get_db
 from app.services import task_service
-from app.services.project_service import ProjectNotFoundError, ensure_default_workspace
+from app.services.project_service import ProjectNotFoundError
 
 router = APIRouter(prefix="/projects", tags=["tasks"])
 
@@ -40,6 +43,35 @@ class TaskCreate(BaseModel):
         )
     )
     payload: dict[str, Any] | None = None
+
+
+def _resolve_sse_workspace_id(
+    project_id: str,
+    task_id: str,
+    request: Request,
+    settings: Annotated[Settings, Depends(get_settings)],
+    x_workspace_id: Annotated[str | None, Header(alias="X-Workspace-Id")] = None,
+) -> str:
+    """
+    用途：SSE 专用连接前鉴权——短 Session 解析 workspace 并校验任务归属后立即关闭。
+    对接：stream_task_events；显式调用 get_workspace_id / task_service.get_task。
+    二次开发：
+      - required：无头用 activeWorkspaceId；显式头仅成员空间；角色精确 bid_writer
+      - disabled：保持默认空间与合法 X-Workspace-Id 个人版兼容
+      - 只返回 workspace_id 字符串；禁止把 Session/ORM 行交给 StreamingResponse
+      - finally 必须在路径返回 StreamingResponse 前关闭会话
+    """
+    db = SessionLocal()
+    try:
+        workspace_id = get_workspace_id(request, db, settings, x_workspace_id)
+        task_service.get_task(db, workspace_id, project_id, task_id)
+        return workspace_id
+    except ProjectNotFoundError:
+        raise HTTPException(status_code=404, detail="项目不存在") from None
+    except KeyError:
+        raise HTTPException(status_code=404, detail="任务不存在") from None
+    finally:
+        db.close()
 
 
 @router.get("/{project_id}/tasks")
@@ -76,30 +108,15 @@ async def stream_task_events(
     project_id: str,
     task_id: str,
     request: Request,
-    x_workspace_id: Annotated[str | None, Header(alias="X-Workspace-Id")] = None,
+    workspace_id: Annotated[str, Depends(_resolve_sse_workspace_id)],
 ):
     """
     用途：以 SSE 推送单个任务的完整快照、状态变化和心跳，终态后自动关闭。
     对接：useProjectPipeline 的 EventSource；GET /api/projects/{id}/tasks/{taskId} 回退查询。
+    二次开发：
+      - workspace_id 由连接前短会话依赖解析；生成器每轮 run_in_threadpool 精确传入该值
+      - 不得持有请求 Session；不得回退默认空间或只按任务主键读取
     """
-    settings = get_settings()
-    workspace_id = (
-        x_workspace_id.strip()
-        if x_workspace_id and x_workspace_id.strip()
-        else settings.default_workspace_id
-    )
-    # 连接前短会话校验归属，生成器中不持有请求级 Session。
-    db = SessionLocal()
-    try:
-        ensure_default_workspace(db, settings)
-        task_service.get_task(db, workspace_id, project_id, task_id)
-    except ProjectNotFoundError:
-        raise HTTPException(status_code=404, detail="项目不存在") from None
-    except KeyError:
-        raise HTTPException(status_code=404, detail="任务不存在") from None
-    finally:
-        db.close()
-
     async def event_stream():
         started_at = time.monotonic()
         last_signature: str | None = None
@@ -114,7 +131,7 @@ async def stream_task_events(
                 return
 
             snapshot = await run_in_threadpool(
-                task_service._read_task_snapshot, project_id, task_id
+                task_service._read_task_snapshot, workspace_id, project_id, task_id
             )
             if snapshot is None:
                 yield task_service._format_sse_event(
