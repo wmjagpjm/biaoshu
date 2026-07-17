@@ -815,4 +815,12 @@ GET /api/projects/{projectId}/editor-state-revisions/page?cursor={opaqueCursor}
 
 冻结=`4ddd896`，实现=`c84a94d`。Grok 真实 failure-first **27 failed / 3 passed**：新静态页当时被动态 revision ID 路由吞掉；实现首轮专项 **30 passed**。Codex 审查后下发一次两文件返修，关闭 Windows `fromtimestamp` 最大年份风险、编码端 pre-1970 不可用游标以及 lookahead 恒真断言。最终覆盖 0/1/10/11/20、MIN/MAX/MAX+1、并列时间稳定、不重不漏、重复确定、非法游标矩阵、跨域、lookahead corrupt、五列/LIMIT 11、五域零写和旧列表回归。
 
-SQLite 方言会把 `.limit(11)` 编译成 `LIMIT ? OFFSET ?`，但 OFFSET 绑定恒为 0；源码无 `.offset(`、无非零/主动偏移分页，也无 COUNT。Codex 独立新专项/受影响回归/后端全量为 **34/171/905 passed**，仅 1 条既有 Starlette/httpx 弃用告警；`py_compile`、diff-check、精确四文件和空暂存区通过。消息追溯：原任务/review_request=`msg_b044740a30cc4e82ac4c98c4c42731c4`/`msg_5df53113b2894ea984694c8d21d15601`，返修 task/review_request=`msg_628cbdef5bf24ac09f4f08d676f79d25`/`msg_6a45abaf4cc141d7bcf066c809b7a11f`，Codex 验收回执=`msg_6163277b22da433a8ae672560eeec3b5`。P12F-C 前端加载更多另行冻结。
+SQLite 方言会把 `.limit(11)` 编译成 `LIMIT ? OFFSET ?`，但 OFFSET 绑定恒为 0；源码无 `.offset(`、无非零/主动偏移分页，也无 COUNT。Codex 独立新专项/受影响回归/后端全量为 **34/171/905 passed**，仅 1 条既有 Starlette/httpx 弃用告警；`py_compile`、diff-check、精确四文件和空暂存区通过。消息追溯：原任务/review_request=`msg_b044740a30cc4e82ac4c98c4c42731c4`/`msg_5df53113b2894ea984694c8d21d15601`，返修 task/review_request=`msg_628cbdef5bf24ac09f4f08d676f79d25`/`msg_6a45abaf4cc141d7bcf066c809b7a11f`，Codex 验收回执=`msg_6163277b22da433a8ae672560eeec3b5`。P12F-C 随后已独立冻结，见下节。
+
+## P12F-C 前端修订加载更多（已冻结，等待实现）
+
+前端首次展开、刷新和恢复后历史重载必须调用 P12F-B `/editor-state-revisions/page`，不能从旧 `{items}` 列表生成游标，也不能同时请求新旧列表。页响应严格精确 `items/nextCursor`，每页最多 10；游标只校验长度、`esrc1_` 前缀和 base64url 外壳，禁止解码或本地生成。
+
+仅 `nextCursor` 非空时显示手动“加载更多”。成功按顺序追加且累计最多 20，跨页 ID 不得重复；失败保留原 items/cursor 和当前详情/比较意图，固定错误后允许同 cursor 重试。按钮需要同步单飞门；折叠、卸载、项目切换、刷新和恢复重载必须用独立代次隔离迟到分页，旧 finally 不得清新状态。
+
+严格三文件：`editorStateRevisionApi.ts`、`EditorStateRevisionPanel.tsx`、`editor-state-revision-history.spec.ts`。E2E 必须证明旧列表零请求、20 条加载、跨页摘要/pair/商务恢复、shape/重复/超限失败保值、双击单飞和 arrived+complete 迟到隔离；所有 Playwright 显式 `--workers=1 --retries=0` 串行。无限滚动、自动预取、搜索/筛选/删除、total/hasMore、页码、跨项目历史、多人协作和后端修改均不在本包。

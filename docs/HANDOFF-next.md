@@ -1,13 +1,13 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-17（P12F-A/P12F-B 已完成；下一包为 P12F-C 前端加载更多）
+> **交接日期**：2026-07-17（P12F-A/P12F-B 已完成；P12F-C 前端加载更多已冻结，等待 Grok）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
 > **协作分支功能基线**：P12F-B 冻结=`4ddd896`、实现=`c84a94d`、文档闭环见当前 HEAD；P12F-A 冻结=`e713fb3`、实现=`24f4cf2`；P12E-A 冻结=`5aa205c`、实现=`f9f067e`；P12E-B 冻结=`00ef081`、实现=`5a5b08a`；P12E-C 冻结=`8b40bf4`、实现=`b6a4375`；P12D-B 冻结=`fc19d93`、实现=`35ab377`、验收闭环=`c7cf67f`；P12D-A 冻结=`2cc6ee3`、实现=`9445fcc`；P9C-R1 冻结=`cd70ef0`、实现=`b53dcce`；P12C-C3 冻结=`6b9143a`、实现=`5e4f9f6`；P12C-C2 冻结=`54af600`、范围修订=`2276366`、实现=`0803250`；P12C-C1 冻结=`26b504e`、实现=`7023ecd`；P12C-B-D3 冻结=`1d44484`、实现=`b91a7ff`；P12C-B-D2 冻结=`6b83fc1`、实现=`f256f5b`；P12C-B-D1 冻结=`e8ffaeb`、实现=`a6a28f6`；P12C-B-C2 冻结=`52bbabf`、实现=`82cc82e`；P12C-B-C1 冻结=`76834f5`、实现=`1d0ce0e`；P12C-B-B2 冻结=`3a30c03`、实现=`5149385`；P12C-B-B1 冻结=`05864f6`、实现=`5a0d1c0`；P12C-B-A 冻结=`fbf93c0`、实现=`acf3139`；P12C-A 冻结=`daa8c43`、实现=`226e1c1`；P12B-D 冻结=`613818f`、D1 后端=`551caba`、D2 前端=`0f81dd6`；其余既有功能基线见本文 §11。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
-> **最新增量基线**：P12F-A 已交付“最多 20 条且总快照最多 20 MiB、默认列表仍为 10 条”的磁盘有界保留基础；P12F-B 已交付独立后端 `/editor-state-revisions/page` 键集分页，旧 `{items}` 路由保持不变；前端尚未消费新页，加载更多留到 P12F-C。
+> **最新增量基线**：P12F-A 已交付最多 20 条/20 MiB 有界保留，P12F-B 已交付独立后端 `/editor-state-revisions/page`；P12F-C 已冻结共用面板手动“加载更多”，首屏改用新页、最多累计 20 条，旧 `{items}` 后端合同仍保持不变。
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **本地状态**：P12F-B 冻结 `4ddd896`、实现 `c84a94d` 均已推送；当前只更新 P12F-B 中文闭环文档，提交推送后必须再次核对 HEAD、远端一致且工作区干净。
+> **本地状态**：P12F-B 冻结=`4ddd896`、实现=`c84a94d`、文档=`1ea5fdf` 均已推送；当前只新增/更新 P12F-C 契约、计划和交接文档，冻结提交后必须核对 HEAD、远端一致且工作区干净。
 > **验收基线**：P12F-B failure-first **27 failed / 3 passed**；返修后 Codex 独立新专项/受影响回归/后端串行全量 **34/171/905 passed**，仅 1 条既有 Starlette/httpx 弃用告警；`py_compile`、diff-check、精确四文件和空暂存区通过。P12F-A 独立六文件专项/受影响回归/当时后端全量 **121/134/871 passed**；P12E-C 聚焦/受影响 history/前端全量为 **3/27/293 passed**。**所有 Playwright E2E 共用 SQLite 重置库，必须逐条串行运行，禁止并行。**
 
 ---
@@ -21,8 +21,8 @@
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
 当前进度：P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/P12D-B、P12E-A/P12E-B/P12E-C、P12F-A/P12F-B、P9D、P9C-R1、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。P12F-B 冻结=`4ddd896`、实现=`c84a94d`；后端全量 905、前端全量仍为 293 passed。
 当前状态：P12F-B 后端游标页已完成并推送；默认 GET 仍只列最近 10 条，新 `/page` 以固定 10 条和规范游标访问第 11～20 条。Codex 独立验收为新专项/受影响回归/后端全量 34/171/905 passed。
-当前执行包：P12F-B 中文文档闭环；完成提交推送后工作区必须干净。没有尚在运行的 Grok 实现任务。
-下一步：审计并独立冻结 P12F-C 前端“加载更多”，只消费 P12F-B 新页，不改变旧列表、详情/恢复/对比、保存令牌或迟到隔离；所有 E2E 必须 `--workers=1 --retries=0` 串行运行。
+当前执行包：P12F-C 前端加载更多，契约=`docs/p12f-revision-load-more-frontend-contract.md`、计划=`docs/plans/2026-07-17-p12f-revision-load-more-frontend-plan.md`。Grok 只允许修改 API 封装、共用修订面板和既有修订历史 E2E 三文件，不得提交或推送。
+下一步：先只修改 E2E 得到“旧列表仍被调用/加载更多不存在”的真实业务红测，再实现严格页解析、最多 20 条追加、失败保值可重试及折叠/刷新/项目切换/恢复重载迟到隔离。所有 E2E 必须 `--workers=1 --retries=0` 串行运行。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -474,7 +474,7 @@ frontend/src/features/
 1. 阶段 4 **功能包 8** MVP=`6db1586`、P8B/P8C、**P8D MinerU 助手**（计划=`30d066f`、实现=`e1fe316`）与 **P8E Docling 助手**（计划=`73b1264`、后端=`79b346e`、助手=`e3f9cc4`）均已验收并推送；真实 CLI/模型仍需人工准备，自动部署仍须独立安全契约。
 2. 阶段 4 **P9A/P9B/P9C/P9D** 与阶段 5 **P10A/P10B/P10C/P10D/P10F/P10E/P10G/P10H/P10I/P10J/P10K** 均已实现、独立验收并文档闭环。P9C 的真实模型门仍是运行时前置：固定依赖和模型缓存就绪后，用户显式构建索引，再运行固定预检；未通过前继续关键词降级。
 3. P8C/P8D/P8E、P10K、M3-D、P11A、P11B 与 P11C 均已完成。P8E 已按顺序完成后端精确 `mineru|docling` 枚举和独立本机助手；继续保持 P8B/P8C/P8D 的策略、票据、回环和正文出域边界。
-4. P12B-A/B/C/D、P12C-A/B/C、P12D-A/B、P12E-A/B/C 与 P12F-A/B 已完成；P12F-B 冻结=`4ddd896`、实现=`c84a94d`，当前后端/前端全量基线 **905/293 passed**。前端加载更多、删除、搜索、跨项目历史或多人协作仍需另行冻结。
+4. P12B-A/B/C/D、P12C-A/B/C、P12D-A/B、P12E-A/B/C 与 P12F-A/B 已完成；P12F-B 冻结=`4ddd896`、实现=`c84a94d`，当前后端/前端全量基线 **905/293 passed**。前端加载更多已由 P12F-C 冻结待实现；删除、搜索、跨项目历史或多人协作仍需另行冻结。
 
 资源同步后续只可由管理员配置新的签名发布方，绝不可放开浏览器 URL 或外网抓取。图片管线已冻结项目内资源引用协议，后续扩展不得放开外链或客户端路径。SSE 的多工作空间鉴权、事件游标和项目级总线不在当前范围。
 
@@ -687,8 +687,14 @@ P12F-A 未回填已裁历史，也未实现分页 API、前端加载更多、搜
 
 Codex 首轮审查拒绝 Windows `datetime.fromtimestamp` 最大年份平台依赖、编码端可能生成解码器必拒的 pre-1970 游标，以及 lookahead 损坏测试中的恒真 `or`。返修任务=`msg_628cbdef5bf24ac09f4f08d676f79d25`，返修回执=`msg_6a45abaf4cc141d7bcf066c809b7a11f`；最终使用 UTC epoch + `timedelta(microseconds=us)`，编码端严格校验 ID 和时间闭区间，MIN/MAX、MAX+1、pre-1970 第十条和精确零泄漏均有回归。
 
-Codex 独立通过新专项/受影响 7 文件回归/后端串行全量 **34/171/905 passed**，仅 1 条既有 Starlette/httpx 弃用告警；`py_compile`、`git diff --check`、精确四文件和空暂存区均通过。验收回执=`msg_6163277b22da433a8ae672560eeec3b5`。P12F-C 尚未冻结或实现；下一包只能审计前端加载更多，不得顺带加入搜索、删除、total/hasMore、跨项目历史或多人协作。
+Codex 独立通过新专项/受影响 7 文件回归/后端串行全量 **34/171/905 passed**，仅 1 条既有 Starlette/httpx 弃用告警；`py_compile`、`git diff --check`、精确四文件和空暂存区均通过。验收回执=`msg_6163277b22da433a8ae672560eeec3b5`。P12F-B 交付时 P12F-C 尚未冻结或实现；随后已完成独立审计，见下一节。
 
-Grok 四文件白名单：`backend/app/services/editor_state_revision_history_service.py`、`backend/app/api/editor_state_revisions.py`、`backend/app/api/schemas.py`、新建 `backend/tests/test_p12f_revision_cursor_page.py`。必须先只建测试得到真实路由 404，再改三个生产文件；禁止模型/数据库/迁移/主注册/写入与恢复服务/既有测试/前端/E2E/依赖/配置/其他文档改动，禁止提交或推送。
+P12F-B 的 Grok 四文件白名单为 `backend/app/services/editor_state_revision_history_service.py`、`backend/app/api/editor_state_revisions.py`、`backend/app/api/schemas.py`、新建 `backend/tests/test_p12f_revision_cursor_page.py`。本包未实现前端加载更多，也未提供客户端 limit/offset/page/total/hasMore；搜索、筛选、删除、命名、固定、导出、分享、跨项目历史、多人协作、历史回填和后台清理均未进入 P12F-B。
 
-本包不实现前端加载更多，也不提供客户端 limit/offset/page/total/hasMore；不做搜索、筛选、删除、命名、固定、导出、分享、跨项目历史、多人协作、历史回填或后台清理。
+## P12F-C 前端加载更多冻结交接（2026-07-17）
+
+契约=`docs/p12f-revision-load-more-frontend-contract.md`、计划=`docs/plans/2026-07-17-p12f-revision-load-more-frontend-plan.md`。审计确认旧 `{items}` 列表没有 cursor，前端不得本地生成排序位置；因此首次展开、刷新和恢复后历史重载必须改用 P12F-B `/page`，旧封装可以保留但面板不能双请求。
+
+三文件边界固定为 `editorStateRevisionApi.ts`、`EditorStateRevisionPanel.tsx` 和 `editor-state-revision-history.spec.ts`。API 严格解析精确 `items/nextCursor`、每页最多 10、页内 ID 唯一和 `esrc1_` 外壳；面板只手动加载、最多累计 20，失败保留原 items/cursor 可重试，不自动预取第三页。
+
+加载更多需要独立同步单飞门和请求代次；折叠、卸载、项目切换、刷新及恢复重载必须作废迟到 catch/finally。追加项复用现有摘要、对比、正文差异、跨页 pair 和恢复链，禁止修改 workspace/hook/后端。P12F-C 不含无限滚动、搜索、筛选、删除、total/hasMore、页码、跨项目历史或多人协作。
