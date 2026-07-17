@@ -2,7 +2,7 @@
 
 模块：P12E-C editor-state 双历史修订正文差异前端选择与展示
 对接：P12E-B `GET /api/projects/{projectId}/editor-state-revisions/{beforeRevisionId}/body-diff/{afterRevisionId}`、P12E-A 共用正文差异模型。
-状态：2026-07-17 冻结，等待 Grok 按三文件白名单实现；Codex 负责受限审查、独立验收、中文闭环和提交推送。
+状态：2026-07-17 已完成；冻结=`8b40bf4`，实现=`b6a4375`，Codex 独立验收通过并已推送。
 
 ## 1. 目标与边界
 
@@ -47,7 +47,7 @@ GET /api/projects/{projectId}/editor-state-revisions/{beforeRevisionId}/body-dif
 
 - 比较按钮固定中文“比较两条修订”，两侧 ID 均存在且不同才可点击；点击后只发一次 pair GET，按钮进入“正在比较…”；
 - 成功结果只展示“差异前修订/差异后修订”、前后章节数量、变化章节数量、正文一致/有变化、截断提示和有界章节/hunk 文本；不得展示内部 ID、版本、sourceKind 原值或快照字段键；
-- 失败只显示固定文案“​​双修订差异加载失败，请稍后重试”；旧成功结果必须清除；
+- 失败只显示固定文案“双修订差异加载失败，请稍后重试”；旧成功结果必须清除；
 - pair 结果与摘要、与当前对比、单修订正文差异、恢复确认互斥；开始任一其他意图时清除 pair 选择/结果或使其不可见。
 
 ### 3.3 迟到隔离
@@ -79,3 +79,11 @@ Grok 只允许修改以下三个文件，不得 `git add/commit/push`：
 - 选择清除、空选择、相同修订选择不得发请求。
 
 Grok 完成后只发送 `review_request`，报告真实红/绿数字、三文件白名单、零旁路证据和未做边界。Codex 随后独立运行 P12E-C E2E、P12E-A/P12D/P12C 受影响回归、前端全量单 worker 零重试、lint、build、`git diff --check` 和白名单检查。
+
+## 6. 完成与验收记录
+
+- Grok 任务=`msg_70f49042da2e46d5a7d2783ee8f7575f`，最终 review_request=`msg_fa38202aa5d641d5b111d914995d6f4f`，Codex 验收回执=`msg_fd6c844f235644e9b3c4bd597d049d36`；Grok 未 `git add/commit/push`。
+- 真实 failure-first：只增加 P12E-C 探针和三组测试后为 **3 failed / 0 passed**，首个失败是生产面板不存在 `editor-state-revision-pair-select-before-0`；不是 TypeScript 收集、fixture、依赖、白页或服务启动失败。实现后聚焦测试 **3 passed**。
+- Codex 独立串行验收：P12E-C 聚焦 **3 passed**；P12E-A/P12D-B/P12C-C3 受影响 history 回归 **27 passed**；前端全量 **293 passed (8.2m)**，均使用 `--workers=1 --retries=0`。
+- `npm run lint`、`npm run build`、`git diff --check`、精确三文件白名单和空暂存区通过；构建只有既有 chunk 大小提示。
+- 交付保持本契约未实现边界：没有分页、搜索、自动批量比较、完整时间线、恢复/删除、导出、分享、缓存、跨项目历史、URL/浏览器存储或多人协作。

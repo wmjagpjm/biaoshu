@@ -1,6 +1,7 @@
 # P12E-C 双修订正文差异前端实施计划
 
 > **执行者：Grok**：按本计划三文件白名单实现；Codex 独立审查、验收、中文文档闭环和提交推送。
+> **完成状态：** 2026-07-17 已完成；冻结=`8b40bf4`，实现=`b6a4375`，已推送协作分支。
 
 **目标：** 在技术标/商务标共用修订面板中以内存选择两条历史修订，调用 P12E-B 并展示有界正文差异。
 **架构：** API 层增加 pair 严格 parser 与单一 GET；面板增加双侧选择、独立 generation 和互斥展示；E2E 在现有 route 探针中增加 pair arrived/complete 与技术/商务隔离证明。
@@ -38,3 +39,11 @@
 ## 6. Codex 文档闭环与提交
 
 独立验收通过后，Codex 更新 `docs/HANDOFF-next.md`、路线图、`docs/integration-checklist.md`、P12E-C 契约和本计划，记录真实 failure-first、E2E 全量计数、Grok/Codex 消息 ID与未实现边界；以中文提交信息提交并推送。P12E-C 不交付分页、搜索、恢复、删除、导出、分享、缓存、跨项目历史或多人协作。
+
+## 7. 实际执行结果
+
+1. Grok 严格只修改 API 封装、共用面板和既有 history E2E 三文件；任务=`msg_70f49042da2e46d5a7d2783ee8f7575f`，最终 review_request=`msg_fa38202aa5d641d5b111d914995d6f4f`，Codex 验收回执=`msg_fd6c844f235644e9b3c4bd597d049d36`；Grok 未提交或推送。
+2. Failure-first 为真实 **3 failed / 0 passed**：三个 P12E-C 用例均因生产面板没有双修订选择入口失败；实现后聚焦测试 **3 passed**。
+3. Codex 独立通过 P12E-C 聚焦 **3 passed**、P12E-A/P12D-B/P12C-C3 history 回归 **27 passed**、前端全量 **293 passed (8.2m)**；Playwright 全部 `--workers=1 --retries=0`。
+4. lint、build、diff-check、精确三文件和空暂存区通过；实现以 `b6a4375 实现：完成P12E双修订正文差异前端` 提交并推送。
+5. 本计划没有扩展分页、搜索、自动批量比较、完整时间线、恢复/删除、导出、分享、缓存、跨项目历史、URL/浏览器存储或多人协作。
