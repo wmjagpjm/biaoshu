@@ -1,6 +1,7 @@
 """
-模块：P12C-C1/C2/P12D-A/P12E-A editor-state 修订历史只读、受限恢复、差异摘要与正文差异路由
-用途：项目最近 10 条修订元数据列表、单条按需详情、单条受限恢复、与当前状态差异摘要、章节正文差异。
+模块：P12C-C1/C2/P12D-A/P12E-A/P12E-B editor-state 修订历史只读、受限恢复、差异摘要与正文差异路由
+用途：项目最近 10 条修订元数据列表、单条按需详情、单条受限恢复、与当前状态差异摘要、
+  单条修订对当前章节正文差异、两条历史修订之间章节正文差异。
 对接：/api/projects/{projectId}/editor-state-revisions*；
   editor_state_revision_history_service；
   editor_state_revision_restore_service；
@@ -11,7 +12,9 @@
   - POST 继续既有 CSRF；所有成功/业务错误 Cache-Control: no-store；
   - 错误固定 code/message（409 另含 currentStateVersion），不反射 ID/正文/路径/SQL；
   - 未知查询参数不得改变固定排序/上限/来源全集/正文不可搜索边界；
-  - comparison/body-diff 只读，禁止写库/锁/审计。
+  - comparison/body-diff 只读，禁止写库/锁/审计；
+  - P12E-B 双修订 body-diff 两侧均经 C1 校验，禁止读取当前 editor-state；
+  - 不得把 revision ID/state version/原始快照放入成功或错误响应。
 """
 
 from __future__ import annotations
@@ -31,6 +34,7 @@ from app.api.schemas import (
     EditorStateRevisionDetailOut,
     EditorStateRevisionListOut,
     EditorStateRevisionMetaOut,
+    EditorStateRevisionPairBodyDiffOut,
     EditorStateRevisionRestore,
     EditorStateRevisionRestoreOut,
 )
@@ -266,6 +270,66 @@ def compare_editor_state_revision_body_with_current(
         changed_chapter_count=data["changed_chapter_count"],
         current_chapter_count=data["current_chapter_count"],
         target_chapter_count=data["target_chapter_count"],
+        truncated=data["truncated"],
+        items=items,
+    )
+
+
+@router.get(
+    "/{project_id}/editor-state-revisions/{before_revision_id}/body-diff/{after_revision_id}",
+    response_model=EditorStateRevisionPairBodyDiffOut,
+)
+def compare_editor_state_revision_bodies(
+    project_id: str,
+    before_revision_id: str,
+    after_revision_id: str,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    workspace_id: Annotated[str, Depends(get_workspace_id)],
+) -> EditorStateRevisionPairBodyDiffOut:
+    """
+    用途：只读比较同一项目两条历史修订 chapters，返回有界行差异。
+    对接：P12E-B；editor_state_revision_body_diff_service.compare_revision_bodies
+    二次开发：
+      - 两侧均经 C1 三重作用域与快照完整性重验；不读当前 editor-state；
+      - 历史 404/corrupt 原样映射；其他失败固定 body_diff_failed；
+      - 成功/业务错误 Cache-Control: no-store；响应禁止 ID/版本/原始快照。
+    """
+    _no_store(response)
+    try:
+        data = editor_state_revision_body_diff_service.compare_revision_bodies(
+            db,
+            workspace_id,
+            project_id,
+            before_revision_id,
+            after_revision_id,
+        )
+    except EditorStateRevisionHistoryError as exc:
+        _raise_history_error(exc)
+    except EditorStateRevisionBodyDiffError as exc:
+        _raise_body_diff_error(exc)
+
+    items: list[EditorStateRevisionBodyDiffItemOut] = []
+    for item in data["items"]:
+        items.append(
+            EditorStateRevisionBodyDiffItemOut(
+                ordinal=item["ordinal"],
+                kind=item["kind"],
+                before_title=item["before_title"],
+                after_title=item["after_title"],
+                hunks=[
+                    EditorStateRevisionBodyDiffHunkOut(
+                        op=h["op"], text=h["text"]
+                    )
+                    for h in item["hunks"]
+                ],
+            )
+        )
+    return EditorStateRevisionPairBodyDiffOut(
+        same_body=data["same_body"],
+        changed_chapter_count=data["changed_chapter_count"],
+        before_chapter_count=data["before_chapter_count"],
+        after_chapter_count=data["after_chapter_count"],
         truncated=data["truncated"],
         items=items,
     )

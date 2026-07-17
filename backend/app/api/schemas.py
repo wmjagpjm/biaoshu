@@ -2224,6 +2224,32 @@ class EditorStateRevisionBodyDiffOut(BaseModel):
     items: list[EditorStateRevisionBodyDiffItemOut]
 
 
+class EditorStateRevisionPairBodyDiffOut(BaseModel):
+    """
+    模块：P12E-B 双历史修订章节正文差异响应
+    用途：仅 sameBody/changedChapterCount/beforeChapterCount/
+      afterChapterCount/truncated/items 六键。
+    对接：GET .../editor-state-revisions/{before}/body-diff/{after}。
+    二次开发：禁止 ID、版本、来源、时间、原始快照、异常原文；
+      复用 item/hunk 严格模型；extra=forbid。
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    same_body: bool = Field(serialization_alias="sameBody")
+    changed_chapter_count: int = Field(
+        serialization_alias="changedChapterCount", ge=0
+    )
+    before_chapter_count: int = Field(
+        serialization_alias="beforeChapterCount", ge=0
+    )
+    after_chapter_count: int = Field(
+        serialization_alias="afterChapterCount", ge=0
+    )
+    truncated: bool
+    items: list[EditorStateRevisionBodyDiffItemOut]
+
+
 class EditorStateCheckpointCreate(BaseModel):
     """
     模块：P12A 手动检查点创建请求

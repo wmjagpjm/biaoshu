@@ -1,11 +1,15 @@
 """
-模块：P12E-A 修订与当前状态章节正文差异服务
-用途：只读比较所选修订与服务端当前 chapters，返回有界行差异。
-对接：api.editor_state_revisions body-diff GET；
+模块：P12E-A/P12E-B 修订章节正文差异服务
+用途：
+  - P12E-A：只读比较所选历史修订与服务端当前 chapters，返回有界行差异；
+  - P12E-B：只读比较同一项目两条历史修订 chapters，返回有界行差异。
+对接：api.editor_state_revisions 单修订 body-diff GET、双修订 body-diff GET；
   editor_state_service / editor_state_revision_history_service。
 二次开发：
   - 全程只读：禁止 add/delete/flush/commit/rollback/refresh/锁/审计/检查点/修订写/HTTP；
-  - 目标侧复用 C1 get_editor_state_revision；当前侧 get_editor_state→extract_canonical_snapshot 仅取 chapters；
+  - 历史侧复用 C1 get_editor_state_revision 三重作用域与快照完整性重验；
+  - P12E-A 当前侧 get_editor_state→extract_canonical_snapshot 仅取 chapters；
+  - P12E-B 禁止读取当前 editor-state，两侧均只取历史快照 chapters；
   - 完整正文先判等，再生成展示截断；禁止用版本/长度/摘要/Python 对象相等冒充；
   - 章节服务端内部唯一 id 配对，缺可用唯一 id 按序号；重复/脏数据固定失败。
 """
@@ -432,6 +436,99 @@ def _build_raw_items(
     return items, any_diff, display_trunc
 
 
+def _compare_chapter_snapshots(
+    before_snapshot: dict[str, Any],
+    after_snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    用途：纯双快照章节正文比较；参数为 before/after 两侧已校验 dict。
+    对接：P12E-A current 路径与 P12E-B 双修订路径共用。
+    二次开发：
+      - before 对应差异前（P12E-A 的 target/修订侧）；
+      - after 对应差异后（P12E-A 的 current 侧）；
+      - 返回 before_chapter_count/after_chapter_count；调用方按路由投影。
+    """
+    if not isinstance(before_snapshot, dict) or not isinstance(
+        after_snapshot, dict
+    ):
+        raise _body_diff_failed()
+
+    before_chapters = _require_chapter_list(before_snapshot.get("chapters"))
+    after_chapters = _require_chapter_list(after_snapshot.get("chapters"))
+
+    # 章节数超 100：完整值仍判等，展示侧截断
+    over_chapter_cap = (
+        len(before_chapters) > MAX_CHAPTERS or len(after_chapters) > MAX_CHAPTERS
+    )
+
+    # 配对：after 作 current 侧、before 作 target 侧（added/removed 语义）
+    pairs = _pair_chapters(after_chapters, before_chapters)
+    raw_items, any_diff, body_trunc = _build_raw_items(pairs)
+    same_body = not any_diff
+
+    if same_body:
+        return {
+            "same_body": True,
+            "changed_chapter_count": 0,
+            "before_chapter_count": len(before_chapters),
+            "after_chapter_count": len(after_chapters),
+            "truncated": False,
+            "items": [],
+        }
+
+    bounded_items, trunc = _apply_display_bounds(raw_items)
+    if over_chapter_cap or body_trunc:
+        trunc = True
+    # 契约：changedChapterCount 必须等于 items.length
+    return {
+        "same_body": False,
+        "changed_chapter_count": len(bounded_items),
+        "before_chapter_count": len(before_chapters),
+        "after_chapter_count": len(after_chapters),
+        "truncated": trunc,
+        "items": bounded_items,
+    }
+
+
+def compare_revision_bodies(
+    db: Session,
+    workspace_id: str,
+    project_id: str,
+    before_revision_id: str,
+    after_revision_id: str,
+) -> dict[str, Any]:
+    """
+    用途：比较同一项目两条历史修订的 chapters，返回脱敏正文差异。
+    对接：GET .../editor-state-revisions/{before}/body-diff/{after}
+    二次开发：
+      - 两侧均复用 C1 get_editor_state_revision 三重作用域与完整性重验；
+      - 禁止读取当前 editor-state；
+      - 历史 404/corrupt 原样上抛；其他异常固定 body_diff_failed；
+      - 不写库、不加锁、不返回 ID/版本/路径/原文异常。
+    """
+    # 两侧历史快照：任一 404/corrupt 原样上抛
+    try:
+        before_rev = get_editor_state_revision(
+            db, workspace_id, project_id, before_revision_id
+        )
+        after_rev = get_editor_state_revision(
+            db, workspace_id, project_id, after_revision_id
+        )
+    except EditorStateRevisionHistoryError:
+        raise
+
+    try:
+        before_snap = before_rev["snapshot"]
+        after_snap = after_rev["snapshot"]
+        return _compare_chapter_snapshots(before_snap, after_snap)
+    except EditorStateRevisionHistoryError:
+        raise
+    except EditorStateRevisionBodyDiffError:
+        raise
+    except Exception:
+        raise _body_diff_failed() from None
+
+
 def compare_revision_body_with_current(
     db: Session,
     workspace_id: str,
@@ -444,7 +541,8 @@ def compare_revision_body_with_current(
     二次开发：
       - 历史服务 404/corrupt 原样上抛；
       - 当前读取/配对/差异其他异常固定 body_diff_failed；
-      - 不写库、不加锁、不返回 ID/版本/路径/原文异常。
+      - 不写库、不加锁、不返回 ID/版本/路径/原文异常；
+      - 响应仍投影 currentChapterCount/targetChapterCount（P12E-A 不变）。
     """
     # 目标侧：三重作用域 + 规范 13 键重验（C1）
     try:
@@ -462,43 +560,15 @@ def compare_revision_body_with_current(
             current_state
         )
         target_snap = target["snapshot"]
-        if not isinstance(target_snap, dict):
-            raise _body_diff_failed()
-
-        current_chapters = _require_chapter_list(current_snap.get("chapters"))
-        target_chapters = _require_chapter_list(target_snap.get("chapters"))
-
-        # 章节数超 100：完整值仍判等，展示侧截断
-        over_chapter_cap = (
-            len(current_chapters) > MAX_CHAPTERS
-            or len(target_chapters) > MAX_CHAPTERS
-        )
-
-        pairs = _pair_chapters(current_chapters, target_chapters)
-        raw_items, any_diff, body_trunc = _build_raw_items(pairs)
-        same_body = not any_diff
-
-        if same_body:
-            return {
-                "same_body": True,
-                "changed_chapter_count": 0,
-                "current_chapter_count": len(current_chapters),
-                "target_chapter_count": len(target_chapters),
-                "truncated": False,
-                "items": [],
-            }
-
-        bounded_items, trunc = _apply_display_bounds(raw_items)
-        if over_chapter_cap or body_trunc:
-            trunc = True
-        # 契约：changedChapterCount 必须等于 items.length
+        result = _compare_chapter_snapshots(target_snap, current_snap)
+        # P12E-A 对外键名：current=after 侧，target=before 侧
         return {
-            "same_body": False,
-            "changed_chapter_count": len(bounded_items),
-            "current_chapter_count": len(current_chapters),
-            "target_chapter_count": len(target_chapters),
-            "truncated": trunc,
-            "items": bounded_items,
+            "same_body": result["same_body"],
+            "changed_chapter_count": result["changed_chapter_count"],
+            "current_chapter_count": result["after_chapter_count"],
+            "target_chapter_count": result["before_chapter_count"],
+            "truncated": result["truncated"],
+            "items": result["items"],
         }
     except EditorStateRevisionHistoryError:
         raise
