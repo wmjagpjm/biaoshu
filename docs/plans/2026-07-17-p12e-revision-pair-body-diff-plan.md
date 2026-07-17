@@ -2,15 +2,15 @@
 
 > **执行者：Grok**：按本计划逐项实现；Codex 独立审查、验收、中文文档闭环和提交推送。
 
-**目标：** 为同一工作空间、同一项目的两条历史修订提供只读、有界、脱敏的章节正文差异 API。  
-**架构：** 复用 P12C-C1 的双修订快照读取与完整性校验，复用 P12E-A 的章节配对、完整值判等、difflib 前截断和展示预算；路由只负责作用域/错误映射与精确 schema 投影，不读取当前 editor-state。  
+**目标：** 为同一工作空间、同一项目的两条历史修订提供只读、有界、脱敏的章节正文差异 API。
+**架构：** 复用 P12C-C1 的双修订快照读取与完整性校验，复用 P12E-A 的章节配对、完整值判等、difflib 前截断和展示预算；路由只负责作用域/错误映射与精确 schema 投影，不读取当前 editor-state。
 **技术栈：** FastAPI、Pydantic、SQLAlchemy、Python 标准库 `difflib`、pytest/SQLite。
 
 ---
 
 ## 1. 开工与白名单核验
 
-文件：无代码变更。  
+文件：无代码变更。
 步骤：
 
 1. 核对分支 `collab/grok-code-codex-review`、HEAD/远端一致、工作区干净；读取 P12E-B 契约和 P12E-A 实现。
@@ -19,7 +19,7 @@
 
 ## 2. 先写真实红测
 
-文件：创建 `backend/tests/test_p12e_revision_pair_body_diff.py`。  
+文件：创建 `backend/tests/test_p12e_revision_pair_body_diff.py`。
 步骤：
 
 1. 使用真实 SQLite、项目和两条有效修订 fixture，写 changed、added、removed 与同修订一致的 HTTP 断言；精确验证六键/五键/二键、前后章节计数、`sameBody` 与计数一致性。
@@ -29,7 +29,7 @@
 
 ## 3. 扩展服务层为双快照比较
 
-文件：修改 `backend/app/services/editor_state_revision_body_diff_service.py`。  
+文件：修改 `backend/app/services/editor_state_revision_body_diff_service.py`。
 步骤：
 
 1. 抽取一个内部纯比较入口，参数为 `before_snapshot`、`after_snapshot`，返回 `before_chapter_count`、`after_chapter_count` 与 P12E-A 相同的有界 items/flags；保持 P12E-A `compare_revision_body_with_current` 外部行为不变。
@@ -40,7 +40,7 @@
 
 ## 4. 增加精确响应模型与路由
 
-文件：修改 `backend/app/api/schemas.py`、`backend/app/api/editor_state_revisions.py`。  
+文件：修改 `backend/app/api/schemas.py`、`backend/app/api/editor_state_revisions.py`。
 步骤：
 
 1. 增加 pair body-diff 顶层模型，固定 `sameBody/changedChapterCount/beforeChapterCount/afterChapterCount/truncated/items` 六键；复用或独立声明严格的 item/hunk 模型，`extra="forbid"`。
