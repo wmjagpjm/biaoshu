@@ -24,7 +24,7 @@
 - 技术标全流程、商务标、异步任务、AI 生成与编辑、文档知识库检索、查重/废标检查、Word 导出、标讯本地库和资源中心已可用。
 - 响应矩阵已支持人工映射、候选分批智能建议、冲突保护、来源 80 分页、双浏览器冲突/刷新来源/人工确认/来源分页 E2E；包 7 字段级三方合并 MVP 已推送（`2c7b3e0`）。
 - 轻量解析和本机 Markdown 回传已经可用；包 8 MVP 可插拔调度已推送（`6db1586`：默认 `lightweight` + 测试 fake），P8B 已让 `parseStrategy` 驱动技术标/商务标的 `light/local/ask` 动作，P8C 已补 required 模式 10 分钟单项目单次回传票据；P8D/P8E 已分别提供离线调用本机既有 `mineru.exe`/`docling.exe` 并受控回传的标准库助手。**两种真实 CLI/模型仍需用户人工准备，自动部署未接**。
-- 当前已具备中标内容模板资产化、多模板/卡片融合、差异确认、最近 10 条有限修订与受限恢复、统一卡片库、受限角色数据域，以及 P9C 固定模型运行时门和真实合成集预检。真实剩余缺口集中在多人协作与更完整版本治理、真实 MinerU/Docling 生产部署、P9C 真实用户语料评测/排序调优、Word `structure`/整章布局、更多合法外部标讯来源及完整生产部署治理。导出版式模板与中标内容模板是两个不同概念，后续不得混用术语。
+- 当前已具备中标内容模板资产化、多模板/卡片融合、差异确认、最多 20 条有限修订的手动游标浏览与受限恢复、统一卡片库、受限角色数据域，以及 P9C 固定模型运行时门和真实合成集预检。真实剩余缺口集中在多人协作与更完整版本治理、真实 MinerU/Docling 生产部署、P9C 真实用户语料评测/排序调优、Word `structure`/整章布局、更多合法外部标讯来源及完整生产部署治理。导出版式模板与中标内容模板是两个不同概念，后续不得混用术语。
 - P11A 已把技术标/商务标列表、详情、创建与查重/废标选择器收口为 `/api/projects*` 单一真值；前端全量 E2E 由 145 增至 155。它未改 editor-state 本地备份、知识库降级、未挂载首页、后端或角色权限。
 - P11B 已让商务标 workspace 只认 `GET|PUT /api/projects/{id}/editor-state`：旧 `biaoshu.businessBid.workspace.*` 忽略保值，真实空态保持空，加载/保存失败固定脱敏，A→B 的迟到 GET/PUT 被项目会话隔离；AI 反馈 history 本地键保持非目标，技术标大 Hook 未改。前端全量 E2E 由 155 增至 166。
 - P11C 已让技术标 workspace 只认 `GET|PUT /api/projects/{id}/editor-state`：旧 `biaoshu.technicalPlan.editors.*` 忽略保值，真实空态保持空，加载/保存失败固定脱敏，required 普通/合并 PUT 使用同源 Cookie 与内存 CSRF，A→B 迟到及挂起保存链隔离，生产演示入口已清理。前端全量 E2E 由 166 增至 184；后端、响应矩阵算法、M3-D 业务与 guidance 历史未改。
@@ -325,7 +325,7 @@
 
 ## 5. 当前下一步
 
-阶段 0/1/2、阶段 3 M3-A 至 M3-D、阶段 4 **包 5** 至 **包 8/P8B/P8C/P8D/P8E**、P9A/P9B/P9C/P9D、阶段 5 P10A 至 P10K、**P11A/P11B/P11C 三个真实数据收口包**，以及 **P12A/P12B-A/P12B-B/P12B-C/P12B-D/P12C-A/P12C-B-A/P12C-B-B1/P12C-B-B2/P12C-B-C1/P12C-B-C2/P12C-B-D1/P12C-B-D2/P12C-B-D3/P12C-C1/P12C-C2/P12C-C3** 均保持已交付。P8E 完整契约见 `docs/p8e-docling-local-helper-contract.md`，实施与独立验收记录见 `docs/plans/2026-07-15-p8e-docling-local-helper-plan.md`。
+阶段 0/1/2、阶段 3 M3-A 至 M3-D、阶段 4 **包 5** 至 **包 8/P8B/P8C/P8D/P8E**、P9A/P9B/P9C/P9D、阶段 5 P10A 至 P10K、**P11A/P11B/P11C 三个真实数据收口包**，以及 **P12A/P12B-A/B/C/D/P12C-A/B/C/P12D-A/B/P12E-A/B/C/P12F-A/B/C** 均保持已交付。P8E 完整契约见 `docs/p8e-docling-local-helper-contract.md`，实施与独立验收记录见 `docs/plans/2026-07-15-p8e-docling-local-helper-plan.md`。
 
 P8D 与 P8E 本机外置解析助手均已完成并推送：P8D 计划=`30d066f`、实现=`e1fe316`、闭环=`38b9318`；P8E 计划=`73b1264`、后端=`79b346e`、助手=`e3f9cc4`。P8E 独立验收为 Docling 46、MinerU 54、后端受影响回归 37、P8C E2E 9、P8B E2E 6 passed；真实 Docling/模型未安装、未验收，自动安装/模型打包/服务端内嵌仍不是已交付能力。
 
@@ -375,7 +375,7 @@ P12E-B 真实 failure-first 为 13 项红测：11 项路由缺失 404、1 项同
 
 **P12F-A 已完成并推送**：契约=`docs/p12f-revision-retention-quota-contract.md`，计划=`docs/plans/2026-07-17-p12f-revision-retention-quota-plan.md`，冻结=`e713fb3`、实现=`24f4cf2`。写入账本最多保留 20 条且项目总快照最多 20 MiB，按 `created_at DESC, id DESC` 保留连续最新前缀；默认列表上限独立固定为 10。真实 failure-first **9 failed**；Codex 经一轮 test-only 补强后独立通过六文件专项/受影响回归/后端全量 **121/134/871 passed**。本包未改 API、schema、模型、数据库或前端，未回填旧历史，也未实现分页/搜索/删除/多人协作。
 
-**P12F-B 已完成并推送**：契约=`docs/p12f-revision-cursor-page-contract.md`，计划=`docs/plans/2026-07-17-p12f-revision-cursor-page-plan.md`，冻结=`4ddd896`、实现=`c84a94d`。独立后端只读页固定 `LIMIT 11`/返回最多 10 条，游标按 `created_at DESC,id DESC` 键集位置生成；旧列表 `{items}` 合同和未知查询参数兼容语义不变。真实 failure-first **27 failed / 3 passed**；Codex 一轮返修关闭 Windows 最大时间平台依赖、pre-1970 不可用游标和恒真测试断言，独立通过 **34/171/905 passed**。SQLite 方言仅出现绑定为 0 的被动 OFFSET 占位，源码无主动偏移。前端加载更多、搜索、删除、筛选、total/hasMore、跨项目历史和多人协作均未实现。
+**P12F-B 已完成并推送**：契约=`docs/p12f-revision-cursor-page-contract.md`，计划=`docs/plans/2026-07-17-p12f-revision-cursor-page-plan.md`，冻结=`4ddd896`、实现=`c84a94d`。独立后端只读页固定 `LIMIT 11`/返回最多 10 条，游标按 `created_at DESC,id DESC` 键集位置生成；旧列表 `{items}` 合同和未知查询参数兼容语义不变。真实 failure-first **27 failed / 3 passed**；Codex 一轮返修关闭 Windows 最大时间平台依赖、pre-1970 不可用游标和恒真测试断言，独立通过 **34/171/905 passed**。SQLite 方言仅出现绑定为 0 的被动 OFFSET 占位，源码无主动偏移。P12F-B 当时未实现前端加载更多，后续已由 P12F-C 完成；搜索、删除、筛选、total/hasMore、跨项目历史和多人协作仍未实现。
 
 **P12F-C 已完成并推送**：契约=`docs/p12f-revision-load-more-frontend-contract.md`，计划=`docs/plans/2026-07-17-p12f-revision-load-more-frontend-plan.md`，冻结=`bb1ae3e`、实现=`fe99f5a`。共用面板首屏/刷新/恢复重载改用新页；手动按钮以同步 ref 精确单飞，成功最多追加到 20，失败保留原 items/cursor 与既有意图，同 cursor 可重试；折叠、刷新、项目切换和恢复重载用独立代次隔离迟到分页。真实 failure-first **2 failed / 0 passed / 2 did not run**；Codex 两轮返修关闭空 cursor、假双击、宽泛计数/Cookie/禁止旁路和 knowledge 宽放行，独立通过 **4/34/28/18/51/297 passed**，lint/build/diff/三文件白名单通过。
 ## P12D-B 完成状态（2026-07-17）

@@ -391,7 +391,7 @@ npm run build
 npx playwright test --workers=1 --retries=0
 ```
 
-P12C-C3 已实现（冻结=`6b9143a`、实现=`5e4f9f6`）。默认折叠零请求，展开只取最近 10 条元数据，详情严格校验后只保留六项有界摘要；revision ID/version/正文不进入可见 DOM、URL、存储或日志。恢复与检查点共用令牌和既有保存链，确认前零 POST、执行时使用最新 expected、成功唯一 editor-state GET；list/detail/restore 迟到以项目会话和详情操作代次隔离。多轮测试返修用真实检查点 create、双项目双 restore 与 `listCompleteLog/detailCompleteLog` 关闭互斥、旧 finally、迟到及 arrived 冒充 fulfill 假绿。Codex 独立结果为 **21 / 51 / 46 / 284 passed**，lint/build/diff/七文件白名单通过；后端沿用 **800 passed**。当时尚无当前状态差异 API；后续 P12D-A/B 已补齐字段摘要及前端入口，P12E-A/B/C 已补齐单修订对当前与双历史修订正文差异，P12F-A 已补齐最多 20 条/20 MiB 的有限保留，P12F-B 已补齐后端游标页。前端加载更多、删除、搜索、跨项目历史和多人协作仍未实现。
+P12C-C3 已实现（冻结=`6b9143a`、实现=`5e4f9f6`）。默认折叠零请求，展开只取最近 10 条元数据，详情严格校验后只保留六项有界摘要；revision ID/version/正文不进入可见 DOM、URL、存储或日志。恢复与检查点共用令牌和既有保存链，确认前零 POST、执行时使用最新 expected、成功唯一 editor-state GET；list/detail/restore 迟到以项目会话和详情操作代次隔离。多轮测试返修用真实检查点 create、双项目双 restore 与 `listCompleteLog/detailCompleteLog` 关闭互斥、旧 finally、迟到及 arrived 冒充 fulfill 假绿。Codex 独立结果为 **21 / 51 / 46 / 284 passed**，lint/build/diff/七文件白名单通过；后端沿用 **800 passed**。当时尚无当前状态差异 API；后续 P12D-A/B 已补齐字段摘要及前端入口，P12E-A/B/C 已补齐单修订对当前与双历史修订正文差异，P12F-A/B/C 已补齐最多 20 条/20 MiB 有限保留、后端游标页和前端手动加载更多。删除、搜索/筛选、跨项目历史和多人协作仍未实现。
 
 P9C-R1 固定离线模型运行时门独立验收命令（后端；模型只允许显式准备一次，其他命令严格离线）：
 
