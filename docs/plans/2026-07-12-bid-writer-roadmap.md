@@ -365,7 +365,7 @@ P8D 与 P8E 本机外置解析助手均已完成并推送：P8D 计划=`30d066f`
 
 **P12E-A 单条修订正文差异预览已完成**：冻结=`5aa205c`、实现=`f9f067e`。只读 GET 返回精确六键和有界章节行差异；前端技术/商务共用按需入口、严格 parser、四意图互斥与 arrived/complete 迟到隔离。Codex 首轮审查复现第 101 个差异章仍进入 difflib，Grok 以真实 **1 failed / 1 passed** 红测返修为 **2 passed**；Codex 独立通过专项/回归/后端全量 **23/27/854**，history/checkpoint/truth/前端全量 **27/51/46/290 passed**。任意历史两两比较、删除、搜索、分页、正文自动恢复和多人协作继续不进入 A 包。
 
-**下一步**：P12F-C 已完成。先只读审计剩余主线与现有未实现清单，再冻结一个最小后续包；不得把搜索、筛选、删除、跨项目历史、多人协作或交付增强未经审计合并实施。
+**下一步**：只读审计已发现任务 SSE 在 required 模式下未复用角色/成员/活动工作空间解析，且流内短会话只按 project/task 读取。P13-A 已冻结为三文件安全包：统一解析、连接前短 Session 和每帧 workspace 再校验；不得夹带搜索、筛选、删除、跨项目历史、多人协作或交付增强。
 
 **P12E-B 已完成并推送**：双修订正文差异后端基础，契约=`docs/p12e-revision-pair-body-diff-contract.md`，计划=`docs/plans/2026-07-17-p12e-revision-pair-body-diff-plan.md`，冻结=`00ef081`、实现=`5a5b08a`。只比较同 workspace/project 的两个历史修订，暂不提供前端入口；Grok 仅改四个后端文件并发送 review_request，Codex 独立验收后提交推送。专项/回归/全量 **13/23/50/867 passed**，合并专项 **86 passed**，仅 1 条既有 Starlette/httpx 弃用告警。
 
@@ -378,6 +378,8 @@ P12E-B 真实 failure-first 为 13 项红测：11 项路由缺失 404、1 项同
 **P12F-B 已完成并推送**：契约=`docs/p12f-revision-cursor-page-contract.md`，计划=`docs/plans/2026-07-17-p12f-revision-cursor-page-plan.md`，冻结=`4ddd896`、实现=`c84a94d`。独立后端只读页固定 `LIMIT 11`/返回最多 10 条，游标按 `created_at DESC,id DESC` 键集位置生成；旧列表 `{items}` 合同和未知查询参数兼容语义不变。真实 failure-first **27 failed / 3 passed**；Codex 一轮返修关闭 Windows 最大时间平台依赖、pre-1970 不可用游标和恒真测试断言，独立通过 **34/171/905 passed**。SQLite 方言仅出现绑定为 0 的被动 OFFSET 占位，源码无主动偏移。P12F-B 当时未实现前端加载更多，后续已由 P12F-C 完成；搜索、删除、筛选、total/hasMore、跨项目历史和多人协作仍未实现。
 
 **P12F-C 已完成并推送**：契约=`docs/p12f-revision-load-more-frontend-contract.md`，计划=`docs/plans/2026-07-17-p12f-revision-load-more-frontend-plan.md`，冻结=`bb1ae3e`、实现=`fe99f5a`。共用面板首屏/刷新/恢复重载改用新页；手动按钮以同步 ref 精确单飞，成功最多追加到 20，失败保留原 items/cursor 与既有意图，同 cursor 可重试；折叠、刷新、项目切换和恢复重载用独立代次隔离迟到分页。真实 failure-first **2 failed / 0 passed / 2 did not run**；Codex 两轮返修关闭空 cursor、假双击、宽泛计数/Cookie/禁止旁路和 knowledge 宽放行，独立通过 **4/34/28/18/51/297 passed**，lint/build/diff/三文件白名单通过。
+
+**P13-A 已冻结待实现**：契约=`docs/p13a-task-sse-workspace-auth-contract.md`，计划=`docs/plans/2026-07-17-p13a-task-sse-workspace-auth-plan.md`。当前认证中间件仍能拦截无会话请求，但 SSE 路由自行采用默认/请求头 workspace，导致已登录非 bid_writer、非成员头和活动工作空间语义绕过；流内快照也未再次按 workspace 校验。三文件包只允许统一工作空间解析、连接前短 Session 和每帧再校验；保留 disabled、原生 EventSource、既有 SSE 事件/回退，不做事件游标、前端或数据库变更。
 ## P12D-B 完成状态（2026-07-17）
 
 P12D-B 技术/商务共用前端修订对比入口已完成。Grok 任务 `msg_a8258d4b49f44678bf43fe2a2356d583`，仅修改三文件白名单并未提交；Codex 独立通过历史 24、检查点 51、技术/商务真值 46、前端全量 287 passed，lint/build/diff 通过。首轮红测实际为 2 failed / 21 passed / 1 did not run，因串行分组在首个缺失入口失败后跳过一条；该过程偏差已保留为事实，不冒充 3/21。

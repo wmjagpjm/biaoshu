@@ -1,13 +1,13 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-17（P12F-A/P12F-B/P12F-C 已完成并推送；下一包待只读审计后冻结）
+> **交接日期**：2026-07-17（P12F-A/P12F-B/P12F-C 已完成并推送；P13-A 任务 SSE 工作空间鉴权已冻结待实现）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
 > **协作分支功能基线**：P12F-C 冻结=`bb1ae3e`、实现=`fe99f5a`、文档闭环见当前 HEAD；P12F-B 冻结=`4ddd896`、实现=`c84a94d`；P12F-A 冻结=`e713fb3`、实现=`24f4cf2`；P12E-A 冻结=`5aa205c`、实现=`f9f067e`；P12E-B 冻结=`00ef081`、实现=`5a5b08a`；P12E-C 冻结=`8b40bf4`、实现=`b6a4375`；P12D-B 冻结=`fc19d93`、实现=`35ab377`、验收闭环=`c7cf67f`；P12D-A 冻结=`2cc6ee3`、实现=`9445fcc`；P9C-R1 冻结=`cd70ef0`、实现=`b53dcce`；P12C-C3 冻结=`6b9143a`、实现=`5e4f9f6`；P12C-C2 冻结=`54af600`、范围修订=`2276366`、实现=`0803250`；P12C-C1 冻结=`26b504e`、实现=`7023ecd`；P12C-B-D3 冻结=`1d44484`、实现=`b91a7ff`；P12C-B-D2 冻结=`6b83fc1`、实现=`f256f5b`；P12C-B-D1 冻结=`e8ffaeb`、实现=`a6a28f6`；P12C-B-C2 冻结=`52bbabf`、实现=`82cc82e`；P12C-B-C1 冻结=`76834f5`、实现=`1d0ce0e`；P12C-B-B2 冻结=`3a30c03`、实现=`5149385`；P12C-B-B1 冻结=`05864f6`、实现=`5a0d1c0`；P12C-B-A 冻结=`fbf93c0`、实现=`acf3139`；P12C-A 冻结=`daa8c43`、实现=`226e1c1`；P12B-D 冻结=`613818f`、D1 后端=`551caba`、D2 前端=`0f81dd6`；其余既有功能基线见本文 §11。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
 > **最新增量基线**：P12F-A 已交付最多 20 条/20 MiB 有界保留，P12F-B 已交付独立后端 `/editor-state-revisions/page`，P12F-C 已交付技术标/商务标共用面板手动“加载更多”，首屏改用新页并最多累计 20 条；旧 `{items}` 后端合同仍保持不变。
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **本地状态**：P12F-C 冻结=`bb1ae3e`、实现=`fe99f5a` 已推送；文档闭环以当前 HEAD 为准，切换会话前必须核对 HEAD、远端一致且跟踪工作区干净。
+> **本地状态**：P12F-C 冻结=`bb1ae3e`、实现=`fe99f5a` 已推送；当前执行包为 P13-A，契约=`docs/p13a-task-sse-workspace-auth-contract.md`、计划=`docs/plans/2026-07-17-p13a-task-sse-workspace-auth-plan.md`，实现尚未开始。
 > **验收基线**：P12F-C failure-first **2 failed / 0 passed / 2 did not run**；Codex 独立 P12F-C/history/技术真值/商务真值/checkpoint/前端全量 **4/34/28/18/51/297 passed**，lint/build/diff/三文件通过。P12F-B 独立新专项/受影响回归/后端全量 **34/171/905 passed**；P12F-A 独立 **121/134/871 passed**。**所有 Playwright E2E 共用 SQLite 重置库，必须逐条串行运行，禁止并行。**
 
 ---
@@ -21,8 +21,8 @@
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
 当前进度：P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/P12D-B、P12E-A/P12E-B/P12E-C、P12F-A/P12F-B/P12F-C、P9D、P9C-R1、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。P12F-C 冻结=`bb1ae3e`、实现=`fe99f5a`；后端/前端全量基线 905/297 passed。
 当前状态：P12F-C 前端加载更多已完成并推送；默认折叠零请求，首屏/刷新/恢复重载只用新 `/page`，手动最多累计 20 条，失败保值可重试，旧列表请求精确为零。
-当前执行包：没有已冻结实现包。必须先只读审计路线图和未实现清单，选定一个最小后续包，写契约/计划并提交冻结后再交 Grok；不得直接沿用 P12F-C 白名单。
-下一步：优先审计剩余主线价值、依赖和安全边界；搜索、筛选、删除、跨项目历史、多人协作、Word 精细版式、外部标讯源和真语义调优不得未经审计合包。所有 E2E 继续 `--workers=1 --retries=0` 串行运行。
+当前执行包：P13-A 任务 SSE 工作空间鉴权闭环已冻结。Grok 只能改 `backend/app/api/tasks.py`、`backend/app/services/task_service.py` 和新建 `backend/tests/test_p13a_task_sse_workspace_auth.py`；不得提交推送。
+下一步：Grok 先以 required 非 bid_writer、非成员头、active workspace 三类旧行为做真实 failure-first，再实现“统一解析 + 连接前短 Session + 每帧 workspace 再校验”；Codex 独立审查、后端专项/回归/全量验收、中文闭环和推送。不得夹带前端、事件游标、多任务总线或 P12F 搜索/删除。所有 E2E 继续 `--workers=1 --retries=0` 串行运行。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
