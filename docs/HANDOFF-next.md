@@ -1,13 +1,13 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-17（P12F-A 有限保留与字节配额已完成；下一包 P12F-B 待独立审计与冻结）
+> **交接日期**：2026-07-17（P12F-A 已完成；P12F-B 后端游标页已冻结，等待 Grok）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
 > **协作分支功能基线**：P12F-A 冻结=`e713fb3`、实现=`24f4cf2`、文档闭环见当前 HEAD；P12E-A 冻结=`5aa205c`、实现=`f9f067e`；P12E-B 冻结=`00ef081`、实现=`5a5b08a`；P12E-C 冻结=`8b40bf4`、实现=`b6a4375`；P12D-B 冻结=`fc19d93`、实现=`35ab377`、验收闭环=`c7cf67f`；P12D-A 冻结=`2cc6ee3`、实现=`9445fcc`；P9C-R1 冻结=`cd70ef0`、实现=`b53dcce`；P12C-C3 冻结=`6b9143a`、实现=`5e4f9f6`；P12C-C2 冻结=`54af600`、范围修订=`2276366`、实现=`0803250`；P12C-C1 冻结=`26b504e`、实现=`7023ecd`；P12C-B-D3 冻结=`1d44484`、实现=`b91a7ff`；P12C-B-D2 冻结=`6b83fc1`、实现=`f256f5b`；P12C-B-D1 冻结=`e8ffaeb`、实现=`a6a28f6`；P12C-B-C2 冻结=`52bbabf`、实现=`82cc82e`；P12C-B-C1 冻结=`76834f5`、实现=`1d0ce0e`；P12C-B-B2 冻结=`3a30c03`、实现=`5149385`；P12C-B-B1 冻结=`05864f6`、实现=`5a0d1c0`；P12C-B-A 冻结=`fbf93c0`、实现=`acf3139`；P12C-A 冻结=`daa8c43`、实现=`226e1c1`；P12B-D 冻结=`613818f`、D1 后端=`551caba`、D2 前端=`0f81dd6`；其余既有功能基线见本文 §11。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
-> **最新增量基线**：P12F-A 已交付“最多 20 条且总快照最多 20 MiB、默认列表仍为 10 条”的磁盘有界保留基础；P12E-A 已交付单条修订对当前状态的只读有界正文差异；P12E-B/C 已交付双历史修订正文差异后端与共用前端。
+> **最新增量基线**：P12F-A 已交付“最多 20 条且总快照最多 20 MiB、默认列表仍为 10 条”的磁盘有界保留基础；P12F-B 已冻结独立后端 `/editor-state-revisions/page` 键集分页，旧 `{items}` 路由保持不变；前端加载更多留到 P12F-C。
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **本地状态**：P12F-A 实现 `24f4cf2` 已推送；当前仅进行 P12F-A 中文文档闭环。闭环提交后必须核对 HEAD、远端一致且工作区干净。固定模型缓存与验收日志仅在本机且被 Git 忽略。
+> **本地状态**：P12F-A 实现 `24f4cf2`、文档闭环 `1e1b8f3` 均已推送；当前仅新增/更新 P12F-B 契约、计划和交接文档，尚未修改生产代码。冻结提交后必须核对 HEAD、远端一致且工作区干净。
 > **验收基线**：P12F-A failure-first **9 failed**；Codex 独立六文件专项/受影响回归/后端串行全量 **121/134/871 passed**，仅 1 条既有 Starlette/httpx 弃用告警；`py_compile`、diff-check、精确六文件和空暂存区通过。P12E-B 专项/P12E-A 专项/P12D-P12C 受影响回归/当时后端全量 **13/23/50/867 passed**；P12E-C 聚焦/受影响 history/前端全量为 **3/27/293 passed**。**所有 Playwright E2E 共用 SQLite 重置库，必须逐条串行运行，禁止并行。**
 
 ---
@@ -21,8 +21,8 @@
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
 当前进度：P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/P12D-B、P12E-A/P12E-B/P12E-C、P12F-A、P9D、P9C-R1、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。P12F-A 冻结=`e713fb3`、实现=`24f4cf2`；后端全量 871、前端全量 293 passed。
 当前状态：P12F-A 已完成并推送；写入保留最多 20 条且总快照最多 20 MiB，默认 GET 仍只列最近 10 条。Codex 独立验收为六文件专项/受影响回归/后端全量 121/134/871 passed。
-当前执行方向：P12F-B 游标分页尚未冻结或实现。必须先审计既有列表路由、稳定排序和前端按需加载边界，再单独冻结契约、计划和白名单。
-下一步：规划 P12F-B，只允许在现有 20 条磁盘有界保留上增加有界游标分页；不得顺带加入搜索、删除、命名、固定、导出、分享、跨项目历史或多人协作。
+当前执行包：P12F-B 后端修订游标页，契约=`docs/p12f-revision-cursor-page-contract.md`、计划=`docs/plans/2026-07-17-p12f-revision-cursor-page-plan.md`。Grok 只允许修改历史服务、修订路由、schema 和新后端专项测试四文件，不得提交或推送。
+下一步：先以新 `/editor-state-revisions/page` 路由 404 形成真实红测，再实现固定每页 10 条、`LIMIT 11`、`created_at DESC,id DESC` 键集分页；旧 `{items}` 列表必须完全不变。前端加载更多留到 P12F-C。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -676,3 +676,13 @@ Grok 严格只修改两个服务和四个既有测试。真实 failure-first 为
 Codex 独立审查确认裁剪 SELECT 无 `snapshot_json`、先完整校验再删除、连续最新前缀、DELETE workspace/project/id 三重作用域且只 flush。非法元数据失败前后精确比较 `id/state_version/snapshot_bytes/source_kind/created_at`，本项目与旁路项目均零副作用。独立六文件专项/受影响回归/后端全量为 **121/134/871 passed**，仅 1 条既有 Starlette/httpx 弃用告警；验收回执=`msg_4cd3242575cb4c5d865138415e57a028`。
 
 P12F-A 未回填已裁历史，也未实现分页 API、前端加载更多、搜索、删除、命名、固定、导出、分享、跨项目历史或多人协作。下一步只可先审计并独立冻结 P12F-B 游标分页，不得直接沿用本包白名单或顺带扩张功能。
+
+## P12F-B 后端修订游标页冻结交接（2026-07-17）
+
+契约=`docs/p12f-revision-cursor-page-contract.md`、计划=`docs/plans/2026-07-17-p12f-revision-cursor-page-plan.md`。审计结论是不能修改既有列表成功体，否则会破坏 P12C-C1 的顶层精确 `{items}` 和当前前端最多 10 条 parser；因此新增独立只读 `GET /api/projects/{projectId}/editor-state-revisions/page`，P12F-C 再单独接“加载更多”。
+
+固定页大小 10，查询投影仍为五列并 `LIMIT 11`；游标使用 `esrc1_` 版本前缀和规范无填充 base64url，只携带 UTC 微秒时间位置与合法修订 ID。带游标时使用 `created_at < t OR (created_at = t AND id < id)`，禁止 OFFSET/COUNT/正文投影。成功体精确 `items/nextCursor`；非法游标固定 400 `editor_state_revision_cursor_invalid`，所有成功/业务错误 `no-store`。
+
+Grok 四文件白名单：`backend/app/services/editor_state_revision_history_service.py`、`backend/app/api/editor_state_revisions.py`、`backend/app/api/schemas.py`、新建 `backend/tests/test_p12f_revision_cursor_page.py`。必须先只建测试得到真实路由 404，再改三个生产文件；禁止模型/数据库/迁移/主注册/写入与恢复服务/既有测试/前端/E2E/依赖/配置/其他文档改动，禁止提交或推送。
+
+本包不实现前端加载更多，也不提供客户端 limit/offset/page/total/hasMore；不做搜索、筛选、删除、命名、固定、导出、分享、跨项目历史、多人协作、历史回填或后台清理。

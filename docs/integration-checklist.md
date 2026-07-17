@@ -801,3 +801,16 @@ cd C:\Users\Administrator\biaoshu\backend
 Codex 独立结果为六文件专项/受影响回归/后端全量 **121/134/871 passed**，均仅 1 条既有 Starlette/httpx 弃用告警；`py_compile`、`git diff --check`、精确六文件和空暂存区通过。消息追溯：首轮 review_request=`msg_63b19b98d56645bb98e96e0affd44524`，返修 task/review_request=`msg_72c9cee33d5446358a29aab701aa5909`/`msg_7fa5a6f3c971479aa8c2b65f7b37cdaa`，Codex 验收回执=`msg_4cd3242575cb4c5d865138415e57a028`。
 
 本包未新增 API/schema/模型/迁移/前端，未回填已裁历史，也未实现游标分页、加载更多、搜索、删除、命名、固定、导出、分享、跨项目历史或多人协作。P12F-B 现在可以另行审计和冻结，但不得直接沿用本包白名单。
+
+## P12F-B 后端修订游标页（已冻结，等待实现）
+
+契约=`docs/p12f-revision-cursor-page-contract.md`、计划=`docs/plans/2026-07-17-p12f-revision-cursor-page-plan.md`。新增独立：
+
+```text
+GET /api/projects/{projectId}/editor-state-revisions/page
+GET /api/projects/{projectId}/editor-state-revisions/page?cursor={opaqueCursor}
+```
+
+成功体精确 `items/nextCursor`，固定每页 10 条；查询只投影五列、`LIMIT 11`，按 `created_at DESC,id DESC` 键集分页。游标为 `esrc1_` 版本化规范 base64url，只含 UTC 微秒时间位置和修订 ID；非法固定 400 `editor_state_revision_cursor_invalid`。旧 `/editor-state-revisions` 顶层仅 `{items}`、最多 10 条及未知查询参数兼容语义必须完全不变。
+
+Grok 仅可修改历史服务、路由、schema 和新建 `test_p12f_revision_cursor_page.py`。failure-first 必须是新路由真实 404；最终覆盖 0/1/10/11/20、并列时间稳定、不重不漏、重复确定、非法游标矩阵、跨域、lookahead corrupt、五列/LIMIT 11/零 OFFSET/COUNT、五域零写和旧列表回归。P12F-C 前端加载更多另行冻结。
