@@ -1,12 +1,12 @@
 /**
- * 模块：P12C-C3 / P12D-B / P12E-A editor-state 修订历史、对比与正文差异 API 封装
- * 用途：严格校验 list/detail/restore/comparison/body-diff 响应 shape；详情仅在 API 栈内解析并压缩为有界摘要。
- * 对接：GET|POST /api/projects/{id}/editor-state-revisions*；comparison/body-diff 只读 GET；apiFetch。
+ * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C editor-state 修订历史、对比与正文差异 API 封装
+ * 用途：严格校验 list/detail/restore/comparison/body-diff/pair-body-diff 响应 shape；详情仅在 API 栈内解析并压缩为有界摘要。
+ * 对接：GET|POST /api/projects/{id}/editor-state-revisions*；comparison/body-diff/pair 只读 GET；apiFetch。
  * 二次开发：
  *   - 禁止把原始 snapshot 返回给 React；禁止本地生成 revisionId/version
  *   - 禁止把响应原文、路径、后端 detail、字段值/键名拼进错误文案
  *   - 九类来源白名单；列表最多 10 条；comparison 顶层精确四键 + 13 键有序子序列
- *   - body-diff 顶层精确六键；item 五键；hunk 二键；固定枚举与计数一致性
+ *   - body-diff 顶层精确六键（current/target）；pair 顶层精确六键（before/after）；item 五键；hunk 二键
  */
 
 import { apiFetch } from "../../shared/lib/api";
@@ -138,12 +138,22 @@ const COMPARISON_SUMMARY_KEYS = [
   "hasParsedMarkdown",
 ] as const;
 
-/** body-diff 顶层精确六键 */
+/** body-diff 顶层精确六键（单修订对当前） */
 const BODY_DIFF_TOP_KEYS = [
   "sameBody",
   "changedChapterCount",
   "currentChapterCount",
   "targetChapterCount",
+  "truncated",
+  "items",
+] as const;
+
+/** pair body-diff 顶层精确六键（双历史修订） */
+const PAIR_BODY_DIFF_TOP_KEYS = [
+  "sameBody",
+  "changedChapterCount",
+  "beforeChapterCount",
+  "afterChapterCount",
   "truncated",
   "items",
 ] as const;
@@ -307,6 +317,19 @@ export type EditorStateRevisionBodyDiff = {
   changedChapterCount: number;
   currentChapterCount: number;
   targetChapterCount: number;
+  truncated: boolean;
+  items: EditorStateRevisionBodyDiffItem[];
+};
+
+/**
+ * 模块：两条历史修订章节正文差异（P12E-B/C）
+ * 约束：顶层精确六键 before/after；sameBody 当且仅当 items 为空。
+ */
+export type EditorStateRevisionPairBodyDiff = {
+  sameBody: boolean;
+  changedChapterCount: number;
+  beforeChapterCount: number;
+  afterChapterCount: number;
   truncated: boolean;
   items: EditorStateRevisionBodyDiffItem[];
 };
@@ -843,6 +866,91 @@ export async function getEditorStateRevisionBodyDiff(
     `/projects/${encodeURIComponent(projectId)}/editor-state-revisions/${encodeURIComponent(revisionId)}/body-diff`,
   );
   return parseRevisionBodyDiff(raw);
+}
+
+/**
+ * 用途：严格解析双修订 body-diff；顶层精确六键 before/after；复用 item/hunk 与预算校验。
+ * 约束：sameBody 当且仅当 items 为空；changedChapterCount === items.length；拒绝未知键。
+ */
+export function parseRevisionPairBodyDiff(
+  raw: unknown,
+): EditorStateRevisionPairBodyDiff {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("revision_pair_body_diff_invalid");
+  }
+  const o = raw as Record<string, unknown>;
+  if (!hasExactKeys(o, PAIR_BODY_DIFF_TOP_KEYS)) {
+    throw new Error("revision_pair_body_diff_invalid");
+  }
+  if (typeof o.sameBody !== "boolean") {
+    throw new Error("revision_pair_body_diff_invalid");
+  }
+  if (!isNonNegativeSafeInt(o.changedChapterCount)) {
+    throw new Error("revision_pair_body_diff_invalid");
+  }
+  if (!isNonNegativeSafeInt(o.beforeChapterCount)) {
+    throw new Error("revision_pair_body_diff_invalid");
+  }
+  if (!isNonNegativeSafeInt(o.afterChapterCount)) {
+    throw new Error("revision_pair_body_diff_invalid");
+  }
+  if (typeof o.truncated !== "boolean") {
+    throw new Error("revision_pair_body_diff_invalid");
+  }
+  if (!Array.isArray(o.items)) {
+    throw new Error("revision_pair_body_diff_invalid");
+  }
+  if (o.items.length > MAX_BODY_DIFF_ITEMS) {
+    throw new Error("revision_pair_body_diff_invalid");
+  }
+  if (o.changedChapterCount !== o.items.length) {
+    throw new Error("revision_pair_body_diff_invalid");
+  }
+  if (o.sameBody !== (o.items.length === 0)) {
+    throw new Error("revision_pair_body_diff_invalid");
+  }
+  if (o.sameBody && o.changedChapterCount !== 0) {
+    throw new Error("revision_pair_body_diff_invalid");
+  }
+  const textBudget = { n: 0 };
+  // 复用 item/hunk 严格解析；失败统一映射为 pair 固定错误标识，避免泄漏内部细节
+  let items: EditorStateRevisionBodyDiffItem[];
+  try {
+    items = o.items.map((item, idx) =>
+      parseBodyDiffItem(item, idx + 1, textBudget),
+    );
+  } catch {
+    throw new Error("revision_pair_body_diff_invalid");
+  }
+  return {
+    sameBody: o.sameBody,
+    changedChapterCount: o.changedChapterCount,
+    beforeChapterCount: o.beforeChapterCount,
+    afterChapterCount: o.afterChapterCount,
+    truncated: o.truncated,
+    items,
+  };
+}
+
+/**
+ * 用途：按需 GET 两条历史修订正文差异；ID 非法或相同固定失败不发请求；无 body/查询/重试。
+ * 对接：GET /projects/{projectId}/editor-state-revisions/{before}/body-diff/{after}
+ */
+export async function getEditorStateRevisionPairBodyDiff(
+  projectId: string,
+  beforeRevisionId: string,
+  afterRevisionId: string,
+): Promise<EditorStateRevisionPairBodyDiff> {
+  if (!isValidRevisionId(beforeRevisionId) || !isValidRevisionId(afterRevisionId)) {
+    throw new Error("revision_id_invalid");
+  }
+  if (beforeRevisionId === afterRevisionId) {
+    throw new Error("revision_pair_same_id");
+  }
+  const raw = await apiFetch<unknown>(
+    `/projects/${encodeURIComponent(projectId)}/editor-state-revisions/${encodeURIComponent(beforeRevisionId)}/body-diff/${encodeURIComponent(afterRevisionId)}`,
+  );
+  return parseRevisionPairBodyDiff(raw);
 }
 
 /**

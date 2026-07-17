@@ -1,13 +1,14 @@
 /**
- * 模块：P12C-C3 / P12D-B / P12E-A 双工作区共用修订历史折叠面板
- * 用途：默认折叠零请求；展开 list；按需摘要；按需与当前对比；按需正文差异；内联二次确认后 restore。
- * 对接：editorStateRevisionApi（含 comparison/body-diff）；技术/商务 hook 的 restoreRevision 回调。
+ * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C 双工作区共用修订历史折叠面板
+ * 用途：默认折叠零请求；展开 list；按需摘要；按需与当前对比；按需正文差异；
+ *       内存双侧修订选择与双修订正文差异；内联二次确认后 restore。
+ * 对接：editorStateRevisionApi（含 comparison/body-diff/pair）；技术/商务 hook 的 restoreRevision 回调。
  * 二次开发：
  *   - 不渲染 revisionId/stateVersion/snapshot 正文/内部字段键/字段值/op 原值
- *   - 项目切换/折叠/卸载用会话代次隔离迟到 list/detail/comparison/body-diff/restore
- *   - 摘要、比较、正文差异、恢复确认同一时刻只保留一个当前意图；交叉作废
+ *   - 项目切换/折叠/卸载用会话代次隔离迟到 list/detail/comparison/body-diff/pair/restore
+ *   - 摘要、比较、正文差异、双修订差异、恢复确认同一时刻只保留一个当前意图；交叉作废
  *   - 固定中文脱敏；禁止 console/存储/URL/Cookie/剪贴板/下载/轮询/外网
- *   - 无创建/删除/任意历史两两比较/搜索/分页/自动批量比较
+ *   - 无创建/删除/搜索/分页/自动批量比较；双修订选择仅内存
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -19,12 +20,14 @@ import {
   formatRevisionTime,
   getEditorStateRevisionBodyDiff,
   getEditorStateRevisionComparison,
+  getEditorStateRevisionPairBodyDiff,
   getEditorStateRevisionSummary,
   listEditorStateRevisions,
   type BodyDiffOp,
   type EditorStateRevisionBodyDiff,
   type EditorStateRevisionComparison,
   type EditorStateRevisionMeta,
+  type EditorStateRevisionPairBodyDiff,
   type EditorStateRevisionSummary,
 } from "./editorStateRevisionApi";
 
@@ -40,6 +43,9 @@ const MSG_COMPARE_DIFF = "与当前版本存在差异";
 const MSG_BODY_DIFF_FAIL = "正文差异加载失败，请稍后重试";
 const MSG_BODY_DIFF_SAME = "章节正文无变化";
 const MSG_BODY_DIFF_TRUNCATED = "差异内容较长，仅显示有界片段";
+const MSG_PAIR_BODY_DIFF_FAIL = "双修订差异加载失败，请稍后重试";
+const MSG_PAIR_BODY_DIFF_SAME = "两条修订正文一致";
+const MSG_PAIR_BODY_DIFF_TRUNCATED = "差异内容较长，仅显示有界片段";
 const MSG_RESTORE_OK = "已恢复到所选修订";
 const MSG_RESTORE_FAIL = "恢复修订失败，本地内容已保留";
 const MSG_RESTORE_RELOAD_FAIL =
@@ -57,7 +63,7 @@ export type EditorStateRevisionPanelProps = {
   projectId: string;
   /**
    * 全状态阻断、初始加载失败、版本未知或 apiReady=false 时禁用恢复。
-   * 列表/摘要/比较/正文差异只读仍可刷新（比较与正文差异不受 disabled 控制，但 restoreBusy 时禁用）。
+   * 列表/摘要/比较/正文差异/双修订差异只读仍可刷新（比较与正文差异不受 disabled 控制，但 restoreBusy 时禁用）。
    */
   disabled: boolean;
   /** 进入既有串行链 POST restore + 唯一 editor-state GET */
@@ -100,6 +106,9 @@ export function EditorStateRevisionPanel({
   const [detailError, setDetailError] = useState<string | null>(null);
   const [comparisonError, setComparisonError] = useState<string | null>(null);
   const [bodyDiffError, setBodyDiffError] = useState<string | null>(null);
+  const [pairBodyDiffError, setPairBodyDiffError] = useState<string | null>(
+    null,
+  );
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [statusTone, setStatusTone] = useState<"ok" | "err" | null>(null);
   const [listLoading, setListLoading] = useState(false);
@@ -113,6 +122,8 @@ export function EditorStateRevisionPanel({
   const [bodyDiffLoadingId, setBodyDiffLoadingId] = useState<string | null>(
     null,
   );
+  /** 双修订比较是否在途（按钮文案；不暴露 ID） */
+  const [pairBodyDiffLoading, setPairBodyDiffLoading] = useState(false);
   const [restoreBusy, setRestoreBusy] = useState(false);
   /** 进入确认态的修订 id（仅内存，不渲染） */
   const [pendingRestoreId, setPendingRestoreId] = useState<string | null>(null);
@@ -135,24 +146,34 @@ export function EditorStateRevisionPanel({
   );
   const [bodyDiff, setBodyDiff] =
     useState<EditorStateRevisionBodyDiff | null>(null);
+  /** 双修订选择：仅内存保存 revisionId，禁止渲染到 DOM/URL/存储 */
+  const [pairBeforeId, setPairBeforeId] = useState<string | null>(null);
+  const [pairAfterId, setPairAfterId] = useState<string | null>(null);
+  const [pairBodyDiff, setPairBodyDiff] =
+    useState<EditorStateRevisionPairBodyDiff | null>(null);
 
   /**
    * 项目会话代次：projectId 变化或折叠时递增，隔离迟到 list/restore。
    */
   const sessionRef = useRef(0);
   /**
-   * 详情请求代次：项目切换/折叠/刷新/另一项/再次点击/恢复/比较/正文差异均递增；
+   * 详情请求代次：项目切换/折叠/刷新/另一项/再次点击/恢复/比较/正文差异/pair 均递增；
    * 旧 detail 的 try/catch/finally 不得写 summary/error/loading。
    */
   const detailGenRef = useRef(0);
   /**
-   * 比较请求代次：与 detail/body-diff 交叉作废；项目切换/折叠/刷新/恢复/列表重载/另一项均递增。
+   * 比较请求代次：与 detail/body-diff/pair 交叉作废；项目切换/折叠/刷新/恢复/列表重载/另一项均递增。
    */
   const comparisonGenRef = useRef(0);
   /**
-   * 正文差异请求代次：与 detail/comparison 交叉作废。
+   * 正文差异请求代次：与 detail/comparison/pair 交叉作废。
    */
   const bodyDiffGenRef = useRef(0);
+  /**
+   * 双修订正文差异请求代次：与 detail/comparison/body-diff 交叉作废；
+   * 重选/清除/折叠/刷新/项目切换均递增。
+   */
+  const pairBodyDiffGenRef = useRef(0);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -182,6 +203,14 @@ export function EditorStateRevisionPanel({
     setBodyDiffLoadingId(null);
   }, []);
 
+  const clearPairBodyDiffState = useCallback(() => {
+    setPairBeforeId(null);
+    setPairAfterId(null);
+    setPairBodyDiff(null);
+    setPairBodyDiffError(null);
+    setPairBodyDiffLoading(false);
+  }, []);
+
   const invalidateDetail = useCallback(() => {
     detailGenRef.current += 1;
     setDetailLoadingId(null);
@@ -197,24 +226,32 @@ export function EditorStateRevisionPanel({
     setBodyDiffLoadingId(null);
   }, []);
 
-  // 项目切换：重置面板，作废在途 list/detail/comparison/body-diff/restore
+  const invalidatePairBodyDiff = useCallback(() => {
+    pairBodyDiffGenRef.current += 1;
+    setPairBodyDiffLoading(false);
+  }, []);
+
+  // 项目切换：重置面板，作废在途 list/detail/comparison/body-diff/pair/restore
   useEffect(() => {
     sessionRef.current += 1;
     detailGenRef.current += 1;
     comparisonGenRef.current += 1;
     bodyDiffGenRef.current += 1;
+    pairBodyDiffGenRef.current += 1;
     setExpanded(false);
     setItems([]);
     setListError(null);
     setDetailError(null);
     setComparisonError(null);
     setBodyDiffError(null);
+    setPairBodyDiffError(null);
     setStatusMessage(null);
     setStatusTone(null);
     setListLoading(false);
     setDetailLoadingId(null);
     setComparisonLoadingId(null);
     setBodyDiffLoadingId(null);
+    setPairBodyDiffLoading(false);
     setRestoreBusy(false);
     setPendingRestoreId(null);
     setSummaryRevisionId(null);
@@ -223,24 +260,30 @@ export function EditorStateRevisionPanel({
     setComparison(null);
     setBodyDiffRevisionId(null);
     setBodyDiff(null);
+    setPairBeforeId(null);
+    setPairAfterId(null);
+    setPairBodyDiff(null);
   }, [projectId]);
 
   const loadList = useCallback(
     async (session: number) => {
       if (!projectId) return;
-      // 刷新/重载列表作废在途 detail/comparison/body-diff，避免迟到结果覆盖新会话
+      // 刷新/重载列表作废在途 detail/comparison/body-diff/pair，避免迟到结果覆盖新会话
       detailGenRef.current += 1;
       comparisonGenRef.current += 1;
       bodyDiffGenRef.current += 1;
+      pairBodyDiffGenRef.current += 1;
       setDetailLoadingId(null);
       setComparisonLoadingId(null);
       setBodyDiffLoadingId(null);
+      setPairBodyDiffLoading(false);
       setListLoading(true);
       setListError(null);
       setPendingRestoreId(null);
       clearSummaryState();
       clearComparisonState();
       clearBodyDiffState();
+      clearPairBodyDiffState();
       try {
         const next = await listEditorStateRevisions(projectId);
         if (!mountedRef.current || session !== sessionRef.current) return;
@@ -255,7 +298,13 @@ export function EditorStateRevisionPanel({
         }
       }
     },
-    [projectId, clearSummaryState, clearComparisonState, clearBodyDiffState],
+    [
+      projectId,
+      clearSummaryState,
+      clearComparisonState,
+      clearBodyDiffState,
+      clearPairBodyDiffState,
+    ],
   );
 
   const handleToggle = useCallback(() => {
@@ -264,16 +313,19 @@ export function EditorStateRevisionPanel({
       detailGenRef.current += 1;
       comparisonGenRef.current += 1;
       bodyDiffGenRef.current += 1;
+      pairBodyDiffGenRef.current += 1;
       setExpanded(false);
       setListLoading(false);
       setDetailLoadingId(null);
       setComparisonLoadingId(null);
       setBodyDiffLoadingId(null);
+      setPairBodyDiffLoading(false);
       setRestoreBusy(false);
       setPendingRestoreId(null);
       clearSummaryState();
       clearComparisonState();
       clearBodyDiffState();
+      clearPairBodyDiffState();
       return;
     }
     const session = sessionRef.current;
@@ -284,6 +336,7 @@ export function EditorStateRevisionPanel({
     clearSummaryState();
     clearComparisonState();
     clearBodyDiffState();
+    clearPairBodyDiffState();
     void loadList(session);
   }, [
     expanded,
@@ -291,6 +344,7 @@ export function EditorStateRevisionPanel({
     clearSummaryState,
     clearComparisonState,
     clearBodyDiffState,
+    clearPairBodyDiffState,
   ]);
 
   const handleRefresh = useCallback(() => {
@@ -305,11 +359,13 @@ export function EditorStateRevisionPanel({
   const handleSummaryClick = useCallback(
     async (item: ListItem) => {
       if (!expanded || restoreBusy) return;
-      // 点击摘要：作废在途比较/正文差异并清除其结果
+      // 点击摘要：作废在途比较/正文差异/pair 并清除其结果
       invalidateComparison();
       clearComparisonState();
       invalidateBodyDiff();
       clearBodyDiffState();
+      invalidatePairBodyDiff();
+      clearPairBodyDiffState();
       // 再次点击同一项：清空摘要并作废在途
       if (summaryRevisionId === item.revisionId) {
         detailGenRef.current += 1;
@@ -352,6 +408,8 @@ export function EditorStateRevisionPanel({
       clearComparisonState,
       invalidateBodyDiff,
       clearBodyDiffState,
+      invalidatePairBodyDiff,
+      clearPairBodyDiffState,
     ],
   );
 
@@ -359,11 +417,13 @@ export function EditorStateRevisionPanel({
     async (item: ListItem) => {
       // 比较不受 disabled 控制，但恢复执行期间禁用
       if (!expanded || restoreBusy) return;
-      // 点击比较：作废在途摘要/正文差异、清除其结果与恢复确认
+      // 点击比较：作废在途摘要/正文差异/pair、清除其结果与恢复确认
       invalidateDetail();
       clearSummaryState();
       invalidateBodyDiff();
       clearBodyDiffState();
+      invalidatePairBodyDiff();
+      clearPairBodyDiffState();
       setPendingRestoreId(null);
       setStatusMessage(null);
       setStatusTone(null);
@@ -424,6 +484,8 @@ export function EditorStateRevisionPanel({
       clearSummaryState,
       invalidateBodyDiff,
       clearBodyDiffState,
+      invalidatePairBodyDiff,
+      clearPairBodyDiffState,
     ],
   );
 
@@ -431,11 +493,13 @@ export function EditorStateRevisionPanel({
     async (item: ListItem) => {
       // 正文差异不受 disabled 控制，但恢复执行期间禁用
       if (!expanded || restoreBusy) return;
-      // 点击正文差异：作废在途摘要/比较、清除其结果与恢复确认
+      // 点击正文差异：作废在途摘要/比较/pair、清除其结果与恢复确认
       invalidateDetail();
       clearSummaryState();
       invalidateComparison();
       clearComparisonState();
+      invalidatePairBodyDiff();
+      clearPairBodyDiffState();
       setPendingRestoreId(null);
       setStatusMessage(null);
       setStatusTone(null);
@@ -496,19 +560,137 @@ export function EditorStateRevisionPanel({
       clearSummaryState,
       invalidateComparison,
       clearComparisonState,
+      invalidatePairBodyDiff,
+      clearPairBodyDiffState,
     ],
   );
+
+  /**
+   * 用途：选为差异前；仅内存；同项不得同时为后侧；选择本身不发请求。
+   */
+  const handlePairSelectBefore = useCallback(
+    (revisionId: string) => {
+      if (!expanded || restoreBusy) return;
+      // 重选作废在途 pair，并清除旧结果
+      pairBodyDiffGenRef.current += 1;
+      setPairBodyDiff(null);
+      setPairBodyDiffError(null);
+      setPairBodyDiffLoading(false);
+      setPairBeforeId(revisionId);
+      // 同一项不得同时承担两侧
+      setPairAfterId((prev) => (prev === revisionId ? null : prev));
+    },
+    [expanded, restoreBusy],
+  );
+
+  /**
+   * 用途：选为差异后；仅内存；同项不得同时为前侧；选择本身不发请求。
+   */
+  const handlePairSelectAfter = useCallback(
+    (revisionId: string) => {
+      if (!expanded || restoreBusy) return;
+      pairBodyDiffGenRef.current += 1;
+      setPairBodyDiff(null);
+      setPairBodyDiffError(null);
+      setPairBodyDiffLoading(false);
+      setPairAfterId(revisionId);
+      setPairBeforeId((prev) => (prev === revisionId ? null : prev));
+    },
+    [expanded, restoreBusy],
+  );
+
+  /**
+   * 用途：清除双侧选择与结果；只动内存，不发请求。
+   */
+  const handlePairClear = useCallback(() => {
+    if (!expanded || restoreBusy) return;
+    pairBodyDiffGenRef.current += 1;
+    clearPairBodyDiffState();
+  }, [expanded, restoreBusy, clearPairBodyDiffState]);
+
+  /**
+   * 用途：比较两条已选修订；精确一次 pair GET；与摘要/当前对比/单修订正文差异/恢复互斥。
+   */
+  const handlePairCompare = useCallback(async () => {
+    if (!expanded || restoreBusy) return;
+    if (!pairBeforeId || !pairAfterId || pairBeforeId === pairAfterId) return;
+    // 启动 pair：作废其它意图结果
+    invalidateDetail();
+    clearSummaryState();
+    invalidateComparison();
+    clearComparisonState();
+    invalidateBodyDiff();
+    clearBodyDiffState();
+    setPendingRestoreId(null);
+    setStatusMessage(null);
+    setStatusTone(null);
+
+    const myGen = ++pairBodyDiffGenRef.current;
+    const session = sessionRef.current;
+    const beforeId = pairBeforeId;
+    const afterId = pairAfterId;
+    setPairBodyDiff(null);
+    setPairBodyDiffError(null);
+    setPairBodyDiffLoading(true);
+    try {
+      const next = await getEditorStateRevisionPairBodyDiff(
+        projectId,
+        beforeId,
+        afterId,
+      );
+      if (
+        !mountedRef.current ||
+        myGen !== pairBodyDiffGenRef.current ||
+        session !== sessionRef.current
+      ) {
+        return;
+      }
+      setPairBodyDiff(next);
+    } catch {
+      if (
+        !mountedRef.current ||
+        myGen !== pairBodyDiffGenRef.current ||
+        session !== sessionRef.current
+      ) {
+        return;
+      }
+      setPairBodyDiff(null);
+      setPairBodyDiffError(MSG_PAIR_BODY_DIFF_FAIL);
+    } finally {
+      if (
+        mountedRef.current &&
+        myGen === pairBodyDiffGenRef.current &&
+        session === sessionRef.current
+      ) {
+        setPairBodyDiffLoading(false);
+      }
+    }
+  }, [
+    expanded,
+    restoreBusy,
+    pairBeforeId,
+    pairAfterId,
+    projectId,
+    invalidateDetail,
+    clearSummaryState,
+    invalidateComparison,
+    clearComparisonState,
+    invalidateBodyDiff,
+    clearBodyDiffState,
+  ]);
 
   const handleRestoreClick = useCallback(
     (revisionId: string) => {
       if (disabled || restoreBusy) return;
-      // 恢复：立即清摘要/比较/正文差异/detail error 并作废在途
+      // 恢复：立即清摘要/比较/正文差异/pair/detail error 并作废在途
       invalidateDetail();
       invalidateComparison();
       invalidateBodyDiff();
+      invalidatePairBodyDiff();
       clearSummaryState();
       clearComparisonState();
       clearBodyDiffState();
+      clearPairBodyDiffState();
       setPendingRestoreId(revisionId);
       setStatusMessage(null);
       setStatusTone(null);
@@ -519,9 +701,11 @@ export function EditorStateRevisionPanel({
       invalidateDetail,
       invalidateComparison,
       invalidateBodyDiff,
+      invalidatePairBodyDiff,
       clearSummaryState,
       clearComparisonState,
       clearBodyDiffState,
+      clearPairBodyDiffState,
     ],
   );
 
@@ -536,13 +720,15 @@ export function EditorStateRevisionPanel({
     }
     const session = sessionRef.current;
     const revisionId = pendingRestoreId;
-    // 确认恢复：作废在途 detail/comparison/body-diff，清摘要/比较/正文差异/确认相关态
+    // 确认恢复：作废在途 detail/comparison/body-diff/pair，清摘要/比较/正文差异/确认相关态
     invalidateDetail();
     invalidateComparison();
     invalidateBodyDiff();
+    invalidatePairBodyDiff();
     clearSummaryState();
     clearComparisonState();
     clearBodyDiffState();
+    clearPairBodyDiffState();
     setRestoreBusy(true);
     setStatusMessage(null);
     setStatusTone(null);
@@ -553,6 +739,7 @@ export function EditorStateRevisionPanel({
       clearSummaryState();
       clearComparisonState();
       clearBodyDiffState();
+      clearPairBodyDiffState();
       if (outcome.status === "success") {
         setStatusMessage(MSG_RESTORE_OK);
         setStatusTone("ok");
@@ -578,6 +765,7 @@ export function EditorStateRevisionPanel({
       clearSummaryState();
       clearComparisonState();
       clearBodyDiffState();
+      clearPairBodyDiffState();
       setStatusMessage(MSG_RESTORE_FAIL);
       setStatusTone("err");
     } finally {
@@ -595,9 +783,11 @@ export function EditorStateRevisionPanel({
     invalidateDetail,
     invalidateComparison,
     invalidateBodyDiff,
+    invalidatePairBodyDiff,
     clearSummaryState,
     clearComparisonState,
     clearBodyDiffState,
+    clearPairBodyDiffState,
   ]);
 
   const handleCancelRestore = useCallback(() => {
@@ -606,9 +796,16 @@ export function EditorStateRevisionPanel({
   }, [restoreBusy]);
 
   const restoreDisabled = disabled || restoreBusy || listLoading;
-  /** 比较/正文差异不受 disabled 控制，仅 restoreBusy 期间禁用 */
+  /** 比较/正文差异/pair 不受 disabled 控制，仅 restoreBusy 期间禁用 */
   const compareDisabled = restoreBusy;
   const bodyDiffDisabled = restoreBusy;
+  const pairSelectDisabled = restoreBusy;
+  const pairCompareReady =
+    !!pairBeforeId &&
+    !!pairAfterId &&
+    pairBeforeId !== pairAfterId &&
+    !restoreBusy &&
+    !pairBodyDiffLoading;
 
   return (
     <div
@@ -704,6 +901,14 @@ export function EditorStateRevisionPanel({
               {bodyDiffError}
             </p>
           ) : null}
+          {pairBodyDiffError ? (
+            <p
+              data-testid="editor-state-revision-pair-error"
+              style={{ margin: "0 0 8px", color: "var(--danger)" }}
+            >
+              {pairBodyDiffError}
+            </p>
+          ) : null}
           {listLoading && items.length === 0 ? (
             <p
               data-testid="editor-state-revision-list-loading"
@@ -719,6 +924,150 @@ export function EditorStateRevisionPanel({
             >
               暂无修订记录
             </p>
+          ) : null}
+          {items.length > 0 ? (
+            <div
+              data-testid="editor-state-revision-pair-controls"
+              style={{
+                marginTop: 8,
+                display: "flex",
+                gap: 8,
+                flexWrap: "wrap",
+                alignItems: "center",
+              }}
+            >
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                data-testid="editor-state-revision-pair-compare"
+                disabled={!pairCompareReady}
+                onClick={() => {
+                  void handlePairCompare();
+                }}
+              >
+                {pairBodyDiffLoading ? "正在比较…" : "比较两条修订"}
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                data-testid="editor-state-revision-pair-clear"
+                disabled={
+                  restoreBusy ||
+                  (!pairBeforeId &&
+                    !pairAfterId &&
+                    !pairBodyDiff &&
+                    !pairBodyDiffError)
+                }
+                onClick={handlePairClear}
+              >
+                清除选择
+              </button>
+            </div>
+          ) : null}
+          {pairBodyDiff ? (
+            <div
+              data-testid="editor-state-revision-pair-result"
+              style={{
+                marginTop: 8,
+                fontSize: 13,
+                color: "var(--text-muted, #4b5563)",
+              }}
+            >
+              <p
+                style={{ margin: "0 0 6px", fontWeight: 600 }}
+                data-testid="editor-state-revision-pair-labels"
+              >
+                差异前修订 → 差异后修订
+              </p>
+              <p
+                data-testid="editor-state-revision-pair-meta"
+                style={{ margin: "0 0 6px" }}
+              >
+                {`差异前章节 ${pairBodyDiff.beforeChapterCount} · 差异后章节 ${pairBodyDiff.afterChapterCount}`}
+              </p>
+              <p
+                data-testid="editor-state-revision-pair-status"
+                style={{ margin: "0 0 6px", fontWeight: 600 }}
+              >
+                {pairBodyDiff.sameBody
+                  ? MSG_PAIR_BODY_DIFF_SAME
+                  : `共 ${pairBodyDiff.changedChapterCount} 章正文有变化`}
+              </p>
+              {pairBodyDiff.truncated ? (
+                <p
+                  data-testid="editor-state-revision-pair-truncated"
+                  style={{ margin: "0 0 6px" }}
+                >
+                  {MSG_PAIR_BODY_DIFF_TRUNCATED}
+                </p>
+              ) : null}
+              {!pairBodyDiff.sameBody
+                ? pairBodyDiff.items.map((diffItem) => (
+                    <div
+                      key={diffItem.ordinal}
+                      data-testid={`editor-state-revision-pair-item-${diffItem.ordinal}`}
+                      style={{
+                        marginBottom: 8,
+                        padding: "6px 8px",
+                        borderRadius: 4,
+                        border: "1px solid var(--border, #e5e7eb)",
+                      }}
+                    >
+                      {formatBodyDiffKindLabel(diffItem.kind) ? (
+                        <p
+                          style={{ margin: "0 0 4px", fontWeight: 600 }}
+                          data-testid={`editor-state-revision-pair-item-kind-${diffItem.ordinal}`}
+                        >
+                          {formatBodyDiffKindLabel(diffItem.kind)}
+                        </p>
+                      ) : null}
+                      <p
+                        style={{ margin: "0 0 4px" }}
+                        data-testid={`editor-state-revision-pair-item-titles-${diffItem.ordinal}`}
+                      >
+                        {diffItem.beforeTitle
+                          ? `差异前：${diffItem.beforeTitle}`
+                          : "差异前：（无标题）"}
+                        {" → "}
+                        {diffItem.afterTitle
+                          ? `差异后：${diffItem.afterTitle}`
+                          : "差异后：（无标题）"}
+                      </p>
+                      <ul
+                        style={{
+                          listStyle: "none",
+                          margin: 0,
+                          padding: 0,
+                        }}
+                      >
+                        {diffItem.hunks.map((hunk, hIdx) => (
+                          <li
+                            key={hIdx}
+                            data-testid={`editor-state-revision-pair-hunk-${diffItem.ordinal}-${hIdx}`}
+                            style={{
+                              marginTop: 4,
+                              whiteSpace: "pre-wrap",
+                              wordBreak: "break-word",
+                            }}
+                          >
+                            <span
+                              data-testid={`editor-state-revision-pair-hunk-op-${diffItem.ordinal}-${hIdx}`}
+                            >
+                              {formatHunkOpLabel(hunk.op)}
+                            </span>
+                            {": "}
+                            <span
+                              data-testid={`editor-state-revision-pair-hunk-text-${diffItem.ordinal}-${hIdx}`}
+                            >
+                              {hunk.text}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))
+                : null}
+            </div>
           ) : null}
           <ul
             data-testid="editor-state-revision-list"
@@ -739,6 +1088,8 @@ export function EditorStateRevisionPanel({
                 comparisonRevisionId === item.revisionId && comparison != null;
               const showingBodyDiff =
                 bodyDiffRevisionId === item.revisionId && bodyDiff != null;
+              const isPairBefore = pairBeforeId === item.revisionId;
+              const isPairAfter = pairAfterId === item.revisionId;
               return (
                 <li
                   key={item.revisionId}
@@ -976,6 +1327,24 @@ export function EditorStateRevisionPanel({
                         flexWrap: "wrap",
                       }}
                     >
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        data-testid={`editor-state-revision-pair-select-before-${index}`}
+                        disabled={pairSelectDisabled}
+                        onClick={() => handlePairSelectBefore(item.revisionId)}
+                      >
+                        {isPairBefore ? "已选为差异前" : "选为差异前"}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        data-testid={`editor-state-revision-pair-select-after-${index}`}
+                        disabled={pairSelectDisabled}
+                        onClick={() => handlePairSelectAfter(item.revisionId)}
+                      >
+                        {isPairAfter ? "已选为差异后" : "选为差异后"}
+                      </button>
                       <button
                         type="button"
                         className="btn btn-ghost btn-sm"

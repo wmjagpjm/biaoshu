@@ -1,8 +1,8 @@
 /**
- * 模块：P12C-C3 / P12D-B / P12E-A 双工作区修订历史、对比与正文差异前端 E2E
- * 用途：技术标/商务标证明默认折叠零请求、按需列表/摘要/对比/正文差异、二次确认 restore、
- *       执行时 expected、唯一 editor-state GET、失败阻断、迟到隔离与数据最小化。
- * 对接：Playwright chromium headless workers=1 retries=0；route 探针（含 comparison/body-diff arrived/complete）。
+ * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C 双工作区修订历史、对比与正文差异前端 E2E
+ * 用途：技术标/商务标证明默认折叠零请求、按需列表/摘要/对比/正文差异、双修订正文差异、
+ *       二次确认 restore、执行时 expected、唯一 editor-state GET、失败阻断、迟到隔离与数据最小化。
+ * 对接：Playwright chromium headless workers=1 retries=0；route 探针（含 comparison/body-diff/pair arrived/complete）。
  * 二次开发：禁止固定 sleep、.or(...)、>=1 冒充、宽泛状态码、route fallback 假成功。
  */
 import {
@@ -48,6 +48,9 @@ const MSG_COMPARE_DIFF = "与当前版本存在差异";
 const MSG_BODY_DIFF_FAIL = "正文差异加载失败，请稍后重试";
 const MSG_BODY_DIFF_SAME = "章节正文无变化";
 const MSG_BODY_DIFF_TRUNCATED = "差异内容较长，仅显示有界片段";
+const MSG_PAIR_BODY_DIFF_FAIL = "双修订差异加载失败，请稍后重试";
+const MSG_PAIR_BODY_DIFF_SAME = "两条修订正文一致";
+const MSG_PAIR_BODY_DIFF_TRUNCATED = "差异内容较长，仅显示有界片段";
 const MSG_RESTORE_OK = "已恢复到所选修订";
 const MSG_RESTORE_BLOCKED =
   "当前无法恢复，请先处理版本冲突或重新载入";
@@ -185,6 +188,7 @@ type ListMode = { kind: "ok" } | { kind: "hold"; gate: HoldGate };
 type DetailMode = { kind: "ok" } | { kind: "hold"; gate: HoldGate };
 type ComparisonMode = { kind: "ok" } | { kind: "hold"; gate: HoldGate };
 type BodyDiffMode = { kind: "ok" } | { kind: "hold"; gate: HoldGate };
+type PairBodyDiffMode = { kind: "ok" } | { kind: "hold"; gate: HoldGate };
 
 type ComparisonSummary = {
   outlineNodeCount: number;
@@ -215,6 +219,16 @@ type BodyDiffPayload = {
   changedChapterCount: number;
   currentChapterCount: number;
   targetChapterCount: number;
+  truncated: boolean;
+  items: BodyDiffItem[];
+};
+
+/** P12E-B/C 双修订正文差异响应：before/after 章节计数 */
+type PairBodyDiffPayload = {
+  sameBody: boolean;
+  changedChapterCount: number;
+  beforeChapterCount: number;
+  afterChapterCount: number;
   truncated: boolean;
   items: BodyDiffItem[];
 };
@@ -266,6 +280,22 @@ type ProbeState = {
   }>;
   /** body-diff 响应已 fulfill（await json 返回后） */
   bodyDiffCompleteLog: Array<{ projectId: string; revisionId: string }>;
+  /** pair body-diff 到达（gate 前） */
+  pairBodyDiffLog: Array<{
+    projectId: string;
+    beforeRevisionId: string;
+    afterRevisionId: string;
+    method: string;
+    path: string;
+    postData: string | null;
+    hasQuery: boolean;
+  }>;
+  /** pair body-diff 响应已 fulfill（await json 返回后） */
+  pairBodyDiffCompleteLog: Array<{
+    projectId: string;
+    beforeRevisionId: string;
+    afterRevisionId: string;
+  }>;
   editorGetLog: Array<{ projectId: string; path: string }>;
   putMode: PutMode;
   restoreMode: RestoreMode;
@@ -273,6 +303,7 @@ type ProbeState = {
   detailMode: DetailMode;
   comparisonMode: ComparisonMode;
   bodyDiffMode: BodyDiffMode;
+  pairBodyDiffMode: PairBodyDiffMode;
   restoreModeByProject: Record<string, RestoreMode>;
   listModeByProject: Record<string, ListMode>;
   detailModeByProject: Record<string, DetailMode>;
@@ -281,6 +312,9 @@ type ProbeState = {
   comparisonModeByRevisionId: Record<string, ComparisonMode>;
   bodyDiffModeByProject: Record<string, BodyDiffMode>;
   bodyDiffModeByRevisionId: Record<string, BodyDiffMode>;
+  pairBodyDiffModeByProject: Record<string, PairBodyDiffMode>;
+  /** 按 before::after 固定 pair hold */
+  pairBodyDiffModeByPairKey: Record<string, PairBodyDiffMode>;
   listResponseOverride: unknown | null;
   detailResponseOverride: unknown | null;
   restoreResponseOverride: unknown | null;
@@ -289,6 +323,9 @@ type ProbeState = {
   comparisonResponseByRevisionId: Record<string, unknown>;
   bodyDiffResponseOverride: unknown | null;
   bodyDiffResponseByRevisionId: Record<string, unknown>;
+  pairBodyDiffResponseOverride: unknown | null;
+  /** 按 before::after 固定 pair 响应表 */
+  pairBodyDiffResponseByPairKey: Record<string, unknown>;
   nextEditorGetFail: boolean;
   restoreArrivedWhilePutHeld: boolean;
   externalHits: string[];
@@ -461,6 +498,8 @@ function createProbeState(mode: Mode): ProbeState {
     comparisonCompleteLog: [],
     bodyDiffLog: [],
     bodyDiffCompleteLog: [],
+    pairBodyDiffLog: [],
+    pairBodyDiffCompleteLog: [],
     editorGetLog: [],
     putMode: { kind: "ok" },
     restoreMode: { kind: "ok" },
@@ -468,6 +507,7 @@ function createProbeState(mode: Mode): ProbeState {
     detailMode: { kind: "ok" },
     comparisonMode: { kind: "ok" },
     bodyDiffMode: { kind: "ok" },
+    pairBodyDiffMode: { kind: "ok" },
     restoreModeByProject: {},
     listModeByProject: {},
     detailModeByProject: {},
@@ -476,6 +516,8 @@ function createProbeState(mode: Mode): ProbeState {
     comparisonModeByRevisionId: {},
     bodyDiffModeByProject: {},
     bodyDiffModeByRevisionId: {},
+    pairBodyDiffModeByProject: {},
+    pairBodyDiffModeByPairKey: {},
     listResponseOverride: null,
     detailResponseOverride: null,
     restoreResponseOverride: null,
@@ -483,6 +525,8 @@ function createProbeState(mode: Mode): ProbeState {
     comparisonResponseByRevisionId: {},
     bodyDiffResponseOverride: null,
     bodyDiffResponseByRevisionId: {},
+    pairBodyDiffResponseOverride: null,
+    pairBodyDiffResponseByPairKey: {},
     nextEditorGetFail: false,
     restoreArrivedWhilePutHeld: false,
     externalHits: [],
@@ -533,6 +577,25 @@ function resolveBodyDiffMode(
     state.bodyDiffModeByRevisionId[revisionId] ??
     state.bodyDiffModeByProject[projectId] ??
     state.bodyDiffMode
+  );
+}
+
+/** 用途：pair 键 before::after，供 hold/响应表定位 */
+function pairBodyDiffKey(beforeRevisionId: string, afterRevisionId: string): string {
+  return `${beforeRevisionId}::${afterRevisionId}`;
+}
+
+function resolvePairBodyDiffMode(
+  state: ProbeState,
+  projectId: string,
+  beforeRevisionId: string,
+  afterRevisionId: string,
+): PairBodyDiffMode {
+  const key = pairBodyDiffKey(beforeRevisionId, afterRevisionId);
+  return (
+    state.pairBodyDiffModeByPairKey[key] ??
+    state.pairBodyDiffModeByProject[projectId] ??
+    state.pairBodyDiffMode
   );
 }
 
@@ -675,6 +738,50 @@ function buildBodyDiffPayload(
     targetChapterCount: targetChapters.length,
     truncated: false,
     items,
+  };
+}
+
+/**
+ * 用途：探针侧构造 P12E-B 双修订 body-diff 六键响应（before/after 章节计数）。
+ * 二次开发：仅 E2E 探针；生产完整算法在后端服务。
+ */
+function buildPairBodyDiffPayload(
+  beforeSnap: Record<string, unknown>,
+  afterSnap: Record<string, unknown>,
+): PairBodyDiffPayload {
+  // 复用单修订探针算法：current=after，target=before，再改写章节计数字段名
+  const afterAsEditor: EditorState = {
+    projectId: "probe_pair",
+    parsedMarkdown: "",
+    businessQualify: [],
+    businessToc: [],
+    businessQuote: { rows: [], notes: "" },
+    businessCommit: [],
+    outline: [],
+    chapters: Array.isArray(afterSnap.chapters)
+      ? (afterSnap.chapters as Array<Record<string, unknown>>)
+      : [],
+    mode: "FREE",
+    analysisOverview: "",
+    analysis: { overview: "" },
+    facts: [],
+    guidance: {},
+    responseMatrix: [],
+    responseMatrixVersion: null,
+    stateVersion: seedStateVersion(1),
+  };
+  const single = buildBodyDiffPayload(afterAsEditor, beforeSnap);
+  return {
+    sameBody: single.sameBody,
+    changedChapterCount: single.changedChapterCount,
+    beforeChapterCount: Array.isArray(beforeSnap.chapters)
+      ? beforeSnap.chapters.length
+      : 0,
+    afterChapterCount: Array.isArray(afterSnap.chapters)
+      ? afterSnap.chapters.length
+      : 0,
+    truncated: single.truncated,
+    items: single.items,
   };
 }
 
@@ -1167,6 +1274,99 @@ async function installRoutes(page: Page, state: ProbeState) {
       );
       await json(route, payload);
       state.comparisonCompleteLog.push({ projectId: pid, revisionId });
+      return;
+    }
+
+    // pair body-diff 必须在单修订 body-diff 之前匹配：
+    // GET .../revisions/{before}/body-diff/{after}
+    const revPairBodyDiffMatch = path.match(
+      /^\/api\/projects\/([^/]+)\/editor-state-revisions\/([^/]+)\/body-diff\/([^/]+)\/?$/,
+    );
+    if (revPairBodyDiffMatch) {
+      const pid = revPairBodyDiffMatch[1];
+      const beforeRevisionId = revPairBodyDiffMatch[2];
+      const afterRevisionId = revPairBodyDiffMatch[3];
+      const hasQuery = url.search.length > 1;
+      const postData = req.postData();
+      if (!known.has(pid)) {
+        state.forbiddenHits.push(`${method} ${path}`);
+        await json(route, { detail: "not_found" }, 404);
+        return;
+      }
+      if (method !== "GET") {
+        state.forbiddenHits.push(`${method} ${path}`);
+        await json(route, { detail: "method_not_allowed" }, 405);
+        return;
+      }
+      // arrived：gate 前记录，证明请求已到达
+      state.pairBodyDiffLog.push({
+        projectId: pid,
+        beforeRevisionId,
+        afterRevisionId,
+        method,
+        path,
+        postData,
+        hasQuery,
+      });
+      const pairMode = resolvePairBodyDiffMode(
+        state,
+        pid,
+        beforeRevisionId,
+        afterRevisionId,
+      );
+      if (pairMode.kind === "hold") {
+        await pairMode.gate.wait();
+      }
+      const pairKey = pairBodyDiffKey(beforeRevisionId, afterRevisionId);
+      if (state.pairBodyDiffResponseOverride != null) {
+        await json(route, state.pairBodyDiffResponseOverride);
+        state.pairBodyDiffCompleteLog.push({
+          projectId: pid,
+          beforeRevisionId,
+          afterRevisionId,
+        });
+        return;
+      }
+      if (state.pairBodyDiffResponseByPairKey[pairKey] != null) {
+        await json(route, state.pairBodyDiffResponseByPairKey[pairKey]);
+        state.pairBodyDiffCompleteLog.push({
+          projectId: pid,
+          beforeRevisionId,
+          afterRevisionId,
+        });
+        return;
+      }
+      const beforeDetail = state.details[beforeRevisionId];
+      const afterDetail = state.details[afterRevisionId];
+      if (!beforeDetail || !afterDetail) {
+        await json(
+          route,
+          {
+            detail: {
+              code: "editor_state_revision_not_found",
+              message: "修订不存在",
+            },
+          },
+          404,
+        );
+        state.pairBodyDiffCompleteLog.push({
+          projectId: pid,
+          beforeRevisionId,
+          afterRevisionId,
+        });
+        return;
+      }
+      const payload = buildPairBodyDiffPayload(
+        beforeDetail.snapshot,
+        afterDetail.snapshot,
+      );
+      await json(route, payload);
+      // complete：await json 之后，证明响应已真正 fulfill
+      state.pairBodyDiffCompleteLog.push({
+        projectId: pid,
+        beforeRevisionId,
+        afterRevisionId,
+      });
       return;
     }
 
@@ -4021,6 +4221,967 @@ test.describe("P12E-A 商务标正文差异-共享入口", () => {
     ).toBe(getsBefore);
     expect(state.externalHits.length).toBe(externalBefore);
     expect(state.bodyDiffLog.length).toBe(1);
+
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+    await assertNoIdLeak(page, state, guards.consoleLogs);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P12E-C 双修订正文差异
+// ---------------------------------------------------------------------------
+test.describe("P12E-C 技术标双修订正文差异-成功与严格解析", () => {
+  test("P12E-C 技术标：选择零请求、pair 成功/同正文、严格 parser、互斥与零泄漏", async ({
+    page,
+  }) => {
+    const state = createProbeState("tech");
+    seedRevisions(state, TECH_A, 3, ["browser_put", "task", "revise"]);
+    const rev0 = state.revisions[TECH_A][0];
+    const rev1 = state.revisions[TECH_A][1];
+    const rev2 = state.revisions[TECH_A][2];
+
+    // before=rev0、after=rev1：正文有变化
+    state.details[rev0.revisionId].snapshot = {
+      ...state.details[rev0.revisionId].snapshot,
+      chapters: [
+        { id: "p12ec1", title: "差异前章", body: "PAIR_BEFORE_BODY" },
+      ],
+    };
+    state.details[rev1.revisionId].snapshot = {
+      ...state.details[rev1.revisionId].snapshot,
+      chapters: [
+        { id: "p12ec1", title: "差异后章", body: "PAIR_AFTER_BODY" },
+      ],
+    };
+    const expectedDiff = buildPairBodyDiffPayload(
+      state.details[rev0.revisionId].snapshot,
+      state.details[rev1.revisionId].snapshot,
+    );
+    expect(expectedDiff.sameBody).toBe(false);
+    expect(expectedDiff.changedChapterCount).toBeGreaterThan(0);
+
+    // before=rev1、after=rev2：同正文
+    state.details[rev2.revisionId].snapshot = {
+      ...state.details[rev1.revisionId].snapshot,
+    };
+    const samePayload: PairBodyDiffPayload = {
+      sameBody: true,
+      changedChapterCount: 0,
+      beforeChapterCount: 1,
+      afterChapterCount: 1,
+      truncated: false,
+      items: [],
+    };
+    state.pairBodyDiffResponseByPairKey[
+      pairBodyDiffKey(rev1.revisionId, rev2.revisionId)
+    ] = samePayload;
+
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+
+    await openWorkspace(page, "tech", TECH_A);
+    expect(state.pairBodyDiffLog.length).toBe(0);
+    expect(state.pairBodyDiffCompleteLog.length).toBe(0);
+
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => state.listLog.filter((p) => p === TECH_A).length, {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    expect(state.pairBodyDiffLog.length).toBe(0);
+
+    const getsBefore = state.editorGetLog.filter(
+      (g) => g.projectId === TECH_A,
+    ).length;
+    const putBefore = state.putLog.length;
+    const restoreBefore = state.restoreLog.length;
+    const detailBefore = state.detailLog.length;
+    const comparisonBefore = state.comparisonLog.length;
+    const bodyDiffBefore = state.bodyDiffLog.length;
+    const externalBefore = state.externalHits.length;
+    const bodyBefore = await readContent(page, "tech");
+
+    // 选择动作不发任何请求
+    await page
+      .getByTestId("editor-state-revision-pair-select-before-0")
+      .click();
+    await page
+      .getByTestId("editor-state-revision-pair-select-after-1")
+      .click();
+    await expect(
+      page.getByTestId("editor-state-revision-pair-select-before-0"),
+    ).toContainText("已选为差异前");
+    await expect(
+      page.getByTestId("editor-state-revision-pair-select-after-1"),
+    ).toContainText("已选为差异后");
+    expect(state.pairBodyDiffLog.length).toBe(0);
+    expect(state.detailLog.length).toBe(detailBefore);
+    expect(state.comparisonLog.length).toBe(comparisonBefore);
+    expect(state.bodyDiffLog.length).toBe(bodyDiffBefore);
+    expect(state.restoreLog.length).toBe(restoreBefore);
+    expect(state.putLog.length).toBe(putBefore);
+    expect(
+      state.editorGetLog.filter((g) => g.projectId === TECH_A).length,
+    ).toBe(getsBefore);
+    expect(state.externalHits.length).toBe(externalBefore);
+
+    // 空/单侧：比较禁用
+    await page.getByTestId("editor-state-revision-pair-clear").click();
+    expect(state.pairBodyDiffLog.length).toBe(0);
+    await expect(
+      page.getByTestId("editor-state-revision-pair-compare"),
+    ).toBeDisabled();
+    await page
+      .getByTestId("editor-state-revision-pair-select-before-0")
+      .click();
+    await expect(
+      page.getByTestId("editor-state-revision-pair-compare"),
+    ).toBeDisabled();
+    expect(state.pairBodyDiffLog.length).toBe(0);
+
+    // 两侧齐后比较：精确 1 次 pair GET，无 query/body
+    await page
+      .getByTestId("editor-state-revision-pair-select-after-1")
+      .click();
+    await page.getByTestId("editor-state-revision-pair-compare").click();
+    await expect
+      .poll(() => state.pairBodyDiffLog.length, { timeout: 10_000 })
+      .toBe(1);
+    await expect
+      .poll(() => state.pairBodyDiffCompleteLog.length, { timeout: 10_000 })
+      .toBe(1);
+    const first = state.pairBodyDiffLog[0];
+    expect(first.projectId).toBe(TECH_A);
+    expect(first.beforeRevisionId).toBe(rev0.revisionId);
+    expect(first.afterRevisionId).toBe(rev1.revisionId);
+    expect(first.method).toBe("GET");
+    expect(first.postData).toBeNull();
+    expect(first.hasQuery).toBe(false);
+    expect(first.path).toContain(
+      `/editor-state-revisions/${rev0.revisionId}/body-diff/${rev1.revisionId}`,
+    );
+    // 不得误打单修订 body-diff
+    expect(state.bodyDiffLog.length).toBe(bodyDiffBefore);
+
+    await expect(
+      page.getByTestId("editor-state-revision-pair-result"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-pair-status"),
+    ).toHaveText(`共 ${expectedDiff.changedChapterCount} 章正文有变化`);
+    await expect(
+      page.getByTestId("editor-state-revision-pair-meta"),
+    ).toContainText(`差异前章节 ${expectedDiff.beforeChapterCount}`);
+    await expect(
+      page.getByTestId("editor-state-revision-pair-meta"),
+    ).toContainText(`差异后章节 ${expectedDiff.afterChapterCount}`);
+    const pairResultText = await page
+      .getByTestId("editor-state-revision-pair-result")
+      .innerText();
+    expect(pairResultText).toMatch(/差异前修订|差异后修订/);
+    expect(pairResultText).toMatch(/保留|删除|新增/);
+    expect(pairResultText).not.toContain("equal");
+    expect(pairResultText).not.toContain("delete");
+    expect(pairResultText).not.toContain("insert");
+    expect(pairResultText).not.toContain("sameBody");
+    expect(pairResultText).not.toContain("beforeChapterCount");
+    expect(pairResultText).not.toContain(rev0.revisionId);
+    expect(pairResultText).not.toContain(rev1.revisionId);
+    expect(pairResultText).not.toContain(rev0.stateVersion);
+
+    // 零旁路
+    expect(state.comparisonLog.length).toBe(comparisonBefore);
+    expect(state.detailLog.length).toBe(detailBefore);
+    expect(state.restoreLog.length).toBe(restoreBefore);
+    expect(state.putLog.length).toBe(putBefore);
+    expect(
+      state.editorGetLog.filter((g) => g.projectId === TECH_A).length,
+    ).toBe(getsBefore);
+    expect(state.externalHits.length).toBe(externalBefore);
+    expect(await readContent(page, "tech")).toBe(bodyBefore);
+
+    // 同正文结果
+    await page.getByTestId("editor-state-revision-pair-clear").click();
+    await page
+      .getByTestId("editor-state-revision-pair-select-before-1")
+      .click();
+    await page
+      .getByTestId("editor-state-revision-pair-select-after-2")
+      .click();
+    await page.getByTestId("editor-state-revision-pair-compare").click();
+    await expect
+      .poll(() => state.pairBodyDiffCompleteLog.length, { timeout: 10_000 })
+      .toBe(2);
+    await expect(
+      page.getByTestId("editor-state-revision-pair-status"),
+    ).toHaveText(MSG_PAIR_BODY_DIFF_SAME);
+
+    // 同一项不得同时承担两侧：先选 after-0，再选 before-0 应切换前侧并清后侧
+    await page.getByTestId("editor-state-revision-pair-clear").click();
+    await page
+      .getByTestId("editor-state-revision-pair-select-after-0")
+      .click();
+    await page
+      .getByTestId("editor-state-revision-pair-select-before-0")
+      .click();
+    await expect(
+      page.getByTestId("editor-state-revision-pair-select-before-0"),
+    ).toContainText("已选为差异前");
+    await expect(
+      page.getByTestId("editor-state-revision-pair-compare"),
+    ).toBeDisabled();
+    expect(state.pairBodyDiffLog.length).toBe(2);
+
+    // summary 作废 pair 结果
+    await page
+      .getByTestId("editor-state-revision-pair-select-after-1")
+      .click();
+    await page.getByTestId("editor-state-revision-pair-compare").click();
+    await expect
+      .poll(() => state.pairBodyDiffCompleteLog.length, { timeout: 10_000 })
+      .toBe(3);
+    await expect(
+      page.getByTestId("editor-state-revision-pair-result"),
+    ).toBeVisible();
+    await page.getByTestId("editor-state-revision-summary-0").click();
+    await expect
+      .poll(() => state.detailCompleteLog.length, { timeout: 10_000 })
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-summary-body-0"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-pair-result"),
+    ).toHaveCount(0);
+
+    // pair 作废 summary
+    await page
+      .getByTestId("editor-state-revision-pair-select-before-0")
+      .click();
+    await page
+      .getByTestId("editor-state-revision-pair-select-after-1")
+      .click();
+    await page.getByTestId("editor-state-revision-pair-compare").click();
+    await expect
+      .poll(() => state.pairBodyDiffCompleteLog.length, { timeout: 10_000 })
+      .toBe(4);
+    await expect(
+      page.getByTestId("editor-state-revision-pair-result"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-summary-body-0"),
+    ).toHaveCount(0);
+
+    // compare 作废 pair
+    await page.getByTestId("editor-state-revision-compare-0").click();
+    await expect
+      .poll(() => state.comparisonCompleteLog.length, { timeout: 10_000 })
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-comparison-0"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-pair-result"),
+    ).toHaveCount(0);
+
+    // pair 作废 compare
+    await page
+      .getByTestId("editor-state-revision-pair-select-before-0")
+      .click();
+    await page
+      .getByTestId("editor-state-revision-pair-select-after-1")
+      .click();
+    await page.getByTestId("editor-state-revision-pair-compare").click();
+    await expect
+      .poll(() => state.pairBodyDiffCompleteLog.length, { timeout: 10_000 })
+      .toBe(5);
+    await expect(
+      page.getByTestId("editor-state-revision-pair-result"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-comparison-0"),
+    ).toHaveCount(0);
+
+    // 单修订 body-diff 作废 pair
+    await page.getByTestId("editor-state-revision-body-diff-0").click();
+    await expect
+      .poll(() => state.bodyDiffCompleteLog.length, { timeout: 10_000 })
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-body-diff-result-0"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-pair-result"),
+    ).toHaveCount(0);
+
+    // pair 作废 body-diff
+    await page
+      .getByTestId("editor-state-revision-pair-select-before-0")
+      .click();
+    await page
+      .getByTestId("editor-state-revision-pair-select-after-1")
+      .click();
+    await page.getByTestId("editor-state-revision-pair-compare").click();
+    await expect
+      .poll(() => state.pairBodyDiffCompleteLog.length, { timeout: 10_000 })
+      .toBe(6);
+    await expect(
+      page.getByTestId("editor-state-revision-pair-result"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-body-diff-result-0"),
+    ).toHaveCount(0);
+
+    // restore 确认作废 pair
+    await page.getByTestId("editor-state-revision-restore-0").click();
+    await expect(
+      page.getByTestId("editor-state-revision-confirm-0"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-pair-result"),
+    ).toHaveCount(0);
+    await page.getByTestId("editor-state-revision-cancel-restore-0").click();
+
+    // 严格 shape：非法响应固定失败且清除旧结果
+    await page
+      .getByTestId("editor-state-revision-pair-select-before-0")
+      .click();
+    await page
+      .getByTestId("editor-state-revision-pair-select-after-1")
+      .click();
+    await page.getByTestId("editor-state-revision-pair-compare").click();
+    await expect
+      .poll(() => state.pairBodyDiffCompleteLog.length, { timeout: 10_000 })
+      .toBe(7);
+    await expect(
+      page.getByTestId("editor-state-revision-pair-result"),
+    ).toBeVisible();
+
+    const baseOk = buildPairBodyDiffPayload(
+      state.details[rev0.revisionId].snapshot,
+      state.details[rev1.revisionId].snapshot,
+    );
+    const illegalCases: unknown[] = [
+      { ...baseOk, leakExtra: "PAIR_BODY_DIFF_TOP_EXTRA" },
+      {
+        sameBody: true,
+        changedChapterCount: 1,
+        beforeChapterCount: baseOk.beforeChapterCount,
+        afterChapterCount: baseOk.afterChapterCount,
+        truncated: false,
+        items: baseOk.items,
+      },
+      {
+        sameBody: false,
+        changedChapterCount: 99,
+        beforeChapterCount: baseOk.beforeChapterCount,
+        afterChapterCount: baseOk.afterChapterCount,
+        truncated: false,
+        items: baseOk.items,
+      },
+      // 使用单修订字段名必须拒绝
+      {
+        sameBody: false,
+        changedChapterCount: 1,
+        currentChapterCount: 1,
+        targetChapterCount: 1,
+        truncated: false,
+        items: baseOk.items,
+      },
+      {
+        sameBody: false,
+        changedChapterCount: 1,
+        beforeChapterCount: baseOk.beforeChapterCount,
+        afterChapterCount: baseOk.afterChapterCount,
+        truncated: false,
+        items: [
+          {
+            ordinal: 2,
+            kind: "changed",
+            beforeTitle: "x",
+            afterTitle: "y",
+            hunks: [{ op: "delete", text: "a" }],
+          },
+        ],
+      },
+      {
+        sameBody: false,
+        changedChapterCount: 1,
+        beforeChapterCount: baseOk.beforeChapterCount,
+        afterChapterCount: baseOk.afterChapterCount,
+        truncated: false,
+        items: [
+          {
+            ordinal: 1,
+            kind: "mutated",
+            beforeTitle: "x",
+            afterTitle: "y",
+            hunks: [{ op: "delete", text: "a" }],
+          },
+        ],
+      },
+      {
+        sameBody: false,
+        changedChapterCount: 1,
+        beforeChapterCount: baseOk.beforeChapterCount,
+        afterChapterCount: baseOk.afterChapterCount,
+        truncated: false,
+        items: [
+          {
+            ordinal: 1,
+            kind: "changed",
+            beforeTitle: "x",
+            afterTitle: "y",
+            hunks: [{ op: "replace", text: "a" }],
+          },
+        ],
+      },
+      {
+        sameBody: false,
+        changedChapterCount: 1,
+        beforeChapterCount: baseOk.beforeChapterCount,
+        afterChapterCount: baseOk.afterChapterCount,
+        truncated: false,
+        items: [
+          {
+            ordinal: 1,
+            kind: "changed",
+            beforeTitle: "x",
+            afterTitle: "y",
+            hunks: [{ op: "delete", text: "a", extra: 1 }],
+          },
+        ],
+      },
+    ];
+
+    let completeBase = state.pairBodyDiffCompleteLog.length;
+    for (const bad of illegalCases) {
+      state.pairBodyDiffResponseOverride = bad;
+      // 先清再选，确保发起新请求
+      await page.getByTestId("editor-state-revision-pair-clear").click();
+      await page
+        .getByTestId("editor-state-revision-pair-select-before-0")
+        .click();
+      await page
+        .getByTestId("editor-state-revision-pair-select-after-1")
+        .click();
+      await page.getByTestId("editor-state-revision-pair-compare").click();
+      completeBase += 1;
+      await expect
+        .poll(() => state.pairBodyDiffCompleteLog.length, { timeout: 10_000 })
+        .toBe(completeBase);
+      await expect(
+        page.getByTestId("editor-state-revision-pair-error"),
+      ).toHaveText(MSG_PAIR_BODY_DIFF_FAIL);
+      await expect(
+        page.getByTestId("editor-state-revision-pair-result"),
+      ).toHaveCount(0);
+      const html = await page.content();
+      expect(html).not.toContain("PAIR_BODY_DIFF_TOP_EXTRA");
+      expect(html).not.toContain(rev0.revisionId);
+      expect(html).not.toContain(rev1.revisionId);
+      expect(html).not.toContain("mutated");
+      expect(html).not.toContain("replace");
+      expect(html).not.toContain(SNAPSHOT_BODY_LEAK);
+      expect(html).not.toContain("PAIR_BEFORE_BODY");
+      expect(html).not.toContain("PAIR_AFTER_BODY");
+    }
+    state.pairBodyDiffResponseOverride = null;
+
+    // 截断提示
+    state.pairBodyDiffResponseByPairKey[
+      pairBodyDiffKey(rev0.revisionId, rev1.revisionId)
+    ] = {
+      ...baseOk,
+      truncated: true,
+    };
+    await page.getByTestId("editor-state-revision-pair-clear").click();
+    await page
+      .getByTestId("editor-state-revision-pair-select-before-0")
+      .click();
+    await page
+      .getByTestId("editor-state-revision-pair-select-after-1")
+      .click();
+    await page.getByTestId("editor-state-revision-pair-compare").click();
+    await expect
+      .poll(() => state.pairBodyDiffCompleteLog.length, { timeout: 10_000 })
+      .toBe(completeBase + 1);
+    await expect(
+      page.getByTestId("editor-state-revision-pair-truncated"),
+    ).toHaveText(MSG_PAIR_BODY_DIFF_TRUNCATED);
+    await expect(
+      page.getByTestId("editor-state-revision-pair-error"),
+    ).toHaveCount(0);
+
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+    await assertNoIdLeak(page, state, guards.consoleLogs);
+    expect(rev2.sourceKind).toBe("revise");
+  });
+});
+
+test.describe("P12E-C 技术标双修订正文差异-迟到隔离", () => {
+  test("P12E-C 技术标：pair arrived+complete 迟到隔离（A0→A1、重选、折叠/刷新、摘要/对比/正文差异/恢复、项目切换）", async ({
+    page,
+  }) => {
+    const state = createProbeState("tech");
+    seedRevisions(state, TECH_A, 3, ["browser_put", "task", "revise"]);
+    seedRevisions(state, TECH_B, 2, ["callback", "local_parser"]);
+    const revA0 = state.revisions[TECH_A][0].revisionId;
+    const revA1 = state.revisions[TECH_A][1].revisionId;
+    const revA2 = state.revisions[TECH_A][2].revisionId;
+
+    state.details[revA0].snapshot = {
+      ...state.details[revA0].snapshot,
+      chapters: [{ id: "a0", title: "A0_ONLY", body: "A0_PAIR_BODY" }],
+    };
+    state.details[revA1].snapshot = {
+      ...state.details[revA1].snapshot,
+      chapters: [{ id: "a1", title: "A1_ONLY", body: "A1_PAIR_BODY" }],
+    };
+    state.details[revA2].snapshot = {
+      ...state.details[revA2].snapshot,
+      chapters: [{ id: "a2", title: "A2_ONLY", body: "A2_PAIR_BODY" }],
+    };
+
+    // A1 pair 固定同正文，便于断言不被 A0 覆盖
+    state.pairBodyDiffResponseByPairKey[pairBodyDiffKey(revA1, revA2)] = {
+      sameBody: true,
+      changedChapterCount: 0,
+      beforeChapterCount: 1,
+      afterChapterCount: 1,
+      truncated: false,
+      items: [],
+    };
+
+    const gateA0 = createHoldGate();
+    const gateProjA = createHoldGate();
+    state.pairBodyDiffModeByPairKey[pairBodyDiffKey(revA0, revA1)] = {
+      kind: "hold",
+      gate: gateA0,
+    };
+
+    await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+
+    await openWorkspace(page, "tech", TECH_A);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => state.listCompleteLog.filter((p) => p === TECH_A).length, {
+        timeout: 10_000,
+      })
+      .toBe(1);
+
+    // A0 挂起 → 重选 A1 成功 → 释放 A0 不得覆盖
+    await page
+      .getByTestId("editor-state-revision-pair-select-before-0")
+      .click();
+    await page
+      .getByTestId("editor-state-revision-pair-select-after-1")
+      .click();
+    await page.getByTestId("editor-state-revision-pair-compare").click();
+    await gateA0.waitUntilEntered(1);
+    expect(
+      state.pairBodyDiffCompleteLog.filter(
+        (d) =>
+          d.beforeRevisionId === revA0 && d.afterRevisionId === revA1,
+      ).length,
+    ).toBe(0);
+    await expect(
+      page.getByTestId("editor-state-revision-pair-compare"),
+    ).toContainText("正在比较");
+
+    // 重选两侧并发起 A1 pair
+    await page
+      .getByTestId("editor-state-revision-pair-select-before-1")
+      .click();
+    await page
+      .getByTestId("editor-state-revision-pair-select-after-2")
+      .click();
+    await page.getByTestId("editor-state-revision-pair-compare").click();
+    await expect
+      .poll(
+        () =>
+          state.pairBodyDiffCompleteLog.filter(
+            (d) =>
+              d.beforeRevisionId === revA1 && d.afterRevisionId === revA2,
+          ).length,
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-pair-status"),
+    ).toHaveText(MSG_PAIR_BODY_DIFF_SAME);
+    await expect(
+      page.getByTestId("editor-state-revision-pair-error"),
+    ).toHaveCount(0);
+
+    gateA0.release();
+    delete state.pairBodyDiffModeByPairKey[pairBodyDiffKey(revA0, revA1)];
+    await expect
+      .poll(
+        () =>
+          state.pairBodyDiffCompleteLog.filter(
+            (d) =>
+              d.beforeRevisionId === revA0 && d.afterRevisionId === revA1,
+          ).length,
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-pair-status"),
+    ).toHaveText(MSG_PAIR_BODY_DIFF_SAME);
+    // 不得被迟到 A0 改成有变化文案
+    await expect(
+      page.getByTestId("editor-state-revision-pair-result"),
+    ).toBeVisible();
+    const lateText = await page
+      .getByTestId("editor-state-revision-pair-result")
+      .innerText();
+    expect(lateText).not.toContain("A0_ONLY");
+    expect(lateText).not.toContain("A0_PAIR_BODY");
+
+    // 折叠作废
+    await page.getByTestId("editor-state-revision-toggle").click();
+    await expect(page.getByTestId("editor-state-revision-body")).toHaveCount(0);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => state.listCompleteLog.filter((p) => p === TECH_A).length, {
+        timeout: 10_000,
+      })
+      .toBe(2);
+    await expect(
+      page.getByTestId("editor-state-revision-pair-result"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-pair-compare"),
+    ).toBeDisabled();
+
+    // 刷新作废
+    await page
+      .getByTestId("editor-state-revision-pair-select-before-1")
+      .click();
+    await page
+      .getByTestId("editor-state-revision-pair-select-after-2")
+      .click();
+    await page.getByTestId("editor-state-revision-pair-compare").click();
+    await expect
+      .poll(
+        () =>
+          state.pairBodyDiffCompleteLog.filter(
+            (d) =>
+              d.beforeRevisionId === revA1 && d.afterRevisionId === revA2,
+          ).length,
+        { timeout: 10_000 },
+      )
+      .toBe(2);
+    await expect(
+      page.getByTestId("editor-state-revision-pair-result"),
+    ).toBeVisible();
+    await page.getByTestId("editor-state-revision-refresh").click();
+    await expect
+      .poll(() => state.listCompleteLog.filter((p) => p === TECH_A).length, {
+        timeout: 10_000,
+      })
+      .toBe(3);
+    await expect(
+      page.getByTestId("editor-state-revision-pair-result"),
+    ).toHaveCount(0);
+
+    // 摘要作废 pair
+    await page
+      .getByTestId("editor-state-revision-pair-select-before-1")
+      .click();
+    await page
+      .getByTestId("editor-state-revision-pair-select-after-2")
+      .click();
+    await page.getByTestId("editor-state-revision-pair-compare").click();
+    await expect
+      .poll(
+        () =>
+          state.pairBodyDiffCompleteLog.filter(
+            (d) =>
+              d.beforeRevisionId === revA1 && d.afterRevisionId === revA2,
+          ).length,
+        { timeout: 10_000 },
+      )
+      .toBe(3);
+    await page.getByTestId("editor-state-revision-summary-1").click();
+    await expect
+      .poll(
+        () =>
+          state.detailCompleteLog.filter((d) => d.revisionId === revA1)
+            .length,
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-pair-result"),
+    ).toHaveCount(0);
+
+    // 对比作废 pair
+    await page
+      .getByTestId("editor-state-revision-pair-select-before-1")
+      .click();
+    await page
+      .getByTestId("editor-state-revision-pair-select-after-2")
+      .click();
+    await page.getByTestId("editor-state-revision-pair-compare").click();
+    await expect
+      .poll(
+        () =>
+          state.pairBodyDiffCompleteLog.filter(
+            (d) =>
+              d.beforeRevisionId === revA1 && d.afterRevisionId === revA2,
+          ).length,
+        { timeout: 10_000 },
+      )
+      .toBe(4);
+    await page.getByTestId("editor-state-revision-compare-1").click();
+    await expect
+      .poll(
+        () =>
+          state.comparisonCompleteLog.filter((d) => d.revisionId === revA1)
+            .length,
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-pair-result"),
+    ).toHaveCount(0);
+
+    // 单修订 body-diff 作废 pair
+    await page
+      .getByTestId("editor-state-revision-pair-select-before-1")
+      .click();
+    await page
+      .getByTestId("editor-state-revision-pair-select-after-2")
+      .click();
+    await page.getByTestId("editor-state-revision-pair-compare").click();
+    await expect
+      .poll(
+        () =>
+          state.pairBodyDiffCompleteLog.filter(
+            (d) =>
+              d.beforeRevisionId === revA1 && d.afterRevisionId === revA2,
+          ).length,
+        { timeout: 10_000 },
+      )
+      .toBe(5);
+    await page.getByTestId("editor-state-revision-body-diff-1").click();
+    await expect
+      .poll(
+        () =>
+          state.bodyDiffCompleteLog.filter((d) => d.revisionId === revA1)
+            .length,
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-pair-result"),
+    ).toHaveCount(0);
+
+    // 恢复确认作废 pair
+    await page
+      .getByTestId("editor-state-revision-pair-select-before-1")
+      .click();
+    await page
+      .getByTestId("editor-state-revision-pair-select-after-2")
+      .click();
+    await page.getByTestId("editor-state-revision-pair-compare").click();
+    await expect
+      .poll(
+        () =>
+          state.pairBodyDiffCompleteLog.filter(
+            (d) =>
+              d.beforeRevisionId === revA1 && d.afterRevisionId === revA2,
+          ).length,
+        { timeout: 10_000 },
+      )
+      .toBe(6);
+    await page.getByTestId("editor-state-revision-restore-1").click();
+    await expect(
+      page.getByTestId("editor-state-revision-confirm-1"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-pair-result"),
+    ).toHaveCount(0);
+    await page.getByTestId("editor-state-revision-cancel-restore-1").click();
+
+    // 项目 A 挂起 → 切 B → 释放不得污染
+    state.pairBodyDiffModeByProject[TECH_A] = {
+      kind: "hold",
+      gate: gateProjA,
+    };
+    await page
+      .getByTestId("editor-state-revision-pair-select-before-0")
+      .click();
+    await page
+      .getByTestId("editor-state-revision-pair-select-after-1")
+      .click();
+    await page.getByTestId("editor-state-revision-pair-compare").click();
+    await gateProjA.waitUntilEntered(1);
+    const completeABeforeSwitch = state.pairBodyDiffCompleteLog.filter(
+      (d) => d.projectId === TECH_A,
+    ).length;
+
+    await openWorkspace(page, "tech", TECH_B);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => state.listCompleteLog.filter((p) => p === TECH_B).length, {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    expect(await readContent(page, "tech")).toBe(TECH_OVERVIEW_B);
+    await expect(
+      page.getByTestId("editor-state-revision-pair-result"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-pair-error"),
+    ).toHaveCount(0);
+
+    const pairBArrivedBefore = state.pairBodyDiffLog.filter(
+      (d) => d.projectId === TECH_B,
+    ).length;
+    const pairBCompleteBefore = state.pairBodyDiffCompleteLog.filter(
+      (d) => d.projectId === TECH_B,
+    ).length;
+    gateProjA.release();
+    delete state.pairBodyDiffModeByProject[TECH_A];
+    await expect
+      .poll(
+        () =>
+          state.pairBodyDiffCompleteLog.filter((d) => d.projectId === TECH_A)
+            .length,
+        { timeout: 10_000 },
+      )
+      .toBe(completeABeforeSwitch + 1);
+    expect(
+      state.pairBodyDiffLog.filter((d) => d.projectId === TECH_B).length,
+    ).toBe(pairBArrivedBefore);
+    expect(
+      state.pairBodyDiffCompleteLog.filter((d) => d.projectId === TECH_B)
+        .length,
+    ).toBe(pairBCompleteBefore);
+    expect(await readContent(page, "tech")).toBe(TECH_OVERVIEW_B);
+    await expect(
+      page.getByTestId("editor-state-revision-pair-result"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-source-0"),
+    ).toHaveText(SOURCE_LABELS.callback);
+  });
+});
+
+test.describe("P12E-C 商务标双修订正文差异-共享入口", () => {
+  test("P12E-C 商务标：共享 pair 入口精确 1 次 GET、无 query/body、正文不变、零旁路", async ({
+    page,
+  }) => {
+    const state = createProbeState("biz");
+    seedRevisions(state, BIZ_A, 2, ["callback", "task"]);
+    const rev0 = state.revisions[BIZ_A][0];
+    const rev1 = state.revisions[BIZ_A][1];
+    state.details[rev0.revisionId].snapshot = {
+      ...state.details[rev0.revisionId].snapshot,
+      chapters: [
+        {
+          id: "biz_pair",
+          title: "商务差异前",
+          body: "BIZ_PAIR_BEFORE_BODY",
+        },
+      ],
+    };
+    state.details[rev1.revisionId].snapshot = {
+      ...state.details[rev1.revisionId].snapshot,
+      chapters: [
+        {
+          id: "biz_pair",
+          title: "商务差异后",
+          body: "BIZ_PAIR_AFTER_BODY",
+        },
+      ],
+    };
+    const expected = buildPairBodyDiffPayload(
+      state.details[rev0.revisionId].snapshot,
+      state.details[rev1.revisionId].snapshot,
+    );
+    expect(expected.sameBody).toBe(false);
+
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+
+    await openWorkspace(page, "biz", BIZ_A);
+    expect(state.pairBodyDiffLog.length).toBe(0);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => state.listCompleteLog.filter((p) => p === BIZ_A).length, {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    expect(state.pairBodyDiffLog.length).toBe(0);
+
+    const bodyBefore = await readContent(page, "biz");
+    expect(bodyBefore).toBe(BIZ_MD);
+    const getsBefore = state.editorGetLog.filter(
+      (g) => g.projectId === BIZ_A,
+    ).length;
+    const putBefore = state.putLog.length;
+    const restoreBefore = state.restoreLog.length;
+    const detailBefore = state.detailLog.length;
+    const comparisonBefore = state.comparisonLog.length;
+    const bodyDiffBefore = state.bodyDiffLog.length;
+    const externalBefore = state.externalHits.length;
+
+    // 选择零请求
+    await page
+      .getByTestId("editor-state-revision-pair-select-before-0")
+      .click();
+    await page
+      .getByTestId("editor-state-revision-pair-select-after-1")
+      .click();
+    expect(state.pairBodyDiffLog.length).toBe(0);
+    expect(state.detailLog.length).toBe(detailBefore);
+    expect(state.bodyDiffLog.length).toBe(bodyDiffBefore);
+
+    await page.getByTestId("editor-state-revision-pair-compare").click();
+    await expect
+      .poll(() => state.pairBodyDiffLog.length, { timeout: 10_000 })
+      .toBe(1);
+    await expect
+      .poll(() => state.pairBodyDiffCompleteLog.length, { timeout: 10_000 })
+      .toBe(1);
+    expect(state.pairBodyDiffLog[0].beforeRevisionId).toBe(rev0.revisionId);
+    expect(state.pairBodyDiffLog[0].afterRevisionId).toBe(rev1.revisionId);
+    expect(state.pairBodyDiffLog[0].method).toBe("GET");
+    expect(state.pairBodyDiffLog[0].postData).toBeNull();
+    expect(state.pairBodyDiffLog[0].hasQuery).toBe(false);
+    expect(state.pairBodyDiffLog[0].path).toContain("/body-diff/");
+
+    await expect(
+      page.getByTestId("editor-state-revision-pair-status"),
+    ).toHaveText(`共 ${expected.changedChapterCount} 章正文有变化`);
+    const pairResultText = await page
+      .getByTestId("editor-state-revision-pair-result")
+      .innerText();
+    expect(pairResultText).toMatch(/保留|删除|新增/);
+    expect(pairResultText).not.toContain("equal");
+    expect(pairResultText).not.toContain("delete");
+    expect(pairResultText).not.toContain("insert");
+
+    // 正文不变、零旁路（无 detail/current comparison/单 body-diff/restore/PUT/额外 editor GET/外网）
+    expect(await readContent(page, "biz")).toBe(BIZ_MD);
+    expect(state.detailLog.length).toBe(detailBefore);
+    expect(state.comparisonLog.length).toBe(comparisonBefore);
+    expect(state.bodyDiffLog.length).toBe(bodyDiffBefore);
+    expect(state.restoreLog.length).toBe(restoreBefore);
+    expect(state.putLog.length).toBe(putBefore);
+    expect(
+      state.editorGetLog.filter((g) => g.projectId === BIZ_A).length,
+    ).toBe(getsBefore);
+    expect(state.externalHits.length).toBe(externalBefore);
+    expect(state.pairBodyDiffLog.length).toBe(1);
 
     expect(guards.pageErrors).toEqual([]);
     expect(await guards.readUnhandled()).toEqual([]);
