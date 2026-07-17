@@ -3,6 +3,8 @@
 对接：`docs/p12e-revision-body-diff-contract.md`、P12C-C1 修订历史、P12D-A/B 当前状态差异摘要与前端入口。  
 执行方式：Codex 规划与受限审查；Grok 只按白名单实现和自测；Codex 独立验收、中文文档闭环、提交并推送。
 
+> **完成状态（2026-07-17）**：冻结=`5aa205c`，实现=`f9f067e`；后端专项/受影响回归/全量为 **23/27/854 passed**，前端 history/checkpoint/truth/全量为 **27/51/46/290 passed**，E2E 均为单 worker、零重试串行执行。
+
 ## 1. 开工基线
 
 - 分支必须是 `collab/grok-code-codex-review`。
@@ -38,3 +40,12 @@
 ## 5. 留给后续包的边界
 
 本计划完成后，正文差异仍只针对“一条历史修订 ↔ 当前状态”，不等于任意历史两两比较、完整版本时间线、正文恢复、修订删除、分页搜索或多人协作。后续包必须重新只读审计、排序和冻结，不能沿用本包白名单顺手扩大。
+
+## 6. 实际审查与验收记录
+
+1. Grok 在额度中断前留下半成品，恢复后补齐 20,000 码点在 difflib 前截断、三条独立 E2E、严格 parser 与 arrived/complete 迟到隔离；首个完整审查请求为 `msg_7409f0e20158437f99ed689e148c7028`。
+2. Codex 首轮受限审查用独立探针证明 101 个正文差异章会调用 `_diff_lines` **101 次**，违反最多处理 100 个章节的资源边界。返修任务=`msg_f09905515e974049827cd981087884c6`；Grok 真实红测为 **1 failed / 1 passed**，修后 **2 passed**，最终审查请求=`msg_c24f270186a741a09a33781e84b1e762`。
+3. 返修后完整值扫描仍覆盖展示上限后的章节；只有前 100 个实际正文差异章进入 difflib。Codex 探针得到 `diff_calls=100`、`raw_items=100`、`any_diff=true`、`body_truncated=true`，同时覆盖“前 100 章相同、第 101 章才不同”仍返回 `sameBody=false` 与非空有界项。
+4. Codex 独立通过后端专项 **23 passed**、P12D/P12C 受影响回归 **27 passed**、后端串行全量 **854 passed**（1 条既有 Starlette/httpx 弃用告警，1198.62 秒）。
+5. 前端严格串行通过 history **27**、checkpoint **51**、技术/商务 truth **46**、全量 **290 passed**（8.3 分钟）；全部使用 `--workers=1 --retries=0`。`npm run lint`、`npm run build`、`git diff --check`、精确七文件白名单与空暂存区均通过；build 只有既有 chunk 大小提示。
+6. Codex 验收确认=`msg_1432aa1aacf944d28b2089dda8f2bb7c`。实现以中文提交 `f9f067e` 推送；未扩入任意历史两两比较、正文自动恢复、删除、搜索、分页、导出、分享或多人协作。

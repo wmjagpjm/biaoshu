@@ -747,4 +747,18 @@ P12D-B 在 P12D-A 只读 comparison API 之上完成技术标/商务标共用“
 4. \`npx --no-install playwright test --workers=1 --retries=0\` → **287 passed**；
 5. \`npm run lint\`、\`npm run build\` → 通过；build 仅有既有 chunk 大小警告。
 
-比较请求是单次 GET，无 body、查询参数、重试、轮询、详情 GET、restore POST、editor-state GET/PUT、检查点或外网旁路；UI 只显示固定中文字段标签和两侧六项摘要。正文 diff、任意历史两两比较、删除、搜索、分页、导出、分享和多人协作仍未接入。
+比较请求是单次 GET，无 body、查询参数、重试、轮询、详情 GET、restore POST、editor-state GET/PUT、检查点或外网旁路；UI 只显示固定中文字段标签和两侧六项摘要。单条修订对当前状态的正文差异现已由 P12E-A 接入；任意历史两两比较、删除、搜索、分页、导出、分享和多人协作仍未接入。
+
+## P12E-A 单条修订正文差异预览（已完成）
+
+P12E-A 冻结=`5aa205c`、实现=`f9f067e`。后端新增唯一只读 `GET /api/projects/{projectId}/editor-state-revisions/{revisionId}/body-diff`；成功体精确六键，章节项/片段精确五键/二键，不返回 revision、版本、chapter ID、路径或原始快照。完整正文先判等，最多前 100 个实际正文差异章进入 difflib；展示正文 20,000 码点、标题 240、80 hunks/章、2,000 码点/hunk、全响应 120,000 码点，任一截断固定 `truncated=true`。
+
+Codex 首轮探针真实复现 101 个变化章产生 **101** 次 `_diff_lines`，返修红测为 **1 failed / 1 passed**，修后 **2 passed**；尾章完整值反假绿同时证明“前 100 章相同、第 101 章才不同”仍为 `sameBody=false` 且有可见项。独立验收：
+
+1. 后端 P12E 专项 **23 passed**，P12D/P12C 受影响回归 **27 passed**；
+2. 后端串行全量 **854 passed**，仅 1 条既有 Starlette/httpx 弃用告警；
+3. `editor-state-revision-history` / checkpoint / technical+business truth 严格串行 **27/51/46 passed**；
+4. `npx --no-install playwright test --workers=1 --retries=0` → **290 passed (8.3m)**；
+5. `npm run lint`、`npm run build`、`git diff --check`、精确七文件与暂存区检查均通过。
+
+技术标与商务标共用“查看正文差异”，只在点击时请求一次；摘要、当前对比、正文差异、恢复确认四意图互斥，项目/修订/折叠/刷新/恢复和组件卸载均隔离 arrived/complete 迟到结果。仍未接：任意历史两两比较、正文自动恢复、完整时间线、删除、搜索、分页、导出、分享和多人协作。
