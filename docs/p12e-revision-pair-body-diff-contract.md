@@ -2,7 +2,7 @@
 
 模块：P12E-B editor-state 任意两条同项目历史修订的章节正文差异只读基础
 对接：P12E-A 单条修订对当前状态正文差异、P12C-C1 修订历史详情。
-状态：2026-07-17 冻结，等待 Grok 按四文件白名单实现；Codex 负责受限审查、独立验收、中文闭环和提交推送。
+状态：2026-07-17 已完成；冻结=`00ef081`、实现=`5a5b08a`，Codex 已完成受限审查、独立验收、中文闭环和提交推送。
 
 ## 1. 目标与边界
 
@@ -73,3 +73,11 @@ Grok 只允许修改以下四个文件，不得 `git add/commit/push`：
 先只增加真实后端红测，证明生产路由不存在/响应不满足契约，再实现最小代码；不得用导入错误、fixture 错误、缺依赖或未启动服务冒充红测。至少覆盖：双修订 changed/added/removed、同修订一致、跨项目/跨工作空间双 ID 404、任一快照损坏固定 500、无 query/body/no-store、完整值尾章反假绿、100 章 difflib 上限和五域零写。
 
 Grok 完成后只发送 `review_request`，报告真实红/绿数字、四文件白名单、零写证据和未做边界。Codex 随后独立运行 P12E-B 专项、P12E-A 专项、P12D/P12C 受影响回归、后端全量、`py_compile`、`git diff --check` 和白名单检查；所有命令后台静默，E2E 如后续包接入必须单 worker、零重试串行。
+
+## 7. 交付记录
+
+Grok 最终 review_request=`msg_d8a128763e274c3b8eb12c6e1234d456`，Codex 验收回执=`msg_f7bd19cc0dae4834b275823a90c4a6f7`。Failure-first 共 13 项失败，其中 11 项为新路由尚不存在的 HTTP 404，1 项为同正文双修订夹具 `stateVersion` 重合导致 before/after ID 相同，1 项为 AST 断言缺少 `compare_revision_bodies`；夹具修正并完成实现后 pair 专项 13 项通过。
+
+Codex 独立通过 P12E-B/P12E-A/P12D-P12C **13/23/50 passed**，合并专项 **86 passed**，后端全量 **867 passed**；均只有 1 条既有 Starlette/httpx 弃用告警。三生产文件 `py_compile`、`git diff --check`、精确四文件白名单、空暂存区通过。实现已由 Codex 以中文提交 `5a5b08a` 并推送协作分支。
+
+本契约不授权前端双修订选择器、分页、搜索、恢复、删除、导出、分享、缓存、跨项目历史、自动批量比较或多人协作；后续能力必须重新冻结。

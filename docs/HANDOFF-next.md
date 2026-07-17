@@ -1,14 +1,14 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-17（P12E-A 单条修订正文差异预览已完成并推送）
+> **交接日期**：2026-07-17（P12E-B 双修订正文差异后端基础已完成并推送）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
-> **协作分支功能基线**：P12E-A 冻结=`5aa205c`、实现=`f9f067e`；P12E-B 契约/计划冻结=`00ef081`、等待实现；P12D-B 冻结=`fc19d93`、实现=`35ab377`、验收闭环=`c7cf67f`；P12D-A 冻结=`2cc6ee3`、实现=`9445fcc`；P9C-R1 冻结=`cd70ef0`、实现=`b53dcce`；P12C-C3 冻结=`6b9143a`、实现=`5e4f9f6`；P12C-C2 冻结=`54af600`、范围修订=`2276366`、实现=`0803250`；P12C-C1 冻结=`26b504e`、实现=`7023ecd`；P12C-B-D3 冻结=`1d44484`、实现=`b91a7ff`；P12C-B-D2 冻结=`6b83fc1`、实现=`f256f5b`；P12C-B-D1 冻结=`e8ffaeb`、实现=`a6a28f6`；P12C-B-C2 冻结=`52bbabf`、实现=`82cc82e`；P12C-B-C1 冻结=`76834f5`、实现=`1d0ce0e`；P12C-B-B2 冻结=`3a30c03`、实现=`5149385`；P12C-B-B1 冻结=`05864f6`、实现=`5a0d1c0`；P12C-B-A 冻结=`fbf93c0`、实现=`acf3139`；P12C-A 冻结=`daa8c43`、实现=`226e1c1`；P12B-D 冻结=`613818f`、D1 后端=`551caba`、D2 前端=`0f81dd6`；其余既有功能基线见本文 §11。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
-> **最新增量基线**：P12E-A 已交付单条修订对当前状态的只读有界正文差异、技术/商务共用按需入口、严格解析、四意图互斥和 arrived/complete 迟到隔离；P12E-B 已冻结双修订正文差异后端基础，等待 Grok 受限实现。
+> **协作分支功能基线**：P12E-A 冻结=`5aa205c`、实现=`f9f067e`；P12E-B 冻结=`00ef081`、实现=`5a5b08a`、文档闭环见当前 HEAD；P12D-B 冻结=`fc19d93`、实现=`35ab377`、验收闭环=`c7cf67f`；P12D-A 冻结=`2cc6ee3`、实现=`9445fcc`；P9C-R1 冻结=`cd70ef0`、实现=`b53dcce`；P12C-C3 冻结=`6b9143a`、实现=`5e4f9f6`；P12C-C2 冻结=`54af600`、范围修订=`2276366`、实现=`0803250`；P12C-C1 冻结=`26b504e`、实现=`7023ecd`；P12C-B-D3 冻结=`1d44484`、实现=`b91a7ff`；P12C-B-D2 冻结=`6b83fc1`、实现=`f256f5b`；P12C-B-D1 冻结=`e8ffaeb`、实现=`a6a28f6`；P12C-B-C2 冻结=`52bbabf`、实现=`82cc82e`；P12C-B-C1 冻结=`76834f5`、实现=`1d0ce0e`；P12C-B-B2 冻结=`3a30c03`、实现=`5149385`；P12C-B-B1 冻结=`05864f6`、实现=`5a0d1c0`；P12C-B-A 冻结=`fbf93c0`、实现=`acf3139`；P12C-A 冻结=`daa8c43`、实现=`226e1c1`；P12B-D 冻结=`613818f`、D1 后端=`551caba`、D2 前端=`0f81dd6`；其余既有功能基线见本文 §11。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
+> **最新增量基线**：P12E-A 已交付单条修订对当前状态的只读有界正文差异、技术/商务共用按需入口、严格解析、四意图互斥和 arrived/complete 迟到隔离；P12E-B 已交付双修订正文差异后端基础，暂不包含前端双修订选择器。
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **本地状态**：P12E-A 实现 `f9f067e` 已推送；本文档闭环完成后必须再次核对 HEAD、远端一致且工作区干净。固定模型缓存与验收日志仅在本机且被 Git 忽略。
-> **验收基线**：P12E-A 后端专项/受影响回归/串行全量 **23/27/854 passed**，history/checkpoint/truth/前端单 worker 零重试全量 **27/51/46/290 passed**；P12D-B 为 24/51/46/287，P12D-A 为 14/132/831。P9C-R1 专项/语义/知识库完整 **17/21/28**，真实预检 Recall@5=`1.0`、NDCG@5=`0.927295`。**所有 Playwright E2E 共用 SQLite 重置库，必须逐条串行运行，禁止并行。**
+> **本地状态**：P12E-A 实现 `f9f067e`、P12E-B 实现 `5a5b08a` 已推送；本文档闭环完成后必须再次核对 HEAD、远端一致且工作区干净。固定模型缓存与验收日志仅在本机且被 Git 忽略。
+> **验收基线**：P12E-B 专项/P12E-A 专项/P12D-P12C 受影响回归/后端串行全量 **13/23/50/867 passed**；Codex 合并重跑三组共 **86 passed**，仅 1 条既有 Starlette/httpx 弃用告警。P12E-A history/checkpoint/truth/前端单 worker 零重试全量仍为 **27/51/46/290 passed**；P12D-B 为 24/51/46/287，P12D-A 为 14/132/831。P9C-R1 专项/语义/知识库完整 **17/21/28**，真实预检 Recall@5=`1.0`、NDCG@5=`0.927295`。**所有 Playwright E2E 共用 SQLite 重置库，必须逐条串行运行，禁止并行。**
 
 ---
 
@@ -19,10 +19,10 @@
 工作分支只能是 collab/grok-code-codex-review，禁止直接操作 main；先执行 git status -sb，并核对 HEAD 与 origin/collab/grok-code-codex-review 一致且工作区干净。
 完整阅读 docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/plans/2026-07-13-package-9-delivery-enhancement-plan.md、docs/integration-checklist.md。
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
-当前进度：P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/P12D-B、P12E-A、P9D、P9C-R1、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。P12E-A 冻结=`5aa205c`、实现=`f9f067e`；后端全量 854、前端全量 290 passed。
-当前状态：P12D-B 前端按需“与当前对比”与 P12E-A 单条修订正文差异均已完成并推送；P12E-A 实现=`f9f067e`。
-当前执行包：P12E-B 双修订正文差异后端基础，冻结=`00ef081`；Grok 只允许修改四个后端文件并发送 review_request，Codex 独立审查、验收、提交和推送；不得让 Grok 提交或推送。
-下一步：先完成 P12E-B 的 failure-first、受限实现和独立验收；前端双修订选择器、分页、搜索、恢复和多人协作必须另行冻结。
+当前进度：P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/P12D-B、P12E-A/P12E-B、P9D、P9C-R1、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。P12E-A 实现=`f9f067e`；P12E-B 实现=`5a5b08a`；后端全量 867、前端全量 290 passed。
+当前状态：P12D-B 前端按需“与当前对比”、P12E-A 单条修订正文差异和 P12E-B 双修订正文差异后端基础均已完成并推送；P12E-B 实现=`5a5b08a`。
+当前执行包：P12E-B 已完成，冻结=`00ef081`、实现=`5a5b08a`；Grok 只实现四个后端文件并发送 review_request，Codex 已独立审查、验收、提交和推送；不得让 Grok 提交或推送。
+下一步：先审计剩余版本历史需求与产品优先级，再单独冻结下一包；前端双修订选择器、分页、搜索、恢复和多人协作必须另行冻结。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -625,7 +625,7 @@ frontend/src/features/
 - 新任务分工不变：Grok 只负责限定实现与自测，未经 Codex 审查确认不得提交；Codex 负责计划、范围冻结、差异审查、独立测试、验收、中文提交、文档闭环和 GitHub 状态核验。每一包仍按“计划提交 → 实现提交 → 文档闭环提交 → 推送协作分支”执行，禁止合包。
 - GitHub 若出现连接重置，可在当前 PowerShell 进程临时配置 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY=http://127.0.0.1:7890` 与 `NO_PROXY=localhost,127.0.0.1` 后重试；不得把代理或凭据写入仓库。
 
-**换会话可直接：核验分支、HEAD/远端与工作区干净 → 读本文 §0～§3.1、§4.23、§5、§6、§11、P12D-A/B、P12E-A、P12E-B 契约/计划及路线图 → 确认 P12E-A 实现=`f9f067e` 与 P12E-B 冻结=`00ef081` 已推送 → 继续读取消息箱中的 P12E-B 任务并等待 review_request。禁止清理或重做已交付包、让 Grok commit/push、扩成前端双修订选择器/分页/搜索/恢复/多人协作，或由 Codex 冒充 Grok 完成主实现。**
+**换会话可直接：核验分支、HEAD/远端与工作区干净 → 读本文 §0～§3.1、§4.23、§5、§6、§11、P12D-A/B、P12E-A、P12E-B 契约/计划及路线图 → 确认 P12E-B 实现=`5a5b08a` 已推送 → 继续审计剩余版本历史需求并重新冻结下一包。禁止清理或重做已交付包、让 Grok commit/push、擅自扩成前端双修订选择器/分页/搜索/恢复/多人协作，或由 Codex 冒充 Grok 完成主实现。**
 ## P12D-B 完成交接（2026-07-17）
 
 当前协作分支已完成 P12D-B：Grok 任务 `msg_a8258d4b49f44678bf43fe2a2356d583`，首轮 review_request `msg_9394bad10ef34048977ecdc9c9250239`；Grok 未提交/推送，Codex 独立审查、验收、文档闭环并负责本次提交推送。三文件白名单为 API 封装、共享修订面板、修订历史 E2E。
@@ -645,8 +645,12 @@ P12E-A 冻结=`5aa205c`，Grok 实现=`f9f067e`，最终 review_request=`msg_c24
 
 交付边界仍是“一条历史修订 ↔ 请求时当前状态”的只读章节正文差异；未实现任意历史两两比较、完整时间线、正文自动恢复、删除、搜索、分页、导出、分享、跨项目历史和多人协作。下一包必须另立契约、计划和白名单。
 
-## P12E-B 当前交接（2026-07-17，等待 Grok 实现）
+## P12E-B 完成交接（2026-07-17）
 
-P12E-B 契约=`docs/p12e-revision-pair-body-diff-contract.md`、计划=`docs/plans/2026-07-17-p12e-revision-pair-body-diff-plan.md`，冻结提交=`00ef081`。目标是同一工作空间/项目内两条历史修订的只读正文差异；路径为 `/api/projects/{projectId}/editor-state-revisions/{beforeRevisionId}/body-diff/{afterRevisionId}`，响应使用 `beforeChapterCount/afterChapterCount`，不读取当前 editor-state。
+P12E-B 契约=`docs/p12e-revision-pair-body-diff-contract.md`、计划=`docs/plans/2026-07-17-p12e-revision-pair-body-diff-plan.md`，冻结提交=`00ef081`，实现提交=`5a5b08a`。目标是同一工作空间/项目内两条历史修订的只读正文差异；路径为 `/api/projects/{projectId}/editor-state-revisions/{beforeRevisionId}/body-diff/{afterRevisionId}`，响应使用 `beforeChapterCount/afterChapterCount`，不读取当前 editor-state。
 
-Grok 只允许修改 `backend/app/api/schemas.py`、`backend/app/api/editor_state_revisions.py`、`backend/app/services/editor_state_revision_body_diff_service.py` 和新建 `backend/tests/test_p12e_revision_pair_body_diff.py`；先写真实红测，再实现双快照服务。禁止前端、分页、搜索、恢复、删除、导出、分享、缓存或多人协作。完成后只发 `review_request`，不得提交/推送。
+Grok 只修改了 `backend/app/api/schemas.py`、`backend/app/api/editor_state_revisions.py`、`backend/app/services/editor_state_revision_body_diff_service.py` 和新建 `backend/tests/test_p12e_revision_pair_body_diff.py`；先写真实红测，再实现双快照服务。禁止前端、分页、搜索、恢复、删除、导出、分享、缓存或多人协作。最终 review_request=`msg_d8a128763e274c3b8eb12c6e1234d456`，Codex 验收回执=`msg_f7bd19cc0dae4834b275823a90c4a6f7`；Grok 未提交/推送。
+
+Failure-first 真实记录：13 项红测中 11 项是新路由尚不存在的 HTTP 404，1 项是同正文双修订夹具因 `stateVersion` 重合导致 before/after ID 相同，1 项是 AST 断言缺少 `compare_revision_bodies`；夹具修正后 pair 专项 13 项通过。不能把 13 项全部表述成路由缺失。
+
+独立验收：P12E-B/P12E-A/P12D-P12C 合并专项 **86 passed**，后端全量 **867 passed**，均仅 1 条既有 Starlette/httpx 弃用告警；三生产文件 `py_compile`、`git diff --check`、精确四文件白名单、空暂存区均通过。交付只包含后端双修订基础，不包含前端双修订选择器、自动批量比较、完整时间线、分页/搜索、恢复/删除/导出/分享、跨项目历史、缓存或多人协作。
