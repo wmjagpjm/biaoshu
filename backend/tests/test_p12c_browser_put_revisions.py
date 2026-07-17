@@ -813,7 +813,7 @@ def test_no_extra_get_lock_refresh_or_multi_commit(client, monkeypatch):
 
 
 def test_checkpoints_and_p12ca_quota_unaffected(client):
-    """用途：P12C-A 最近 10 条语义与检查点域完全不受本包破坏。"""
+    """用途：P12F-A 最近 20 条写入保留与检查点域完全独立；检查点零干扰。"""
     pid = _create_project(client, name="域隔离")
     cp = client.post(f"/api/projects/{pid}/editor-state-checkpoints", json={})
     assert cp.status_code == 201, cp.text
@@ -836,9 +836,9 @@ def test_checkpoints_and_p12ca_quota_unaffected(client):
         db.close()
     assert cp_count == 1
 
-    # 多次 PUT 产生 revision，不超过 10 条裁剪语义（11 次状态变化后仍 ≤10）
+    # 多次 PUT 超过 20 条写入保留上限后仍精确裁到 20；检查点域不变
     prev = _get(client, pid)
-    for i in range(12):
+    for i in range(24):
         prev = _put(
             client,
             pid,
@@ -848,7 +848,8 @@ def test_checkpoints_and_p12ca_quota_unaffected(client):
             },
         ).json()
     n = _db_rev_count(pid)
-    assert n == 10, n
+    assert n == 20, n
+    assert editor_state_revision_service.MAX_REVISIONS_PER_PROJECT == 20
     assert all(r.source_kind == _SOURCE_BROWSER for r in _db_rev_rows(pid))
 
     db = SessionLocal()

@@ -525,7 +525,26 @@ def _raw_sql_delete_revision(revision_id: str) -> None:
         )
 
 
-# ---------- 空列表 / 多来源列表 / 上限 10 ----------
+# ---------- 空列表 / 多来源列表 / 默认列表 10 / 写入保留 20 ----------
+
+
+def test_p12f_a_list_limit_independent_of_write_retention():
+    """
+    用途：默认历史列表上限必须独立固定为 10，不得再绑定写入保留上限 20。
+    """
+    from app.services import editor_state_revision_history_service as hist
+
+    assert hist.MAX_REVISIONS_LIST == 10
+    assert editor_state_revision_service.MAX_REVISIONS_PER_PROJECT == 20
+    assert hist.MAX_REVISIONS_LIST != editor_state_revision_service.MAX_REVISIONS_PER_PROJECT
+    # 源码字面量 10，禁止继续引用写入服务常量
+    src = _SERVICE_PATH.read_text(encoding="utf-8")
+    assert re.search(
+        r"^MAX_REVISIONS_LIST\s*=\s*10\b",
+        src,
+        re.MULTILINE,
+    ), "MAX_REVISIONS_LIST 必须字面量固定为 10"
+    assert "MAX_REVISIONS_LIST = editor_state_revision_service.MAX_REVISIONS_PER_PROJECT" not in src
 
 
 def test_empty_project_list_is_exact_empty_items(disabled_client):
@@ -570,12 +589,13 @@ def test_multi_source_list_shape_order_and_max_ten(disabled_client):
         _record(pid, before, after, src)
         before = after
 
-    # 再追加若干 browser_put 使总数 >10
+    # 再追加若干 browser_put 使 DB 保留数 > 默认列表 10（写入上限 20）
     for i in range(6):
         _put_state(client, pid, tag=f"more{i}")
 
     db_rows = _db_rev_rows(pid)
-    assert len(db_rows) == 10, len(db_rows)
+    assert len(db_rows) > 10, len(db_rows)
+    assert len(db_rows) <= 20, len(db_rows)
 
     res = client.get(_url(pid))
     assert res.status_code == 200, res.text
@@ -596,11 +616,12 @@ def test_multi_source_list_shape_order_and_max_ten(disabled_client):
         listed_ids.append(item["revisionId"])
         assert "snapshot" not in item
 
-    # 顺序精确对齐 DB 契约序
-    assert listed_ids == [r["id"] for r in db_rows]
-    assert [i["stateVersion"] for i in items] == [r["state_version"] for r in db_rows]
-    assert [i["sourceKind"] for i in items] == [r["source_kind"] for r in db_rows]
-    assert [i["snapshotBytes"] for i in items] == [r["snapshot_bytes"] for r in db_rows]
+    # 列表仍只返回最近 10 条，顺序对齐 DB 契约序前缀；不得因写入扩容而返回 11+
+    top10 = db_rows[:10]
+    assert listed_ids == [r["id"] for r in top10]
+    assert [i["stateVersion"] for i in items] == [r["state_version"] for r in top10]
+    assert [i["sourceKind"] for i in items] == [r["source_kind"] for r in top10]
+    assert [i["snapshotBytes"] for i in items] == [r["snapshot_bytes"] for r in top10]
 
     # 响应不含正文；禁止出现 snapshot 键（snapshotBytes 合法）
     blob = json.dumps(body, ensure_ascii=False)

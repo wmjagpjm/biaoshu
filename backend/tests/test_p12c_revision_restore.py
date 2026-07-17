@@ -1002,13 +1002,15 @@ def test_revisit_old_version_forms_new_timepoint(client: TestClient):
 
 
 def test_revision_10_and_checkpoint_20_trim_independent(client: TestClient):
+    """用途：P12F-A 修订最多 20 条与检查点 20 条配额独立；恢复后仍受各自上限约束。"""
     pid = _create_project(client, name="双配额裁剪")
-    # 先堆 10 条 revision
+    # 先堆 20 条 revision（写入保留上限）
     versions: list[str] = []
-    for i in range(10):
+    for i in range(20):
         st = _seed_via_browser(client, pid, marker=f"trim-r-{i}")
         versions.append(st["stateVersion"])
-    assert _db_rev_count(pid) == 10
+    assert _db_rev_count(pid) == 20
+    assert editor_state_revision_service.MAX_REVISIONS_PER_PROJECT == 20
 
     # 堆 20 条检查点（当前状态）
     for i in range(20):
@@ -1022,13 +1024,13 @@ def test_revision_10_and_checkpoint_20_trim_independent(client: TestClient):
     newer = _seed_via_browser(client, pid, marker="trim-new")
     new_ver = newer["stateVersion"]
     assert new_ver != target_ver
-    # 确认目标仍在 10 条账本内
+    # 确认目标仍在 20 条账本内
     assert any(r.id == rid_old for r in _db_rev_rows(pid))
 
     res = _restore(client, pid, rid_old, new_ver)
     body = _assert_success_restore(res, target_version=target_ver)
     rows = _db_rev_rows(pid)
-    assert len(rows) == 10  # 修订配额
+    assert len(rows) == 20  # 修订配额（P12F-A：20）
     assert body["safetyCheckpointId"] in _db_cp_ids(pid)
     assert _db_cp_count(pid) == 20  # 检查点配额，保护新安全点
     # 本场景此前无 restore：恢复后 restore 账本精确 +1，禁止 >=1 假绿

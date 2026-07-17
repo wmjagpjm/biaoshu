@@ -1,11 +1,12 @@
 """
-模块：P12C-C1 editor-state 修订历史只读服务
-用途：最近 10 条修订元数据列表与单条按需详情；列表绝不加载 snapshot_json。
+模块：P12C-C1 / P12F-A editor-state 修订历史只读服务
+用途：默认最近 10 条修订元数据列表与单条按需详情；列表绝不加载 snapshot_json。
 对接：api.editor_state_revisions；EditorStateRevisionRow；
   editor_state_service / editor_state_revision_service 权威常量与算法。
 二次开发：
   - 全程只读：禁止 commit/rollback/flush/refresh/锁/审计/写配额/读当前 editor-state/检查点；
   - 项目校验只投影 Project.id；列表五列投影；详情六列 + revision/workspace/project 三重作用域；
+  - 列表上限 MAX_REVISIONS_LIST 必须字面量固定为 10，禁止绑定写入保留上限 20；
   - 13 键/规范 JSON/版本/来源必须委托既有权威实现，禁止第二套哈希或来源枚举；
   - 任一损坏收敛固定 corrupt，不反射正文/ID/版本/SQL/路径/异常。
 """
@@ -23,7 +24,8 @@ from sqlalchemy.orm import Session
 from app.models.entities import EditorStateRevisionRow, Project
 from app.services import editor_state_revision_service, editor_state_service
 
-MAX_REVISIONS_LIST = editor_state_revision_service.MAX_REVISIONS_PER_PROJECT
+# P12F-A：默认只读列表与写入保留解耦，字面量固定 10（禁止引用 MAX_REVISIONS_PER_PROJECT）
+MAX_REVISIONS_LIST = 10
 MAX_SNAPSHOT_BYTES = editor_state_revision_service.MAX_SNAPSHOT_BYTES
 MIN_SNAPSHOT_BYTES = editor_state_revision_service.MIN_SNAPSHOT_BYTES
 REVISION_SOURCE_KINDS = editor_state_revision_service.REVISION_SOURCE_KINDS

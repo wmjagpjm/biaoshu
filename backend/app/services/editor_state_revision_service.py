@@ -1,12 +1,13 @@
 """
-模块：P12C-A editor-state 有限自动修订账本服务
-用途：独立 revision 表上的无提交 transition 原语（相邻去重、断链补点、10 条裁剪）。
+模块：P12C-A / P12F-A editor-state 有限自动修订账本服务
+用途：独立 revision 表上的无提交 transition 原语（相邻去重、断链补点、
+  最多 20 条且总快照 20 MiB 的连续最新前缀裁剪）。
 对接：EditorStateRevisionRow；editor_state_service（共享 13 键/规范 JSON/版本算法）。
 二次开发：
-  - A 包禁止任何生产写入者调用；不得声称自动历史已可用
   - 只 flush，绝不 commit/rollback/refresh/项目查询/锁/审计
   - 13 键/JSON/哈希必须委托 editor_state_service，禁止第二套算法
   - 最新/裁剪 SQL 不得加载 snapshot_json；DELETE 必须 workspace+project+id 三重限定
+  - 校验完所有 snapshot_bytes 后才允许删除；禁止跳洞保留更旧小行
   - 返回值不含 snapshot/行 ID/项目/空间
 """
 
@@ -21,8 +22,9 @@ from sqlalchemy.orm import Session
 from app.models.entities import EditorStateRevisionRow, utc_now
 from app.services import editor_state_service
 
-MAX_REVISIONS_PER_PROJECT = 10
-MAX_SNAPSHOT_BYTES = 2 * 1024 * 1024  # 2 MiB
+MAX_REVISIONS_PER_PROJECT = 20
+MAX_REVISION_BYTES_PER_PROJECT = 20 * 1024 * 1024  # 20 MiB 总字节配额
+MAX_SNAPSHOT_BYTES = 2 * 1024 * 1024  # 2 MiB 单条上限
 MIN_SNAPSHOT_BYTES = 1
 
 REVISION_SOURCE_KINDS: frozenset[str] = frozenset(
@@ -162,12 +164,28 @@ def _insert_revision_row(
     db.flush()
 
 
+def _validate_trim_snapshot_bytes(value: Any) -> int:
+    """
+    用途：裁剪前严格校验 snapshot_bytes 元数据；非法固定 invalid，禁止部分删除。
+    规则：非布尔 int，落在 [MIN_SNAPSHOT_BYTES, MAX_SNAPSHOT_BYTES]。
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        _raise_invalid()
+    if value < MIN_SNAPSHOT_BYTES or value > MAX_SNAPSHOT_BYTES:
+        _raise_invalid()
+    return value
+
+
 def _trim_revisions(db: Session, workspace_id: str, project_id: str) -> None:
     """
-    用途：同事务内仅保留本项目最近 10 条（created_at DESC, id DESC）。
+    用途：同事务内按连续最新前缀保留本项目修订：
+      最多 MAX_REVISIONS_PER_PROJECT 条，且 snapshot_bytes 总和不超过
+      MAX_REVISION_BYTES_PER_PROJECT；排序键 created_at DESC, id DESC。
     二次开发：
-      - SELECT 仅 id/state_version，禁止加载 snapshot_json；
-      - DELETE 必须同时限定 workspace_id/project_id/id；
+      - SELECT 仅 id/state_version/snapshot_bytes，禁止加载 snapshot_json；
+      - 必须先完整物化并校验全部 snapshot_bytes，校验失败不得 DELETE；
+      - 达到任一上限后删除当前及所有更旧行，禁止跳过大行保留更旧小行；
+      - DELETE 必须同时限定 workspace_id/project_id/id；只 flush；
       - 禁止跨项目/跨空间删除。
     """
     rows = list(
@@ -175,6 +193,7 @@ def _trim_revisions(db: Session, workspace_id: str, project_id: str) -> None:
             select(
                 EditorStateRevisionRow.id,
                 EditorStateRevisionRow.state_version,
+                EditorStateRevisionRow.snapshot_bytes,
             )
             .where(
                 EditorStateRevisionRow.workspace_id == workspace_id,
@@ -186,9 +205,29 @@ def _trim_revisions(db: Session, workspace_id: str, project_id: str) -> None:
             )
         ).all()
     )
-    if len(rows) <= MAX_REVISIONS_PER_PROJECT:
+    if not rows:
         return
-    drop_ids = [str(r.id) for r in rows[MAX_REVISIONS_PER_PROJECT:]]
+
+    # 先完整校验全部元数据，再决定删除集合；任一行非法则整事务回滚
+    validated_bytes: list[int] = []
+    for row in rows:
+        validated_bytes.append(_validate_trim_snapshot_bytes(row.snapshot_bytes))
+
+    kept_count = 0
+    kept_bytes = 0
+    drop_ids: list[str] = []
+    for idx, row in enumerate(rows):
+        nbytes = validated_bytes[idx]
+        # 先到 20 条或加入本条会超过 20 MiB → 本条及更旧全部删除
+        if (
+            kept_count >= MAX_REVISIONS_PER_PROJECT
+            or kept_bytes + nbytes > MAX_REVISION_BYTES_PER_PROJECT
+        ):
+            drop_ids.extend(str(r.id) for r in rows[idx:])
+            break
+        kept_count += 1
+        kept_bytes += nbytes
+
     if not drop_ids:
         return
     db.execute(

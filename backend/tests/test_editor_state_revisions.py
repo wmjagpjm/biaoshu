@@ -1,7 +1,7 @@
 """
-模块：P12C-A editor-state 有限自动修订账本定向测试
-用途：验收独立表、固定来源、transition 语义、10 条裁剪、SQL 最小投影、
-  固定内部错误、回滚双零与检查点域零干扰。
+模块：P12C-A / P12F-A editor-state 有限自动修订账本定向测试
+用途：验收独立表、固定来源、transition 语义、最多 20 条且总快照 20 MiB 连续前缀裁剪、
+  SQL 最小投影、固定内部错误、回滚双零与检查点域零干扰。
 对接：editor_state_revision_service；EditorStateRevisionRow；editor_state_service。
 二次开发：仅本地 SQLite 与合成数据；禁止外网、真实业务正文或白名单外改动。
 """
@@ -174,6 +174,25 @@ def _db_rev_rows(
         )
     finally:
         db.close()
+
+
+def _rev_meta_seq(
+    project_id: str, workspace_id: str | None = None
+) -> list[tuple]:
+    """
+    契约序修订元数据序列（不含 snapshot_json 正文）。
+    每项：(id, state_version, snapshot_bytes, source_kind, created_at)
+    """
+    return [
+        (
+            r.id,
+            r.state_version,
+            r.snapshot_bytes,
+            r.source_kind,
+            r.created_at,
+        )
+        for r in _db_rev_rows(project_id, workspace_id)
+    ]
 
 
 def _db_cp_count(project_id: str) -> int:
@@ -415,7 +434,18 @@ def test_adjacent_same_version_dedupe_on_continuous(disabled_client):
 # ---------- 配额 / 隔离 / 并列 ----------
 
 
-def test_keep_latest_10_and_do_not_delete_other_projects(disabled_client):
+def test_p12f_a_retention_constants_exact():
+    """用途：P12F-A 生产常量精确 20 条 / 20 MiB；列表上限由历史服务独立固定为 10。"""
+    assert editor_state_revision_service.MAX_REVISIONS_PER_PROJECT == 20
+    assert (
+        editor_state_revision_service.MAX_REVISION_BYTES_PER_PROJECT
+        == 20 * 1024 * 1024
+    )
+    assert editor_state_revision_service.MAX_SNAPSHOT_BYTES == _MAX_BYTES
+
+
+def test_keep_latest_20_and_do_not_delete_other_projects(disabled_client):
+    """用途：小快照最多保留 20 条；另一项目账本零误删。"""
     pid = _create_project(disabled_client, name="主账本")
     other = _create_project(disabled_client, name="旁路账本")
     o0 = _variant("o0")
@@ -424,19 +454,21 @@ def test_keep_latest_10_and_do_not_delete_other_projects(disabled_client):
     assert _db_rev_count(other) == 2
 
     prev = _variant("t0")
-    for i in range(1, 12):
+    for i in range(1, 22):
         nxt = _variant(f"t{i}")
         result, db = _record(pid, prev, nxt)
         db.close()
         prev = nxt
         assert result["final_state_version"] == nxt["stateVersion"]
 
-    # 11 次 transition：首写 2 + 10 次各 1 = 12，裁剪后 10
-    assert _db_rev_count(pid) == 10
+    # 21 次 transition：首写 2 + 20 次各 1 = 22，裁剪后 20
+    assert _db_rev_count(pid) == 20
     assert _db_rev_count(other) == 2
     rows = _db_rev_rows(pid)
-    assert len(rows) == 10
+    assert len(rows) == 20
     assert rows[0].state_version == prev["stateVersion"]
+    kept_versions = {r.state_version for r in rows}
+    assert prev["stateVersion"] in kept_versions
 
 
 def test_trim_does_not_touch_other_workspace_same_project_id(disabled_client):
@@ -485,14 +517,14 @@ def test_trim_does_not_touch_other_workspace_same_project_id(disabled_client):
     assert _db_rev_count(pid, workspace_id=other_ws) == 1
 
     prev = _variant("iso0")
-    for i in range(1, 12):
+    for i in range(1, 22):
         nxt = _variant(f"iso{i}")
         result, db = _record(pid, prev, nxt, workspace_id=_WS)
         db.close()
         prev = nxt
         assert result["final_state_version"] == nxt["stateVersion"]
 
-    assert _db_rev_count(pid, workspace_id=_WS) == 10
+    assert _db_rev_count(pid, workspace_id=_WS) == 20
     assert _db_rev_count(pid, workspace_id=other_ws) == 1
 
     db = SessionLocal()
@@ -508,6 +540,154 @@ def test_trim_does_not_touch_other_workspace_same_project_id(disabled_client):
         assert foreign.source_kind == _SOURCE_OK
     finally:
         db.close()
+
+
+def test_byte_quota_continuous_newest_prefix_no_holes(disabled_client, monkeypatch):
+    """
+    用途：缩小总字节配额后，按 created_at DESC,id DESC 保留连续最新前缀；
+      不得跳过大行后保留更旧小行造成历史空洞。
+    """
+    pid = _create_project(disabled_client, name="字节连续前缀")
+    # 先写入 5 个时间点（首写 2 + 3 = 5）
+    prev = _variant("b0")
+    states = [prev]
+    for i in range(1, 5):
+        nxt = _variant(f"b{i}")
+        _record(pid, prev, nxt)[1].close()
+        states.append(nxt)
+        prev = nxt
+    assert _db_rev_count(pid) == 5
+
+    rows_before = _db_rev_rows(pid)
+    assert len(rows_before) == 5
+    # 契约序：索引 0 最新，4 最旧
+    newest_id = rows_before[0].id
+    second_id = rows_before[1].id
+    mid_id = rows_before[2].id
+    older_ids = [rows_before[3].id, rows_before[4].id]
+
+    # 人工设定元数据字节：最新两行小，中间一行大，更旧两行小
+    # 配额仅够最新两行；中间大行触发截断后更旧小行必须一并删除
+    small = 100
+    large = 500
+    budget = small + small  # 恰好两行
+    db = SessionLocal()
+    try:
+        for rid, nbytes in (
+            (newest_id, small),
+            (second_id, small),
+            (mid_id, large),
+            (older_ids[0], small),
+            (older_ids[1], small),
+        ):
+            row = db.get(EditorStateRevisionRow, rid)
+            assert row is not None
+            row.snapshot_bytes = nbytes
+        db.commit()
+    finally:
+        db.close()
+
+    monkeypatch.setattr(
+        editor_state_revision_service,
+        "MAX_REVISION_BYTES_PER_PROJECT",
+        budget,
+    )
+    # 条数上限保持宽松，确保本用例由字节配额触发
+    monkeypatch.setattr(
+        editor_state_revision_service,
+        "MAX_REVISIONS_PER_PROJECT",
+        20,
+    )
+
+    db = SessionLocal()
+    try:
+        editor_state_revision_service._trim_revisions(db, _WS, pid)
+        db.commit()
+    finally:
+        db.close()
+
+    kept = _db_rev_rows(pid)
+    kept_ids = [r.id for r in kept]
+    assert kept_ids == [newest_id, second_id], kept_ids
+    assert mid_id not in kept_ids
+    assert older_ids[0] not in kept_ids
+    assert older_ids[1] not in kept_ids
+    # 连续前缀：无空洞（保留集合必须是最新连续段）
+    assert kept_ids == [rows_before[0].id, rows_before[1].id]
+
+
+def test_invalid_snapshot_bytes_fails_before_any_delete(disabled_client, monkeypatch):
+    """
+    用途：非法 snapshot_bytes 在任何 DELETE 前固定 editor_state_revision_invalid；
+      调用方回滚后本项目与旁路项目每行元数据序列完全不变。
+    """
+    pid = _create_project(disabled_client, name="非法字节零删")
+    other = _create_project(disabled_client, name="非法字节旁路")
+    _record(other, _variant("x0"), _variant("x1"))[1].close()
+    assert _db_rev_count(other) == 2
+
+    prev = _variant("iv0")
+    for i in range(1, 4):
+        nxt = _variant(f"iv{i}")
+        _record(pid, prev, nxt)[1].close()
+        prev = nxt
+    assert _db_rev_count(pid) == 4
+    # 最旧行作为受害元数据目标
+    victim = _db_rev_rows(pid)[-1].id
+
+    # SQLite 允许浮点通过 CHECK 区间；服务层必须按非布尔 int 拒绝
+    db = SessionLocal()
+    try:
+        db.execute(
+            text(
+                "UPDATE editor_state_revisions SET snapshot_bytes = 1.5 "
+                "WHERE id = :rid"
+            ),
+            {"rid": victim},
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    # 故障前基线：非法 UPDATE 已提交、裁剪尚未调用；按契约序锁定元数据
+    baseline_pid = _rev_meta_seq(pid)
+    baseline_other = _rev_meta_seq(other)
+    assert len(baseline_pid) == 4
+    assert len(baseline_other) == 2
+    assert any(
+        mid == victim and float(nbytes) == 1.5
+        for mid, _ver, nbytes, _src, _ts in baseline_pid
+    )
+
+    # 压低条数上限，使合法路径本会删除；非法元数据必须抢先失败
+    monkeypatch.setattr(
+        editor_state_revision_service,
+        "MAX_REVISIONS_PER_PROJECT",
+        2,
+    )
+
+    captured: list[str] = []
+
+    def _capture(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("DELETE"):
+            captured.append(statement)
+
+    event.listen(engine, "before_cursor_execute", _capture)
+    db = SessionLocal()
+    try:
+        with pytest.raises(EditorStateRevisionError) as ei:
+            editor_state_revision_service._trim_revisions(db, _WS, pid)
+        assert ei.value.code == CODE_REVISION_INVALID
+        assert ei.value.message == MSG_REVISION_INVALID
+        db.rollback()
+    finally:
+        event.remove(engine, "before_cursor_execute", _capture)
+        db.close()
+
+    assert captured == [], f"非法元数据前不得 DELETE: {captured}"
+    # 精确零副作用：契约序逐行 id/state_version/snapshot_bytes/source_kind/created_at
+    assert _rev_meta_seq(pid) == baseline_pid
+    assert _rev_meta_seq(other) == baseline_other
 
 
 def test_tie_break_by_id_stable_order(disabled_client):
@@ -585,7 +765,8 @@ def test_latest_and_trim_sql_exclude_snapshot_json(disabled_client):
 
     event.listen(engine, "before_cursor_execute", _capture)
     try:
-        for i in range(1, 12):
+        # 首写 2 + 20 次各 1 = 22，触发超过 20 条后的 DELETE 裁剪
+        for i in range(1, 22):
             nxt = _variant(f"sql{i}")
             result, db = _record(pid, prev, nxt)
             db.close()
@@ -601,6 +782,7 @@ def test_latest_and_trim_sql_exclude_snapshot_json(disabled_client):
         and s.lstrip().upper().startswith("SELECT")
     ]
     assert select_sqls, f"未捕获 SELECT: {captured}"
+    trim_selects = []
     for sql in select_sqls:
         compact = " ".join(sql.split())
         match = re.search(r"(?is)\bSELECT\b(.*?)\bFROM\b", compact)
@@ -609,6 +791,10 @@ def test_latest_and_trim_sql_exclude_snapshot_json(disabled_client):
         assert "snapshot_json" not in select_list, sql
         assert "state_version" in select_list, sql
         assert "id" in select_list, sql
+        if "snapshot_bytes" in select_list:
+            trim_selects.append(sql)
+    # 裁剪路径必须投影 snapshot_bytes，且仍禁止正文
+    assert trim_selects, f"裁剪 SELECT 未投影 snapshot_bytes: {select_sqls}"
 
     delete_sqls = [
         s
@@ -616,7 +802,7 @@ def test_latest_and_trim_sql_exclude_snapshot_json(disabled_client):
         if s.lstrip().upper().startswith("DELETE")
         and "editor_state_revisions" in s.lower()
     ]
-    assert delete_sqls, "第 11 条后应触发 DELETE 裁剪"
+    assert delete_sqls, "超过 20 条后应触发 DELETE 裁剪"
     for sql in delete_sqls:
         low = sql.lower()
         assert "workspace_id" in low
@@ -626,6 +812,7 @@ def test_latest_and_trim_sql_exclude_snapshot_json(disabled_client):
             r"(?is)\beditor_state_revisions\s*\.\s*id\b",
             sql,
         ), f"DELETE 缺少行 id 列条件: {sql}"
+    assert _db_rev_count(pid) == 20
 
 
 def test_no_commit_rollback_refresh_project_lock(disabled_client, monkeypatch):
