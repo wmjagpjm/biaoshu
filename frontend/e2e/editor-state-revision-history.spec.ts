@@ -1,10 +1,10 @@
 /**
- * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C 双工作区修订历史、对比、正文差异与游标分页前端 E2E
+ * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D 双工作区修订历史、对比、正文差异、游标分页与来源筛选前端 E2E
  * 用途：技术标/商务标证明默认折叠零请求、按需列表/摘要/对比/正文差异、双修订正文差异、
- *       二次确认 restore、游标页首屏与加载更多、执行时 expected、唯一 editor-state GET、
+ *       二次确认 restore、游标页首屏与加载更多、来源筛选、执行时 expected、唯一 editor-state GET、
  *       失败阻断、迟到隔离与数据最小化。
  * 对接：Playwright chromium headless workers=1 retries=0；route 探针
- *       （含 comparison/body-diff/pair/page arrived/complete/cursor）。
+ *       （含 comparison/body-diff/pair/page arrived/complete/cursor/sourceKind）。
  * 二次开发：禁止固定 sleep、.or(...)、>=1 冒充、宽泛状态码、route fallback 假成功。
  */
 import {
@@ -60,6 +60,11 @@ const MSG_LOAD_MORE_FAIL = "更多修订加载失败，请稍后重试";
  * 前端不得解码；仅原样回传。
  */
 const PAGE_CURSOR_SECOND = "esrc1_cGFnZTJjdXJzb3Jmb3JyZXZoaXN0";
+/**
+ * P12F-D 筛选第二页不透明游标（外壳合法：esrc2_ + base64url 无 =）。
+ * 前端不得解码；仅原样回传，且必须与当前 sourceKind 同时出现。
+ */
+const PAGE_CURSOR_FILTER_SECOND = "esrc2_ZmlsdGVycGFnZTJjdXJzb3Jmb3JyZXY";
 /** 故意非法游标（缺前缀）——仅用于服务端/前端失败路径 */
 const PAGE_CURSOR_BAD_SHAPE = "not_a_valid_cursor_value";
 const MSG_RESTORE_OK = "已恢复到所选修订";
@@ -206,10 +211,12 @@ type ComparisonMode = { kind: "ok" } | { kind: "hold"; gate: HoldGate };
 type BodyDiffMode = { kind: "ok" } | { kind: "hold"; gate: HoldGate };
 type PairBodyDiffMode = { kind: "ok" } | { kind: "hold"; gate: HoldGate };
 
-/** page 探针到达记录：含 cursor 与查询键，供精确零旁路断言 */
+/** page 探针到达记录：含 cursor/sourceKind 与查询键，供精确零旁路断言 */
 type PageProbeHit = {
   projectId: string;
   cursor: string | null;
+  /** 缺省 null 表示无 sourceKind query */
+  sourceKind: string | null;
   method: string;
   path: string;
   postData: string | null;
@@ -282,10 +289,16 @@ type ProbeState = {
   listLog: string[];
   /** list 响应已 fulfill（await json 返回后）——用于证明迟到响应真正完成 */
   listCompleteLog: string[];
-  /** P12F-C page 到达（gate 前），含 cursor */
+  /** P12F-C/D page 到达（gate 前），含 cursor/sourceKind */
   pageLog: PageProbeHit[];
-  /** P12F-C page 响应已 fulfill（await json 返回后） */
-  pageCompleteLog: Array<{ projectId: string; cursor: string | null }>;
+  /** P12F-C/D page 响应已 fulfill（await json 返回后） */
+  pageCompleteLog: Array<{
+    projectId: string;
+    cursor: string | null;
+    sourceKind: string | null;
+  }>;
+  /** 按 cursor 键固定第二页游标；筛选场景可用 esrc2 */
+  pageSecondCursorBySource: Record<string, string>;
   detailLog: Array<{ projectId: string; revisionId: string }>;
   /** detail 响应已 fulfill（await json 返回后）——用于证明迟到响应真正完成 */
   detailCompleteLog: Array<{ projectId: string; revisionId: string }>;
@@ -567,6 +580,7 @@ function createProbeState(mode: Mode): ProbeState {
     pageResponseOverride: null,
     pageResponseByCursor: {},
     pageSecondCursor: PAGE_CURSOR_SECOND,
+    pageSecondCursorBySource: {},
     detailResponseOverride: null,
     restoreResponseOverride: null,
     comparisonResponseOverride: null,
@@ -625,22 +639,78 @@ function pageHitCountForCursor(
   ).length;
 }
 
+/** 用途：统计精确 sourceKind（null=无筛选 query）的 page 到达次数 */
+function pageHitCountForSource(
+  state: ProbeState,
+  projectId: string,
+  sourceKind: string | null,
+): number {
+  return state.pageLog.filter(
+    (h) => h.projectId === projectId && h.sourceKind === sourceKind,
+  ).length;
+}
+
+/** 用途：统计精确 sourceKind + cursor 组合的 page 到达次数 */
+function pageHitCountForSourceCursor(
+  state: ProbeState,
+  projectId: string,
+  sourceKind: string | null,
+  cursor: string | null,
+): number {
+  return state.pageLog.filter(
+    (h) =>
+      h.projectId === projectId &&
+      h.sourceKind === sourceKind &&
+      h.cursor === cursor,
+  ).length;
+}
+
+/** 用途：统计 page 完成次数（可按 sourceKind/cursor 精确过滤） */
+function pageCompleteCountForSourceCursor(
+  state: ProbeState,
+  projectId: string,
+  sourceKind: string | null,
+  cursor: string | null,
+): number {
+  return state.pageCompleteLog.filter(
+    (h) =>
+      h.projectId === projectId &&
+      h.sourceKind === sourceKind &&
+      h.cursor === cursor,
+  ).length;
+}
+
 /**
- * 用途：构建默认游标页响应；首屏最多 10 条，超出则返回固定 opaque nextCursor。
+ * 用途：构建默认游标页响应；可选 sourceKind 服务端过滤；
+ *   无筛选 nextCursor=esrc1 探针；有筛选 nextCursor=esrc2 探针。
  */
 function buildDefaultPagePayload(
   state: ProbeState,
   projectId: string,
   cursor: string | null,
+  sourceKind: string | null = null,
 ): { items: RevisionMeta[]; nextCursor: string | null } | { error: "cursor" } {
-  const all = state.revisions[projectId] || [];
+  const allRaw = state.revisions[projectId] || [];
+  const all =
+    sourceKind == null
+      ? allRaw
+      : allRaw.filter((it) => it.sourceKind === sourceKind);
+  const secondCursor =
+    sourceKind == null
+      ? state.pageSecondCursor
+      : (state.pageSecondCursorBySource[sourceKind] ??
+        PAGE_CURSOR_FILTER_SECOND);
   if (cursor == null) {
     const items = all.slice(0, 10);
-    const nextCursor =
-      all.length > 10 ? state.pageSecondCursor : null;
+    const nextCursor = all.length > 10 ? secondCursor : null;
     return { items, nextCursor };
   }
-  if (cursor === state.pageSecondCursor) {
+  if (cursor === secondCursor) {
+    const items = all.slice(10, 20);
+    return { items, nextCursor: null };
+  }
+  // 兼容无筛选默认第二页游标
+  if (sourceKind == null && cursor === state.pageSecondCursor) {
     const items = all.slice(10, 20);
     return { items, nextCursor: null };
   }
@@ -1284,7 +1354,7 @@ async function installRoutes(page: Page, state: ProbeState) {
       }
     }
 
-    // P12F-C 游标页：必须在旧 list 与 detail 之前匹配，避免 path 段 "page" 被当 revisionId
+    // P12F-C/D 游标页：必须在旧 list 与 detail 之前匹配，避免 path 段 "page" 被当 revisionId
     const revPageMatch = path.match(
       /^\/api\/projects\/([^/]+)\/editor-state-revisions\/page\/?$/,
     );
@@ -1294,6 +1364,9 @@ async function installRoutes(page: Page, state: ProbeState) {
       const rawCursor = url.searchParams.get("cursor");
       const cursor =
         rawCursor === null || rawCursor === "" ? null : rawCursor;
+      // sourceKind：缺省 null；空串也按字面记录（前端不得发送空串）
+      const rawSource = url.searchParams.get("sourceKind");
+      const sourceKind = rawSource === null ? null : rawSource;
       const postData = req.postData();
       if (!known.has(pid)) {
         state.forbiddenHits.push(`${method} ${path}`);
@@ -1305,10 +1378,11 @@ async function installRoutes(page: Page, state: ProbeState) {
         await json(route, { detail: "method_not_allowed" }, 405);
         return;
       }
-      // arrived：gate 前记录，含 cursor 与查询键
+      // arrived：gate 前记录，含 cursor/sourceKind 与查询键
       state.pageLog.push({
         projectId: pid,
         cursor,
+        sourceKind,
         method,
         path,
         postData,
@@ -1330,21 +1404,39 @@ async function installRoutes(page: Page, state: ProbeState) {
           },
           pageMode.status,
         );
-        state.pageCompleteLog.push({ projectId: pid, cursor });
+        state.pageCompleteLog.push({ projectId: pid, cursor, sourceKind });
         return;
       }
       if (state.pageResponseOverride != null) {
         await json(route, state.pageResponseOverride);
-        state.pageCompleteLog.push({ projectId: pid, cursor });
+        state.pageCompleteLog.push({ projectId: pid, cursor, sourceKind });
         return;
       }
       const cursorKey = cursor ?? "";
       if (state.pageResponseByCursor[cursorKey] != null) {
         await json(route, state.pageResponseByCursor[cursorKey]);
-        state.pageCompleteLog.push({ projectId: pid, cursor });
+        state.pageCompleteLog.push({ projectId: pid, cursor, sourceKind });
         return;
       }
-      const built = buildDefaultPagePayload(state, pid, cursor);
+      // 非法 sourceKind 字面量（探针侧）：仅用于失败路径；合法九类或 null 继续
+      if (
+        sourceKind !== null &&
+        !NINE_SOURCES.includes(sourceKind)
+      ) {
+        await json(
+          route,
+          {
+            detail: {
+              code: "editor_state_revision_source_invalid",
+              message: "修订来源筛选无效",
+            },
+          },
+          400,
+        );
+        state.pageCompleteLog.push({ projectId: pid, cursor, sourceKind });
+        return;
+      }
+      const built = buildDefaultPagePayload(state, pid, cursor, sourceKind);
       if ("error" in built) {
         await json(
           route,
@@ -1356,14 +1448,14 @@ async function installRoutes(page: Page, state: ProbeState) {
           },
           400,
         );
-        state.pageCompleteLog.push({ projectId: pid, cursor });
+        state.pageCompleteLog.push({ projectId: pid, cursor, sourceKind });
         return;
       }
       await json(route, {
         items: built.items,
         nextCursor: built.nextCursor,
       });
-      state.pageCompleteLog.push({ projectId: pid, cursor });
+      state.pageCompleteLog.push({ projectId: pid, cursor, sourceKind });
       return;
     }
 
@@ -2004,7 +2096,9 @@ async function assertNoIdLeak(
   expect(consoleBlob).not.toContain(SNAPSHOT_BODY_LEAK);
   expect(consoleBlob).not.toMatch(/\bsnapshot\b/i);
   expect(consoleBlob).not.toContain(PAGE_CURSOR_SECOND);
+  expect(consoleBlob).not.toContain(PAGE_CURSOR_FILTER_SECOND);
   expect(consoleBlob).not.toContain("esrc1_");
+  expect(consoleBlob).not.toContain("esrc2_");
 }
 
 function debounceMs(mode: Mode) {
@@ -6251,5 +6345,896 @@ test.describe("P12F-C 商务标修订历史加载更多", () => {
     expect(guards.pageErrors).toEqual([]);
     expect(await guards.readUnhandled()).toEqual([]);
     await assertNoIdLeak(page, state, guards.consoleLogs);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P12F-D 修订历史来源筛选
+// ---------------------------------------------------------------------------
+
+/** 九类固定中文标签顺序（与 REVISION_SOURCE_LABELS 一致） */
+const NINE_SOURCE_LABELS_ORDERED = NINE_SOURCES.map((k) => SOURCE_LABELS[k]);
+
+test.describe("P12F-D 技术标修订历史来源筛选", () => {
+  test.describe.configure({ mode: "serial" });
+
+  test("P12F-D 技术标：筛选器九选项；默认无 query；选来源仅 sourceKind；同值不重发；第二页 esrc2；空态；失败不回退；在途禁用", async ({
+    page,
+  }) => {
+    const state = createProbeState("tech");
+    // 混排：11 条 task + 3 条 revise，保证筛选分页与空态
+    const taskSources = Array.from({ length: 11 }, () => "task");
+    const reviseSources = Array.from({ length: 3 }, () => "revise");
+    const seeded = seedRevisions(
+      state,
+      TECH_A,
+      14,
+      taskSources.concat(reviseSources),
+    );
+    state.pageSecondCursorBySource["task"] = PAGE_CURSOR_FILTER_SECOND;
+
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+
+    await openWorkspace(page, "tech", TECH_A);
+    expect(state.pageLog.length).toBe(0);
+    await expect(
+      page.getByTestId("editor-state-revision-source-filter"),
+    ).toHaveCount(0);
+
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(1);
+    // 默认首次展开精确无 query
+    expect(pageHitCountForSource(state, TECH_A, null)).toBe(1);
+    const firstHit = state.pageLog[0];
+    expect(firstHit.method).toBe("GET");
+    expect(firstHit.postData).toBeNull();
+    expect(firstHit.cursor).toBeNull();
+    expect(firstHit.sourceKind).toBeNull();
+    expect(firstHit.queryKeys).toEqual([]);
+    expect(firstHit.search).toBe("");
+
+    // 筛选器可见：默认“全部来源”+ 九中文选项
+    const filter = page.getByTestId("editor-state-revision-source-filter");
+    await expect(filter).toBeVisible();
+    await expect(filter).toBeEnabled();
+    const optionTexts = await filter.locator("option").allTextContents();
+    expect(optionTexts[0]).toBe("全部来源");
+    expect(optionTexts.slice(1)).toEqual(NINE_SOURCE_LABELS_ORDERED);
+    // 内部值不得作为可见文案泄漏到 option 文本（仅中文标签）
+    for (const sk of NINE_SOURCES) {
+      expect(optionTexts.join("\n")).not.toContain(sk);
+    }
+    await expect(filter).toHaveValue("");
+
+    // 选择「任务写入」= task：精确一次仅 sourceKind
+    await filter.selectOption({ label: "任务写入" });
+    await expect
+      .poll(() => pageHitCountForSource(state, TECH_A, "task"), {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    await expect
+      .poll(
+        () => pageCompleteCountForSourceCursor(state, TECH_A, "task", null),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    const filterHit = state.pageLog[state.pageLog.length - 1];
+    expect(filterHit.method).toBe("GET");
+    expect(filterHit.postData).toBeNull();
+    expect(filterHit.cursor).toBeNull();
+    expect(filterHit.sourceKind).toBe("task");
+    expect(filterHit.queryKeys).toEqual(["sourceKind"]);
+    expect(filterHit.search).toBe("?sourceKind=task");
+    for (const banned of [
+      "limit",
+      "offset",
+      "page",
+      "total",
+      "hasMore",
+      "source",
+      "search",
+      "q",
+      "cursor",
+    ]) {
+      expect(filterHit.queryKeys).not.toContain(banned);
+    }
+    // 仅 task 来源可见（11 条 → 首屏 10 + load-more）
+    for (let i = 0; i < 10; i++) {
+      await expect(
+        page.getByTestId(`editor-state-revision-source-${i}`),
+      ).toHaveText("任务写入");
+    }
+    await expect(
+      page.getByTestId("editor-state-revision-load-more"),
+    ).toBeVisible();
+
+    // 同值不重发：再次选同一选项不得 +1
+    const beforeSame = pageHitCountForSource(state, TECH_A, "task");
+    await filter.selectOption({ label: "任务写入" });
+    // 同值不触发请求：直接断言计数不变（禁止固定 sleep 冒充）
+    expect(pageHitCountForSource(state, TECH_A, "task")).toBe(beforeSame);
+
+    // 第二页成功前：PAGE_CURSOR_FILTER_SECOND 精确 HTTP 500
+    state.pageModeByCursor[PAGE_CURSOR_FILTER_SECOND] = {
+      kind: "http_error",
+      status: 500,
+    };
+    await page.getByTestId("editor-state-revision-load-more").click();
+    await expect
+      .poll(
+        () =>
+          pageHitCountForSourceCursor(
+            state,
+            TECH_A,
+            "task",
+            PAGE_CURSOR_FILTER_SECOND,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect
+      .poll(
+        () =>
+          pageCompleteCountForSourceCursor(
+            state,
+            TECH_A,
+            "task",
+            PAGE_CURSOR_FILTER_SECOND,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    const failHit = state.pageLog[state.pageLog.length - 1];
+    expect(failHit.sourceKind).toBe("task");
+    expect(failHit.cursor).toBe(PAGE_CURSOR_FILTER_SECOND);
+    expect(failHit.queryKeys.sort()).toEqual(
+      ["cursor", "sourceKind"].sort(),
+    );
+    expect(failHit.search).toContain("sourceKind=task");
+    expect(failHit.search).toContain(
+      `cursor=${encodeURIComponent(PAGE_CURSOR_FILTER_SECOND)}`,
+    );
+    // 筛选前 10 条、原中文来源与 load-more 按钮仍保留；第 11 条不存在
+    for (let i = 0; i < 10; i++) {
+      await expect(
+        page.getByTestId(`editor-state-revision-item-${i}`),
+      ).toBeVisible();
+      await expect(
+        page.getByTestId(`editor-state-revision-source-${i}`),
+      ).toHaveText("任务写入");
+    }
+    await expect(page.getByTestId("editor-state-revision-item-10")).toHaveCount(
+      0,
+    );
+    await expect(
+      page.getByTestId("editor-state-revision-load-more"),
+    ).toBeVisible();
+    await expect(filter).toHaveValue("task");
+    await expect(
+      page.getByTestId("editor-state-revision-load-more-error"),
+    ).toHaveText(MSG_LOAD_MORE_FAIL);
+
+    // 同 cursor/sourceKind 可点击重试：失败与成功各精确一次（同 cursor 总计 2）
+    state.pageModeByCursor[PAGE_CURSOR_FILTER_SECOND] = { kind: "ok" };
+    await page.getByTestId("editor-state-revision-load-more").click();
+    await expect
+      .poll(
+        () =>
+          pageHitCountForSourceCursor(
+            state,
+            TECH_A,
+            "task",
+            PAGE_CURSOR_FILTER_SECOND,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(2);
+    await expect
+      .poll(
+        () =>
+          pageCompleteCountForSourceCursor(
+            state,
+            TECH_A,
+            "task",
+            PAGE_CURSOR_FILTER_SECOND,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(2);
+    const secondHit = state.pageLog[state.pageLog.length - 1];
+    expect(secondHit.sourceKind).toBe("task");
+    expect(secondHit.cursor).toBe(PAGE_CURSOR_FILTER_SECOND);
+    expect(secondHit.queryKeys.sort()).toEqual(
+      ["cursor", "sourceKind"].sort(),
+    );
+    expect(secondHit.search).toContain("sourceKind=task");
+    expect(secondHit.search).toContain(
+      `cursor=${encodeURIComponent(PAGE_CURSOR_FILTER_SECOND)}`,
+    );
+    // 成功后第 11 条出现且错误消失；不得自动换 cursor/清空筛选
+    await expect(
+      page.getByTestId("editor-state-revision-item-10"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-source-10"),
+    ).toHaveText("任务写入");
+    await expect(
+      page.getByTestId("editor-state-revision-load-more-error"),
+    ).toHaveCount(0);
+    await expect(filter).toHaveValue("task");
+    // 同 cursor 总计精确 2（失败 1 + 成功 1），无自动换 cursor
+    expect(
+      pageHitCountForSourceCursor(
+        state,
+        TECH_A,
+        "task",
+        PAGE_CURSOR_FILTER_SECOND,
+      ),
+    ).toBe(2);
+    expect(
+      state.pageLog.filter(
+        (h) =>
+          h.projectId === TECH_A &&
+          h.sourceKind === "task" &&
+          h.cursor !== null &&
+          h.cursor !== PAGE_CURSOR_FILTER_SECOND,
+      ).length,
+    ).toBe(0);
+
+    // 空态：选 callback（无数据）
+    await filter.selectOption({ label: "解析回传" });
+    await expect
+      .poll(() => pageHitCountForSource(state, TECH_A, "callback"), {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    await expect(page.getByTestId("editor-state-revision-empty")).toBeVisible();
+    await expect(page.getByTestId("editor-state-revision-item-0")).toHaveCount(
+      0,
+    );
+    await expect(
+      page.getByTestId("editor-state-revision-load-more"),
+    ).toHaveCount(0);
+
+    // 失败：HTTP 500，显示列表失败 + 空态，不回退旧 task 列表；保留筛选供刷新
+    state.pageModeByProject[TECH_A] = { kind: "http_error", status: 500 };
+    await filter.selectOption({ label: "智能修订" });
+    await expect
+      .poll(() => pageHitCountForSource(state, TECH_A, "revise"), {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    await expect
+      .poll(
+        () => pageCompleteCountForSourceCursor(state, TECH_A, "revise", null),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-list-error"),
+    ).toHaveText(MSG_LIST_FAIL);
+    await expect(page.getByTestId("editor-state-revision-item-0")).toHaveCount(
+      0,
+    );
+    // 保留所选来源
+    await expect(filter).toHaveValue("revise");
+    // 刷新重试仍带 revise
+    state.pageModeByProject[TECH_A] = { kind: "ok" };
+    await page.getByTestId("editor-state-revision-refresh").click();
+    await expect
+      .poll(() => pageHitCountForSource(state, TECH_A, "revise"), {
+        timeout: 10_000,
+      })
+      .toBe(2);
+    const refreshHit = state.pageLog[state.pageLog.length - 1];
+    expect(refreshHit.sourceKind).toBe("revise");
+    expect(refreshHit.cursor).toBeNull();
+    expect(refreshHit.queryKeys).toEqual(["sourceKind"]);
+    await expect(
+      page.getByTestId("editor-state-revision-list-error"),
+    ).toHaveCount(0);
+    for (let i = 0; i < 3; i++) {
+      await expect(
+        page.getByTestId(`editor-state-revision-source-${i}`),
+      ).toHaveText("智能修订");
+    }
+
+    // 在途禁用 selector：挂起列表请求
+    const holdGate = createHoldGate();
+    state.pageModeByProject[TECH_A] = { kind: "hold", gate: holdGate };
+    await filter.selectOption({ label: "任务写入" });
+    await holdGate.waitUntilEntered(1);
+    await expect(filter).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-refresh"),
+    ).toBeDisabled();
+    holdGate.release();
+    state.pageModeByProject[TECH_A] = { kind: "ok" };
+    await expect
+      .poll(
+        () => pageCompleteCountForSourceCursor(state, TECH_A, "task", null),
+        { timeout: 10_000 },
+      )
+      .toBe(2);
+    await expect(filter).toBeEnabled();
+
+    expect(state.listLog.length).toBe(0);
+    expect(state.forbiddenHits).toEqual([]);
+    expect(state.externalHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+    await assertNoIdLeak(page, state, guards.consoleLogs);
+    // 零持久化：URL / localStorage / sessionStorage / document.cookie / console
+    const persist = await page.evaluate(() => {
+      const ls: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k) ls.push(`${k}=${localStorage.getItem(k)}`);
+      }
+      const ss: string[] = [];
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const k = sessionStorage.key(i);
+        if (k) ss.push(`${k}=${sessionStorage.getItem(k)}`);
+      }
+      return {
+        ls: ls.join("\n"),
+        ss: ss.join("\n"),
+        href: location.href,
+        cookie: document.cookie,
+      };
+    });
+    const storageBlob = `${persist.ls}\n${persist.ss}`;
+    const cookieBlob = persist.cookie ?? "";
+    // URL / localStorage / sessionStorage：筛选键与游标/正文不得落盘
+    for (const blob of [storageBlob, persist.href]) {
+      expect(blob).not.toContain("sourceKind");
+      expect(blob).not.toContain(PAGE_CURSOR_FILTER_SECOND);
+      expect(blob).not.toContain("esrc2_");
+      expect(blob).not.toMatch(/esr_[0-9a-f]{32}/);
+      expect(blob).not.toMatch(/esv_[0-9a-f]{32}/);
+      expect(blob).not.toContain(SNAPSHOT_BODY_LEAK);
+    }
+    // document.cookie：精确不含 sourceKind、九来源字面量、esrc2_、revision/version/正文
+    expect(cookieBlob).not.toContain("sourceKind");
+    expect(cookieBlob).not.toContain(PAGE_CURSOR_FILTER_SECOND);
+    expect(cookieBlob).not.toContain("esrc2_");
+    expect(cookieBlob).not.toContain(SNAPSHOT_BODY_LEAK);
+    expect(cookieBlob).not.toMatch(/esr_[0-9a-f]{32}/);
+    expect(cookieBlob).not.toMatch(/esv_[0-9a-f]{32}/);
+    for (const sk of NINE_SOURCES) {
+      expect(cookieBlob).not.toContain(sk);
+    }
+    for (const item of seeded) {
+      expect(cookieBlob).not.toContain(item.revisionId);
+      expect(cookieBlob).not.toContain(item.stateVersion);
+      expect(storageBlob).not.toContain(item.revisionId);
+      expect(storageBlob).not.toContain(item.stateVersion);
+    }
+    // URL 不带筛选
+    expect(page.url()).not.toContain("sourceKind");
+    expect(page.url()).not.toContain("esrc2_");
+    // console 保留游标/正文零泄漏（assertNoIdLeak 已检 revisionId/version）
+    const consoleBlob = guards.consoleLogs.join("\n");
+    expect(consoleBlob).not.toContain("sourceKind");
+    expect(consoleBlob).not.toContain(PAGE_CURSOR_FILTER_SECOND);
+    expect(consoleBlob).not.toContain("esrc2_");
+    expect(consoleBlob).not.toContain(SNAPSHOT_BODY_LEAK);
+    expect(seeded.length).toBe(14);
+  });
+
+  test("P12F-D 技术标：切换清意图；折叠保留；项目切换重置；迟到 arrived+complete 隔离；零旁路", async ({
+    page,
+  }) => {
+    const state = createProbeState("tech");
+    seedRevisions(
+      state,
+      TECH_A,
+      12,
+      Array.from({ length: 11 }, () => "task").concat(["revise"]),
+    );
+    seedRevisions(
+      state,
+      TECH_B,
+      5,
+      Array.from({ length: 5 }, () => "callback"),
+    );
+    state.pageSecondCursorBySource["task"] = PAGE_CURSOR_FILTER_SECOND;
+
+    const firstTask = state.revisions[TECH_A][0];
+    state.details[firstTask.revisionId].snapshot = {
+      ...state.details[firstTask.revisionId].snapshot,
+      chapters: [{ id: "ch", title: "筛选章节", body: "FILTER_BODY_LEAK" }],
+    };
+
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+
+    await openWorkspace(page, "tech", TECH_A);
+    await expandRevisionPanel(page);
+    await expect.poll(() => pageCompleteCount(state, TECH_A)).toBe(1);
+
+    // 展开摘要 + 选择 pair + 恢复确认，切换筛选应清空
+    await page.getByTestId("editor-state-revision-summary-0").click();
+    await expect
+      .poll(() => state.detailCompleteLog.length, { timeout: 10_000 })
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-summary-body-0"),
+    ).toBeVisible();
+    await page.getByTestId("editor-state-revision-pair-select-before-0").click();
+    await page.getByTestId("editor-state-revision-pair-select-after-1").click();
+    await page.getByTestId("editor-state-revision-restore-0").click();
+    await expect(
+      page.getByTestId("editor-state-revision-confirm-0"),
+    ).toBeVisible();
+
+    const filter = page.getByTestId("editor-state-revision-source-filter");
+    await filter.selectOption({ label: "任务写入" });
+    await expect
+      .poll(
+        () => pageCompleteCountForSourceCursor(state, TECH_A, "task", null),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    // 旧意图清空
+    await expect(
+      page.getByTestId("editor-state-revision-summary-body-0"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-confirm-0"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-pair-result"),
+    ).toHaveCount(0);
+
+    // 折叠再展开：保留筛选（内存），再次请求带 sourceKind
+    await page.getByTestId("editor-state-revision-toggle").click();
+    await expect(page.getByTestId("editor-state-revision-body")).toHaveCount(0);
+    const taskHitsBefore = pageHitCountForSource(state, TECH_A, "task");
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageHitCountForSource(state, TECH_A, "task"), {
+        timeout: 10_000,
+      })
+      .toBe(taskHitsBefore + 1);
+    await expect(
+      page.getByTestId("editor-state-revision-source-filter"),
+    ).toHaveValue("task");
+    const reopenHit = state.pageLog[state.pageLog.length - 1];
+    expect(reopenHit.sourceKind).toBe("task");
+    expect(reopenHit.cursor).toBeNull();
+    expect(reopenHit.queryKeys).toEqual(["sourceKind"]);
+
+    // 迟到隔离（首屏）：挂起 task 刷新；在途 selector 禁用；切 revise 前须先完成/作废
+    // 路径：挂起 → 折叠作废 → 释放 complete → 再展开选 revise，证明旧 success 不污染
+    const lateGate = createHoldGate();
+    state.pageModeByProject[TECH_A] = { kind: "hold", gate: lateGate };
+    await page.getByTestId("editor-state-revision-refresh").click();
+    await lateGate.waitUntilEntered(1);
+    const taskArrivedWhileHeld = pageHitCountForSourceCursor(
+      state,
+      TECH_A,
+      "task",
+      null,
+    );
+    const taskCompleteWhileHeld = pageCompleteCountForSourceCursor(
+      state,
+      TECH_A,
+      "task",
+      null,
+    );
+    // 在途：筛选器真实 disabled
+    await expect(filter).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-refresh"),
+    ).toBeDisabled();
+    // 折叠作废在途首屏
+    await page.getByTestId("editor-state-revision-toggle").click();
+    await expect(page.getByTestId("editor-state-revision-body")).toHaveCount(0);
+    lateGate.release();
+    await expect
+      .poll(
+        () => pageCompleteCountForSourceCursor(state, TECH_A, "task", null),
+        { timeout: 10_000 },
+      )
+      .toBe(taskCompleteWhileHeld + 1);
+    // 折叠态不得被迟到 success 打开
+    await expect(page.getByTestId("editor-state-revision-body")).toHaveCount(0);
+    expect(taskArrivedWhileHeld).toBe(
+      pageHitCountForSourceCursor(state, TECH_A, "task", null),
+    );
+
+    // 再展开（仍保留 task 筛选）后切换到 revise：精确新 sourceKind，清空旧列表意图
+    state.pageModeByProject[TECH_A] = { kind: "ok" };
+    const taskFirstBeforeReopen2 = pageHitCountForSourceCursor(
+      state,
+      TECH_A,
+      "task",
+      null,
+    );
+    await expandRevisionPanel(page);
+    await expect
+      .poll(
+        () => pageHitCountForSourceCursor(state, TECH_A, "task", null),
+        { timeout: 10_000 },
+      )
+      .toBe(taskFirstBeforeReopen2 + 1);
+    await expect(filter).toHaveValue("task");
+    await expect(filter).toBeEnabled();
+    const reviseCompleteBefore = pageCompleteCountForSourceCursor(
+      state,
+      TECH_A,
+      "revise",
+      null,
+    );
+    await filter.selectOption({ label: "智能修订" });
+    await expect
+      .poll(
+        () => pageCompleteCountForSourceCursor(state, TECH_A, "revise", null),
+        { timeout: 10_000 },
+      )
+      .toBe(reviseCompleteBefore + 1);
+    await expect(filter).toHaveValue("revise");
+    await expect(
+      page.getByTestId("editor-state-revision-source-0"),
+    ).toHaveText("智能修订");
+    await expect(page.getByTestId("editor-state-revision-item-1")).toHaveCount(
+      0,
+    );
+
+    // load-more 迟到：选回 task 有第二页；在途 selector 真实 disabled；折叠作废后释放不污染
+    state.pageModeByProject[TECH_A] = { kind: "ok" };
+    const taskCompleteBefore = pageCompleteCountForSourceCursor(
+      state,
+      TECH_A,
+      "task",
+      null,
+    );
+    await filter.selectOption({ label: "任务写入" });
+    await expect
+      .poll(
+        () => pageCompleteCountForSourceCursor(state, TECH_A, "task", null),
+        { timeout: 10_000 },
+      )
+      .toBe(taskCompleteBefore + 1);
+    await expect(
+      page.getByTestId("editor-state-revision-load-more"),
+    ).toBeVisible();
+    const loadGate = createHoldGate();
+    state.pageModeByCursor[PAGE_CURSOR_FILTER_SECOND] = {
+      kind: "hold",
+      gate: loadGate,
+    };
+    await page.getByTestId("editor-state-revision-load-more").click();
+    await loadGate.waitUntilEntered(1);
+    // load-more 在途：筛选器/刷新/恢复真实 disabled（不得 force:true）
+    await expect(filter).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-refresh"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-restore-0"),
+    ).toBeDisabled();
+    // 折叠作废在途 load-more
+    await page.getByTestId("editor-state-revision-toggle").click();
+    await expect(page.getByTestId("editor-state-revision-body")).toHaveCount(0);
+    loadGate.release();
+    await expect
+      .poll(
+        () =>
+          pageCompleteCountForSourceCursor(
+            state,
+            TECH_A,
+            "task",
+            PAGE_CURSOR_FILTER_SECOND,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    // 折叠后不得渲染第二页或错误
+    await expect(page.getByTestId("editor-state-revision-body")).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-load-more-error"),
+    ).toHaveCount(0);
+    // 再展开：保留 task 筛选，精确一次首屏，无第二页污染
+    state.pageModeByCursor[PAGE_CURSOR_FILTER_SECOND] = { kind: "ok" };
+    const taskFirstBeforeReopen = pageHitCountForSourceCursor(
+      state,
+      TECH_A,
+      "task",
+      null,
+    );
+    await expandRevisionPanel(page);
+    await expect
+      .poll(
+        () => pageHitCountForSourceCursor(state, TECH_A, "task", null),
+        { timeout: 10_000 },
+      )
+      .toBe(taskFirstBeforeReopen + 1);
+    await expect(filter).toHaveValue("task");
+    await expect(page.getByTestId("editor-state-revision-item-0")).toBeVisible();
+    await expect(page.getByTestId("editor-state-revision-item-10")).toHaveCount(
+      0,
+    );
+
+    // 项目切换：重置全部来源
+    await openWorkspace(page, "tech", TECH_B);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageHitCountForSource(state, TECH_B, null), {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    const bFilter = page.getByTestId("editor-state-revision-source-filter");
+    await expect(bFilter).toHaveValue("");
+    const bHit = state.pageLog[state.pageLog.length - 1];
+    expect(bHit.projectId).toBe(TECH_B);
+    expect(bHit.sourceKind).toBeNull();
+    expect(bHit.queryKeys).toEqual([]);
+
+    expect(state.listLog.length).toBe(0);
+    expect(state.forbiddenHits).toEqual([]);
+    expect(state.externalHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+    await assertNoIdLeak(page, state, guards.consoleLogs);
+    // 零持久化：document.cookie + URL/storage/console
+    const persist2 = await page.evaluate(() => ({
+      href: location.href,
+      cookie: document.cookie,
+      ls: (() => {
+        const out: string[] = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k) out.push(`${k}=${localStorage.getItem(k)}`);
+        }
+        return out.join("\n");
+      })(),
+      ss: (() => {
+        const out: string[] = [];
+        for (let i = 0; i < sessionStorage.length; i++) {
+          const k = sessionStorage.key(i);
+          if (k) out.push(`${k}=${sessionStorage.getItem(k)}`);
+        }
+        return out.join("\n");
+      })(),
+    }));
+    const cookie2 = persist2.cookie ?? "";
+    for (const blob of [persist2.href, persist2.ls, persist2.ss]) {
+      expect(blob).not.toContain("sourceKind");
+      expect(blob).not.toContain("esrc2_");
+      expect(blob).not.toContain(PAGE_CURSOR_FILTER_SECOND);
+      expect(blob).not.toContain(SNAPSHOT_BODY_LEAK);
+    }
+    expect(cookie2).not.toContain("sourceKind");
+    expect(cookie2).not.toContain("esrc2_");
+    expect(cookie2).not.toContain(PAGE_CURSOR_FILTER_SECOND);
+    expect(cookie2).not.toContain(SNAPSHOT_BODY_LEAK);
+    expect(cookie2).not.toMatch(/esr_[0-9a-f]{32}/);
+    expect(cookie2).not.toMatch(/esv_[0-9a-f]{32}/);
+    for (const sk of NINE_SOURCES) {
+      expect(cookie2).not.toContain(sk);
+    }
+    const console2 = guards.consoleLogs.join("\n");
+    expect(console2).not.toContain("sourceKind");
+    expect(console2).not.toContain("esrc2_");
+    expect(console2).not.toContain(PAGE_CURSOR_FILTER_SECOND);
+  });
+});
+
+test.describe("P12F-D 商务标修订历史来源筛选", () => {
+  test.describe.configure({ mode: "serial" });
+
+  test("P12F-D 商务标：共享筛选入口；刷新/恢复保留筛选；零额外 API/外网/泄漏", async ({
+    page,
+  }) => {
+    const state = createProbeState("biz");
+    const seeded = seedRevisions(
+      state,
+      BIZ_A,
+      11,
+      Array.from({ length: 11 }, () => "callback"),
+    );
+    state.pageSecondCursorBySource["callback"] = PAGE_CURSOR_FILTER_SECOND;
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+    await page.clock.install();
+
+    await openWorkspace(page, "biz", BIZ_A);
+    expect(state.pageLog.length).toBe(0);
+
+    await expandRevisionPanel(page);
+    await expect.poll(() => pageCompleteCount(state, BIZ_A)).toBe(1);
+    expect(state.pageLog[0].sourceKind).toBeNull();
+    expect(state.pageLog[0].queryKeys).toEqual([]);
+
+    const filter = page.getByTestId("editor-state-revision-source-filter");
+    await expect(filter).toBeVisible();
+    await filter.selectOption({ label: "解析回传" });
+    await expect
+      .poll(() => pageHitCountForSource(state, BIZ_A, "callback"), {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    const selHit = state.pageLog[state.pageLog.length - 1];
+    expect(selHit.sourceKind).toBe("callback");
+    expect(selHit.queryKeys).toEqual(["sourceKind"]);
+    expect(selHit.search).toBe("?sourceKind=callback");
+
+    // 刷新保留筛选
+    const beforeRefresh = pageHitCountForSource(state, BIZ_A, "callback");
+    await page.getByTestId("editor-state-revision-refresh").click();
+    await expect
+      .poll(() => pageHitCountForSource(state, BIZ_A, "callback"), {
+        timeout: 10_000,
+      })
+      .toBe(beforeRefresh + 1);
+    expect(state.pageLog[state.pageLog.length - 1].sourceKind).toBe("callback");
+    await expect(filter).toHaveValue("callback");
+
+    // 加载第二页后恢复：gate 在途禁用筛选/刷新/恢复；释放后唯一 restore + 唯一 editor-state GET + 只重载筛选第一页
+    await page.getByTestId("editor-state-revision-load-more").click();
+    await expect
+      .poll(
+        () =>
+          pageCompleteCountForSourceCursor(
+            state,
+            BIZ_A,
+            "callback",
+            PAGE_CURSOR_FILTER_SECOND,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-item-10"),
+    ).toBeVisible();
+
+    const restoreGate = createHoldGate();
+    state.restoreMode = { kind: "gate", gate: restoreGate, then: "ok" };
+    const pageBeforeRestore = pageHitCount(state, BIZ_A);
+    const pageFirstBeforeRestore = pageHitCountForSourceCursor(
+      state,
+      BIZ_A,
+      "callback",
+      null,
+    );
+    const getsBefore = state.editorGetLog.filter(
+      (g) => g.projectId === BIZ_A,
+    ).length;
+    const expectedAtConfirm = state.projects[BIZ_A].stateVersion;
+    await page.getByTestId("editor-state-revision-restore-0").click();
+    await page.getByTestId("editor-state-revision-confirm-restore-0").click();
+    // POST 到达（gate entered）后：来源筛选器、刷新、恢复相关交互真实在途禁用（不得 force:true）
+    await restoreGate.waitUntilEntered(1);
+    expect(state.restoreLog.length).toBe(0);
+    await expect(filter).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-refresh"),
+    ).toBeDisabled();
+    // 确认态在途：确认/取消真实 disabled（restore 主按钮此时由 confirm 区替代，不得 force:true）
+    await expect(
+      page.getByTestId("editor-state-revision-confirm-restore-0"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-cancel-restore-0"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-confirm-restore-0"),
+    ).toHaveText("恢复中…");
+    // 在途不得提前重载 page / editor-state
+    expect(pageHitCount(state, BIZ_A)).toBe(pageBeforeRestore);
+    expect(
+      state.editorGetLog.filter((g) => g.projectId === BIZ_A).length,
+    ).toBe(getsBefore);
+
+    restoreGate.release();
+    state.restoreMode = { kind: "ok" };
+    await expect
+      .poll(() => state.restoreLog.length, { timeout: 10_000 })
+      .toBe(1);
+    expect(state.restoreLog.length).toBe(1);
+    expect(state.restoreLog[0].body).toEqual({
+      expectedStateVersion: expectedAtConfirm,
+    });
+    // 唯一 editor-state GET
+    await expect
+      .poll(
+        () =>
+          state.editorGetLog.filter((g) => g.projectId === BIZ_A).length -
+          getsBefore,
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    // 只重载筛选第一页（callback + null cursor 精确 +1；总 page +1）
+    await expect
+      .poll(() => pageHitCount(state, BIZ_A) - pageBeforeRestore, {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    await expect
+      .poll(
+        () =>
+          pageHitCountForSourceCursor(state, BIZ_A, "callback", null) -
+          pageFirstBeforeRestore,
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect
+      .poll(
+        () =>
+          pageCompleteCountForSourceCursor(state, BIZ_A, "callback", null),
+        { timeout: 10_000 },
+      )
+      .toBe(pageFirstBeforeRestore + 1);
+    const reloadHit = state.pageLog[state.pageLog.length - 1];
+    expect(reloadHit.sourceKind).toBe("callback");
+    expect(reloadHit.cursor).toBeNull();
+    expect(reloadHit.queryKeys).toEqual(["sourceKind"]);
+    expect(reloadHit.search).toBe("?sourceKind=callback");
+    await expect(filter).toHaveValue("callback");
+    await expect(filter).toBeEnabled();
+    // 恢复后仍最多首屏
+    await expect(page.getByTestId("editor-state-revision-item-10")).toHaveCount(
+      0,
+    );
+
+    expect(state.listLog.length).toBe(0);
+    expect(state.forbiddenHits).toEqual([]);
+    expect(state.externalHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+    await assertNoIdLeak(page, state, guards.consoleLogs);
+    // 零持久化：document.cookie + URL/storage/console
+    const persistBiz = await page.evaluate(() => ({
+      href: location.href,
+      cookie: document.cookie,
+      ls: (() => {
+        const out: string[] = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k) out.push(`${k}=${localStorage.getItem(k)}`);
+        }
+        return out.join("\n");
+      })(),
+      ss: (() => {
+        const out: string[] = [];
+        for (let i = 0; i < sessionStorage.length; i++) {
+          const k = sessionStorage.key(i);
+          if (k) out.push(`${k}=${sessionStorage.getItem(k)}`);
+        }
+        return out.join("\n");
+      })(),
+    }));
+    const cookieBiz = persistBiz.cookie ?? "";
+    for (const blob of [persistBiz.href, persistBiz.ls, persistBiz.ss]) {
+      expect(blob).not.toContain("sourceKind");
+      expect(blob).not.toContain("esrc2_");
+      expect(blob).not.toContain(PAGE_CURSOR_FILTER_SECOND);
+      expect(blob).not.toContain(SNAPSHOT_BODY_LEAK);
+    }
+    expect(cookieBiz).not.toContain("sourceKind");
+    expect(cookieBiz).not.toContain("esrc2_");
+    expect(cookieBiz).not.toContain(PAGE_CURSOR_FILTER_SECOND);
+    expect(cookieBiz).not.toContain(SNAPSHOT_BODY_LEAK);
+    expect(cookieBiz).not.toMatch(/esr_[0-9a-f]{32}/);
+    expect(cookieBiz).not.toMatch(/esv_[0-9a-f]{32}/);
+    for (const sk of NINE_SOURCES) {
+      expect(cookieBiz).not.toContain(sk);
+    }
+    for (const item of seeded) {
+      expect(cookieBiz).not.toContain(item.revisionId);
+      expect(cookieBiz).not.toContain(item.stateVersion);
+    }
+    const consoleBiz = guards.consoleLogs.join("\n");
+    expect(consoleBiz).not.toContain("sourceKind");
+    expect(consoleBiz).not.toContain("esrc2_");
+    expect(consoleBiz).not.toContain(PAGE_CURSOR_FILTER_SECOND);
+    expect(consoleBiz).not.toContain(SNAPSHOT_BODY_LEAK);
+    expect(seeded.length).toBe(11);
   });
 });

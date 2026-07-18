@@ -1,13 +1,14 @@
 """
-模块：P12C-C1 / P12F-A / P12F-B editor-state 修订历史只读服务
-用途：默认最近 10 条修订元数据列表、键集游标页与单条按需详情；绝不加载 snapshot_json。
+模块：P12C-C1 / P12F-A / P12F-B / P12F-D editor-state 修订历史只读服务
+用途：默认最近 10 条修订元数据列表、键集游标页、可选 sourceKind 筛选与单条按需详情；
+  绝不加载 snapshot_json。
 对接：api.editor_state_revisions；EditorStateRevisionRow；
   editor_state_service / editor_state_revision_service 权威常量与算法。
 二次开发：
   - 全程只读：禁止 commit/rollback/flush/refresh/锁/审计/写配额/读当前 editor-state/检查点；
   - 项目校验只投影 Project.id；列表/页五列投影；详情六列 + revision/workspace/project 三重作用域；
   - 列表上限 MAX_REVISIONS_LIST 与页大小 REVISION_PAGE_SIZE 字面量固定 10，禁止绑定写入保留 20；
-  - 游标页 LIMIT 11 前瞻、键集谓词、esrc1_ 规范往返；禁止偏移分页/总数查询/正文投影；
+  - 游标页 LIMIT 11 前瞻、键集谓词；无筛选 esrc1_{i,t}；有筛选 esrc2_{i,s,t} 且与 sourceKind 绑定；
   - 13 键/规范 JSON/版本/来源必须委托既有权威实现，禁止第二套哈希或来源枚举；
   - 任一损坏收敛固定 corrupt，不反射正文/ID/版本/SQL/路径/异常。
 """
@@ -39,8 +40,11 @@ REVISION_ID_PATTERN = re.compile(r"^esr_[0-9a-f]{32}$")
 
 # P12F-B 规范游标：前缀 + 无填充 base64url(紧凑 JSON{"i","t"})
 CURSOR_PREFIX = "esrc1_"
+# P12F-D 筛选游标：前缀 + 无填充 base64url(紧凑 JSON{"i","s","t"})
+CURSOR_PREFIX_V2 = "esrc2_"
 CURSOR_MAX_LEN = 192
 CURSOR_PAYLOAD_KEYS = frozenset({"i", "t"})
+CURSOR_PAYLOAD_KEYS_V2 = frozenset({"i", "s", "t"})
 # UTC 微秒时间位置合法闭区间（含 0 与 9999-12-31 23:59:59.999999）
 CURSOR_T_MIN = 0
 CURSOR_T_MAX = 253402300799_999999
@@ -53,6 +57,8 @@ CODE_REVISION_CORRUPT = "editor_state_revision_corrupt"
 MSG_REVISION_CORRUPT = "修订记录数据损坏，无法读取"
 CODE_CURSOR_INVALID = "editor_state_revision_cursor_invalid"
 MSG_CURSOR_INVALID = "修订分页游标无效"
+CODE_SOURCE_INVALID = "editor_state_revision_source_invalid"
+MSG_SOURCE_INVALID = "修订来源筛选无效"
 
 
 class EditorStateRevisionHistoryError(Exception):
@@ -85,6 +91,30 @@ def _cursor_invalid() -> EditorStateRevisionHistoryError:
     )
 
 
+def _source_invalid() -> EditorStateRevisionHistoryError:
+    """用途：统一构造脱敏非法来源筛选错误，禁止反射输入/枚举细节。"""
+    return EditorStateRevisionHistoryError(
+        400, CODE_SOURCE_INVALID, MSG_SOURCE_INVALID
+    )
+
+
+def _normalize_source_kind_filter(source_kind: str | None) -> str | None:
+    """
+    用途：规范化可选 sourceKind 筛选。
+    规则：None 表示全部；空串/空白/大小写变体/别名/非法值固定 source_invalid。
+    """
+    if source_kind is None:
+        return None
+    if not isinstance(source_kind, str):
+        raise _source_invalid() from None
+    # 缺省由调用方传 None；显式空串/空白/非权威字面量一律 400，不 strip 后接纳
+    if source_kind == "" or source_kind.strip() != source_kind or source_kind.strip() == "":
+        raise _source_invalid() from None
+    if source_kind not in REVISION_SOURCE_KINDS:
+        raise _source_invalid() from None
+    return source_kind
+
+
 def _as_utc(dt: datetime) -> datetime:
     """用途：将 datetime 规范为 UTC aware，供微秒编解码。"""
     if dt.tzinfo is None:
@@ -115,8 +145,23 @@ def _us_to_datetime(us: int) -> datetime:
 
 
 def _canonical_cursor_body(revision_id: str, created_at_us: int) -> str:
-    """用途：规范紧凑 JSON + 无填充 base64url 正文（不含前缀）。"""
+    """用途：esrc1 规范紧凑 JSON + 无填充 base64url 正文（不含前缀）。"""
     payload = {"i": revision_id, "t": created_at_us}
+    raw = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    return (
+        base64.urlsafe_b64encode(raw.encode("utf-8"))
+        .decode("ascii")
+        .rstrip("=")
+    )
+
+
+def _canonical_cursor_body_v2(
+    revision_id: str, source_kind: str, created_at_us: int
+) -> str:
+    """用途：esrc2 规范紧凑 JSON{"i","s","t"} + 无填充 base64url 正文。"""
+    payload = {"i": revision_id, "s": source_kind, "t": created_at_us}
     raw = json.dumps(
         payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
@@ -129,7 +174,7 @@ def _canonical_cursor_body(revision_id: str, created_at_us: int) -> str:
 
 def encode_revision_page_cursor(created_at: datetime, revision_id: str) -> str:
     """
-    用途：由本页末条排序位置生成 esrc1_ 规范游标。
+    用途：由本页末条排序位置生成 esrc1_ 规范游标（无筛选页）。
     二次开发：仅含时间微秒与修订 ID；完整长度必须 ≤ CURSOR_MAX_LEN。
       编码端必须严格校验 revision ID 与 UTC 微秒 t 的闭区间；
       存量非法游标位置（如 pre-1970）固定 corrupt，禁止生成解码器必拒的 nextCursor。
@@ -157,9 +202,44 @@ def encode_revision_page_cursor(created_at: datetime, revision_id: str) -> str:
         raise _corrupt() from None
 
 
+def encode_revision_page_cursor_v2(
+    created_at: datetime, revision_id: str, source_kind: str
+) -> str:
+    """
+    用途：有筛选页末条位置生成 esrc2_ 规范游标，载荷精确 {i,s,t}。
+    二次开发：s 必须为权威来源字面量；长度 ≤ CURSOR_MAX_LEN；非法存量位置固定 corrupt。
+    """
+    try:
+        if not isinstance(revision_id, str) or not REVISION_ID_PATTERN.fullmatch(
+            revision_id
+        ):
+            raise _corrupt() from None
+        if (
+            not isinstance(source_kind, str)
+            or source_kind not in REVISION_SOURCE_KINDS
+        ):
+            raise _corrupt() from None
+        if not isinstance(created_at, datetime):
+            raise _corrupt() from None
+        tus = _datetime_to_us(created_at)
+        if isinstance(tus, bool) or not isinstance(tus, int):
+            raise _corrupt() from None
+        if tus < CURSOR_T_MIN or tus > CURSOR_T_MAX:
+            raise _corrupt() from None
+        body = _canonical_cursor_body_v2(revision_id, source_kind, tus)
+        cursor = CURSOR_PREFIX_V2 + body
+        if len(cursor) > CURSOR_MAX_LEN:
+            raise _corrupt() from None
+        return cursor
+    except EditorStateRevisionHistoryError:
+        raise
+    except Exception:
+        raise _corrupt() from None
+
+
 def decode_revision_page_cursor(cursor: str) -> tuple[datetime, str]:
     """
-    用途：严格解码并规范往返校验游标；非法一律固定 cursor_invalid。
+    用途：严格解码 esrc1 并规范往返校验；非法一律固定 cursor_invalid。
     规则：前缀 esrc1_、长度、base64url、JSON 对象、精确键 i/t、类型、
       时间闭区间、esr_ ID，且重新编码必须与输入全等。
     """
@@ -168,6 +248,9 @@ def decode_revision_page_cursor(cursor: str) -> tuple[datetime, str]:
     if len(cursor) > CURSOR_MAX_LEN:
         raise _cursor_invalid() from None
     if not cursor.startswith(CURSOR_PREFIX):
+        raise _cursor_invalid() from None
+    # 防止 esrc1 前缀误匹配 esrc10_ 等；esrc2 不得走本函数
+    if cursor.startswith(CURSOR_PREFIX_V2):
         raise _cursor_invalid() from None
     body = cursor[len(CURSOR_PREFIX) :]
     if body == "" or "=" in body:
@@ -204,6 +287,55 @@ def decode_revision_page_cursor(cursor: str) -> tuple[datetime, str]:
     except Exception:
         raise _cursor_invalid() from None
     return created_at, rid
+
+
+def decode_revision_page_cursor_v2(cursor: str) -> tuple[datetime, str, str]:
+    """
+    用途：严格解码 esrc2 并规范往返校验；返回 (created_at, revision_id, source_kind)。
+    规则：前缀 esrc2_、精确键 i/s/t、s 为权威来源、规范全等往返。
+    """
+    if not isinstance(cursor, str) or cursor == "":
+        raise _cursor_invalid() from None
+    if len(cursor) > CURSOR_MAX_LEN:
+        raise _cursor_invalid() from None
+    if not cursor.startswith(CURSOR_PREFIX_V2):
+        raise _cursor_invalid() from None
+    body = cursor[len(CURSOR_PREFIX_V2) :]
+    if body == "" or "=" in body:
+        raise _cursor_invalid() from None
+    try:
+        pad = "=" * ((4 - len(body) % 4) % 4)
+        raw = base64.b64decode(body + pad, altchars=b"-_", validate=True)
+        text = raw.decode("utf-8")
+        data = json.loads(text)
+    except Exception:
+        raise _cursor_invalid() from None
+    if not isinstance(data, dict):
+        raise _cursor_invalid() from None
+    if set(data.keys()) != CURSOR_PAYLOAD_KEYS_V2:
+        raise _cursor_invalid() from None
+    rid = data.get("i")
+    source = data.get("s")
+    tus = data.get("t")
+    if not isinstance(rid, str) or not REVISION_ID_PATTERN.fullmatch(rid):
+        raise _cursor_invalid() from None
+    if not isinstance(source, str) or source not in REVISION_SOURCE_KINDS:
+        raise _cursor_invalid() from None
+    if isinstance(tus, bool) or not isinstance(tus, int):
+        raise _cursor_invalid() from None
+    if tus < CURSOR_T_MIN or tus > CURSOR_T_MAX:
+        raise _cursor_invalid() from None
+    try:
+        expected = CURSOR_PREFIX_V2 + _canonical_cursor_body_v2(rid, source, tus)
+    except Exception:
+        raise _cursor_invalid() from None
+    if expected != cursor:
+        raise _cursor_invalid() from None
+    try:
+        created_at = _us_to_datetime(tus)
+    except Exception:
+        raise _cursor_invalid() from None
+    return created_at, rid, source
 
 
 def _materialize_one_or_none(result: Any) -> Any:
@@ -415,22 +547,62 @@ def list_editor_state_revisions_page(
     workspace_id: str,
     project_id: str,
     cursor: str | None = None,
+    source_kind: str | None = None,
 ) -> dict[str, Any]:
     """
-    用途：固定每页 10 条的只读键集分页；SQL 五列投影 + LIMIT 11 前瞻。
-    对接：GET /api/projects/{projectId}/editor-state-revisions/page[?cursor=]。
+    用途：固定每页 10 条的只读键集分页；可选 sourceKind 精确筛选；
+      SQL 五列投影 + LIMIT 11 前瞻。
+    对接：GET .../page[?sourceKind=&cursor=]。
     二次开发：
-      - 先项目存在性，再严格解码游标；非法游标固定 400，不反射输入；
-      - 带游标时使用 created_at/id 双键降序键集谓词，禁止偏移/总数；
+      - 先项目存在性（404 最优先），再处理筛选/游标；
+      - 规范或以 esrc2_ 开头的游标：缺筛选、非法筛选、与另一合法筛选错配
+        一律固定 cursor_invalid（不得先 source_invalid，禁止从游标采用来源）；
+      - 无 esrc2 形游标时：单独非法 sourceKind 仍 source_invalid；
+      - 无筛选仅 esrc1；有筛选仅 esrc2 且 s 必须与显式 sourceKind 全等；
+      - SQL 来源谓词只能使用通过显式 query 校验的 filter_kind；
       - 完整物化并校验最多 11 行（含 lookahead 损坏整页 corrupt）；
-      - 仅第 11 行存在时以第 10 条位置生成 nextCursor。
+      - 仅第 11 行存在时以第 10 条位置生成 nextCursor（esrc1 或 esrc2）。
     """
     _require_project_id(db, workspace_id, project_id)
 
+    # 契约：esrc2 形游标（规范或仅前缀）与缺筛选/非法筛选/错配均 cursor_invalid，
+    # 不得在规范化 sourceKind 时提前 source_invalid，也不得从游标采用来源。
+    esrc2_shaped = (
+        cursor is not None
+        and isinstance(cursor, str)
+        and cursor.startswith(CURSOR_PREFIX_V2)
+    )
+
     cursor_created_at: datetime | None = None
     cursor_id: str | None = None
-    if cursor is not None:
-        cursor_created_at, cursor_id = decode_revision_page_cursor(cursor)
+    if esrc2_shaped:
+        try:
+            filter_kind = _normalize_source_kind_filter(source_kind)
+        except EditorStateRevisionHistoryError as exc:
+            if exc.code == CODE_SOURCE_INVALID:
+                raise _cursor_invalid() from None
+            raise
+        if filter_kind is None:
+            # esrc2 缺显式筛选：固定 cursor_invalid，禁止采用游标内 s
+            raise _cursor_invalid() from None
+        cursor_created_at, cursor_id, cursor_source = (
+            decode_revision_page_cursor_v2(cursor)
+        )
+        if cursor_source != filter_kind:
+            raise _cursor_invalid() from None
+    else:
+        # 非 esrc2 形：非法来源仍 source_invalid；无筛选仅 esrc1
+        filter_kind = _normalize_source_kind_filter(source_kind)
+        if cursor is not None:
+            if filter_kind is None:
+                cursor_created_at, cursor_id = decode_revision_page_cursor(cursor)
+            else:
+                # 有合法筛选但游标非 esrc2 形（含 esrc1）→ v2 解码固定 cursor_invalid
+                cursor_created_at, cursor_id, cursor_source = (
+                    decode_revision_page_cursor_v2(cursor)
+                )
+                if cursor_source != filter_kind:
+                    raise _cursor_invalid() from None
 
     try:
         stmt = (
@@ -446,6 +618,8 @@ def list_editor_state_revisions_page(
                 EditorStateRevisionRow.project_id == project_id,
             )
         )
+        if filter_kind is not None:
+            stmt = stmt.where(EditorStateRevisionRow.source_kind == filter_kind)
         if cursor_created_at is not None and cursor_id is not None:
             stmt = stmt.where(
                 or_(
@@ -492,9 +666,14 @@ def list_editor_state_revisions_page(
     next_cursor: str | None = None
     if has_more and page_items:
         last = page_items[-1]
-        next_cursor = encode_revision_page_cursor(
-            last["created_at"], last["revision_id"]
-        )
+        if filter_kind is None:
+            next_cursor = encode_revision_page_cursor(
+                last["created_at"], last["revision_id"]
+            )
+        else:
+            next_cursor = encode_revision_page_cursor_v2(
+                last["created_at"], last["revision_id"], filter_kind
+            )
     return {"items": page_items, "next_cursor": next_cursor}
 
 

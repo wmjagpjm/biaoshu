@@ -1,13 +1,13 @@
 /**
- * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C editor-state 修订历史、对比、正文差异与游标页 API 封装
+ * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D editor-state 修订历史、对比、正文差异与游标页 API 封装
  * 用途：严格校验 list/page/detail/restore/comparison/body-diff/pair-body-diff 响应 shape；详情仅在 API 栈内解析并压缩为有界摘要。
- * 对接：GET|POST /api/projects/{id}/editor-state-revisions*；page 游标分页；comparison/body-diff/pair 只读 GET；apiFetch。
+ * 对接：GET|POST /api/projects/{id}/editor-state-revisions*；page 游标分页（可选 sourceKind）；comparison/body-diff/pair 只读 GET；apiFetch。
  * 二次开发：
  *   - 禁止把原始 snapshot 返回给 React；禁止本地生成 revisionId/version/cursor
  *   - 禁止把响应原文、路径、后端 detail、字段值/键名/游标拼进错误文案
  *   - 九类来源白名单；旧列表/页最多 10 条；comparison 顶层精确四键 + 13 键有序子序列
  *   - body-diff 顶层精确六键（current/target）；pair 顶层精确六键（before/after）；item 五键；hunk 二键
- *   - page 顶层精确 items/nextCursor；游标仅外壳校验，禁止解码/本地生成
+ *   - page 顶层精确 items/nextCursor；游标仅 esrc1_/esrc2_ 外壳校验，禁止解码/本地生成
  */
 
 import { apiFetch } from "../../shared/lib/api";
@@ -86,8 +86,11 @@ const PAGE_TOP_KEYS = ["items", "nextCursor"] as const;
 /** 游标完整长度上限（与后端合同对齐） */
 const MAX_PAGE_CURSOR_LEN = 192;
 
-/** 游标版本前缀 */
-const PAGE_CURSOR_PREFIX = "esrc1_";
+/** 无筛选游标版本前缀 */
+const PAGE_CURSOR_PREFIX_V1 = "esrc1_";
+
+/** 有筛选游标版本前缀（P12F-D） */
+const PAGE_CURSOR_PREFIX_V2 = "esrc2_";
 
 /** base64url 安全字符（无 =） */
 const PAGE_CURSOR_BODY_RE = /^[A-Za-z0-9_-]+$/;
@@ -678,18 +681,34 @@ export async function listEditorStateRevisions(
 
 /**
  * 用途：校验不透明游标外壳；禁止解码或本地生成。
- * 规则：完整长度 ≤192、无首尾空白、前缀 esrc1_、其余仅 base64url 安全字符且无 =。
+ * 规则：完整长度 ≤192、无首尾空白、前缀 esrc1_ 或 esrc2_、其余仅 base64url 安全字符且无 =。
  */
 export function isValidPageCursor(value: unknown): value is string {
   if (typeof value !== "string") return false;
   if (value.length === 0 || value.length > MAX_PAGE_CURSOR_LEN) return false;
   if (value.trim() !== value) return false;
-  if (!value.startsWith(PAGE_CURSOR_PREFIX)) return false;
-  const body = value.slice(PAGE_CURSOR_PREFIX.length);
+  let prefix: string | null = null;
+  if (value.startsWith(PAGE_CURSOR_PREFIX_V2)) {
+    prefix = PAGE_CURSOR_PREFIX_V2;
+  } else if (value.startsWith(PAGE_CURSOR_PREFIX_V1)) {
+    prefix = PAGE_CURSOR_PREFIX_V1;
+  } else {
+    return false;
+  }
+  const body = value.slice(prefix.length);
   if (body.length === 0) return false;
   if (body.includes("=")) return false;
   return PAGE_CURSOR_BODY_RE.test(body);
 }
+
+/**
+ * 模块：游标页查询参数（P12F-D）
+ * 四种精确组合：无参 / 仅 sourceKind / 仅 cursor / sourceKind+cursor。
+ */
+export type EditorStateRevisionPageQuery = {
+  cursor?: string | null;
+  sourceKind?: RevisionSourceKind | null;
+};
 
 /**
  * 用途：严格解析游标页；顶层精确 items/nextCursor；页内 ID 唯一；非空游标时恰好 10 条。
@@ -733,21 +752,48 @@ export function parseRevisionPage(raw: unknown): EditorStateRevisionPage {
 }
 
 /**
- * 用途：GET 游标页；首次无 query；后续仅 cursor=encodeURIComponent(opaque)。
- * 对接：GET /projects/{projectId}/editor-state-revisions/page[?cursor=]
- * 约束：禁止 limit/offset/page/total/hasMore/source/search/q；无 body。
+ * 用途：GET 游标页；支持无参、仅 sourceKind、仅 cursor、sourceKind+cursor 四种精确 GET。
+ * 对接：GET /projects/{projectId}/editor-state-revisions/page[?sourceKind=&cursor=]
+ * 约束：禁止 limit/offset/page/total/hasMore/source/search/q；无 body；禁止解码/生成游标。
+ * 兼容：第二参可为历史 cursor 字符串，或 {cursor, sourceKind} 对象。
  */
 export async function listEditorStateRevisionPage(
   projectId: string,
-  cursor?: string | null,
+  cursorOrQuery?: string | null | EditorStateRevisionPageQuery,
 ): Promise<EditorStateRevisionPage> {
+  let cursor: string | null | undefined;
+  let sourceKind: RevisionSourceKind | null | undefined;
+  if (
+    cursorOrQuery !== null &&
+    cursorOrQuery !== undefined &&
+    typeof cursorOrQuery === "object"
+  ) {
+    const q = cursorOrQuery as EditorStateRevisionPageQuery;
+    cursor = q.cursor;
+    sourceKind = q.sourceKind ?? undefined;
+  } else {
+    cursor = cursorOrQuery as string | null | undefined;
+    sourceKind = undefined;
+  }
+
   let path = `/projects/${encodeURIComponent(projectId)}/editor-state-revisions/page`;
-  // null/undefined → 首屏无 query；空字符串或其它非法游标 → 固定错误，不得静默退化成第一页
+  const parts: string[] = [];
+  // 仅合法九类字面量可进入 query；非法不得静默发送
+  if (sourceKind != null) {
+    if (!SOURCE_KIND_SET.has(sourceKind)) {
+      throw new Error("revision_page_source_invalid");
+    }
+    parts.push(`sourceKind=${encodeURIComponent(sourceKind)}`);
+  }
+  // null/undefined → 不带 cursor；空字符串或其它非法游标 → 固定错误
   if (cursor != null) {
     if (!isValidPageCursor(cursor)) {
       throw new Error("revision_page_cursor_invalid");
     }
-    path += `?cursor=${encodeURIComponent(cursor)}`;
+    parts.push(`cursor=${encodeURIComponent(cursor)}`);
+  }
+  if (parts.length > 0) {
+    path += `?${parts.join("&")}`;
   }
   const raw = await apiFetch<unknown>(path);
   return parseRevisionPage(raw);

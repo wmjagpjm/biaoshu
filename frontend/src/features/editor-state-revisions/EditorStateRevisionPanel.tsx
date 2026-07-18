@@ -1,7 +1,7 @@
 /**
- * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C 双工作区共用修订历史折叠面板
- * 用途：默认折叠零请求；展开游标页；手动加载更多至最多 20 条；按需摘要；按需与当前对比；
- *       按需正文差异；内存双侧修订选择与双修订正文差异；内联二次确认后 restore。
+ * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D 双工作区共用修订历史折叠面板
+ * 用途：默认折叠零请求；展开游标页；可选来源筛选；手动加载更多至最多 20 条；按需摘要；
+ *       按需与当前对比；按需正文差异；内存双侧选择与双修订正文差异；内联二次确认后 restore。
  * 对接：editorStateRevisionApi（含 page/comparison/body-diff/pair）；技术/商务 hook 的 restoreRevision 回调。
  * 二次开发：
  *   - 不渲染 revisionId/stateVersion/cursor/snapshot 正文/内部字段键/字段值/op 原值
@@ -24,12 +24,15 @@ import {
   getEditorStateRevisionSummary,
   listEditorStateRevisionPage,
   MAX_RETAINED_REVISIONS,
+  REVISION_SOURCE_KINDS,
+  REVISION_SOURCE_LABELS,
   type BodyDiffOp,
   type EditorStateRevisionBodyDiff,
   type EditorStateRevisionComparison,
   type EditorStateRevisionMeta,
   type EditorStateRevisionPairBodyDiff,
   type EditorStateRevisionSummary,
+  type RevisionSourceKind,
 } from "./editorStateRevisionApi";
 
 /** 恢复前内联确认固定文案（契约 §3） */
@@ -104,6 +107,11 @@ export function EditorStateRevisionPanel({
 }: EditorStateRevisionPanelProps) {
   const [expanded, setExpanded] = useState(false);
   const [items, setItems] = useState<ListItem[]>([]);
+  /**
+   * 来源筛选：""=全部来源；其余为权威九类字面量。
+   * 仅内存 + select 值；不写 URL/存储/Cookie。
+   */
+  const [sourceFilter, setSourceFilter] = useState<"" | RevisionSourceKind>("");
   /** 服务端 nextCursor；仅内存，不渲染 */
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
@@ -191,11 +199,14 @@ export function EditorStateRevisionPanel({
   const itemsRef = useRef<ListItem[]>([]);
   /** nextCursor 同步镜像 */
   const nextCursorRef = useRef<string | null>(null);
+  /** sourceFilter 同步镜像，供 loadList/load-more 在 setState 后立即读取 */
+  const sourceFilterRef = useRef<"" | RevisionSourceKind>("");
   const mountedRef = useRef(true);
 
   // 保持 ref 与 state 同步
   itemsRef.current = items;
   nextCursorRef.current = nextCursor;
+  sourceFilterRef.current = sourceFilter;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -252,7 +263,7 @@ export function EditorStateRevisionPanel({
     setPairBodyDiffLoading(false);
   }, []);
 
-  // 项目切换：重置面板，作废在途 page/load-more/detail/comparison/body-diff/pair/restore
+  // 项目切换：重置面板（含筛选→全部来源），作废在途 page/load-more/detail/comparison/body-diff/pair/restore
   useEffect(() => {
     sessionRef.current += 1;
     detailGenRef.current += 1;
@@ -263,6 +274,8 @@ export function EditorStateRevisionPanel({
     loadMoreInFlightRef.current = false;
     setExpanded(false);
     setItems([]);
+    setSourceFilter("");
+    sourceFilterRef.current = "";
     setNextCursor(null);
     setListError(null);
     setLoadMoreError(null);
@@ -315,19 +328,33 @@ export function EditorStateRevisionPanel({
       clearComparisonState();
       clearBodyDiffState();
       clearPairBodyDiffState();
+      // 绑定当前筛选（ref 可在 setState 后立即读取）
+      const filter = sourceFilterRef.current;
       try {
-        // 首屏改用游标页，禁止同时请求旧列表
-        const page = await listEditorStateRevisionPage(projectId);
+        // 首屏：全部来源无 query；有筛选仅 sourceKind
+        const page = await listEditorStateRevisionPage(
+          projectId,
+          filter
+            ? { sourceKind: filter }
+            : undefined,
+        );
         if (!mountedRef.current || session !== sessionRef.current) return;
+        // 筛选在请求期间被切换时，以 ref 为准再校验一次
+        if (sourceFilterRef.current !== filter) return;
         setItems(page.items);
         setNextCursor(page.nextCursor);
       } catch {
         if (!mountedRef.current || session !== sessionRef.current) return;
+        if (sourceFilterRef.current !== filter) return;
         setListError(MSG_LIST_FAIL);
         setItems([]);
         setNextCursor(null);
       } finally {
-        if (mountedRef.current && session === sessionRef.current) {
+        if (
+          mountedRef.current &&
+          session === sessionRef.current &&
+          sourceFilterRef.current === filter
+        ) {
           setListLoading(false);
         }
       }
@@ -343,6 +370,7 @@ export function EditorStateRevisionPanel({
 
   /**
    * 用途：手动加载更多；同步在途门 + 代次；成功顺序追加；失败保值可重试。
+   * 筛选第二页：当前 sourceKind + 服务端原 esrc2。
    */
   const handleLoadMore = useCallback(async () => {
     if (!expanded || !projectId) return;
@@ -354,14 +382,21 @@ export function EditorStateRevisionPanel({
     loadMoreInFlightRef.current = true;
     const myGen = ++loadMoreGenRef.current;
     const session = sessionRef.current;
+    const filter = sourceFilterRef.current;
     setLoadMoreLoading(true);
     setLoadMoreError(null);
     try {
-      const page = await listEditorStateRevisionPage(projectId, cursor);
+      const page = await listEditorStateRevisionPage(
+        projectId,
+        filter
+          ? { cursor, sourceKind: filter }
+          : { cursor },
+      );
       if (
         !mountedRef.current ||
         myGen !== loadMoreGenRef.current ||
-        session !== sessionRef.current
+        session !== sessionRef.current ||
+        sourceFilterRef.current !== filter
       ) {
         return;
       }
@@ -388,7 +423,8 @@ export function EditorStateRevisionPanel({
       if (
         !mountedRef.current ||
         myGen !== loadMoreGenRef.current ||
-        session !== sessionRef.current
+        session !== sessionRef.current ||
+        sourceFilterRef.current !== filter
       ) {
         return;
       }
@@ -401,12 +437,54 @@ export function EditorStateRevisionPanel({
       if (
         mountedRef.current &&
         myGen === loadMoreGenRef.current &&
-        session === sessionRef.current
+        session === sessionRef.current &&
+        sourceFilterRef.current === filter
       ) {
         setLoadMoreLoading(false);
       }
     }
   }, [expanded, projectId, listLoading, restoreBusy, loadMoreLoading]);
+
+  /**
+   * 用途：切换来源筛选；同值不重发；立即清空旧列表/意图并加载新第一页。
+   */
+  const handleSourceFilterChange = useCallback(
+    (raw: string) => {
+      if (!expanded || listLoading || restoreBusy || loadMoreLoading) return;
+      // 同值不重发
+      if (raw === sourceFilter) return;
+      let next: "" | RevisionSourceKind = "";
+      if (raw === "") {
+        next = "";
+      } else if (
+        (REVISION_SOURCE_KINDS as readonly string[]).includes(raw)
+      ) {
+        next = raw as RevisionSourceKind;
+      } else {
+        return;
+      }
+      // 同步写入 ref，保证随后 loadList 读到新筛选
+      sourceFilterRef.current = next;
+      setSourceFilter(next);
+      // 切换筛选：清空旧列表与意图，失败不回退旧结果
+      setItems([]);
+      setNextCursor(null);
+      setListError(null);
+      setLoadMoreError(null);
+      setStatusMessage(null);
+      setStatusTone(null);
+      const session = sessionRef.current;
+      void loadList(session);
+    },
+    [
+      expanded,
+      listLoading,
+      restoreBusy,
+      loadMoreLoading,
+      sourceFilter,
+      loadList,
+    ],
+  );
 
   const handleToggle = useCallback(() => {
     if (expanded) {
@@ -926,6 +1004,9 @@ export function EditorStateRevisionPanel({
   const showLoadMore = nextCursor != null;
   const loadMoreDisabled =
     loadMoreLoading || listLoading || restoreBusy || !nextCursor;
+  /** 列表/加载更多/恢复在途时禁用来源筛选器 */
+  const sourceFilterDisabled =
+    listLoading || loadMoreLoading || restoreBusy;
 
   return (
     <div
@@ -975,6 +1056,50 @@ export function EditorStateRevisionPanel({
           data-testid="editor-state-revision-body"
           style={{ marginTop: 10 }}
         >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              marginBottom: 8,
+              flexWrap: "wrap",
+            }}
+          >
+            <label
+              htmlFor="editor-state-revision-source-filter"
+              style={{
+                fontSize: 13,
+                color: "var(--text-muted, #4b5563)",
+              }}
+            >
+              来源
+            </label>
+            <select
+              id="editor-state-revision-source-filter"
+              data-testid="editor-state-revision-source-filter"
+              value={sourceFilter}
+              disabled={sourceFilterDisabled}
+              onChange={(e) => {
+                handleSourceFilterChange(e.target.value);
+              }}
+              style={{
+                fontSize: 13,
+                maxWidth: "100%",
+                padding: "4px 8px",
+                borderRadius: 6,
+                border: "1px solid var(--border, #e5e7eb)",
+                background: "var(--surface, #fff)",
+                color: "var(--text, #111827)",
+              }}
+            >
+              <option value="">全部来源</option>
+              {REVISION_SOURCE_KINDS.map((kind) => (
+                <option key={kind} value={kind}>
+                  {REVISION_SOURCE_LABELS[kind]}
+                </option>
+              ))}
+            </select>
+          </div>
           {statusMessage ? (
             <p
               data-testid="editor-state-revision-status"

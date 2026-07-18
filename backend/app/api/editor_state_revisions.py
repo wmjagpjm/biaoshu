@@ -1,8 +1,8 @@
 """
-模块：P12C-C1/C2/P12D-A/P12E-A/P12E-B/P12F-B editor-state 修订历史只读、
-  游标页、受限恢复、差异摘要与正文差异路由
-用途：项目最近 10 条修订元数据列表、键集游标页、单条按需详情、单条受限恢复、
-  与当前状态差异摘要、单条修订对当前章节正文差异、两条历史修订之间章节正文差异。
+模块：P12C-C1/C2/P12D-A/P12E-A/P12E-B/P12F-B/P12F-D editor-state 修订历史只读、
+  游标页、来源筛选、受限恢复、差异摘要与正文差异路由
+用途：项目最近 10 条修订元数据列表、键集游标页（可选 sourceKind）、单条按需详情、
+  单条受限恢复、与当前状态差异摘要、单/双修订正文差异。
 对接：/api/projects/{projectId}/editor-state-revisions*；
   editor_state_revision_history_service；
   editor_state_revision_restore_service；
@@ -14,6 +14,7 @@
   - 错误固定 code/message（409 另含 currentStateVersion），不反射 ID/正文/路径/SQL；
   - 未知查询参数不得改变固定排序/上限/来源全集/正文不可搜索边界；
   - 静态 /page 必须注册在动态 /{revision_id} 之前；页大小服务端固定 10；
+  - page 仅扩展可选 query 别名 sourceKind；旧列表路由完全不变；
   - comparison/body-diff 只读，禁止写库/锁/审计；
   - P12E-B 双修订 body-diff 两侧均经 C1 校验，禁止读取当前 editor-state；
   - 不得把 revision ID/state version/原始快照放入成功或错误响应。
@@ -23,7 +24,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_workspace_id
@@ -156,18 +157,19 @@ def list_editor_state_revisions_page(
     db: Annotated[Session, Depends(get_db)],
     workspace_id: Annotated[str, Depends(get_workspace_id)],
     cursor: str | None = None,
+    source_kind: Annotated[str | None, Query(alias="sourceKind")] = None,
 ) -> EditorStateRevisionPageOut:
     """
-    用途：固定每页 10 条的只读键集分页；可选 cursor 取下一页。
-    对接：P12F-B；editor_state_revision_history_service.list_editor_state_revisions_page。
-    二次开发：必须静态注册在 /{revision_id} 之前；非法游标固定 400；全程 no-store；
-      未知 limit/offset/page/source/search/q 不得改变固定页。
+    用途：固定每页 10 条的只读键集分页；可选 cursor 取下一页；可选 sourceKind 筛选。
+    对接：P12F-B/D；editor_state_revision_history_service.list_editor_state_revisions_page。
+    二次开发：必须静态注册在 /{revision_id} 之前；非法游标/来源固定 400；全程 no-store；
+      缺 sourceKind 表示全部；未知 limit/offset/page/source/search/q 不得改变固定页。
     """
     _no_store(response)
     try:
         data = (
             editor_state_revision_history_service.list_editor_state_revisions_page(
-                db, workspace_id, project_id, cursor
+                db, workspace_id, project_id, cursor, source_kind
             )
         )
     except EditorStateRevisionHistoryError as exc:
