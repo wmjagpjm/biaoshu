@@ -1,13 +1,13 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-18（P12F-F-A 后端与 P12F-F-B 共用前端搜索入口均已闭环）
+> **交接日期**：2026-07-18（P12F-F-A/B 搜索链已闭环；P12F-G-A 单条修订删除后端已完成只读审计，当前文档提交即冻结）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
 > **协作分支功能基线**：P12F-F-B 冻结=`4585388`、实现=`be2fe77`；P12F-F-A 冻结=`b2eed7c`、实现=`e6516e8`；P12F-E-B 冻结=`a31e50e`、实现=`f9127ec`；P12F-E-A 冻结=`af3798a`、实现=`c66b69d`、文档=`e1345ff`；P12F-D 冻结=`a2acdf3`、实现=`587df9a`；P13-A 冻结=`e8dfa61`、实现=`1509aa2`；P12F-C 冻结=`bb1ae3e`、实现=`fe99f5a`；P12F-B 冻结=`4ddd896`、实现=`c84a94d`；P12F-A 冻结=`e713fb3`、实现=`24f4cf2`；P12E-A 冻结=`5aa205c`、实现=`f9f067e`；P12E-B 冻结=`00ef081`、实现=`5a5b08a`；P12E-C 冻结=`8b40bf4`、实现=`b6a4375`；其余既有功能基线见本文 §11。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
 > **最新增量基线**：P12F-F-A/B 已交付不进入 URL 的独立 POST 有界可见内容搜索及技术/商务共用显式内存态入口；P12F-E-A/B 时间、P12F-D 来源和 P12F-A/B/C 分页语义继续复用。
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **本地状态**：P12F-F-A 冻结=`b2eed7c`、实现=`e6516e8`、闭环=`e843338` 已推送；P12F-F-B 冻结=`4585388`、实现=`be2fe77` 已推送，当前仅待本次中文文档闭环提交。
+> **本地状态**：P12F-F-A 冻结=`b2eed7c`、实现=`e6516e8`、闭环=`e843338`，P12F-F-B 冻结=`4585388`、实现=`be2fe77`、闭环=`94d255a` 均已推送；P12F-G-A 契约/计划已完成只读审计，冻结提交以当前文档提交为准。
 > **验收基线**：P12F-F-B 聚焦/history/技术 truth/商务 truth/checkpoint/后端专项/前端全量 **3/43/28/18/51/23/306 passed**；P12F-F-A 后端受影响回归/全量 **203/1096 passed**。**所有 Playwright E2E 共用 SQLite 重置库，必须显式 `--workers=1 --retries=0` 逐条串行运行，禁止并行。**
 
 ---
@@ -21,8 +21,8 @@
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
 当前进度：P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/B、P12E-A/B/C、P12F-A/B/C/D/E-A/E-B/F-A/F-B、P13-A、P9D、P9C-R1、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。P12F-F-B 冻结=`4585388`、实现=`be2fe77`；后端/前端全量基线为 1096/306 passed。
 当前状态：后端已支持来源/UTC 时间条件下最新 20 条候选的严格可见字段搜索，前端已完成技术/商务共用显式搜索入口及组合筛选、重载和迟到隔离。
-当前执行包：下一剩余主线包待只读审计与独立冻结；严禁沿用 P12F-F-B 三文件授权或把多个剩余能力合包。
-下一步：对路线图剩余主线做只读审计，独立选择并冻结一个最小包，再通过既有 Grok 消息箱下发 failure-first 实现。候选仍包括片段/高亮、自动搜索、缓存、来源多选、日期预设、命名/固定/删除、跨项目历史、导出/分享、多人协作及 SSE 扩展。
+当前执行包：P12F-G-A 单条修订删除后端。严格只改修订路由、实体注释，并新建独立删除服务与专项测试；空 query/body、单行三重作用域 DELETE、唯一 commit/失败 rollback、required bid_writer+CSRF、固定脱敏错误和五域零副作用必须闭合。
+下一步：提交并推送 P12F-G-A 冻结契约/计划，通过既有 Grok 消息箱下发四文件 failure-first 实现；Codex 独立审查并串行跑专项、受影响回归、auth 和后端全量。P12F-G-B 前端确认/重载、多选/批量/软删除、命名/固定、检查点删除、跨项目历史、多人协作及 SSE 不得混入。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -782,3 +782,13 @@ Codex 独立串行通过专项/受影响回归/后端全量 **23/203/1096 passed
 返修真实覆盖顶层 extra、元数据缺键/extra、重复 ID、21 项超限，DEL/C1、64/65 个 astral 码点边界，以及 A 搜索 parser `catch` 与 B page loading 的真实重叠。Codex 独立串行通过聚焦/history/技术 truth/商务 truth/checkpoint/后端专项/前端全量 **3/43/28/18/51/23/306 passed**，lint/build/diff-check/精确三文件/空暂存区/禁区扫描通过。
 
 最终 SHA-256：API=`4EB053C284A6F4059D559842B3A6C5C0AF829BDF08E26A8528E0760B0B02D433`，面板=`524D5AC6D494736492E4A18385DEE74C7F7547129888E322808548A17F8F81FF`，history E2E=`D7BFAE7EDD61747DE790FDC188E9C61959E93529AA1093F514E1B6BBCC7D63BB`。自动搜索/防抖、片段/高亮/分数、搜索历史/缓存、搜索游标/跨项目搜索、来源多选/日期预设、命名/固定/删除、导出/分享、多人协作和 SSE 扩展仍未实现，后续必须另包冻结。
+
+## P12F-G-A 单条修订删除后端冻结交接（2026-07-18）
+
+契约=`docs/p12f-revision-delete-backend-contract.md`、计划=`docs/plans/2026-07-18-p12f-revision-delete-backend-plan.md`。只读审计确认单条自动修订没有被其它业务表外键引用，当前 editor-state、手动/安全检查点和后续 transition 均不依赖修订行持续存在，因此最小方案无需新表、迁移、软删除或配额重算。
+
+冻结入口为无 query/body 的 `DELETE /api/projects/{projectId}/editor-state-revisions/{revisionId}`：成功严格空 204/no-store；query/body 固定脱敏 422；项目/跨空间与修订/跨项目固定脱敏 404；数据库故障 rollback 后固定 500。required 继续只允许当前空间 bid_writer 并校验 DELETE CSRF，disabled 保持本机兼容。
+
+严格四文件：修订路由、实体注释、新删除服务、新专项测试。服务只能先投影 `Project.id`，再以 workspace/project/revision 三谓词删除恰好一行并唯一 commit；禁止读取 snapshot/current editor-state/checkpoint，禁止范围删除、补写修订或 commit 后 refresh。实现前哈希：路由=`E56B0BF69A1DD425DFBF3FCD68F210E2664A9D693571E11467C462F10DDFDC08`，实体=`851D9A973DC90831DDCF372594BB65FA306D7C3E1676295D79798CB4984CFD21`；新服务/专项不存在。
+
+Grok 必须先只新增专项，以真实 405/能力缺失形成 failure-first，再实现三生产改动；不得暂存、提交或推送。P12F-G-B 前端确认/重载、多选/批量/软删除/回收站、命名/固定/标签、检查点删除、审计报表、跨项目历史、多人协作和 SSE/WebSocket 均未授权。
