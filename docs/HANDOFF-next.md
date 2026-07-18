@@ -21,8 +21,8 @@
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
 当前进度：P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/B、P12E-A/B/C、P12F-A/B/C/D/E-A/E-B/F-A/F-B/G-A/G-B/H、P13-A、P9D、P9C-R1、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。P12F-H 冻结=`0660145`、范围修订=`0db935b`/`aca68b6`、实现=`b4338ba`；后端/前端全量基线为 1140/315 passed。
 当前状态：修订历史已闭合来源、UTC 时间、可见字段搜索、游标分页、单条删除和可选展示名称；名称保存/覆盖/清除不重载历史，不影响搜索、游标、恢复或裁剪。
-当前执行包：无。P12F-H 已完成，契约=`docs/p12f-revision-display-name-contract.md`、计划=`docs/plans/2026-07-18-p12f-revision-display-name-plan.md`。
-下一步：先对剩余主线做只读审计并新建独立契约/计划/白名单，再通过 Grok 消息箱下发单一实现任务。固定/置顶若被选择，必须独立设计裁剪保护与配额语义；名称搜索、批量、检查点命名、跨项目历史、多人协作及 SSE 扩展不得未经审计合包。
+当前执行包：P12F-I 修订名称与可见内容联合搜索，契约=`docs/p12f-revision-display-name-search-contract.md`、计划=`docs/plans/2026-07-18-p12f-revision-display-name-search-plan.md`。冻结基线=`060191e`，严格四文件，不改接口、Schema、API 封装或数据库。
+下一步：提交并推送 P12F-I 冻结文档，通过 Grok 消息箱下发 failure-first 与实现；Codex 独立审查并逐条串行跑后端专项/兼容/全量和前端聚焦/history/checkpoint/truth/lint/build/全量。固定/置顶及裁剪保护继续不得混入。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -509,6 +509,8 @@ frontend/src/features/
 | docs/plans/2026-07-18-p12f-revision-delete-frontend-plan.md | P12F-G-B 三文件 failure-first 与串行验收计划 |
 | docs/p12f-revision-display-name-contract.md | P12F-H 单条展示名称、六键元数据、PATCH 与迟到隔离完成契约 |
 | docs/plans/2026-07-18-p12f-revision-display-name-plan.md | P12F-H 十七文件 failure-first、四轮返修与串行验收记录 |
+| docs/p12f-revision-display-name-search-contract.md | P12F-I 展示名称与可见内容联合搜索冻结契约 |
+| docs/plans/2026-07-18-p12f-revision-display-name-search-plan.md | P12F-I 四文件 failure-first、联合匹配与串行验收计划 |
 | docs/p12a-editor-state-manual-checkpoints-contract.md | P12A 手动检查点只读库冻结契约 |
 | docs/plans/2026-07-15-p12a-editor-state-manual-checkpoints-plan.md | P12A 七文件后端实施与验收计划 |
 | docs/p12b-editor-state-version-foundation-contract.md | P12B-A 全状态版本与可选 CAS 冻结契约 |
