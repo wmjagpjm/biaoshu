@@ -1,9 +1,10 @@
 /**
- * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B / P12F-F-B
- *       editor-state 修订历史、对比、正文差异、游标页与可见内容搜索 API 封装
- * 用途：严格校验 list/page/detail/restore/comparison/body-diff/pair-body-diff/search 响应 shape；详情仅在 API 栈内解析并压缩为有界摘要。
- * 对接：GET|POST /api/projects/{id}/editor-state-revisions*；page 游标分页（可选 sourceKind/createdFrom/createdBefore）；
- *       search POST body（query+可选来源/时间）；comparison/body-diff/pair 只读 GET；apiFetch。
+ * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B / P12F-F-B / P12F-G-B
+ *       editor-state 修订历史、对比、正文差异、游标页、可见内容搜索与单条删除 API 封装
+ * 用途：严格校验 list/page/detail/restore/comparison/body-diff/pair-body-diff/search 响应 shape；详情仅在 API 栈内解析并压缩为有界摘要；
+ *       单条 DELETE 无 query/body，成功依赖 204 空体。
+ * 对接：GET|POST|DELETE /api/projects/{id}/editor-state-revisions*；page 游标分页（可选 sourceKind/createdFrom/createdBefore）；
+ *       search POST body（query+可选来源/时间）；comparison/body-diff/pair 只读 GET；delete 无 body；apiFetch。
  * 二次开发：
  *   - 禁止把原始 snapshot 返回给 React；禁止本地生成 revisionId/version/cursor
  *   - 禁止把响应原文、路径、后端 detail、字段值/键名/游标/时间/关键词字面量拼进错误文案
@@ -13,6 +14,7 @@
  *   - page 顶层精确 items/nextCursor；游标仅 esrc1_/esrc2_/esrc3_ 外壳校验，禁止解码/本地生成
  *   - 时间 query 仅精确 24 字符 UTC 毫秒；顺序 sourceKind→createdFrom→createdBefore→cursor
  *   - search body 顺序 query→sourceKind→createdFrom→createdBefore；禁止 URL query/cursor
+ *   - delete 仅 method DELETE；禁止 query/body/retry/读取响应 JSON
  */
 
 import { apiFetch } from "../../shared/lib/api";
@@ -1090,6 +1092,27 @@ export async function restoreEditorStateRevision(
     },
   );
   return parseRestoreResult(raw);
+}
+
+/**
+ * 用途：DELETE 单条自动修订；无 query/body；成功 204 空体。
+ * 对接：DELETE /projects/{projectId}/editor-state-revisions/{revisionId}
+ * 约束：
+ *   - 非法 revisionId 在发请求前固定抛出内部错误
+ *   - init 精确仅 { method: "DELETE" }
+ *   - 不读响应 JSON、不重试、不导出响应体类型
+ */
+export async function deleteEditorStateRevision(
+  projectId: string,
+  revisionId: string,
+): Promise<void> {
+  if (!isValidRevisionId(revisionId)) {
+    throw new Error("revision_id_invalid");
+  }
+  await apiFetch<void>(
+    `/projects/${encodeURIComponent(projectId)}/editor-state-revisions/${encodeURIComponent(revisionId)}`,
+    { method: "DELETE" },
+  );
 }
 
 /**

@@ -1,11 +1,12 @@
 /**
- * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B / P12F-F-B
- *       双工作区修订历史、对比、正文差异、游标分页、来源与时间范围筛选、可见内容搜索前端 E2E
+ * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B / P12F-F-B / P12F-G-B
+ *       双工作区修订历史、对比、正文差异、游标分页、来源与时间范围筛选、可见内容搜索、单条删除前端 E2E
  * 用途：技术标/商务标证明默认折叠零请求、按需列表/摘要/对比/正文差异、双修订正文差异、
  *       二次确认 restore、游标页首屏与加载更多、来源筛选、本地时间范围应用/清除、
- *       显式内容搜索 POST、执行时 expected、唯一 editor-state GET、失败阻断、迟到隔离与数据最小化。
+ *       显式内容搜索 POST、单条删除确认/唯一 DELETE/成功重载/失败保留、
+ *       执行时 expected、唯一 editor-state GET、失败阻断、迟到隔离与数据最小化。
  * 对接：Playwright chromium headless workers=1 retries=0；route 探针
- *       （含 comparison/body-diff/pair/page/search arrived/complete/cursor/sourceKind/createdFrom/createdBefore/query body）。
+ *       （含 comparison/body-diff/pair/page/search/delete arrived/complete/cursor/sourceKind/createdFrom/createdBefore/query body）。
  * 二次开发：禁止固定 sleep、.or(...)、>=1 冒充、宽泛状态码、route fallback 假成功。
  */
 import {
@@ -14,6 +15,9 @@ import {
   type Page,
   type Route,
 } from "@playwright/test";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const TECH_A = "proj_e2e_p12cc3_tech_a";
 const TECH_B = "proj_e2e_p12cc3_tech_b";
@@ -96,6 +100,13 @@ const MSG_RESTORE_RELOAD_FAIL =
 const MSG_CHECKPOINT_CREATE_FAIL = "保存检查点失败，请确认后重试";
 const RESTORE_CONFIRM =
   "服务器当前内容会先保存为安全检查点，恢复替换技术标和商务标全部编辑态，尚未保存的本地修改不会写入。";
+/** P12F-G-B 单条删除确认固定文案 */
+const DELETE_CONFIRM =
+  "删除后无法恢复。当前编辑内容和检查点不会改变，确定删除这条修订吗？";
+/** P12F-G-B 删除成功固定文案 */
+const MSG_DELETE_OK = "已删除所选修订";
+/** P12F-G-B 删除失败固定文案 */
+const MSG_DELETE_FAIL = "删除修订失败，当前列表已保留";
 
 /** 权威 13 键固定顺序（与后端 CANONICAL_STATE_KEYS 对齐） */
 const CANONICAL_FIELD_ORDER = [
@@ -235,6 +246,22 @@ type DetailMode = { kind: "ok" } | { kind: "hold"; gate: HoldGate };
 type ComparisonMode = { kind: "ok" } | { kind: "hold"; gate: HoldGate };
 type BodyDiffMode = { kind: "ok" } | { kind: "hold"; gate: HoldGate };
 type PairBodyDiffMode = { kind: "ok" } | { kind: "hold"; gate: HoldGate };
+/** P12F-G-B 单条删除模式：正常 / 挂起 / HTTP 错误 */
+type DeleteMode =
+  | { kind: "ok" }
+  | { kind: "hold"; gate: HoldGate }
+  | { kind: "http_error"; status: number };
+
+/** P12F-G-B DELETE 探针到达记录：无 query/body */
+type DeleteProbeHit = {
+  projectId: string;
+  revisionId: string;
+  method: string;
+  path: string;
+  postData: string | null;
+  queryKeys: string[];
+  search: string;
+};
 
 /** page 探针到达记录：含 cursor/sourceKind/时间与查询键，供精确零旁路断言 */
 type PageProbeHit = {
@@ -399,6 +426,14 @@ type ProbeState = {
     beforeRevisionId: string;
     afterRevisionId: string;
   }>;
+  /** P12F-G-B DELETE 到达（gate 前） */
+  deleteLog: DeleteProbeHit[];
+  /** P12F-G-B DELETE 响应已 fulfill（await fulfill 返回后） */
+  deleteCompleteLog: Array<{
+    projectId: string;
+    revisionId: string;
+    status: number;
+  }>;
   editorGetLog: Array<{ projectId: string; path: string }>;
   putMode: PutMode;
   restoreMode: RestoreMode;
@@ -409,6 +444,7 @@ type ProbeState = {
   comparisonMode: ComparisonMode;
   bodyDiffMode: BodyDiffMode;
   pairBodyDiffMode: PairBodyDiffMode;
+  deleteMode: DeleteMode;
   restoreModeByProject: Record<string, RestoreMode>;
   listModeByProject: Record<string, ListMode>;
   pageModeByProject: Record<string, PageMode>;
@@ -426,6 +462,8 @@ type ProbeState = {
   pairBodyDiffModeByProject: Record<string, PairBodyDiffMode>;
   /** 按 before::after 固定 pair hold */
   pairBodyDiffModeByPairKey: Record<string, PairBodyDiffMode>;
+  deleteModeByProject: Record<string, DeleteMode>;
+  deleteModeByRevisionId: Record<string, DeleteMode>;
   listResponseOverride: unknown | null;
   pageResponseOverride: unknown | null;
   /** 按 cursor 键固定 page 响应（null cursor 用 ""） */
@@ -623,6 +661,8 @@ function createProbeState(mode: Mode): ProbeState {
     bodyDiffCompleteLog: [],
     pairBodyDiffLog: [],
     pairBodyDiffCompleteLog: [],
+    deleteLog: [],
+    deleteCompleteLog: [],
     editorGetLog: [],
     putMode: { kind: "ok" },
     restoreMode: { kind: "ok" },
@@ -633,6 +673,7 @@ function createProbeState(mode: Mode): ProbeState {
     comparisonMode: { kind: "ok" },
     bodyDiffMode: { kind: "ok" },
     pairBodyDiffMode: { kind: "ok" },
+    deleteMode: { kind: "ok" },
     restoreModeByProject: {},
     listModeByProject: {},
     pageModeByProject: {},
@@ -647,6 +688,8 @@ function createProbeState(mode: Mode): ProbeState {
     bodyDiffModeByRevisionId: {},
     pairBodyDiffModeByProject: {},
     pairBodyDiffModeByPairKey: {},
+    deleteModeByProject: {},
+    deleteModeByRevisionId: {},
     listResponseOverride: null,
     pageResponseOverride: null,
     pageResponseByCursor: {},
@@ -674,6 +717,45 @@ function createProbeState(mode: Mode): ProbeState {
 
 function resolveRestoreMode(state: ProbeState, projectId: string): RestoreMode {
   return state.restoreModeByProject[projectId] ?? state.restoreMode;
+}
+
+/** 用途：解析 DELETE 模式；按 revisionId 优先，其次 project，最后全局 */
+function resolveDeleteMode(
+  state: ProbeState,
+  projectId: string,
+  revisionId: string,
+): DeleteMode {
+  return (
+    state.deleteModeByRevisionId[revisionId] ??
+    state.deleteModeByProject[projectId] ??
+    state.deleteMode
+  );
+}
+
+/** 用途：DELETE arrived 计数（可按 project/revision 过滤） */
+function deleteHitCount(
+  state: ProbeState,
+  projectId?: string,
+  revisionId?: string,
+): number {
+  return state.deleteLog.filter(
+    (h) =>
+      (projectId == null || h.projectId === projectId) &&
+      (revisionId == null || h.revisionId === revisionId),
+  ).length;
+}
+
+/** 用途：DELETE complete 计数（可按 project/revision 过滤） */
+function deleteCompleteCount(
+  state: ProbeState,
+  projectId?: string,
+  revisionId?: string,
+): number {
+  return state.deleteCompleteLog.filter(
+    (h) =>
+      (projectId == null || h.projectId === projectId) &&
+      (revisionId == null || h.revisionId === revisionId),
+  ).length;
 }
 
 function resolveListMode(state: ProbeState, projectId: string): ListMode {
@@ -2338,6 +2420,92 @@ async function installRoutes(page: Page, state: ProbeState) {
         safetyCheckpointId: safetyId,
         stateVersion: restoredVersion,
         restoredAt: new Date().toISOString(),
+      });
+      return;
+    }
+
+    // P12F-G-B 单条物理删除：精确 DELETE，无 query/body；成功空 204 且突变探针 revisions/details
+    const revDeleteMatch = path.match(
+      /^\/api\/projects\/([^/]+)\/editor-state-revisions\/([^/]+)\/?$/,
+    );
+    if (revDeleteMatch && method === "DELETE") {
+      const pid = revDeleteMatch[1];
+      const revisionId = revDeleteMatch[2];
+      const queryKeys = [...url.searchParams.keys()];
+      const postData = req.postData();
+      if (!known.has(pid)) {
+        state.forbiddenHits.push(`${method} ${path}`);
+        await json(route, { detail: "not_found" }, 404);
+        return;
+      }
+      // arrived：gate 前记录
+      state.deleteLog.push({
+        projectId: pid,
+        revisionId,
+        method,
+        path,
+        postData,
+        queryKeys,
+        search: url.search,
+      });
+      // 无 query/body 约束：探测违规仍记录 arrived，并记 forbidden
+      if (queryKeys.length > 0 || url.search.length > 1) {
+        state.forbiddenHits.push(`${method} ${path}${url.search}`);
+      }
+      if (postData != null && postData !== "") {
+        state.forbiddenHits.push(`delete_body:${path}`);
+      }
+      const deleteMode = resolveDeleteMode(state, pid, revisionId);
+      if (deleteMode.kind === "hold") {
+        await deleteMode.gate.wait();
+      }
+      if (deleteMode.kind === "http_error") {
+        await json(
+          route,
+          {
+            detail: {
+              code: "editor_state_revision_delete_error",
+              message: "delete error",
+            },
+          },
+          deleteMode.status,
+        );
+        state.deleteCompleteLog.push({
+          projectId: pid,
+          revisionId,
+          status: deleteMode.status,
+        });
+        return;
+      }
+      // 成功：仅在 ok（hold 释放后亦走此路径）时突变探针状态；失败不得修改
+      const before = state.revisions[pid] || [];
+      const found = before.some((r) => r.revisionId === revisionId);
+      if (!found) {
+        await json(
+          route,
+          {
+            detail: {
+              code: "editor_state_revision_not_found",
+              message: "修订不存在",
+            },
+          },
+          404,
+        );
+        state.deleteCompleteLog.push({
+          projectId: pid,
+          revisionId,
+          status: 404,
+        });
+        return;
+      }
+      state.revisions[pid] = before.filter((r) => r.revisionId !== revisionId);
+      delete state.details[revisionId];
+      // 204 必须以空 body fulfill；禁止 JSON 体
+      await route.fulfill({ status: 204, body: "" });
+      state.deleteCompleteLog.push({
+        projectId: pid,
+        revisionId,
+        status: 204,
       });
       return;
     }
@@ -10325,5 +10493,1466 @@ test.describe("P12F-F-B 商务标共享与恢复", () => {
       expect(h.queryKeys).toEqual([]);
     }
     expect(seeded.length).toBe(6);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// P12F-G-B 单条修订删除前端（三用例互不 serial 跳过）
+// ---------------------------------------------------------------------------
+
+test.describe("P12F-G-B 技术标确认成功失败与重载", () => {
+  // 独立 describe，禁止跨用例 serial 首失败 did-not-run
+  test("P12F-G-B 技术标：确认前/取消零 DELETE；确认精确一次无 query/body；成功普通页与搜索重载；404/500 固定失败保值；零写旁路", async ({
+    page,
+  }) => {
+    const state = createProbeState("tech");
+    const SEARCH_MARK = "P12FGB_TECH_DEL_MARK";
+    const SEARCH_Q = "P12FGB_TECH_DEL";
+    const seeded = seedRevisions(
+      state,
+      TECH_A,
+      12,
+      Array.from({ length: 12 }, (_, i) => (i % 2 === 0 ? "task" : "revise")),
+    );
+    for (let i = 0; i < 8; i++) {
+      stampSearchableMarker(state, seeded[i].revisionId, SEARCH_MARK, "tech");
+    }
+    const target0 = seeded[0].revisionId;
+    // 删除 index0 后探针剩余 11 条，顺序为 seed 原 1..11
+    const orderAfterDel0 = seeded.slice(1).map((r) => r.revisionId);
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+
+    await openWorkspace(page, "tech", TECH_A);
+    expect(state.deleteLog.length).toBe(0);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(1);
+    for (let i = 0; i < 10; i++) {
+      await expect(
+        page.getByTestId(`editor-state-revision-item-${i}`),
+      ).toBeVisible();
+    }
+    await expect(
+      page.getByTestId("editor-state-revision-load-more"),
+    ).toBeVisible();
+
+    // 默认/展开后：DELETE=0
+    expect(state.deleteLog.length).toBe(0);
+    expect(state.deleteCompleteLog.length).toBe(0);
+
+    // 点击删除：仅进入确认，DELETE 仍为 0
+    await page.getByTestId("editor-state-revision-delete-0").click();
+    await expect(
+      page.getByTestId("editor-state-revision-confirm-delete-0"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-delete-confirm-text-0"),
+    ).toHaveText(DELETE_CONFIRM);
+    expect(state.deleteLog.length).toBe(0);
+    await expect(
+      page.getByTestId("editor-state-revision-toggle"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-refresh"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-source-filter"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-search-input"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-search-apply"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-load-more"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-restore-1"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-delete-1"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-summary-1"),
+    ).toBeDisabled();
+
+    // 取消：零 DELETE，确认关闭，列表不变
+    await page.getByTestId("editor-state-revision-cancel-delete-0").click();
+    await expect(
+      page.getByTestId("editor-state-revision-confirm-delete-0"),
+    ).toHaveCount(0);
+    expect(state.deleteLog.length).toBe(0);
+    expect(state.deleteCompleteLog.length).toBe(0);
+    await expect(
+      page.getByTestId("editor-state-revision-item-0"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-toggle"),
+    ).toBeEnabled();
+
+    // 确认删除成功：精确一次 DELETE 无 query/body；普通页重载第一批
+    const pageBeforeOk = pageHitCount(state, TECH_A);
+    const pageCompleteBeforeOk = pageCompleteCount(state, TECH_A);
+    const editorGetsBefore = state.editorGetLog.length;
+    const putBefore = state.putLog.length;
+    const restoreBefore = state.restoreLog.length;
+    const cpBefore = state.checkpointCreateLog.length;
+    const searchBefore = state.searchLog.length;
+    await page.getByTestId("editor-state-revision-delete-0").click();
+    await page.getByTestId("editor-state-revision-confirm-delete-0").click();
+    await expect
+      .poll(() => deleteCompleteCount(state, TECH_A, target0), {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    expect(deleteHitCount(state, TECH_A, target0)).toBe(1);
+    expect(state.deleteLog.length).toBe(1);
+    const delHit = state.deleteLog[0];
+    expect(delHit.method).toBe("DELETE");
+    expect(delHit.path).toBe(
+      `/api/projects/${TECH_A}/editor-state-revisions/${target0}`,
+    );
+    expect(delHit.queryKeys).toEqual([]);
+    expect(delHit.search).toBe("");
+    expect(delHit.postData).toBeNull();
+    expect(state.deleteCompleteLog[0].status).toBe(204);
+    expect(
+      state.revisions[TECH_A].some((r) => r.revisionId === target0),
+    ).toBe(false);
+    expect(state.details[target0]).toBeUndefined();
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(pageCompleteBeforeOk + 1);
+    expect(pageHitCount(state, TECH_A)).toBe(pageBeforeOk + 1);
+    const reloadHit = state.pageLog[state.pageLog.length - 1];
+    expect(reloadHit.projectId).toBe(TECH_A);
+    expect(reloadHit.cursor).toBeNull();
+    expect(reloadHit.method).toBe("GET");
+    expect(reloadHit.queryKeys).toEqual([]);
+    expect(state.searchLog.length).toBe(searchBefore);
+    await expect(page.getByTestId("editor-state-revision-status")).toHaveText(
+      MSG_DELETE_OK,
+    );
+    for (let i = 0; i < 10; i++) {
+      await expect(
+        page.getByTestId(`editor-state-revision-item-${i}`),
+      ).toBeVisible();
+    }
+    expect(
+      state.revisions[TECH_A].map((r) => r.revisionId),
+    ).toEqual(orderAfterDel0);
+    expect(state.editorGetLog.length).toBe(editorGetsBefore);
+    expect(state.putLog.length).toBe(putBefore);
+    expect(state.restoreLog.length).toBe(restoreBefore);
+    expect(state.checkpointCreateLog.length).toBe(cpBefore);
+    expect(state.externalHits).toEqual([]);
+
+    // 加载更多后删除：成功只回第一批
+    await page.getByTestId("editor-state-revision-load-more").click();
+    await expect
+      .poll(
+        () =>
+          pageCompleteCountForSourceCursor(
+            state,
+            TECH_A,
+            null,
+            PAGE_CURSOR_SECOND,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-item-10"),
+    ).toBeVisible();
+    const pageBeforeSecondDel = pageHitCount(state, TECH_A);
+    expect(state.revisions[TECH_A].length).toBe(11);
+    const delSecondId = state.revisions[TECH_A][0].revisionId;
+    await page.getByTestId("editor-state-revision-delete-0").click();
+    await page.getByTestId("editor-state-revision-confirm-delete-0").click();
+    await expect
+      .poll(() => deleteCompleteCount(state, TECH_A, delSecondId), {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(pageCompleteBeforeOk + 3);
+    await expect(
+      page.getByTestId("editor-state-revision-item-10"),
+    ).toHaveCount(0);
+    const afterSecondReload = state.pageLog[state.pageLog.length - 1];
+    expect(afterSecondReload.cursor).toBeNull();
+    expect(pageHitCount(state, TECH_A)).toBe(pageBeforeSecondDel + 1);
+
+    // 搜索态成功：保留 query 精确一次 POST search，无 page
+    for (const r of state.revisions[TECH_A]) {
+      stampSearchableMarker(state, r.revisionId, SEARCH_MARK, "tech");
+    }
+    const searchInput = page.getByTestId("editor-state-revision-search-input");
+    await searchInput.fill(SEARCH_Q);
+    await page.getByTestId("editor-state-revision-search-apply").click();
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(
+            state,
+            TECH_A,
+            SEARCH_Q,
+            null,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-search-active"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-item-0"),
+    ).toBeVisible();
+    // 精确绑定：探针列表长度、第 0 项 ID、snapshot 含标记 → DOM index 0
+    const probeAfterPageDeletes = state.revisions[TECH_A];
+    expect(probeAfterPageDeletes.length).toBe(10);
+    const searchTargetId = probeAfterPageDeletes[0].revisionId;
+    expect(
+      JSON.stringify(state.details[searchTargetId].snapshot),
+    ).toContain(SEARCH_MARK);
+    const pageBeforeSearchDel = pageHitCount(state, TECH_A);
+    const searchBeforeDel = searchHitCountForFilter(
+      state,
+      TECH_A,
+      SEARCH_Q,
+      null,
+      null,
+      null,
+    );
+    const searchCompleteBeforeDel = searchCompleteCountForFilter(
+      state,
+      TECH_A,
+      SEARCH_Q,
+      null,
+      null,
+      null,
+    );
+    const editorGetsBeforeSearchDel = state.editorGetLog.length;
+    const putBeforeSearchDel = state.putLog.length;
+    const restoreBeforeSearchDel = state.restoreLog.length;
+    const cpBeforeSearchDel = state.checkpointCreateLog.length;
+    await page.getByTestId("editor-state-revision-delete-0").click();
+    await page.getByTestId("editor-state-revision-confirm-delete-0").click();
+    await expect
+      .poll(() => deleteCompleteCount(state, TECH_A, searchTargetId), {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    expect(deleteHitCount(state, TECH_A, searchTargetId)).toBe(1);
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(
+            state,
+            TECH_A,
+            SEARCH_Q,
+            null,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(searchCompleteBeforeDel + 1);
+    expect(
+      searchHitCountForFilter(state, TECH_A, SEARCH_Q, null, null, null),
+    ).toBe(searchBeforeDel + 1);
+    expect(pageHitCount(state, TECH_A)).toBe(pageBeforeSearchDel);
+    const searchReload = state.searchLog[state.searchLog.length - 1];
+    expect(searchReload.method).toBe("POST");
+    expect(searchReload.query).toBe(SEARCH_Q);
+    expect(searchReload.queryKeys).toEqual([]);
+    expect(searchReload.bodyKeys).toEqual(["query"]);
+    expect(searchReload.body).toEqual({ query: SEARCH_Q });
+    await expect(page.getByTestId("editor-state-revision-status")).toHaveText(
+      MSG_DELETE_OK,
+    );
+    expect(
+      state.revisions[TECH_A].some(
+        (r) => r.revisionId === searchTargetId,
+      ),
+    ).toBe(false);
+    expect(state.editorGetLog.length).toBe(editorGetsBeforeSearchDel);
+    expect(state.putLog.length).toBe(putBeforeSearchDel);
+    expect(state.restoreLog.length).toBe(restoreBeforeSearchDel);
+    expect(state.checkpointCreateLog.length).toBe(cpBeforeSearchDel);
+
+    // 搜索态 DELETE 204 成功 + search 重载固定 HTTP 失败：双文案并存，不回退 page
+    for (const r of state.revisions[TECH_A]) {
+      stampSearchableMarker(state, r.revisionId, SEARCH_MARK, "tech");
+    }
+    const probeBeforeSearchReloadFail = state.revisions[TECH_A];
+    expect(probeBeforeSearchReloadFail.length).toBe(9);
+    const searchFailTargetId = probeBeforeSearchReloadFail[0].revisionId;
+    expect(
+      JSON.stringify(state.details[searchFailTargetId].snapshot),
+    ).toContain(SEARCH_MARK);
+    state.searchModeByProject[TECH_A] = {
+      kind: "http_error",
+      status: 500,
+    };
+    const delCompleteBeforeSearchReloadFail = deleteCompleteCount(
+      state,
+      TECH_A,
+      searchFailTargetId,
+    );
+    const delHitBeforeSearchReloadFail = deleteHitCount(
+      state,
+      TECH_A,
+      searchFailTargetId,
+    );
+    const searchArrivedBeforeReloadFail = searchHitCountForFilter(
+      state,
+      TECH_A,
+      SEARCH_Q,
+      null,
+      null,
+      null,
+    );
+    const searchCompleteBeforeReloadFail = searchCompleteCountForFilter(
+      state,
+      TECH_A,
+      SEARCH_Q,
+      null,
+      null,
+      null,
+    );
+    const pageBeforeSearchReloadFail = pageHitCount(state, TECH_A);
+    const pageCompleteBeforeSearchReloadFail = pageCompleteCount(
+      state,
+      TECH_A,
+    );
+    const editorGetsBeforeSearchReloadFail = state.editorGetLog.length;
+    const putBeforeSearchReloadFail = state.putLog.length;
+    const restoreBeforeSearchReloadFail = state.restoreLog.length;
+    const cpBeforeSearchReloadFail = state.checkpointCreateLog.length;
+    await page.getByTestId("editor-state-revision-delete-0").click();
+    await page.getByTestId("editor-state-revision-confirm-delete-0").click();
+    await expect
+      .poll(
+        () => deleteCompleteCount(state, TECH_A, searchFailTargetId),
+        { timeout: 10_000 },
+      )
+      .toBe(delCompleteBeforeSearchReloadFail + 1);
+    expect(deleteHitCount(state, TECH_A, searchFailTargetId)).toBe(
+      delHitBeforeSearchReloadFail + 1,
+    );
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(
+            state,
+            TECH_A,
+            SEARCH_Q,
+            null,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(searchCompleteBeforeReloadFail + 1);
+    expect(
+      searchHitCountForFilter(state, TECH_A, SEARCH_Q, null, null, null),
+    ).toBe(searchArrivedBeforeReloadFail + 1);
+    // DELETE 不重试；page 零新增
+    expect(deleteHitCount(state, TECH_A, searchFailTargetId)).toBe(
+      delHitBeforeSearchReloadFail + 1,
+    );
+    expect(pageHitCount(state, TECH_A)).toBe(pageBeforeSearchReloadFail);
+    expect(pageCompleteCount(state, TECH_A)).toBe(
+      pageCompleteBeforeSearchReloadFail,
+    );
+    await expect(page.getByTestId("editor-state-revision-status")).toHaveText(
+      MSG_DELETE_OK,
+    );
+    await expect(
+      page.getByTestId("editor-state-revision-list-error"),
+    ).toHaveText(MSG_SEARCH_FAIL);
+    await expect(
+      page.getByTestId("editor-state-revision-search-active"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-item-0"),
+    ).toHaveCount(0);
+    expect(
+      state.revisions[TECH_A].some(
+        (r) => r.revisionId === searchFailTargetId,
+      ),
+    ).toBe(false);
+    expect(state.editorGetLog.length).toBe(editorGetsBeforeSearchReloadFail);
+    expect(state.putLog.length).toBe(putBeforeSearchReloadFail);
+    expect(state.restoreLog.length).toBe(restoreBeforeSearchReloadFail);
+    expect(state.checkpointCreateLog.length).toBe(cpBeforeSearchReloadFail);
+    // 恢复 search 后显式刷新可重载
+    state.searchModeByProject[TECH_A] = { kind: "ok" };
+    const searchCompleteBeforeRecover = searchCompleteCountForFilter(
+      state,
+      TECH_A,
+      SEARCH_Q,
+      null,
+      null,
+      null,
+    );
+    await page.getByTestId("editor-state-revision-refresh").click();
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(
+            state,
+            TECH_A,
+            SEARCH_Q,
+            null,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(searchCompleteBeforeRecover + 1);
+    await expect(
+      page.getByTestId("editor-state-revision-list-error"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-item-0"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-search-active"),
+    ).toBeVisible();
+
+    // 清除搜索回到 page 态
+    const pageBeforeClearSearch = pageCompleteCount(state, TECH_A);
+    await page.getByTestId("editor-state-revision-search-clear").click();
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(pageBeforeClearSearch + 1);
+
+    // 普通 page：DELETE 204 成功 + page 重载固定 HTTP 失败
+    const probeBeforePageReloadFail = state.revisions[TECH_A];
+    expect(probeBeforePageReloadFail.length).toBe(8);
+    const pageReloadFailTargetId = probeBeforePageReloadFail[0].revisionId;
+    state.pageModeByProject[TECH_A] = {
+      kind: "http_error",
+      status: 500,
+    };
+    const delCompleteBeforePageReloadFail = deleteCompleteCount(
+      state,
+      TECH_A,
+      pageReloadFailTargetId,
+    );
+    const delHitBeforePageReloadFail = deleteHitCount(
+      state,
+      TECH_A,
+      pageReloadFailTargetId,
+    );
+    const pageArrivedBeforeReloadFail = pageHitCount(state, TECH_A);
+    const pageCompleteBeforeReloadFail = pageCompleteCount(state, TECH_A);
+    const searchBeforePageReloadFail = state.searchLog.length;
+    const editorGetsBeforePageReloadFail = state.editorGetLog.length;
+    const putBeforePageReloadFail = state.putLog.length;
+    const restoreBeforePageReloadFail = state.restoreLog.length;
+    const cpBeforePageReloadFail = state.checkpointCreateLog.length;
+    await page.getByTestId("editor-state-revision-delete-0").click();
+    await page.getByTestId("editor-state-revision-confirm-delete-0").click();
+    await expect
+      .poll(
+        () => deleteCompleteCount(state, TECH_A, pageReloadFailTargetId),
+        { timeout: 10_000 },
+      )
+      .toBe(delCompleteBeforePageReloadFail + 1);
+    expect(deleteHitCount(state, TECH_A, pageReloadFailTargetId)).toBe(
+      delHitBeforePageReloadFail + 1,
+    );
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(pageCompleteBeforeReloadFail + 1);
+    expect(pageHitCount(state, TECH_A)).toBe(pageArrivedBeforeReloadFail + 1);
+    // DELETE 不重试
+    expect(deleteHitCount(state, TECH_A, pageReloadFailTargetId)).toBe(
+      delHitBeforePageReloadFail + 1,
+    );
+    expect(state.searchLog.length).toBe(searchBeforePageReloadFail);
+    await expect(page.getByTestId("editor-state-revision-status")).toHaveText(
+      MSG_DELETE_OK,
+    );
+    await expect(
+      page.getByTestId("editor-state-revision-list-error"),
+    ).toHaveText(MSG_LIST_FAIL);
+    await expect(
+      page.getByTestId("editor-state-revision-item-0"),
+    ).toHaveCount(0);
+    expect(
+      state.revisions[TECH_A].some(
+        (r) => r.revisionId === pageReloadFailTargetId,
+      ),
+    ).toBe(false);
+    expect(state.editorGetLog.length).toBe(editorGetsBeforePageReloadFail);
+    expect(state.putLog.length).toBe(putBeforePageReloadFail);
+    expect(state.restoreLog.length).toBe(restoreBeforePageReloadFail);
+    expect(state.checkpointCreateLog.length).toBe(cpBeforePageReloadFail);
+    // 恢复 page 后刷新可重载
+    state.pageModeByProject[TECH_A] = { kind: "ok" };
+    const pageCompleteBeforeRecover = pageCompleteCount(state, TECH_A);
+    await page.getByTestId("editor-state-revision-refresh").click();
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(pageCompleteBeforeRecover + 1);
+    await expect(
+      page.getByTestId("editor-state-revision-list-error"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-item-0"),
+    ).toBeVisible();
+
+    // 500/404 失败保值：可见 time/source 序列 + 探针 ID 顺序 + 计数不变 + 确认关闭 + 按钮启用
+    const pageFailBase = pageCompleteCount(state, TECH_A);
+    expect(state.revisions[TECH_A].length).toBe(7);
+    const listIdsBeforeFail = state.revisions[TECH_A].map(
+      (r) => r.revisionId,
+    );
+    expect(listIdsBeforeFail.length).toBe(7);
+    const failTarget = state.revisions[TECH_A][0].revisionId;
+    const visibleFailCount = 7;
+    const timesBefore500: string[] = [];
+    const sourcesBefore500: string[] = [];
+    for (let i = 0; i < visibleFailCount; i++) {
+      timesBefore500.push(
+        await page.getByTestId(`editor-state-revision-time-${i}`).innerText(),
+      );
+      sourcesBefore500.push(
+        await page
+          .getByTestId(`editor-state-revision-source-${i}`)
+          .innerText(),
+      );
+    }
+    state.deleteModeByRevisionId[failTarget] = {
+      kind: "http_error",
+      status: 500,
+    };
+    const delBeforeFail = state.deleteLog.length;
+    const pageBeforeFail = pageHitCount(state, TECH_A);
+    const pageCompleteBeforeFail = pageCompleteCount(state, TECH_A);
+    const searchBeforeFail = state.searchLog.length;
+    const searchCompleteBeforeFail = searchCompleteCount(state, TECH_A);
+    await page.getByTestId("editor-state-revision-delete-0").click();
+    await page.getByTestId("editor-state-revision-confirm-delete-0").click();
+    await expect
+      .poll(() => deleteCompleteCount(state, TECH_A, failTarget), {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    expect(state.deleteLog.length).toBe(delBeforeFail + 1);
+    expect(pageHitCount(state, TECH_A)).toBe(pageBeforeFail);
+    expect(pageCompleteCount(state, TECH_A)).toBe(pageCompleteBeforeFail);
+    expect(state.searchLog.length).toBe(searchBeforeFail);
+    expect(searchCompleteCount(state, TECH_A)).toBe(searchCompleteBeforeFail);
+    expect(pageCompleteCount(state, TECH_A)).toBe(pageFailBase);
+    expect(state.revisions[TECH_A].map((r) => r.revisionId)).toEqual(
+      listIdsBeforeFail,
+    );
+    for (let i = 0; i < visibleFailCount; i++) {
+      await expect(
+        page.getByTestId(`editor-state-revision-time-${i}`),
+      ).toHaveText(timesBefore500[i]);
+      await expect(
+        page.getByTestId(`editor-state-revision-source-${i}`),
+      ).toHaveText(sourcesBefore500[i]);
+    }
+    await expect(page.getByTestId("editor-state-revision-status")).toHaveText(
+      MSG_DELETE_FAIL,
+    );
+    const failText = await page
+      .getByTestId("editor-state-revision-status")
+      .innerText();
+    expect(failText).not.toContain(failTarget);
+    expect(failText).not.toContain("delete error");
+    expect(failText).not.toContain("/editor-state-revisions/");
+    await expect(
+      page.getByTestId("editor-state-revision-confirm-delete-0"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-delete-0"),
+    ).toBeEnabled();
+    await expect(
+      page.getByTestId("editor-state-revision-restore-0"),
+    ).toBeEnabled();
+    await expect(
+      page.getByTestId("editor-state-revision-summary-0"),
+    ).toBeEnabled();
+    await expect(
+      page.getByTestId("editor-state-revision-refresh"),
+    ).toBeEnabled();
+
+    delete state.deleteModeByRevisionId[failTarget];
+    state.deleteModeByRevisionId[failTarget] = {
+      kind: "http_error",
+      status: 404,
+    };
+    const timesBefore404: string[] = [];
+    const sourcesBefore404: string[] = [];
+    for (let i = 0; i < visibleFailCount; i++) {
+      timesBefore404.push(
+        await page.getByTestId(`editor-state-revision-time-${i}`).innerText(),
+      );
+      sourcesBefore404.push(
+        await page
+          .getByTestId(`editor-state-revision-source-${i}`)
+          .innerText(),
+      );
+    }
+    const delBefore404 = state.deleteLog.length;
+    const pageBefore404 = pageHitCount(state, TECH_A);
+    const pageCompleteBefore404 = pageCompleteCount(state, TECH_A);
+    const searchBefore404 = state.searchLog.length;
+    const searchCompleteBefore404 = searchCompleteCount(state, TECH_A);
+    await page.getByTestId("editor-state-revision-delete-0").click();
+    await page.getByTestId("editor-state-revision-confirm-delete-0").click();
+    await expect
+      .poll(() => deleteCompleteCount(state, TECH_A, failTarget), {
+        timeout: 10_000,
+      })
+      .toBe(2);
+    expect(state.deleteLog.length).toBe(delBefore404 + 1);
+    expect(pageHitCount(state, TECH_A)).toBe(pageBefore404);
+    expect(pageCompleteCount(state, TECH_A)).toBe(pageCompleteBefore404);
+    expect(state.searchLog.length).toBe(searchBefore404);
+    expect(searchCompleteCount(state, TECH_A)).toBe(searchCompleteBefore404);
+    await expect(page.getByTestId("editor-state-revision-status")).toHaveText(
+      MSG_DELETE_FAIL,
+    );
+    expect(state.revisions[TECH_A].map((r) => r.revisionId)).toEqual(
+      listIdsBeforeFail,
+    );
+    for (let i = 0; i < visibleFailCount; i++) {
+      await expect(
+        page.getByTestId(`editor-state-revision-time-${i}`),
+      ).toHaveText(timesBefore404[i]);
+      await expect(
+        page.getByTestId(`editor-state-revision-source-${i}`),
+      ).toHaveText(sourcesBefore404[i]);
+    }
+    await expect(
+      page.getByTestId("editor-state-revision-confirm-delete-0"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-delete-0"),
+    ).toBeEnabled();
+    await expect(
+      page.getByTestId("editor-state-revision-restore-0"),
+    ).toBeEnabled();
+    await expect(
+      page.getByTestId("editor-state-revision-refresh"),
+    ).toBeEnabled();
+
+    // 全部 deleteLog 终态：postData 精确 null
+    for (const h of state.deleteLog) {
+      expect(h.postData).toBeNull();
+      expect(h.queryKeys).toEqual([]);
+      expect(h.search).toBe("");
+      expect(h.method).toBe("DELETE");
+    }
+
+    expect(state.listLog.length).toBe(0);
+    expect(state.forbiddenHits).toEqual([]);
+    expect(state.externalHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+    await assertNoIdLeak(page, state, guards.consoleLogs);
+  });
+});
+
+test.describe("P12F-G-B 技术标互斥与迟到隔离", () => {
+  test("P12F-G-B 技术标：确认前清意图；确认/在途控件真实 disabled；A 挂起切 B 后发 B；释放 A 不污染 B；旧删除后迟到 page/search 不污染", async ({
+    page,
+  }) => {
+    const state = createProbeState("tech");
+    const seededA = seedRevisions(state, TECH_A, 3, [
+      "browser_put",
+      "task",
+      "revise",
+    ]);
+    const seededB = seedRevisions(state, TECH_B, 2, ["callback", "task"]);
+    const revA0 = seededA[0].revisionId;
+    const revB0 = seededB[0].revisionId;
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+
+    await openWorkspace(page, "tech", TECH_A);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(1);
+
+    // 先建立摘要/比较/body-diff/pair/restore 意图
+    await page.getByTestId("editor-state-revision-summary-0").click();
+    await expect
+      .poll(
+        () =>
+          state.detailCompleteLog.filter((d) => d.revisionId === revA0).length,
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-summary-body-0"),
+    ).toBeVisible();
+    await page.getByTestId("editor-state-revision-compare-0").click();
+    await expect
+      .poll(
+        () =>
+          state.comparisonCompleteLog.filter((d) => d.revisionId === revA0)
+            .length,
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-comparison-0"),
+    ).toBeVisible();
+    await page.getByTestId("editor-state-revision-body-diff-0").click();
+    await expect
+      .poll(
+        () =>
+          state.bodyDiffCompleteLog.filter((d) => d.revisionId === revA0)
+            .length,
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-body-diff-result-0"),
+    ).toBeVisible();
+    await page.getByTestId("editor-state-revision-pair-select-before-0").click();
+    await page.getByTestId("editor-state-revision-pair-select-after-1").click();
+    await page.getByTestId("editor-state-revision-restore-1").click();
+    await expect(
+      page.getByTestId("editor-state-revision-confirm-restore-1"),
+    ).toBeVisible();
+
+    // 点击删除：确认前清除上述意图；DELETE=0
+    await page.getByTestId("editor-state-revision-delete-0").click();
+    expect(state.deleteLog.length).toBe(0);
+    await expect(
+      page.getByTestId("editor-state-revision-confirm-delete-0"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-summary-body-0"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-comparison-0"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-body-diff-result-0"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-confirm-restore-1"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-pair-result"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-toggle"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-refresh"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-source-filter"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-search-apply"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-summary-1"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-restore-1"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-delete-1"),
+    ).toBeDisabled();
+
+    // A 删除挂起
+    const gateA = createHoldGate();
+    state.deleteModeByProject[TECH_A] = { kind: "hold", gate: gateA };
+    await page.getByTestId("editor-state-revision-confirm-delete-0").click();
+    await gateA.waitUntilEntered(1);
+    expect(deleteHitCount(state, TECH_A, revA0)).toBe(1);
+    expect(deleteCompleteCount(state, TECH_A, revA0)).toBe(0);
+    await expect(page.getByTestId("editor-state-revision-status")).toHaveText(
+      "删除中…",
+    );
+    await expect(
+      page.getByTestId("editor-state-revision-toggle"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-confirm-delete-0"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-cancel-delete-0"),
+    ).toBeDisabled();
+    expect(state.deleteLog.length).toBe(1);
+
+    // 切 B：再发 B 删除
+    await openWorkspace(page, "tech", TECH_B);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_B), { timeout: 10_000 })
+      .toBe(1);
+    expect(deleteCompleteCount(state, TECH_A, revA0)).toBe(0);
+    const gateB = createHoldGate();
+    state.deleteModeByProject[TECH_B] = { kind: "hold", gate: gateB };
+    await page.getByTestId("editor-state-revision-delete-0").click();
+    await page.getByTestId("editor-state-revision-confirm-delete-0").click();
+    await gateB.waitUntilEntered(1);
+    expect(deleteHitCount(state, TECH_B, revB0)).toBe(1);
+    expect(deleteCompleteCount(state, TECH_B, revB0)).toBe(0);
+    await expect(page.getByTestId("editor-state-revision-status")).toHaveText(
+      "删除中…",
+    );
+    const pageBBeforeARelease = pageHitCount(state, TECH_B);
+    const searchBBefore = state.searchLog.filter(
+      (h) => h.projectId === TECH_B,
+    ).length;
+    const delBArrived = deleteHitCount(state, TECH_B, revB0);
+
+    // 释放 A：不得污染 B
+    gateA.release();
+    delete state.deleteModeByProject[TECH_A];
+    await expect
+      .poll(() => deleteCompleteCount(state, TECH_A, revA0), {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    expect(deleteHitCount(state, TECH_B, revB0)).toBe(delBArrived);
+    expect(deleteCompleteCount(state, TECH_B, revB0)).toBe(0);
+    expect(pageHitCount(state, TECH_B)).toBe(pageBBeforeARelease);
+    expect(
+      state.searchLog.filter((h) => h.projectId === TECH_B).length,
+    ).toBe(searchBBefore);
+    await expect(page.getByTestId("editor-state-revision-status")).toHaveText(
+      "删除中…",
+    );
+    await expect(
+      page.getByTestId("editor-state-revision-toggle"),
+    ).toBeDisabled();
+    expect(await readContent(page, "tech")).toBe(TECH_OVERVIEW_B);
+
+    // 释放 B
+    gateB.release();
+    delete state.deleteModeByProject[TECH_B];
+    await expect
+      .poll(() => deleteCompleteCount(state, TECH_B, revB0), {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_B), { timeout: 10_000 })
+      .toBe(2);
+    await expect(page.getByTestId("editor-state-revision-status")).toHaveText(
+      MSG_DELETE_OK,
+    );
+    expect(
+      state.revisions[TECH_B].some((r) => r.revisionId === revB0),
+    ).toBe(false);
+    expect(deleteHitCount(state, TECH_A, revA0)).toBe(1);
+    expect(deleteHitCount(state, TECH_B, revB0)).toBe(1);
+
+    // 切回 A：首次展开精确 page complete +1（A 删除后可能已有迟到 page，但项目切换后折叠再展开必发）
+    const pageABeforeReopen = pageCompleteCount(state, TECH_A);
+    await openWorkspace(page, "tech", TECH_A);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(pageABeforeReopen + 1);
+    expect(
+      state.revisions[TECH_A].some((r) => r.revisionId === revA0),
+    ).toBe(false);
+
+    // 迟到 search 隔离：A 删除后 search 挂起，切 B 再释放
+    expect(state.revisions[TECH_A].length).toBe(2);
+    const lateStampId = state.revisions[TECH_A][0].revisionId;
+    stampSearchableMarker(state, lateStampId, "P12FGB_LATE", "tech");
+    await page
+      .getByTestId("editor-state-revision-search-input")
+      .fill("P12FGB_LATE");
+    await page.getByTestId("editor-state-revision-search-apply").click();
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(
+            state,
+            TECH_A,
+            "P12FGB_LATE",
+            null,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    const lateDelGate = createHoldGate();
+    const lateSearchGate = createHoldGate();
+    expect(state.revisions[TECH_A].length).toBe(2);
+    const lateTarget = state.revisions[TECH_A][0].revisionId;
+    state.deleteModeByRevisionId[lateTarget] = {
+      kind: "hold",
+      gate: lateDelGate,
+    };
+    state.searchModeByProject[TECH_A] = { kind: "hold", gate: lateSearchGate };
+    await page.getByTestId("editor-state-revision-delete-0").click();
+    await page.getByTestId("editor-state-revision-confirm-delete-0").click();
+    await lateDelGate.waitUntilEntered(1);
+    lateDelGate.release();
+    delete state.deleteModeByRevisionId[lateTarget];
+    await expect
+      .poll(() => deleteCompleteCount(state, TECH_A, lateTarget), {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    await lateSearchGate.waitUntilEntered(1);
+    const pageBBeforeLateSearch = pageCompleteCount(state, TECH_B);
+    await openWorkspace(page, "tech", TECH_B);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_B), { timeout: 10_000 })
+      .toBe(pageBBeforeLateSearch + 1);
+    lateSearchGate.release();
+    state.searchModeByProject[TECH_A] = { kind: "ok" };
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(
+            state,
+            TECH_A,
+            "P12FGB_LATE",
+            null,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(2);
+    await expect(
+      page.getByTestId("editor-state-revision-search-active"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-list-error"),
+    ).toHaveCount(0);
+    expect(searchHitCount(state, TECH_B)).toBe(0);
+
+    expect(state.listLog.length).toBe(0);
+    expect(state.forbiddenHits).toEqual([]);
+    expect(state.externalHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+    await assertNoIdLeak(page, state, guards.consoleLogs);
+  });
+});
+
+test.describe("P12F-G-B 商务标共用入口与数据最小化", () => {
+  test.use({ timezoneId: "Asia/Shanghai" });
+
+  test("P12F-G-B 商务标：同一删除入口/确认/失败/成功；搜索+来源+时间成功只重发原 search；零 editor-state/restore/checkpoint/外网与 ID/关键词/快照/CSRF 泄漏", async ({
+    page,
+  }) => {
+    const state = createProbeState("biz");
+    const SEARCH_MARK = "P12FGB_BIZ_DEL_MARK";
+    const SEARCH_Q = "P12FGB_BIZ_DEL";
+    const seeded = seedRevisions(
+      state,
+      BIZ_A,
+      6,
+      Array.from({ length: 6 }, () => "callback"),
+    );
+    syncRevisionCreatedAts(state, BIZ_A, "2026-07-16T00:00:00.000Z", 1);
+    for (const it of seeded) {
+      stampSearchableMarker(state, it.revisionId, SEARCH_MARK, "biz");
+    }
+    seedRevisions(state, BIZ_B, 2, ["task", "revise"]);
+    const UTC_FROM = "2026-07-16T00:00:00.000Z";
+    const UTC_BEFORE = "2026-07-16T00:10:00.000Z";
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+
+    await openWorkspace(page, "biz", BIZ_A);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageCompleteCount(state, BIZ_A), { timeout: 10_000 })
+      .toBe(1);
+
+    await expect(
+      page.getByTestId("editor-state-revision-delete-0"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-delete-0"),
+    ).toHaveText("删除");
+
+    await page
+      .getByTestId("editor-state-revision-source-filter")
+      .selectOption({ label: "解析回传" });
+    await expect
+      .poll(() => pageHitCountForSource(state, BIZ_A, "callback"), {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    await page
+      .getByTestId("editor-state-revision-created-from")
+      .fill("2026-07-16T08:00");
+    await page
+      .getByTestId("editor-state-revision-created-before")
+      .fill("2026-07-16T08:10");
+    await page.getByTestId("editor-state-revision-time-apply").click();
+    await expect
+      .poll(
+        () =>
+          pageHitCountForTimeFilter(
+            state,
+            BIZ_A,
+            "callback",
+            UTC_FROM,
+            UTC_BEFORE,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await page
+      .getByTestId("editor-state-revision-search-input")
+      .fill(SEARCH_Q);
+    await page.getByTestId("editor-state-revision-search-apply").click();
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(
+            state,
+            BIZ_A,
+            SEARCH_Q,
+            "callback",
+            UTC_FROM,
+            UTC_BEFORE,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    const comboBody = state.searchLog[state.searchLog.length - 1];
+    expect(comboBody.bodyKeys).toEqual([
+      "query",
+      "sourceKind",
+      "createdFrom",
+      "createdBefore",
+    ]);
+    expect(comboBody.body).toEqual({
+      query: SEARCH_Q,
+      sourceKind: "callback",
+      createdFrom: UTC_FROM,
+      createdBefore: UTC_BEFORE,
+    });
+
+    expect(state.revisions[BIZ_A].length).toBe(6);
+    const failId = state.revisions[BIZ_A][0].revisionId;
+    state.deleteModeByRevisionId[failId] = {
+      kind: "http_error",
+      status: 500,
+    };
+    const pageBeforeFail = pageHitCount(state, BIZ_A);
+    const searchBeforeFail = searchHitCountForFilter(
+      state,
+      BIZ_A,
+      SEARCH_Q,
+      "callback",
+      UTC_FROM,
+      UTC_BEFORE,
+    );
+    await page.getByTestId("editor-state-revision-delete-0").click();
+    await expect(
+      page.getByTestId("editor-state-revision-delete-confirm-text-0"),
+    ).toHaveText(DELETE_CONFIRM);
+    expect(state.deleteLog.length).toBe(0);
+    await page.getByTestId("editor-state-revision-confirm-delete-0").click();
+    await expect
+      .poll(() => deleteCompleteCount(state, BIZ_A, failId), {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    await expect(page.getByTestId("editor-state-revision-status")).toHaveText(
+      MSG_DELETE_FAIL,
+    );
+    expect(pageHitCount(state, BIZ_A)).toBe(pageBeforeFail);
+    expect(
+      searchHitCountForFilter(
+        state,
+        BIZ_A,
+        SEARCH_Q,
+        "callback",
+        UTC_FROM,
+        UTC_BEFORE,
+      ),
+    ).toBe(searchBeforeFail);
+    expect(
+      state.revisions[BIZ_A].some((r) => r.revisionId === failId),
+    ).toBe(true);
+
+    delete state.deleteModeByRevisionId[failId];
+    const okId = failId;
+    const editorGetsBefore = state.editorGetLog.length;
+    const putBefore = state.putLog.length;
+    const restoreBefore = state.restoreLog.length;
+    const cpBefore = state.checkpointCreateLog.length;
+    const pageBeforeOk = pageHitCount(state, BIZ_A);
+    const delCompleteBeforeOk = deleteCompleteCount(state, BIZ_A, okId);
+    const searchBeforeOk = searchHitCountForFilter(
+      state,
+      BIZ_A,
+      SEARCH_Q,
+      "callback",
+      UTC_FROM,
+      UTC_BEFORE,
+    );
+    const searchCompleteBeforeOk = searchCompleteCountForFilter(
+      state,
+      BIZ_A,
+      SEARCH_Q,
+      "callback",
+      UTC_FROM,
+      UTC_BEFORE,
+    );
+    await page.getByTestId("editor-state-revision-delete-0").click();
+    await page.getByTestId("editor-state-revision-confirm-delete-0").click();
+    await expect
+      .poll(() => deleteCompleteCount(state, BIZ_A, okId), {
+        timeout: 10_000,
+      })
+      .toBe(delCompleteBeforeOk + 1);
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(
+            state,
+            BIZ_A,
+            SEARCH_Q,
+            "callback",
+            UTC_FROM,
+            UTC_BEFORE,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(searchCompleteBeforeOk + 1);
+    expect(
+      searchHitCountForFilter(
+        state,
+        BIZ_A,
+        SEARCH_Q,
+        "callback",
+        UTC_FROM,
+        UTC_BEFORE,
+      ),
+    ).toBe(searchBeforeOk + 1);
+    expect(pageHitCount(state, BIZ_A)).toBe(pageBeforeOk);
+    const reloadSearch = state.searchLog[state.searchLog.length - 1];
+    expect(reloadSearch.method).toBe("POST");
+    expect(reloadSearch.queryKeys).toEqual([]);
+    expect(reloadSearch.search).toBe("");
+    expect(reloadSearch.body).toEqual({
+      query: SEARCH_Q,
+      sourceKind: "callback",
+      createdFrom: UTC_FROM,
+      createdBefore: UTC_BEFORE,
+    });
+    const delHit = state.deleteLog[state.deleteLog.length - 1];
+    expect(delHit.method).toBe("DELETE");
+    expect(delHit.queryKeys).toEqual([]);
+    expect(delHit.postData).toBeNull();
+    await expect(page.getByTestId("editor-state-revision-status")).toHaveText(
+      MSG_DELETE_OK,
+    );
+    expect(
+      state.revisions[BIZ_A].some((r) => r.revisionId === okId),
+    ).toBe(false);
+    expect(state.editorGetLog.length).toBe(editorGetsBefore);
+    expect(state.putLog.length).toBe(putBefore);
+    expect(state.restoreLog.length).toBe(restoreBefore);
+    expect(state.checkpointCreateLog.length).toBe(cpBefore);
+    expect(state.externalHits).toEqual([]);
+
+    await expect(
+      page.getByTestId("editor-state-revision-delete-0"),
+    ).toBeVisible();
+
+    // 组合四条件 search 态：DELETE 204 成功 + search 重载固定 HTTP 失败
+    // 必须保留已应用 query/sourceKind/createdFrom/createdBefore，不得退回仅 query
+    expect(state.revisions[BIZ_A].length).toBe(5);
+    const comboFailTargetId = state.revisions[BIZ_A][0].revisionId;
+    expect(
+      JSON.stringify(state.details[comboFailTargetId].snapshot),
+    ).toContain(SEARCH_MARK);
+    state.searchModeByProject[BIZ_A] = {
+      kind: "http_error",
+      status: 500,
+    };
+    const delCompleteBeforeComboFail = deleteCompleteCount(
+      state,
+      BIZ_A,
+      comboFailTargetId,
+    );
+    const delHitBeforeComboFail = deleteHitCount(
+      state,
+      BIZ_A,
+      comboFailTargetId,
+    );
+    const searchArrivedBeforeComboFail = searchHitCountForFilter(
+      state,
+      BIZ_A,
+      SEARCH_Q,
+      "callback",
+      UTC_FROM,
+      UTC_BEFORE,
+    );
+    const searchCompleteBeforeComboFail = searchCompleteCountForFilter(
+      state,
+      BIZ_A,
+      SEARCH_Q,
+      "callback",
+      UTC_FROM,
+      UTC_BEFORE,
+    );
+    const pageBeforeComboFail = pageHitCount(state, BIZ_A);
+    const pageCompleteBeforeComboFail = pageCompleteCount(state, BIZ_A);
+    const editorGetsBeforeComboFail = state.editorGetLog.length;
+    const putBeforeComboFail = state.putLog.length;
+    const restoreBeforeComboFail = state.restoreLog.length;
+    const cpBeforeComboFail = state.checkpointCreateLog.length;
+    await page.getByTestId("editor-state-revision-delete-0").click();
+    await page.getByTestId("editor-state-revision-confirm-delete-0").click();
+    await expect
+      .poll(
+        () => deleteCompleteCount(state, BIZ_A, comboFailTargetId),
+        { timeout: 10_000 },
+      )
+      .toBe(delCompleteBeforeComboFail + 1);
+    expect(deleteHitCount(state, BIZ_A, comboFailTargetId)).toBe(
+      delHitBeforeComboFail + 1,
+    );
+    const comboDelHit = state.deleteLog[state.deleteLog.length - 1];
+    expect(comboDelHit.method).toBe("DELETE");
+    expect(comboDelHit.queryKeys).toEqual([]);
+    expect(comboDelHit.search).toBe("");
+    expect(comboDelHit.postData).toBeNull();
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(
+            state,
+            BIZ_A,
+            SEARCH_Q,
+            "callback",
+            UTC_FROM,
+            UTC_BEFORE,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(searchCompleteBeforeComboFail + 1);
+    expect(
+      searchHitCountForFilter(
+        state,
+        BIZ_A,
+        SEARCH_Q,
+        "callback",
+        UTC_FROM,
+        UTC_BEFORE,
+      ),
+    ).toBe(searchArrivedBeforeComboFail + 1);
+    // DELETE 不重试；page 零新增
+    expect(deleteHitCount(state, BIZ_A, comboFailTargetId)).toBe(
+      delHitBeforeComboFail + 1,
+    );
+    expect(pageHitCount(state, BIZ_A)).toBe(pageBeforeComboFail);
+    expect(pageCompleteCount(state, BIZ_A)).toBe(pageCompleteBeforeComboFail);
+    const comboFailSearch = state.searchLog[state.searchLog.length - 1];
+    expect(comboFailSearch.method).toBe("POST");
+    expect(comboFailSearch.queryKeys).toEqual([]);
+    expect(comboFailSearch.search).toBe("");
+    expect(comboFailSearch.bodyKeys).toEqual([
+      "query",
+      "sourceKind",
+      "createdFrom",
+      "createdBefore",
+    ]);
+    expect(comboFailSearch.body).toEqual({
+      query: SEARCH_Q,
+      sourceKind: "callback",
+      createdFrom: UTC_FROM,
+      createdBefore: UTC_BEFORE,
+    });
+    await expect(page.getByTestId("editor-state-revision-status")).toHaveText(
+      MSG_DELETE_OK,
+    );
+    await expect(
+      page.getByTestId("editor-state-revision-list-error"),
+    ).toHaveText(MSG_SEARCH_FAIL);
+    await expect(
+      page.getByTestId("editor-state-revision-search-active"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-item-0"),
+    ).toHaveCount(0);
+    expect(
+      state.revisions[BIZ_A].some((r) => r.revisionId === comboFailTargetId),
+    ).toBe(false);
+    expect(state.editorGetLog.length).toBe(editorGetsBeforeComboFail);
+    expect(state.putLog.length).toBe(putBeforeComboFail);
+    expect(state.restoreLog.length).toBe(restoreBeforeComboFail);
+    expect(state.checkpointCreateLog.length).toBe(cpBeforeComboFail);
+
+    // 恢复 searchMode 后显式刷新：仍以同一四条件 search 成功重载且零 page
+    state.searchModeByProject[BIZ_A] = { kind: "ok" };
+    const searchCompleteBeforeComboRecover = searchCompleteCountForFilter(
+      state,
+      BIZ_A,
+      SEARCH_Q,
+      "callback",
+      UTC_FROM,
+      UTC_BEFORE,
+    );
+    const pageBeforeComboRecover = pageHitCount(state, BIZ_A);
+    const pageCompleteBeforeComboRecover = pageCompleteCount(state, BIZ_A);
+    await page.getByTestId("editor-state-revision-refresh").click();
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(
+            state,
+            BIZ_A,
+            SEARCH_Q,
+            "callback",
+            UTC_FROM,
+            UTC_BEFORE,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(searchCompleteBeforeComboRecover + 1);
+    expect(pageHitCount(state, BIZ_A)).toBe(pageBeforeComboRecover);
+    expect(pageCompleteCount(state, BIZ_A)).toBe(
+      pageCompleteBeforeComboRecover,
+    );
+    const comboRecoverSearch = state.searchLog[state.searchLog.length - 1];
+    expect(comboRecoverSearch.bodyKeys).toEqual([
+      "query",
+      "sourceKind",
+      "createdFrom",
+      "createdBefore",
+    ]);
+    expect(comboRecoverSearch.body).toEqual({
+      query: SEARCH_Q,
+      sourceKind: "callback",
+      createdFrom: UTC_FROM,
+      createdBefore: UTC_BEFORE,
+    });
+    await expect(
+      page.getByTestId("editor-state-revision-list-error"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-item-0"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-search-active"),
+    ).toBeVisible();
+
+    expect(state.listLog.length).toBe(0);
+    expect(state.forbiddenHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+    await assertNoIdLeak(page, state, guards.consoleLogs);
+
+    const persist = await page.evaluate(() => ({
+      href: location.href,
+      cookie: document.cookie,
+      ls: Object.keys(localStorage)
+        .map((k) => `${k}=${localStorage.getItem(k)}`)
+        .join("\n"),
+      ss: Object.keys(sessionStorage)
+        .map((k) => `${k}=${sessionStorage.getItem(k)}`)
+        .join("\n"),
+      body: document.body?.innerText ?? "",
+    }));
+    for (const blob of [
+      persist.href,
+      persist.cookie,
+      persist.ls,
+      persist.ss,
+    ]) {
+      expect(blob).not.toContain(SEARCH_Q);
+      expect(blob).not.toContain(SEARCH_MARK);
+      expect(blob).not.toMatch(/esr_[0-9a-f]{32}/);
+      expect(blob).not.toMatch(/esv_[0-9a-f]{32}/);
+      expect(blob).not.toMatch(/csrf/i);
+    }
+    expect(persist.body).not.toContain(SEARCH_MARK);
+    expect(persist.body).not.toContain(SNAPSHOT_BODY_LEAK);
+    const consoleBlob = guards.consoleLogs.join("\n");
+    expect(consoleBlob).not.toContain(SEARCH_Q);
+    expect(consoleBlob).not.toContain(SEARCH_MARK);
+    expect(consoleBlob).not.toMatch(/esr_[0-9a-f]{32}/);
+    expect(consoleBlob).not.toMatch(/csrf/i);
+    // 全部 deleteLog 终态：postData 精确 null；query 空；method DELETE
+    for (const h of state.deleteLog) {
+      expect(h.postData).toBeNull();
+      expect(h.queryKeys).toEqual([]);
+      expect(h.search).toBe("");
+      expect(h.method).toBe("DELETE");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P12F-G-B 终态静态自检（扫描上列三用例源码；本 describe 不计入扫描范围）
+// ---------------------------------------------------------------------------
+test.describe("P12F-G-B 终态静态自检", () => {
+  test("P12F-G-B marker 后禁止项精确零命中", () => {
+    const selfPath = fileURLToPath(import.meta.url);
+    const sourcePath = path.resolve(selfPath);
+    expect(sourcePath.endsWith("editor-state-revision-history.spec.ts")).toBe(
+      true,
+    );
+    const full = fs.readFileSync(sourcePath, "utf8");
+    const beginMark = "// P12F-G-B 单条修订删除前端";
+    const endMark = "// P12F-G-B 终态静态自检";
+    const begin = full.indexOf(beginMark);
+    const end = full.indexOf(endMark);
+    expect(begin).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(begin);
+    const block = full.slice(begin, end);
+
+    const count = (re: RegExp): number => {
+      const flags = re.flags.includes("g") ? re.flags : `${re.flags}g`;
+      const matched = block.match(new RegExp(re.source, flags));
+      if (matched === null) return 0;
+      return matched.length;
+    };
+
+    // 权威 revisions 不得空列表兜底
+    expect(count(/state\.revisions\[[^\]]+\]\s*\|\|/)).toBe(0);
+    // 已断言长度后禁止 Math.min 收缩可见计数
+    expect(count(/Math\.min\s*\(/)).toBe(0);
+    // 弱存在/定义断言
+    expect(count(/toBeTruthy\s*\(/)).toBe(0);
+    expect(count(/toBeFalsy\s*\(/)).toBe(0);
+    expect(count(/toBeDefined\s*\(/)).toBe(0);
+    // postData 不得用 == null 逃逸
+    expect(count(/postData\s*==\s*null/)).toBe(0);
+    // Playwright 宽松定位 / 固定 sleep / 强制点击 / 条件跳过
+    expect(count(/\.or\s*\(/)).toBe(0);
+    expect(count(/waitForTimeout\s*\(/)).toBe(0);
+    expect(count(/force\s*:\s*true/)).toBe(0);
+    expect(count(/test\.skip\s*[.(]/)).toBe(0);
+    expect(count(/test\.fixme\s*[.(]/)).toBe(0);
+    // 可选链取第 0 项
+    expect(count(/\)\[0\]\?/)).toBe(0);
   });
 });

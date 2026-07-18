@@ -1,23 +1,25 @@
 /**
- * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B / P12F-F-B
+ * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B / P12F-F-B / P12F-G-B
  *       双工作区共用修订历史折叠面板
  * 用途：默认折叠零请求；展开游标页；可选来源筛选；本地时间范围草稿显式应用/清除；
  *       显式可见内容搜索 POST；手动加载更多至最多 20 条；按需摘要；按需与当前对比；按需正文差异；
- *       内存双侧选择与双修订正文差异；内联二次确认后 restore。
- * 对接：editorStateRevisionApi（含 page/search/comparison/body-diff/pair）；技术/商务 hook 的 restoreRevision 回调。
+ *       内存双侧选择与双修订正文差异；内联二次确认后 restore；内联二次确认后单条 DELETE。
+ * 对接：editorStateRevisionApi（含 page/search/comparison/body-diff/pair/delete）；技术/商务 hook 的 restoreRevision 回调。
  * 二次开发：
  *   - 不渲染 revisionId/stateVersion/cursor/UTC query/snapshot 正文/内部字段键/字段值/op 原值/关键词到固定文案
- *   - 项目切换/折叠/卸载用会话代次隔离迟到 page/search/load-more/detail/comparison/body-diff/pair/restore
- *   - 摘要、比较、正文差异、双修订差异、恢复确认同一时刻只保留一个当前意图；交叉作废
- *   - 时间/搜索草稿与已应用值分离；来源/刷新/恢复/加载更多只读已应用范围
+ *   - 项目切换/折叠/卸载用会话代次隔离迟到 page/search/load-more/detail/comparison/body-diff/pair/restore/delete
+ *   - 摘要、比较、正文差异、双修订差异、恢复确认、删除确认同一时刻只保留一个当前意图；交叉作废
+ *   - 时间/搜索草稿与已应用值分离；来源/刷新/恢复/删除/加载更多只读已应用范围
  *   - 固定中文脱敏；禁止 console/存储/URL/Cookie/剪贴板/下载/轮询/外网
- *   - 无创建/删除/自动搜索/自动分页/预取；双修订选择仅内存；游标仅内存 + 规定 API 查询
+ *   - 无创建/批量删除/自动搜索/自动分页/预取；双修订选择仅内存；游标仅内存 + 规定 API 查询
  *   - 搜索态无加载更多；关键词仅输入控件值 + React 内存 + 一次 POST body
+ *   - 删除不依赖 editor-state expected version；不得仅因 props.disabled 永久隐藏
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   assertValidSearchQuery,
+  deleteEditorStateRevision,
   formatBodyDiffKindLabel,
   formatCanonicalFieldLabel,
   formatRevisionBytes,
@@ -45,6 +47,10 @@ import {
 export const REVISION_RESTORE_CONFIRM_TEXT =
   "服务器当前内容会先保存为安全检查点，恢复替换技术标和商务标全部编辑态，尚未保存的本地修改不会写入。";
 
+/** 删除前内联确认固定文案（P12F-G-B） */
+export const REVISION_DELETE_CONFIRM_TEXT =
+  "删除后无法恢复。当前编辑内容和检查点不会改变，确定删除这条修订吗？";
+
 const MSG_LIST_FAIL = "修订历史加载失败，请稍后重试";
 const MSG_LOAD_MORE_FAIL = "更多修订加载失败，请稍后重试";
 const MSG_DETAIL_FAIL = "修订摘要加载失败，请稍后重试";
@@ -62,6 +68,10 @@ const MSG_RESTORE_FAIL = "恢复修订失败，本地内容已保留";
 const MSG_RESTORE_RELOAD_FAIL =
   "恢复已完成，但刷新失败，请重新载入远端内容";
 const MSG_RESTORE_BLOCKED = "当前无法恢复，请先处理版本冲突或重新载入";
+/** P12F-G-B 删除成功固定中文 */
+const MSG_DELETE_OK = "已删除所选修订";
+/** P12F-G-B 删除失败固定中文 */
+const MSG_DELETE_FAIL = "删除修订失败，当前列表已保留";
 /** P12F-E-B 时间范围无效固定中文 */
 const MSG_TIME_RANGE_INVALID = "时间范围无效，请检查开始和结束时间";
 /** P12F-F-B 搜索关键词校验失败固定中文 */
@@ -233,6 +243,10 @@ export function EditorStateRevisionPanel({
   const [restoreBusy, setRestoreBusy] = useState(false);
   /** 进入确认态的修订 id（仅内存，不渲染） */
   const [pendingRestoreId, setPendingRestoreId] = useState<string | null>(null);
+  /** P12F-G-B：进入删除确认态的修订 id（仅内存，不渲染） */
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  /** P12F-G-B：删除请求在途 */
+  const [deleteBusy, setDeleteBusy] = useState(false);
   /** 当前展开摘要的修订 id（仅内存） */
   const [summaryRevisionId, setSummaryRevisionId] = useState<string | null>(
     null,
@@ -263,6 +277,11 @@ export function EditorStateRevisionPanel({
    */
   const sessionRef = useRef(0);
   /**
+   * 当前项目 ID 同步镜像：每次 render 更新；DELETE/loadList 的 stillCurrent
+   * 必须与闭包内 projectAtStart/projectId 交叉核对，禁止仅比同闭包两值。
+   */
+  const projectIdRef = useRef(projectId);
+  /**
    * 详情请求代次：项目切换/折叠/刷新/另一项/再次点击/恢复/比较/正文差异/pair 均递增；
    * 旧 detail 的 try/catch/finally 不得写 summary/error/loading。
    */
@@ -285,6 +304,11 @@ export function EditorStateRevisionPanel({
    * 旧 load-more 的 try/catch/finally 不得写 items/error/loading/cursor。
    */
   const loadMoreGenRef = useRef(0);
+  /**
+   * P12F-G-B 删除请求代次：项目切换/折叠/卸载递增；
+   * 旧 delete 的 success/catch/finally 不得写新项目忙碌/文案/列表。
+   */
+  const deleteGenRef = useRef(0);
   /** 同步在途门：连续点击/双击不得产生第二个在途请求 */
   const loadMoreInFlightRef = useRef(false);
   /** items 同步镜像，供 load-more 合并校验（避免闭包过期） */
@@ -307,6 +331,7 @@ export function EditorStateRevisionPanel({
   appliedFromRef.current = appliedFrom;
   appliedBeforeRef.current = appliedBefore;
   appliedSearchRef.current = appliedSearch;
+  projectIdRef.current = projectId;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -363,7 +388,7 @@ export function EditorStateRevisionPanel({
     setPairBodyDiffLoading(false);
   }, []);
 
-  // 项目切换：重置面板（来源/时间/搜索草稿与已应用/错误），作废在途 page/search/load-more/detail/...
+  // 项目切换：重置面板（来源/时间/搜索草稿与已应用/错误），作废在途 page/search/load-more/detail/.../delete
   useEffect(() => {
     sessionRef.current += 1;
     detailGenRef.current += 1;
@@ -371,6 +396,7 @@ export function EditorStateRevisionPanel({
     bodyDiffGenRef.current += 1;
     pairBodyDiffGenRef.current += 1;
     loadMoreGenRef.current += 1;
+    deleteGenRef.current += 1;
     loadMoreInFlightRef.current = false;
     setExpanded(false);
     setItems([]);
@@ -404,6 +430,8 @@ export function EditorStateRevisionPanel({
     setPairBodyDiffLoading(false);
     setRestoreBusy(false);
     setPendingRestoreId(null);
+    setDeleteBusy(false);
+    setPendingDeleteId(null);
     setSummaryRevisionId(null);
     setSummary(null);
     setComparisonRevisionId(null);
@@ -439,6 +467,7 @@ export function EditorStateRevisionPanel({
       setListLoading(true);
       setListError(null);
       setPendingRestoreId(null);
+      setPendingDeleteId(null);
       clearSummaryState();
       clearComparisonState();
       clearBodyDiffState();
@@ -454,7 +483,8 @@ export function EditorStateRevisionPanel({
         sourceFilterRef.current === filter &&
         appliedFromRef.current === from &&
         appliedBeforeRef.current === before &&
-        appliedSearchRef.current === searchQ;
+        appliedSearchRef.current === searchQ &&
+        projectIdRef.current === projectId;
       try {
         if (searchQ) {
           // 搜索态：POST；cursor 固定清空；最多 20；无加载更多
@@ -510,7 +540,8 @@ export function EditorStateRevisionPanel({
    */
   const handleLoadMore = useCallback(async () => {
     if (!expanded || !projectId) return;
-    if (listLoading || restoreBusy || loadMoreLoading) return;
+    if (listLoading || restoreBusy || deleteBusy || loadMoreLoading) return;
+    if (pendingDeleteId != null) return;
     const cursor = nextCursorRef.current;
     if (!cursor) return;
     // 同步单飞：双击/连点不得产生第二请求
@@ -587,14 +618,31 @@ export function EditorStateRevisionPanel({
         setLoadMoreLoading(false);
       }
     }
-  }, [expanded, projectId, listLoading, restoreBusy, loadMoreLoading]);
+  }, [
+    expanded,
+    projectId,
+    listLoading,
+    restoreBusy,
+    deleteBusy,
+    loadMoreLoading,
+    pendingDeleteId,
+  ]);
 
   /**
    * 用途：切换来源筛选；同值不重发；保留已应用时间；立即清空旧列表/意图并加载新第一页。
    */
   const handleSourceFilterChange = useCallback(
     (raw: string) => {
-      if (!expanded || listLoading || restoreBusy || loadMoreLoading) return;
+      if (
+        !expanded ||
+        listLoading ||
+        restoreBusy ||
+        deleteBusy ||
+        loadMoreLoading ||
+        pendingDeleteId != null
+      ) {
+        return;
+      }
       // 同值不重发
       if (raw === sourceFilter) return;
       let next: "" | RevisionSourceKind = "";
@@ -624,7 +672,9 @@ export function EditorStateRevisionPanel({
       expanded,
       listLoading,
       restoreBusy,
+      deleteBusy,
       loadMoreLoading,
+      pendingDeleteId,
       sourceFilter,
       loadList,
     ],
@@ -634,7 +684,7 @@ export function EditorStateRevisionPanel({
    * 用途：应用本地时间草稿；严格转 UTC；同值零重发；非法零请求保值。
    */
   const handleTimeApply = useCallback(() => {
-    if (!expanded || listLoading || restoreBusy || loadMoreLoading) return;
+    if (!expanded || listLoading || restoreBusy || deleteBusy || loadMoreLoading || pendingDeleteId != null) return;
     const rawFrom = fromDraft.trim() === "" ? "" : fromDraft;
     const rawBefore = beforeDraft.trim() === "" ? "" : beforeDraft;
     // 至少一个非空（按钮也应 disabled，此处双保险）
@@ -690,7 +740,9 @@ export function EditorStateRevisionPanel({
     expanded,
     listLoading,
     restoreBusy,
+    deleteBusy,
     loadMoreLoading,
+    pendingDeleteId,
     fromDraft,
     beforeDraft,
     loadList,
@@ -700,7 +752,7 @@ export function EditorStateRevisionPanel({
    * 用途：清除时间草稿、已应用范围与错误；全空无状态不重发，否则保留来源取无时间第一页。
    */
   const handleTimeClear = useCallback(() => {
-    if (!expanded || listLoading || restoreBusy || loadMoreLoading) return;
+    if (!expanded || listLoading || restoreBusy || deleteBusy || loadMoreLoading || pendingDeleteId != null) return;
     const hadApplied =
       appliedFromRef.current != null || appliedBeforeRef.current != null;
     const hadDraft = fromDraft !== "" || beforeDraft !== "";
@@ -728,7 +780,9 @@ export function EditorStateRevisionPanel({
     expanded,
     listLoading,
     restoreBusy,
+    deleteBusy,
     loadMoreLoading,
+    pendingDeleteId,
     fromDraft,
     beforeDraft,
     loadList,
@@ -759,7 +813,7 @@ export function EditorStateRevisionPanel({
    * 用途：显式应用搜索（按钮/Enter）；不 trim；非法零请求保值；同值零重发。
    */
   const handleSearchApply = useCallback(() => {
-    if (!expanded || listLoading || restoreBusy || loadMoreLoading) return;
+    if (!expanded || listLoading || restoreBusy || deleteBusy || loadMoreLoading || pendingDeleteId != null) return;
     const raw = searchDraft;
     try {
       assertValidSearchQuery(raw);
@@ -787,7 +841,9 @@ export function EditorStateRevisionPanel({
     expanded,
     listLoading,
     restoreBusy,
+    deleteBusy,
     loadMoreLoading,
+    pendingDeleteId,
     searchDraft,
     loadList,
   ]);
@@ -797,7 +853,7 @@ export function EditorStateRevisionPanel({
    *   本来全空零请求，否则保留来源/已应用时间并恢复 page 第一页。
    */
   const handleSearchClear = useCallback(() => {
-    if (!expanded || listLoading || restoreBusy || loadMoreLoading) return;
+    if (!expanded || listLoading || restoreBusy || deleteBusy || loadMoreLoading || pendingDeleteId != null) return;
     const hadApplied = appliedSearchRef.current != null;
     const hadDraft = searchDraft !== "";
     setSearchDraft("");
@@ -820,12 +876,16 @@ export function EditorStateRevisionPanel({
     expanded,
     listLoading,
     restoreBusy,
+    deleteBusy,
     loadMoreLoading,
+    pendingDeleteId,
     searchDraft,
     loadList,
   ]);
 
   const handleToggle = useCallback(() => {
+    // 删除确认/在途期间折叠真实 disabled，避免伪装取消不可撤销请求
+    if (pendingDeleteId != null || deleteBusy) return;
     if (expanded) {
       sessionRef.current += 1;
       detailGenRef.current += 1;
@@ -833,6 +893,7 @@ export function EditorStateRevisionPanel({
       bodyDiffGenRef.current += 1;
       pairBodyDiffGenRef.current += 1;
       loadMoreGenRef.current += 1;
+      deleteGenRef.current += 1;
       loadMoreInFlightRef.current = false;
       setExpanded(false);
       setListLoading(false);
@@ -845,6 +906,8 @@ export function EditorStateRevisionPanel({
       setPairBodyDiffLoading(false);
       setRestoreBusy(false);
       setPendingRestoreId(null);
+      setDeleteBusy(false);
+      setPendingDeleteId(null);
       clearSummaryState();
       clearComparisonState();
       clearBodyDiffState();
@@ -856,6 +919,7 @@ export function EditorStateRevisionPanel({
     setStatusMessage(null);
     setStatusTone(null);
     setPendingRestoreId(null);
+    setPendingDeleteId(null);
     setLoadMoreError(null);
     clearSummaryState();
     clearComparisonState();
@@ -864,6 +928,8 @@ export function EditorStateRevisionPanel({
     void loadList(session);
   }, [
     expanded,
+    pendingDeleteId,
+    deleteBusy,
     loadList,
     clearSummaryState,
     clearComparisonState,
@@ -874,16 +940,16 @@ export function EditorStateRevisionPanel({
   const handleRefresh = useCallback(() => {
     // 允许详情/比较/正文差异挂起时刷新：loadList 会递增代次作废旧结果
     // 加载更多在途时禁用刷新，避免列表替换与追加并发
-    if (!expanded || listLoading || restoreBusy || loadMoreLoading) return;
+    if (!expanded || listLoading || restoreBusy || deleteBusy || loadMoreLoading || pendingDeleteId != null) return;
     const session = sessionRef.current;
     setStatusMessage(null);
     setStatusTone(null);
     void loadList(session);
-  }, [expanded, listLoading, restoreBusy, loadMoreLoading, loadList]);
+  }, [expanded, listLoading, restoreBusy, deleteBusy, loadMoreLoading, pendingDeleteId, loadList]);
 
   const handleSummaryClick = useCallback(
     async (item: ListItem) => {
-      if (!expanded || restoreBusy) return;
+      if (!expanded || restoreBusy || deleteBusy || pendingDeleteId != null) return;
       // 点击摘要：作废在途比较/正文差异/pair 并清除其结果
       invalidateComparison();
       clearComparisonState();
@@ -927,6 +993,8 @@ export function EditorStateRevisionPanel({
     [
       expanded,
       restoreBusy,
+      deleteBusy,
+      pendingDeleteId,
       summaryRevisionId,
       projectId,
       invalidateComparison,
@@ -941,7 +1009,7 @@ export function EditorStateRevisionPanel({
   const handleComparisonClick = useCallback(
     async (item: ListItem) => {
       // 比较不受 disabled 控制，但恢复执行期间禁用
-      if (!expanded || restoreBusy) return;
+      if (!expanded || restoreBusy || deleteBusy || pendingDeleteId != null) return;
       // 点击比较：作废在途摘要/正文差异/pair、清除其结果与恢复确认
       invalidateDetail();
       clearSummaryState();
@@ -1003,6 +1071,8 @@ export function EditorStateRevisionPanel({
     [
       expanded,
       restoreBusy,
+      deleteBusy,
+      pendingDeleteId,
       comparisonRevisionId,
       projectId,
       invalidateDetail,
@@ -1017,7 +1087,7 @@ export function EditorStateRevisionPanel({
   const handleBodyDiffClick = useCallback(
     async (item: ListItem) => {
       // 正文差异不受 disabled 控制，但恢复执行期间禁用
-      if (!expanded || restoreBusy) return;
+      if (!expanded || restoreBusy || deleteBusy || pendingDeleteId != null) return;
       // 点击正文差异：作废在途摘要/比较/pair、清除其结果与恢复确认
       invalidateDetail();
       clearSummaryState();
@@ -1079,6 +1149,8 @@ export function EditorStateRevisionPanel({
     [
       expanded,
       restoreBusy,
+      deleteBusy,
+      pendingDeleteId,
       bodyDiffRevisionId,
       projectId,
       invalidateDetail,
@@ -1095,7 +1167,7 @@ export function EditorStateRevisionPanel({
    */
   const handlePairSelectBefore = useCallback(
     (revisionId: string) => {
-      if (!expanded || restoreBusy) return;
+      if (!expanded || restoreBusy || deleteBusy || pendingDeleteId != null) return;
       // 重选作废在途 pair，并清除旧结果
       pairBodyDiffGenRef.current += 1;
       setPairBodyDiff(null);
@@ -1105,7 +1177,7 @@ export function EditorStateRevisionPanel({
       // 同一项不得同时承担两侧
       setPairAfterId((prev) => (prev === revisionId ? null : prev));
     },
-    [expanded, restoreBusy],
+    [expanded, restoreBusy, deleteBusy, pendingDeleteId],
   );
 
   /**
@@ -1113,7 +1185,7 @@ export function EditorStateRevisionPanel({
    */
   const handlePairSelectAfter = useCallback(
     (revisionId: string) => {
-      if (!expanded || restoreBusy) return;
+      if (!expanded || restoreBusy || deleteBusy || pendingDeleteId != null) return;
       pairBodyDiffGenRef.current += 1;
       setPairBodyDiff(null);
       setPairBodyDiffError(null);
@@ -1121,23 +1193,23 @@ export function EditorStateRevisionPanel({
       setPairAfterId(revisionId);
       setPairBeforeId((prev) => (prev === revisionId ? null : prev));
     },
-    [expanded, restoreBusy],
+    [expanded, restoreBusy, deleteBusy, pendingDeleteId],
   );
 
   /**
    * 用途：清除双侧选择与结果；只动内存，不发请求。
    */
   const handlePairClear = useCallback(() => {
-    if (!expanded || restoreBusy) return;
+    if (!expanded || restoreBusy || deleteBusy || pendingDeleteId != null) return;
     pairBodyDiffGenRef.current += 1;
     clearPairBodyDiffState();
-  }, [expanded, restoreBusy, clearPairBodyDiffState]);
+  }, [expanded, restoreBusy, deleteBusy, pendingDeleteId, clearPairBodyDiffState]);
 
   /**
    * 用途：比较两条已选修订；精确一次 pair GET；与摘要/当前对比/单修订正文差异/恢复互斥。
    */
   const handlePairCompare = useCallback(async () => {
-    if (!expanded || restoreBusy) return;
+    if (!expanded || restoreBusy || deleteBusy || pendingDeleteId != null) return;
     if (!pairBeforeId || !pairAfterId || pairBeforeId === pairAfterId) return;
     // 启动 pair：作废其它意图结果
     invalidateDetail();
@@ -1193,6 +1265,8 @@ export function EditorStateRevisionPanel({
   }, [
     expanded,
     restoreBusy,
+    deleteBusy,
+    pendingDeleteId,
     pairBeforeId,
     pairAfterId,
     projectId,
@@ -1206,8 +1280,16 @@ export function EditorStateRevisionPanel({
 
   const handleRestoreClick = useCallback(
     (revisionId: string) => {
-      if (disabled || restoreBusy || loadMoreLoading) return;
-      // 恢复：立即清摘要/比较/正文差异/pair/detail error 并作废在途
+      if (
+        disabled ||
+        restoreBusy ||
+        deleteBusy ||
+        loadMoreLoading ||
+        pendingDeleteId != null
+      ) {
+        return;
+      }
+      // 恢复：立即清摘要/比较/正文差异/pair/删除确认/detail error 并作废在途
       invalidateDetail();
       invalidateComparison();
       invalidateBodyDiff();
@@ -1216,6 +1298,7 @@ export function EditorStateRevisionPanel({
       clearComparisonState();
       clearBodyDiffState();
       clearPairBodyDiffState();
+      setPendingDeleteId(null);
       setPendingRestoreId(revisionId);
       setStatusMessage(null);
       setStatusTone(null);
@@ -1223,7 +1306,9 @@ export function EditorStateRevisionPanel({
     [
       disabled,
       restoreBusy,
+      deleteBusy,
       loadMoreLoading,
+      pendingDeleteId,
       invalidateDetail,
       invalidateComparison,
       invalidateBodyDiff,
@@ -1239,7 +1324,9 @@ export function EditorStateRevisionPanel({
     if (
       disabled ||
       restoreBusy ||
+      deleteBusy ||
       loadMoreLoading ||
+      pendingDeleteId != null ||
       !pendingRestoreId ||
       !expanded
     ) {
@@ -1307,7 +1394,9 @@ export function EditorStateRevisionPanel({
   }, [
     disabled,
     restoreBusy,
+    deleteBusy,
     loadMoreLoading,
+    pendingDeleteId,
     pendingRestoreId,
     expanded,
     restoreRevision,
@@ -1323,22 +1412,166 @@ export function EditorStateRevisionPanel({
   ]);
 
   const handleCancelRestore = useCallback(() => {
-    if (restoreBusy) return;
+    if (restoreBusy || deleteBusy) return;
     setPendingRestoreId(null);
-  }, [restoreBusy]);
+  }, [restoreBusy, deleteBusy]);
 
-  // 恢复：全状态阻断 / 首屏加载 / 加载更多在途时禁用
+  /**
+   * 用途：进入单条删除确认；清摘要/比较/body-diff/pair/restore 意图；零 DELETE。
+   * 约束：不依赖 props.disabled（editor-state 版本安全）；受列表/恢复/删除在途阻断。
+   */
+  const handleDeleteClick = useCallback(
+    (revisionId: string) => {
+      if (
+        listLoading ||
+        loadMoreLoading ||
+        restoreBusy ||
+        deleteBusy ||
+        pendingDeleteId != null
+      ) {
+        return;
+      }
+      invalidateDetail();
+      invalidateComparison();
+      invalidateBodyDiff();
+      invalidatePairBodyDiff();
+      clearSummaryState();
+      clearComparisonState();
+      clearBodyDiffState();
+      clearPairBodyDiffState();
+      setPendingRestoreId(null);
+      setPendingDeleteId(revisionId);
+      setStatusMessage(null);
+      setStatusTone(null);
+    },
+    [
+      listLoading,
+      loadMoreLoading,
+      restoreBusy,
+      deleteBusy,
+      pendingDeleteId,
+      invalidateDetail,
+      invalidateComparison,
+      invalidateBodyDiff,
+      invalidatePairBodyDiff,
+      clearSummaryState,
+      clearComparisonState,
+      clearBodyDiffState,
+      clearPairBodyDiffState,
+    ],
+  );
+
+  /**
+   * 用途：确认删除；精确一次 DELETE；success/catch/finally 同时校验 mounted/session/generation/project。
+   */
+  const handleConfirmDelete = useCallback(async () => {
+    if (
+      listLoading ||
+      loadMoreLoading ||
+      restoreBusy ||
+      deleteBusy ||
+      !pendingDeleteId ||
+      !expanded ||
+      !projectId
+    ) {
+      return;
+    }
+    const session = sessionRef.current;
+    const myGen = ++deleteGenRef.current;
+    const revisionId = pendingDeleteId;
+    const projectAtStart = projectId;
+    // 确认删除：作废在途 detail/comparison/body-diff/pair/load-more，清意图
+    invalidateDetail();
+    invalidateComparison();
+    invalidateBodyDiff();
+    invalidatePairBodyDiff();
+    loadMoreGenRef.current += 1;
+    loadMoreInFlightRef.current = false;
+    setLoadMoreLoading(false);
+    setLoadMoreError(null);
+    clearSummaryState();
+    clearComparisonState();
+    clearBodyDiffState();
+    clearPairBodyDiffState();
+    setPendingRestoreId(null);
+    setDeleteBusy(true);
+    setStatusMessage("删除中…");
+    setStatusTone(null);
+    const stillCurrent = () =>
+      mountedRef.current &&
+      session === sessionRef.current &&
+      myGen === deleteGenRef.current &&
+      projectIdRef.current === projectAtStart;
+    try {
+      await deleteEditorStateRevision(projectAtStart, revisionId);
+      if (!stillCurrent()) return;
+      setPendingDeleteId(null);
+      clearSummaryState();
+      clearComparisonState();
+      clearBodyDiffState();
+      clearPairBodyDiffState();
+      // 成功事实先写入；列表重载失败仍保留成功文案并显示既有列表失败
+      setStatusMessage(MSG_DELETE_OK);
+      setStatusTone("ok");
+      await loadList(session);
+    } catch {
+      if (!stillCurrent()) return;
+      setPendingDeleteId(null);
+      clearSummaryState();
+      clearComparisonState();
+      clearBodyDiffState();
+      clearPairBodyDiffState();
+      setStatusMessage(MSG_DELETE_FAIL);
+      setStatusTone("err");
+    } finally {
+      if (stillCurrent()) {
+        setDeleteBusy(false);
+      }
+    }
+  }, [
+    listLoading,
+    loadMoreLoading,
+    restoreBusy,
+    deleteBusy,
+    pendingDeleteId,
+    expanded,
+    projectId,
+    loadList,
+    invalidateDetail,
+    invalidateComparison,
+    invalidateBodyDiff,
+    invalidatePairBodyDiff,
+    clearSummaryState,
+    clearComparisonState,
+    clearBodyDiffState,
+    clearPairBodyDiffState,
+  ]);
+
+  const handleCancelDelete = useCallback(() => {
+    if (deleteBusy) return;
+    setPendingDeleteId(null);
+  }, [deleteBusy]);
+
+  // 删除确认或在途：除确认删除/取消规则外全局锁定
+  const deleteUiLocked = pendingDeleteId != null || deleteBusy;
+  // 恢复：全状态阻断 / 首屏加载 / 加载更多/删除在途时禁用
   const restoreDisabled =
-    disabled || restoreBusy || listLoading || loadMoreLoading;
-  /** 比较/正文差异/pair 不受 disabled 控制，仅 restoreBusy 期间禁用 */
-  const compareDisabled = restoreBusy;
-  const bodyDiffDisabled = restoreBusy;
-  const pairSelectDisabled = restoreBusy;
+    disabled ||
+    restoreBusy ||
+    deleteBusy ||
+    listLoading ||
+    loadMoreLoading ||
+    deleteUiLocked;
+  /** 比较/正文差异/pair：restore/delete 在途或删除确认期间禁用 */
+  const compareDisabled = restoreBusy || deleteUiLocked;
+  const bodyDiffDisabled = restoreBusy || deleteUiLocked;
+  const pairSelectDisabled = restoreBusy || deleteUiLocked;
   const pairCompareReady =
     !!pairBeforeId &&
     !!pairAfterId &&
     pairBeforeId !== pairAfterId &&
     !restoreBusy &&
+    !deleteUiLocked &&
     !pairBodyDiffLoading;
   // 搜索态 cursor 恒为 null，永不显示加载更多
   const showLoadMore = nextCursor != null && appliedSearch == null;
@@ -1346,11 +1579,15 @@ export function EditorStateRevisionPanel({
     loadMoreLoading ||
     listLoading ||
     restoreBusy ||
+    deleteUiLocked ||
     !nextCursor ||
     appliedSearch != null;
-  /** 列表/加载更多/恢复在途时：来源、时间、搜索输入/搜索/清除均真实 disabled */
+  /** 列表/加载更多/恢复/删除在途或删除确认：来源、时间、搜索均真实 disabled */
   const filterControlsDisabled =
-    listLoading || loadMoreLoading || restoreBusy;
+    listLoading || loadMoreLoading || restoreBusy || deleteUiLocked;
+  /** 删除按钮：不依赖 props.disabled；受列表/加载更多/恢复/删除阻断 */
+  const deleteDisabled =
+    listLoading || loadMoreLoading || restoreBusy || deleteBusy;
   /** 应用时间：至少一个草稿非空且不在途 */
   const timeApplyDisabled =
     filterControlsDisabled ||
@@ -1381,6 +1618,7 @@ export function EditorStateRevisionPanel({
           className="btn btn-ghost btn-sm"
           data-testid="editor-state-revision-toggle"
           aria-expanded={expanded}
+          disabled={deleteUiLocked}
           onClick={handleToggle}
         >
           {expanded ? "收起修订历史" : "修订历史"}
@@ -1391,7 +1629,13 @@ export function EditorStateRevisionPanel({
               type="button"
               className="btn btn-ghost btn-sm"
               data-testid="editor-state-revision-refresh"
-              disabled={listLoading || restoreBusy || loadMoreLoading}
+              disabled={
+                listLoading ||
+                restoreBusy ||
+                deleteBusy ||
+                loadMoreLoading ||
+                pendingDeleteId != null
+              }
               onClick={handleRefresh}
             >
               刷新
@@ -1712,6 +1956,7 @@ export function EditorStateRevisionPanel({
                 data-testid="editor-state-revision-pair-clear"
                 disabled={
                   restoreBusy ||
+                  deleteUiLocked ||
                   (!pairBeforeId &&
                     !pairAfterId &&
                     !pairBodyDiff &&
@@ -1840,7 +2085,8 @@ export function EditorStateRevisionPanel({
             }}
           >
             {items.map((item, index) => {
-              const confirming = pendingRestoreId === item.revisionId;
+              const confirmingRestore = pendingRestoreId === item.revisionId;
+              const confirmingDelete = pendingDeleteId === item.revisionId;
               const showingSummary =
                 summaryRevisionId === item.revisionId && summary != null;
               const showingComparison =
@@ -2040,7 +2286,45 @@ export function EditorStateRevisionPanel({
                         : null}
                     </div>
                   ) : null}
-                  {confirming ? (
+                  {confirmingDelete ? (
+                    <div
+                      data-testid={`editor-state-revision-confirm-delete-wrap-${index}`}
+                      style={{ marginTop: 8 }}
+                    >
+                      <p
+                        data-testid={`editor-state-revision-delete-confirm-text-${index}`}
+                        style={{
+                          margin: "0 0 8px",
+                          fontSize: 13,
+                          color: "var(--danger)",
+                        }}
+                      >
+                        {REVISION_DELETE_CONFIRM_TEXT}
+                      </p>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-sm"
+                          data-testid={`editor-state-revision-confirm-delete-${index}`}
+                          disabled={deleteBusy || listLoading || loadMoreLoading}
+                          onClick={() => {
+                            void handleConfirmDelete();
+                          }}
+                        >
+                          {deleteBusy ? "删除中…" : "确认删除"}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          data-testid={`editor-state-revision-cancel-delete-${index}`}
+                          disabled={deleteBusy}
+                          onClick={handleCancelDelete}
+                        >
+                          取消
+                        </button>
+                      </div>
+                    </div>
+                  ) : confirmingRestore ? (
                     <div
                       data-testid={`editor-state-revision-confirm-${index}`}
                       style={{ marginTop: 8 }}
@@ -2070,7 +2354,7 @@ export function EditorStateRevisionPanel({
                           type="button"
                           className="btn btn-ghost btn-sm"
                           data-testid={`editor-state-revision-cancel-restore-${index}`}
-                          disabled={restoreBusy}
+                          disabled={restoreBusy || deleteBusy}
                           onClick={handleCancelRestore}
                         >
                           取消
@@ -2108,7 +2392,7 @@ export function EditorStateRevisionPanel({
                         type="button"
                         className="btn btn-ghost btn-sm"
                         data-testid={`editor-state-revision-summary-${index}`}
-                        disabled={restoreBusy}
+                        disabled={restoreBusy || deleteUiLocked}
                         onClick={() => {
                           void handleSummaryClick(item);
                         }}
@@ -2151,6 +2435,15 @@ export function EditorStateRevisionPanel({
                         onClick={() => handleRestoreClick(item.revisionId)}
                       >
                         恢复
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        data-testid={`editor-state-revision-delete-${index}`}
+                        disabled={deleteDisabled || deleteUiLocked}
+                        onClick={() => handleDeleteClick(item.revisionId)}
+                      >
+                        删除
                       </button>
                     </div>
                   )}
