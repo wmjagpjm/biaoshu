@@ -1,13 +1,13 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-18（P12F-F-A 修订可见内容搜索后端已独立验收并推送；下一包为待审计的 P12F-F-B 前端入口）
+> **交接日期**：2026-07-18（P12F-F-A 后端已闭环；P12F-F-B 共用前端搜索入口已完成只读审计，当前文档提交即冻结）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
 > **协作分支功能基线**：P12F-F-A 冻结=`b2eed7c`、实现=`e6516e8`；P12F-E-B 冻结=`a31e50e`、实现=`f9127ec`；P12F-E-A 冻结=`af3798a`、实现=`c66b69d`、文档=`e1345ff`；P12F-D 冻结=`a2acdf3`、实现=`587df9a`；P13-A 冻结=`e8dfa61`、实现=`1509aa2`；P12F-C 冻结=`bb1ae3e`、实现=`fe99f5a`；P12F-B 冻结=`4ddd896`、实现=`c84a94d`；P12F-A 冻结=`e713fb3`、实现=`24f4cf2`；P12E-A 冻结=`5aa205c`、实现=`f9f067e`；P12E-B 冻结=`00ef081`、实现=`5a5b08a`；P12E-C 冻结=`8b40bf4`、实现=`b6a4375`；其余既有功能基线见本文 §11。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
-> **最新增量基线**：P12F-F-A 已交付不进入 URL 的独立 POST 有界可见内容搜索后端；P12F-E-A/B 的严格 UTC 时间范围、`esrc3` 和前端本地时间交互，以及 P12F-D 来源单选、P13-A SSE 鉴权、P12F-A/B/C 保留/分页/加载更多继续保留。
+> **最新增量基线**：P12F-F-A 已交付不进入 URL 的独立 POST 有界可见内容搜索后端；当前执行包 P12F-F-B 将只在共用面板增加显式内存态搜索入口，P12F-E-A/B 时间、P12F-D 来源和 P12F-A/B/C 分页语义继续复用。
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **本地状态**：P12F-F-A 冻结=`b2eed7c`、实现=`e6516e8` 已推送；本次中文文档闭环见当前 HEAD。
+> **本地状态**：P12F-F-A 冻结=`b2eed7c`、实现=`e6516e8`、闭环=`e843338` 已推送；P12F-F-B 契约/计划已完成只读审计，冻结提交以当前 HEAD 为准。
 > **验收基线**：P12F-F-A 后端专项/受影响回归/全量 **23/203/1096 passed**；P12F-E-B 前端全量 **303 passed**；P12F-E-A 后端全量 **1073 passed**。**所有 Playwright E2E 共用 SQLite 重置库，必须显式 `--workers=1 --retries=0` 逐条串行运行，禁止并行。**
 
 ---
@@ -20,9 +20,9 @@
 完整阅读 docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/plans/2026-07-13-package-9-delivery-enhancement-plan.md、docs/integration-checklist.md。
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
 当前进度：P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/B、P12E-A/B/C、P12F-A/B/C/D/E-A/E-B/F-A、P13-A、P9D、P9C-R1、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。P12F-F-A 冻结=`b2eed7c`、实现=`e6516e8`；后端全量基线为 1096 passed。
-当前状态：后端已支持来源/UTC 时间条件下最新 20 条候选的严格可见字段搜索，关键词只在 POST 请求体和调用栈中，响应只回五键元数据；前端尚无搜索入口。
-当前执行包：无实现包在途。下一步先独立审计 P12F-F-B 前端入口，重新冻结 API 封装、共用修订面板和 E2E 精确白名单。
-下一步：为 P12F-F-B 编写独立契约/计划并提交冻结，再通过既有 Grok 消息箱下发 failure-first 实现。片段/高亮、自动搜索、缓存、来源多选、日期预设、命名/固定/删除、跨项目历史、多人协作及 SSE 扩展不得混入。
+当前状态：后端已支持来源/UTC 时间条件下最新 20 条候选的严格可见字段搜索；前端搜索入口尚未实现，但 P12F-F-B 三文件合同已完成审计。
+当前执行包：P12F-F-B 共用前端搜索入口。严格只改 API 封装、共用修订面板和既有 history E2E；显式搜索/清除、草稿与已应用关键词分离、POST body、搜索态无加载更多、刷新/恢复/来源/时间/折叠/项目切换与迟到隔离必须闭合。
+下一步：提交并推送 P12F-F-B 冻结契约/计划，通过既有 Grok 消息箱下发三文件 failure-first 实现；Codex 独立审查，并以 `--workers=1 --retries=0` 串行跑聚焦/history/truth/checkpoint/全量。片段/高亮、自动搜索、缓存、来源多选、日期预设、命名/固定/删除、跨项目历史、多人协作及 SSE 扩展不得混入。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -767,4 +767,14 @@ Codex 独立通过 P12F-E-B/history/技术 truth/商务 truth/checkpoint **3/40/
 
 Codex 独立串行通过专项/受影响回归/后端全量 **23/203/1096 passed**，全量 1658.59 秒；仅 1 条既有 Starlette/httpx 弃用告警。编译、diff-check、AST/弱断言、精确四文件和空暂存区通过。最终哈希：路由=`E56B0BF69A1DD425DFBF3FCD68F210E2664A9D693571E11467C462F10DDFDC08`，Schema=`474680ECEC41BEACACE624A6F154B5951167C1EEC23AEF4D48AAC708CD277221`，service=`8EACFAD08E213B14F8FF3FC5A3DBE93F3F9A17D02BCA282FF79BF8D51C350B2C`，测试=`584441E80D4C22DF4D616DB94E2D70CBBBF849260B5A314666F8C891F1B3995B`。
 
-本包未改前端、旧 GET、游标/分页、数据库/索引/迁移或依赖。P12F-F-B 前端入口仍未实现，下一包必须先独立审计并重新冻结；命中高亮/片段、自动搜索、缓存、跨项目搜索、来源多选、日期预设、命名/固定/删除、多人协作和 SSE 仍未实现。
+本包未改前端、旧 GET、游标/分页、数据库/索引/迁移或依赖。P12F-F-B 前端入口仍未实现，但已在下一节完成独立审计冻结；命中高亮/片段、自动搜索、缓存、跨项目搜索、来源多选、日期预设、命名/固定/删除、多人协作和 SSE 仍未实现。
+
+## P12F-F-B 修订可见内容搜索前端冻结交接（2026-07-18）
+
+契约=`docs/p12f-revision-content-search-frontend-contract.md`、计划=`docs/plans/2026-07-18-p12f-revision-content-search-frontend-plan.md`。只读审计确认既有 API 已有严格五键/来源/UTC parser，面板已有筛选、刷新、恢复重载与迟到隔离，history E2E 已有双工作区 page 探针；因此只改 API 封装、共用面板和既有 history E2E，不改后端、CSS、hook、配置、依赖或其它测试。
+
+交互冻结为搜索草稿与已应用关键词分离：输入零请求，明确“搜索”或 Enter 才校验并 POST；无静默 trim，NFKC 后 1..64 码点、无首尾空白/C0/C1。搜索与来源/已应用时间组合，成功展示服务端最多 20 条并隐藏加载更多；空态/失败固定中文。刷新、恢复、来源/时间变化和折叠重开保留已应用搜索，项目切换重置；page/search success/catch/finally 必须同时核对 query/source/from/before 和 session。
+
+关键词只可存在于当前输入值、React 内存、调用栈和一次 POST body，不得进入 URL、GET query、固定文案、console、local/session/Cookie、剪贴板或其它请求。冻结三文件 SHA-256：API=`DD49CC4D53389C3760797CDA8D87536131DAF12671AEF1F642EAADFC09372375`，面板=`1F29D4FB0A9A840B954963CC51D8176DC254E6D4EBFC4C02B4C52C2D0F2546D9`，history E2E=`AB27FE3E1DEB0CD8A3BD8AAF5DDB8CDD0F6DE0D6517CEB1F28B0FDC1B45B23C7`。
+
+Grok 必须先只补三个互不 serial 跳过的 E2E 形成真实 UI/API 红测，再实现两生产文件；聚焦/history/truth/checkpoint/全量 Playwright 全部显式 `--workers=1 --retries=0`。自动搜索/防抖、片段/高亮/分数、搜索历史、缓存、游标/跨项目搜索、来源多选、日期预设及任何写能力不在本包。

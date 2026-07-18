@@ -365,7 +365,7 @@ P8D 与 P8E 本机外置解析助手均已完成并推送：P8D 计划=`30d066f`
 
 **P12E-A 单条修订正文差异预览已完成**：冻结=`5aa205c`、实现=`f9f067e`。只读 GET 返回精确六键和有界章节行差异；前端技术/商务共用按需入口、严格 parser、四意图互斥与 arrived/complete 迟到隔离。Codex 首轮审查复现第 101 个差异章仍进入 difflib，Grok 以真实 **1 failed / 1 passed** 红测返修为 **2 passed**；Codex 独立通过专项/回归/后端全量 **23/27/854**，history/checkpoint/truth/前端全量 **27/51/46/290 passed**。任意历史两两比较、删除、搜索、分页、正文自动恢复和多人协作继续不进入 A 包。
 
-**下一步**：P13-A、P12F-D、P12F-E-A/B 与 P12F-F-A 均已完成。下一包先独立审计 P12F-F-B 前端搜索入口，重新冻结 API 封装、共用修订面板和 E2E 白名单；游标/片段、高亮、自动搜索、缓存、来源多选、日期预设、命名/固定/删除、跨项目历史、多人协作和 SSE 扩展不得合包。
+**下一步**：P13-A、P12F-D、P12F-E-A/B 与 P12F-F-A 均已完成；P12F-F-B 前端搜索入口已完成只读审计，当前文档提交即冻结 API 封装、共用面板和 history E2E 三文件。Grok 必须先形成三个真实前端红测；游标/片段、高亮、自动搜索、缓存、来源多选、日期预设、命名/固定/删除、跨项目历史、多人协作和 SSE 扩展不得合包。
 
 **P12E-B 已完成并推送**：双修订正文差异后端基础，契约=`docs/p12e-revision-pair-body-diff-contract.md`，计划=`docs/plans/2026-07-17-p12e-revision-pair-body-diff-plan.md`，冻结=`00ef081`、实现=`5a5b08a`。只比较同 workspace/project 的两个历史修订，暂不提供前端入口；Grok 仅改四个后端文件并发送 review_request，Codex 独立验收后提交推送。专项/回归/全量 **13/23/50/867 passed**，合并专项 **86 passed**，仅 1 条既有 Starlette/httpx 弃用告警。
 
@@ -386,6 +386,8 @@ P12E-B 真实 failure-first 为 13 项红测：11 项路由缺失 404、1 项同
 **P12F-E-B 已完成并推送**：契约=`docs/p12f-revision-time-range-filter-frontend-contract.md`，计划=`docs/plans/2026-07-18-p12f-revision-time-range-filter-frontend-plan.md`，冻结=`a31e50e`、实现=`f9127ec`。只改 API 封装、共用修订面板和既有 history E2E：本地时间草稿经显式应用后严格转 UTC 毫秒，无效零请求保值；已应用时间与来源共同用于首屏、刷新、恢复和 `esrc3` 第二页。真实红测 **0/2/1**；Codex E2E-only 返修审查关闭宽松计数、V3 257 假覆盖、第二页查询串和同项目迟到污染假绿，独立通过 **3/40/28/18/51/303 passed** 及 lint/build/diff/白名单。全量首轮冻结范围外既有双击竞态 **294/1/8** 已保留，检查点独立 51/51 后无代码改动完整复验 303/303。后端、日期预设、正文搜索、来源多选和写能力未进入本包。
 
 **P12F-F-A 已完成并推送**：契约=`docs/p12f-revision-content-search-contract.md`，计划=`docs/plans/2026-07-18-p12f-revision-content-search-plan.md`，冻结=`b2eed7c`、实现=`e6516e8`。独立 POST 只扫描来源/时间条件下最新 20 条六列候选，完整校验后以 NFKC+casefold 连续字面搜索严格可见字段，只回五键元数据；缺失/额外键使用固定脱敏 422。真实红测 **18 failed / 3 passed**；两轮受限返修关闭 422 原始 input 泄漏、报价容器对象预算及测试假绿。Codex 独立通过 **23/203/1096 passed**，编译/diff/AST/四文件/空暂存区通过。P12F-F-B 前端、游标/片段、FTS/索引/迁移、缓存和跨项目搜索仍未实现。
+
+**P12F-F-B 已审计，当前文档冻结**：契约=`docs/p12f-revision-content-search-frontend-contract.md`，计划=`docs/plans/2026-07-18-p12f-revision-content-search-frontend-plan.md`。严格三文件接入显式 POST 搜索：草稿/已应用关键词分离，输入零请求，搜索与来源/已应用时间组合，结果最多 20 且无加载更多；刷新/恢复/折叠保留，项目切换重置，四条件迟到隔离。关键词只留输入内存和 POST body；无自动搜索、片段/高亮、缓存、游标/跨项目搜索或写能力。
 
 **P13-A 已完成并推送**：契约=`docs/p13a-task-sse-workspace-auth-contract.md`，计划=`docs/plans/2026-07-17-p13a-task-sse-workspace-auth-plan.md`，冻结=`e8dfa61`、实现=`1509aa2`。SSE 连接前短 Session 复用统一 workspace/成员/bid_writer 解析，流内每轮按 workspace/project/task 再校验；disabled、原生 EventSource、事件/回退不变。真实 failure-first **8 failed / 5 passed**；Codex 一轮 test-only 返修关闭恒真泄漏断言、secret marker 跳过和宽松三参，独立通过 **13/72/918 passed**。首次全量只因 20 分钟外层时限不足终止，40 分钟外层干净重跑为 **918 passed in 1310.97s**。
 ## P12D-B 完成状态（2026-07-17）
