@@ -3,7 +3,7 @@
 模块：P12F-F-B 技术标/商务标共用修订可见内容搜索前端
 用途：把 P12F-F-A 已验收的有界 POST 搜索接入共用修订历史面板，以显式、无持久化方式搜索当前筛选下最近 20 条候选。
 对接：`editorStateRevisionApi.ts`、`EditorStateRevisionPanel.tsx`、`editor-state-revision-history.spec.ts`、P12F-F-A 后端合同。
-状态：2026-07-18 已完成只读审计，当前文档冻结前端三文件边界；Grok 负责 failure-first 实现，Codex 负责独立审查、串行验收、中文文档闭环和协作分支推送。
+状态：2026-07-18 已完成并推送；冻结=`4585388`、实现=`be2fe77`。Grok 完成 failure-first 实现及受限 E2E 返修，Codex 完成独立审查、串行验收、中文文档闭环和协作分支推送。
 
 ## 1. 审计结论与方案
 
@@ -76,7 +76,7 @@ Grok 只允许修改：
 2. `frontend/src/features/editor-state-revisions/EditorStateRevisionPanel.tsx`
 3. `frontend/e2e/editor-state-revision-history.spec.ts`
 
-冻结 SHA-256：
+实现前冻结 SHA-256：
 
 - API：`DD49CC4D53389C3760797CDA8D87536131DAF12671AEF1F642EAADFC09372375`
 - 面板：`1F29D4FB0A9A840B954963CC51D8176DC254E6D4EBFC4C02B4C52C2D0F2546D9`
@@ -107,3 +107,12 @@ Grok 至少串行运行：
 - `git diff --check`、精确三文件、空暂存区和弱断言/禁区扫描。
 
 所有 Playwright 命令必须显式 `--workers=1 --retries=0`，禁止 xdist/并行。Codex 独立审查和重跑后才可提交。
+
+## 7. 完成记录
+
+- 冻结提交=`4585388`，实现提交=`be2fe77`；Grok 严格只修改三文件，未暂存、提交或推送。真实 failure-first 为 **3 failed / 0 passed / 0 did not run**，首个失败是搜索输入不存在。
+- 初始任务/回执=`msg_3fb9225e60824153ac8b76d6d2c118de`/`msg_c69d1b022cea4d778db1edeee5da5546`。Codex 首轮审查发现三类 E2E 假绿：严格坏响应未真实进入 parser；DEL/C1 与 Unicode 码点边界证据不足；旧请求 `catch/finally` 未与新搜索 loading 真实重叠。受限返修任务/回执=`msg_76277425992e4369a1476bdcbe9829c1`/`msg_6722f22970184a0981eb07d6d2997951`，验收回执=`msg_14c421e3a1c2498985c41ed026e84fdf`。
+- 返修后探针真实覆盖顶层额外键、元数据缺键/额外键、重复 ID、21 项超限；覆盖 DEL/C1、64 个 astral 码点合法与 65 个非法；并以 A 请求 parser `catch` 和 B 请求 page loading 重叠证明旧 `finally` 不能清除新 loading。
+- Codex 独立串行通过聚焦/history/技术 truth/商务 truth/checkpoint/后端 P12F-F-A **3/43/28/18/51/23 passed**，lint、build、diff-check、精确三文件、空暂存区和禁区/弱断言扫描通过；前端全量 **306 passed（7.6m）**。
+- 最终 SHA-256：API=`4EB053C284A6F4059D559842B3A6C5C0AF829BDF08E26A8528E0760B0B02D433`，面板=`524D5AC6D494736492E4A18385DEE74C7F7547129888E322808548A17F8F81FF`，history E2E=`D7BFAE7EDD61747DE790FDC188E9C61959E93529AA1093F514E1B6BBCC7D63BB`。
+- 仍未实现：自动搜索/防抖、片段/高亮/分数、搜索历史/缓存、搜索游标/跨项目搜索、来源多选/日期预设、命名/固定/删除、导出/分享、多人协作和 SSE 扩展；后续必须重新只读审计并独立冻结，不能沿用本包授权。
