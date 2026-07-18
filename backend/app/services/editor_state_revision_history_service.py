@@ -1,6 +1,6 @@
 """
-模块：P12C-C1 / P12F-A / P12F-B / P12F-D editor-state 修订历史只读服务
-用途：默认最近 10 条修订元数据列表、键集游标页、可选 sourceKind 筛选与单条按需详情；
+模块：P12C-C1 / P12F-A / P12F-B / P12F-D / P12F-E-A editor-state 修订历史只读服务
+用途：默认最近 10 条修订元数据列表、键集游标页、可选 sourceKind/时间范围筛选与单条按需详情；
   绝不加载 snapshot_json。
 对接：api.editor_state_revisions；EditorStateRevisionRow；
   editor_state_service / editor_state_revision_service 权威常量与算法。
@@ -8,7 +8,8 @@
   - 全程只读：禁止 commit/rollback/flush/refresh/锁/审计/写配额/读当前 editor-state/检查点；
   - 项目校验只投影 Project.id；列表/页五列投影；详情六列 + revision/workspace/project 三重作用域；
   - 列表上限 MAX_REVISIONS_LIST 与页大小 REVISION_PAGE_SIZE 字面量固定 10，禁止绑定写入保留 20；
-  - 游标页 LIMIT 11 前瞻、键集谓词；无筛选 esrc1_{i,t}；有筛选 esrc2_{i,s,t} 且与 sourceKind 绑定；
+  - 游标页 LIMIT 11 前瞻、键集谓词；无时间无来源 esrc1；仅来源 esrc2；任一时间边界 esrc3；
+  - esrc3 载荷 {b,f,i,s,t} 绑定显式时间/来源，禁止从游标采用筛选条件；
   - 13 键/规范 JSON/版本/来源必须委托既有权威实现，禁止第二套哈希或来源枚举；
   - 任一损坏收敛固定 corrupt，不反射正文/ID/版本/SQL/路径/异常。
 """
@@ -42,12 +43,23 @@ REVISION_ID_PATTERN = re.compile(r"^esr_[0-9a-f]{32}$")
 CURSOR_PREFIX = "esrc1_"
 # P12F-D 筛选游标：前缀 + 无填充 base64url(紧凑 JSON{"i","s","t"})
 CURSOR_PREFIX_V2 = "esrc2_"
+# P12F-E-A 时间范围游标：前缀 + 无填充 base64url(紧凑 JSON{"b","f","i","s","t"})
+CURSOR_PREFIX_V3 = "esrc3_"
 CURSOR_MAX_LEN = 192
+CURSOR_MAX_LEN_V3 = 256
 CURSOR_PAYLOAD_KEYS = frozenset({"i", "t"})
 CURSOR_PAYLOAD_KEYS_V2 = frozenset({"i", "s", "t"})
+CURSOR_PAYLOAD_KEYS_V3 = frozenset({"b", "f", "i", "s", "t"})
 # UTC 微秒时间位置合法闭区间（含 0 与 9999-12-31 23:59:59.999999）
 CURSOR_T_MIN = 0
 CURSOR_T_MAX = 253402300799_999999
+
+# P12F-E-A：严格 24 字符 UTC 毫秒 RFC3339（大写 T/Z、三位毫秒）
+_TIME_BOUND_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$"
+)
+_TIME_BOUND_MIN = datetime(1970, 1, 1, 0, 0, 0, 0, tzinfo=timezone.utc)
+_TIME_BOUND_MAX = datetime(9999, 12, 31, 23, 59, 59, 999000, tzinfo=timezone.utc)
 
 CODE_PROJECT_NOT_FOUND = "project_not_found"
 MSG_PROJECT_NOT_FOUND = "项目不存在或不可访问"
@@ -59,6 +71,8 @@ CODE_CURSOR_INVALID = "editor_state_revision_cursor_invalid"
 MSG_CURSOR_INVALID = "修订分页游标无效"
 CODE_SOURCE_INVALID = "editor_state_revision_source_invalid"
 MSG_SOURCE_INVALID = "修订来源筛选无效"
+CODE_TIME_RANGE_INVALID = "editor_state_revision_time_range_invalid"
+MSG_TIME_RANGE_INVALID = "修订时间范围筛选无效"
 
 
 class EditorStateRevisionHistoryError(Exception):
@@ -98,6 +112,13 @@ def _source_invalid() -> EditorStateRevisionHistoryError:
     )
 
 
+def _time_range_invalid() -> EditorStateRevisionHistoryError:
+    """用途：统一构造脱敏非法时间范围错误，禁止反射输入。"""
+    return EditorStateRevisionHistoryError(
+        400, CODE_TIME_RANGE_INVALID, MSG_TIME_RANGE_INVALID
+    )
+
+
 def _normalize_source_kind_filter(source_kind: str | None) -> str | None:
     """
     用途：规范化可选 sourceKind 筛选。
@@ -113,6 +134,87 @@ def _normalize_source_kind_filter(source_kind: str | None) -> str | None:
     if source_kind not in REVISION_SOURCE_KINDS:
         raise _source_invalid() from None
     return source_kind
+
+
+def _parse_time_bound_literal(value: str) -> datetime:
+    """
+    用途：解析严格 24 字符 UTC 毫秒字面量 YYYY-MM-DDTHH:MM:SS.sssZ。
+    规则：仅大写 T/Z、三位毫秒、合法日历、闭区间 1970..9999；拒绝空白/偏移/别名。
+    """
+    if not isinstance(value, str):
+        raise _time_range_invalid() from None
+    if len(value) != 24 or not value.isascii():
+        raise _time_range_invalid() from None
+    if _TIME_BOUND_RE.fullmatch(value) is None:
+        raise _time_range_invalid() from None
+    try:
+        dt = datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ").replace(
+            tzinfo=timezone.utc
+        )
+    except ValueError:
+        raise _time_range_invalid() from None
+    if dt < _TIME_BOUND_MIN or dt > _TIME_BOUND_MAX:
+        raise _time_range_invalid() from None
+    return dt
+
+
+def _normalize_time_range_filter(
+    created_from: str | None,
+    created_before: str | None,
+) -> tuple[datetime | None, datetime | None]:
+    """
+    用途：规范化可选 createdFrom/createdBefore。
+    规则：None 表示该边界缺失；双边必须严格 from < before；非法固定 time_range_invalid。
+    """
+    from_dt: datetime | None = None
+    before_dt: datetime | None = None
+    if created_from is not None:
+        from_dt = _parse_time_bound_literal(created_from)
+    if created_before is not None:
+        before_dt = _parse_time_bound_literal(created_before)
+    if from_dt is not None and before_dt is not None:
+        if not (from_dt < before_dt):
+            raise _time_range_invalid() from None
+    return from_dt, before_dt
+
+
+def _time_bound_to_us(dt: datetime | None) -> int | None:
+    """用途：时间边界 datetime → 游标载荷微秒整数；None 保持 null。"""
+    if dt is None:
+        return None
+    return _datetime_to_us(dt)
+
+
+def _validate_optional_bound_us(value: Any) -> int | None:
+    """用途：校验 esrc3 载荷 f/b：JSON null 或非布尔整数且落在游标时间闭区间。"""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise _cursor_invalid() from None
+    if value < CURSOR_T_MIN or value > CURSOR_T_MAX:
+        raise _cursor_invalid() from None
+    return value
+
+
+def _esrc3_time_semantics_ok(
+    from_us: int | None,
+    before_us: int | None,
+    tus: int,
+) -> bool:
+    """
+    用途：esrc3 时间语义一致性（类型/闭区间已通过后）。
+    规则：V3 仅在任一边界激活时合法；双边严格 f < b；
+      t 须为结果集内位置（下界包含 t>=f，上界排除 t<b）。
+    """
+    if from_us is None and before_us is None:
+        return False
+    if from_us is not None and before_us is not None and from_us >= before_us:
+        return False
+    if from_us is not None and tus < from_us:
+        return False
+    if before_us is not None and tus >= before_us:
+        return False
+    return True
 
 
 def _as_utc(dt: datetime) -> datetime:
@@ -162,6 +264,32 @@ def _canonical_cursor_body_v2(
 ) -> str:
     """用途：esrc2 规范紧凑 JSON{"i","s","t"} + 无填充 base64url 正文。"""
     payload = {"i": revision_id, "s": source_kind, "t": created_at_us}
+    raw = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    return (
+        base64.urlsafe_b64encode(raw.encode("utf-8"))
+        .decode("ascii")
+        .rstrip("=")
+    )
+
+
+def _canonical_cursor_body_v3(
+    *,
+    revision_id: str,
+    created_at_us: int,
+    from_us: int | None,
+    before_us: int | None,
+    source_kind: str | None,
+) -> str:
+    """用途：esrc3 规范紧凑 JSON{"b","f","i","s","t"} + 无填充 base64url 正文。"""
+    payload = {
+        "b": before_us,
+        "f": from_us,
+        "i": revision_id,
+        "s": source_kind,
+        "t": created_at_us,
+    }
     raw = json.dumps(
         payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
@@ -237,6 +365,68 @@ def encode_revision_page_cursor_v2(
         raise _corrupt() from None
 
 
+def encode_revision_page_cursor_v3(
+    created_at: datetime,
+    revision_id: str,
+    *,
+    from_us: int | None,
+    before_us: int | None,
+    source_kind: str | None,
+) -> str:
+    """
+    用途：时间范围页末条位置生成 esrc3_ 规范游标，载荷精确 {b,f,i,s,t}。
+    二次开发：f/b 为边界 UTC 微秒或 null；s 为权威来源或 null；长度 ≤ 256。
+      类型/闭区间后拒绝：f/b 双 null、双边 f>=b、t 低于 f、t 达到/超过 b；
+      非法存量位置固定 corrupt，禁止生成不可能来自结果集的 V3。
+    """
+    try:
+        if not isinstance(revision_id, str) or not REVISION_ID_PATTERN.fullmatch(
+            revision_id
+        ):
+            raise _corrupt() from None
+        if source_kind is not None:
+            if (
+                not isinstance(source_kind, str)
+                or source_kind not in REVISION_SOURCE_KINDS
+            ):
+                raise _corrupt() from None
+        if from_us is not None:
+            if isinstance(from_us, bool) or not isinstance(from_us, int):
+                raise _corrupt() from None
+            if from_us < CURSOR_T_MIN or from_us > CURSOR_T_MAX:
+                raise _corrupt() from None
+        if before_us is not None:
+            if isinstance(before_us, bool) or not isinstance(before_us, int):
+                raise _corrupt() from None
+            if before_us < CURSOR_T_MIN or before_us > CURSOR_T_MAX:
+                raise _corrupt() from None
+        if not isinstance(created_at, datetime):
+            raise _corrupt() from None
+        tus = _datetime_to_us(created_at)
+        if isinstance(tus, bool) or not isinstance(tus, int):
+            raise _corrupt() from None
+        if tus < CURSOR_T_MIN or tus > CURSOR_T_MAX:
+            raise _corrupt() from None
+        # 语义一致性：不得编码不可能来自时间范围结果集的位置
+        if not _esrc3_time_semantics_ok(from_us, before_us, tus):
+            raise _corrupt() from None
+        body = _canonical_cursor_body_v3(
+            revision_id=revision_id,
+            created_at_us=tus,
+            from_us=from_us,
+            before_us=before_us,
+            source_kind=source_kind,
+        )
+        cursor = CURSOR_PREFIX_V3 + body
+        if len(cursor) > CURSOR_MAX_LEN_V3:
+            raise _corrupt() from None
+        return cursor
+    except EditorStateRevisionHistoryError:
+        raise
+    except Exception:
+        raise _corrupt() from None
+
+
 def decode_revision_page_cursor(cursor: str) -> tuple[datetime, str]:
     """
     用途：严格解码 esrc1 并规范往返校验；非法一律固定 cursor_invalid。
@@ -249,8 +439,8 @@ def decode_revision_page_cursor(cursor: str) -> tuple[datetime, str]:
         raise _cursor_invalid() from None
     if not cursor.startswith(CURSOR_PREFIX):
         raise _cursor_invalid() from None
-    # 防止 esrc1 前缀误匹配 esrc10_ 等；esrc2 不得走本函数
-    if cursor.startswith(CURSOR_PREFIX_V2):
+    # 防止 esrc1 前缀误匹配 esrc10_ 等；esrc2/esrc3 不得走本函数
+    if cursor.startswith(CURSOR_PREFIX_V2) or cursor.startswith(CURSOR_PREFIX_V3):
         raise _cursor_invalid() from None
     body = cursor[len(CURSOR_PREFIX) :]
     if body == "" or "=" in body:
@@ -336,6 +526,70 @@ def decode_revision_page_cursor_v2(cursor: str) -> tuple[datetime, str, str]:
     except Exception:
         raise _cursor_invalid() from None
     return created_at, rid, source
+
+
+def decode_revision_page_cursor_v3(
+    cursor: str,
+) -> tuple[datetime, str, int | None, int | None, str | None]:
+    """
+    用途：严格解码 esrc3 并规范往返校验；
+      返回 (created_at, revision_id, from_us, before_us, source_kind)。
+    规则：前缀 esrc3_、长度≤256、精确键 b/f/i/s/t、null/整数类型、规范全等往返。
+    """
+    if not isinstance(cursor, str) or cursor == "":
+        raise _cursor_invalid() from None
+    if len(cursor) > CURSOR_MAX_LEN_V3:
+        raise _cursor_invalid() from None
+    if not cursor.startswith(CURSOR_PREFIX_V3):
+        raise _cursor_invalid() from None
+    body = cursor[len(CURSOR_PREFIX_V3) :]
+    if body == "" or "=" in body:
+        raise _cursor_invalid() from None
+    try:
+        pad = "=" * ((4 - len(body) % 4) % 4)
+        raw = base64.b64decode(body + pad, altchars=b"-_", validate=True)
+        text = raw.decode("utf-8")
+        data = json.loads(text)
+    except Exception:
+        raise _cursor_invalid() from None
+    if not isinstance(data, dict):
+        raise _cursor_invalid() from None
+    if set(data.keys()) != CURSOR_PAYLOAD_KEYS_V3:
+        raise _cursor_invalid() from None
+    rid = data.get("i")
+    tus = data.get("t")
+    from_us = _validate_optional_bound_us(data.get("f"))
+    before_us = _validate_optional_bound_us(data.get("b"))
+    source = data.get("s")
+    if not isinstance(rid, str) or not REVISION_ID_PATTERN.fullmatch(rid):
+        raise _cursor_invalid() from None
+    if isinstance(tus, bool) or not isinstance(tus, int):
+        raise _cursor_invalid() from None
+    if tus < CURSOR_T_MIN or tus > CURSOR_T_MAX:
+        raise _cursor_invalid() from None
+    if source is not None:
+        if not isinstance(source, str) or source not in REVISION_SOURCE_KINDS:
+            raise _cursor_invalid() from None
+    # 与编码器同一语义：双 null / f>=b / t 不在结果集 → 固定 cursor_invalid
+    if not _esrc3_time_semantics_ok(from_us, before_us, tus):
+        raise _cursor_invalid() from None
+    try:
+        expected = CURSOR_PREFIX_V3 + _canonical_cursor_body_v3(
+            revision_id=rid,
+            created_at_us=tus,
+            from_us=from_us,
+            before_us=before_us,
+            source_kind=source,
+        )
+    except Exception:
+        raise _cursor_invalid() from None
+    if expected != cursor:
+        raise _cursor_invalid() from None
+    try:
+        created_at = _us_to_datetime(tus)
+    except Exception:
+        raise _cursor_invalid() from None
+    return created_at, rid, from_us, before_us, source
 
 
 def _materialize_one_or_none(result: Any) -> Any:
@@ -548,34 +802,77 @@ def list_editor_state_revisions_page(
     project_id: str,
     cursor: str | None = None,
     source_kind: str | None = None,
+    created_from: str | None = None,
+    created_before: str | None = None,
 ) -> dict[str, Any]:
     """
-    用途：固定每页 10 条的只读键集分页；可选 sourceKind 精确筛选；
+    用途：固定每页 10 条的只读键集分页；可选 sourceKind 与 createdFrom/createdBefore；
       SQL 五列投影 + LIMIT 11 前瞻。
-    对接：GET .../page[?sourceKind=&cursor=]。
+    对接：GET .../page[?sourceKind=&createdFrom=&createdBefore=&cursor=]。
     二次开发：
-      - 先项目存在性（404 最优先），再处理筛选/游标；
-      - 规范或以 esrc2_ 开头的游标：缺筛选、非法筛选、与另一合法筛选错配
-        一律固定 cursor_invalid（不得先 source_invalid，禁止从游标采用来源）；
-      - 无 esrc2 形游标时：单独非法 sourceKind 仍 source_invalid；
-      - 无筛选仅 esrc1；有筛选仅 esrc2 且 s 必须与显式 sourceKind 全等；
-      - SQL 来源谓词只能使用通过显式 query 校验的 filter_kind；
-      - 完整物化并校验最多 11 行（含 lookahead 损坏整页 corrupt）；
-      - 仅第 11 行存在时以第 10 条位置生成 nextCursor（esrc1 或 esrc2）。
+      - 先项目存在性（404 最优先）；
+      - esrc3 形游标：任何非法/缺失/错配来源或时间条件均 cursor_invalid，禁止从游标采用；
+      - esrc2 形游标：先绑定来源合同，再处理时间/版本；
+      - 无 V3 形：先来源校验，再时间范围，最后游标版本；
+      - 无时间无来源 esrc1；仅来源 esrc2；任一时间边界 esrc3；
+      - SQL 谓词仅用显式 query 校验后的 filter_kind/from/before；
+      - 完整物化并校验最多 11 行（含 lookahead 损坏整页 corrupt）。
     """
     _require_project_id(db, workspace_id, project_id)
 
-    # 契约：esrc2 形游标（规范或仅前缀）与缺筛选/非法筛选/错配均 cursor_invalid，
-    # 不得在规范化 sourceKind 时提前 source_invalid，也不得从游标采用来源。
     esrc2_shaped = (
         cursor is not None
         and isinstance(cursor, str)
         and cursor.startswith(CURSOR_PREFIX_V2)
     )
+    esrc3_shaped = (
+        cursor is not None
+        and isinstance(cursor, str)
+        and cursor.startswith(CURSOR_PREFIX_V3)
+    )
 
     cursor_created_at: datetime | None = None
     cursor_id: str | None = None
-    if esrc2_shaped:
+    filter_kind: str | None
+    from_dt: datetime | None
+    before_dt: datetime | None
+
+    if esrc3_shaped:
+        # V3 绑定合同：任何非法/缺失/错配来源或时间 → cursor_invalid
+        try:
+            filter_kind = _normalize_source_kind_filter(source_kind)
+        except EditorStateRevisionHistoryError as exc:
+            if exc.code == CODE_SOURCE_INVALID:
+                raise _cursor_invalid() from None
+            raise
+        try:
+            from_dt, before_dt = _normalize_time_range_filter(
+                created_from, created_before
+            )
+        except EditorStateRevisionHistoryError as exc:
+            if exc.code == CODE_TIME_RANGE_INVALID:
+                raise _cursor_invalid() from None
+            raise
+        # 无时间范围时携 esrc3 固定 cursor-invalid
+        if from_dt is None and before_dt is None:
+            raise _cursor_invalid() from None
+        (
+            cursor_created_at,
+            cursor_id,
+            cursor_from_us,
+            cursor_before_us,
+            cursor_source,
+        ) = decode_revision_page_cursor_v3(cursor)
+        expected_from_us = _time_bound_to_us(from_dt)
+        expected_before_us = _time_bound_to_us(before_dt)
+        if cursor_from_us != expected_from_us:
+            raise _cursor_invalid() from None
+        if cursor_before_us != expected_before_us:
+            raise _cursor_invalid() from None
+        if cursor_source != filter_kind:
+            raise _cursor_invalid() from None
+    elif esrc2_shaped:
+        # esrc2 绑定合同优先：缺筛选/非法筛选/错配 → cursor_invalid
         try:
             filter_kind = _normalize_source_kind_filter(source_kind)
         except EditorStateRevisionHistoryError as exc:
@@ -583,21 +880,42 @@ def list_editor_state_revisions_page(
                 raise _cursor_invalid() from None
             raise
         if filter_kind is None:
-            # esrc2 缺显式筛选：固定 cursor_invalid，禁止采用游标内 s
             raise _cursor_invalid() from None
         cursor_created_at, cursor_id, cursor_source = (
             decode_revision_page_cursor_v2(cursor)
         )
         if cursor_source != filter_kind:
             raise _cursor_invalid() from None
+        # 绑定通过后：校验时间；时间范围激活时 esrc2 固定 cursor-invalid
+        from_dt, before_dt = _normalize_time_range_filter(
+            created_from, created_before
+        )
+        if from_dt is not None or before_dt is not None:
+            raise _cursor_invalid() from None
     else:
-        # 非 esrc2 形：非法来源仍 source_invalid；无筛选仅 esrc1
+        # 无 V3/V2 形：先来源，再时间，最后游标版本
         filter_kind = _normalize_source_kind_filter(source_kind)
+        from_dt, before_dt = _normalize_time_range_filter(
+            created_from, created_before
+        )
+        time_active = from_dt is not None or before_dt is not None
         if cursor is not None:
-            if filter_kind is None:
+            if time_active:
+                # 时间范围激活仅认 esrc3；非 V3 形解码固定 cursor_invalid
+                cursor_created_at, cursor_id, cursor_from_us, cursor_before_us, cursor_source = (
+                    decode_revision_page_cursor_v3(cursor)
+                )
+                expected_from_us = _time_bound_to_us(from_dt)
+                expected_before_us = _time_bound_to_us(before_dt)
+                if cursor_from_us != expected_from_us:
+                    raise _cursor_invalid() from None
+                if cursor_before_us != expected_before_us:
+                    raise _cursor_invalid() from None
+                if cursor_source != filter_kind:
+                    raise _cursor_invalid() from None
+            elif filter_kind is None:
                 cursor_created_at, cursor_id = decode_revision_page_cursor(cursor)
             else:
-                # 有合法筛选但游标非 esrc2 形（含 esrc1）→ v2 解码固定 cursor_invalid
                 cursor_created_at, cursor_id, cursor_source = (
                     decode_revision_page_cursor_v2(cursor)
                 )
@@ -620,6 +938,10 @@ def list_editor_state_revisions_page(
         )
         if filter_kind is not None:
             stmt = stmt.where(EditorStateRevisionRow.source_kind == filter_kind)
+        if from_dt is not None:
+            stmt = stmt.where(EditorStateRevisionRow.created_at >= from_dt)
+        if before_dt is not None:
+            stmt = stmt.where(EditorStateRevisionRow.created_at < before_dt)
         if cursor_created_at is not None and cursor_id is not None:
             stmt = stmt.where(
                 or_(
@@ -666,7 +988,16 @@ def list_editor_state_revisions_page(
     next_cursor: str | None = None
     if has_more and page_items:
         last = page_items[-1]
-        if filter_kind is None:
+        time_active = from_dt is not None or before_dt is not None
+        if time_active:
+            next_cursor = encode_revision_page_cursor_v3(
+                last["created_at"],
+                last["revision_id"],
+                from_us=_time_bound_to_us(from_dt),
+                before_us=_time_bound_to_us(before_dt),
+                source_kind=filter_kind,
+            )
+        elif filter_kind is None:
             next_cursor = encode_revision_page_cursor(
                 last["created_at"], last["revision_id"]
             )
