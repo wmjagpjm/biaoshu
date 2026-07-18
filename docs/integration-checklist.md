@@ -918,7 +918,7 @@ cd C:\Users\Administrator\biaoshu\backend
 
 Grok 与 Codex 最终均通过 **14/71/93/39/1110 passed**；Codex 独立全量 1620.30 秒，仅 1 条既有 Starlette/httpx 弃用告警。`py_compile`、`git diff --check`、精确五文件、空暂存区与最终 SHA-256 全部通过。P12F-G-B 只可另包实现前端确认、加载态、成功重载、失败保留和迟到隔离。
 
-## P12F-G-B 单条修订删除前端（已审计，当前文档冻结）
+## P12F-G-B 单条修订删除前端（已完成并推送）
 
 契约=`docs/p12f-revision-delete-frontend-contract.md`、计划=`docs/plans/2026-07-18-p12f-revision-delete-frontend-plan.md`。三文件白名单为 API、技术/商务共用面板、history E2E；冻结哈希分别为 `4EB053C...B02D433`、`524D5AC...F81FF`、`D7BFAE7...63BB`。共享 `apiFetch` 已支持 204 与 DELETE CSRF，禁止修改后端、共享请求层或 workspace hook。
 
@@ -926,7 +926,9 @@ Grok 与 Codex 最终均通过 **14/71/93/39/1110 passed**；Codex 独立全量 
 
 确认和执行期间折叠、筛选、搜索、刷新、加载更多及全部行操作真实 disabled；进入确认先清摘要/当前对比/body-diff/pair/restore 意图。A→B 双 gate 必须证明旧 DELETE 和旧重载的 success/catch/finally 不污染 B 或清除 B busy。editor-state GET/PUT、restore、checkpoint create、外网、URL/存储/Cookie/console 泄漏均为零。
 
-Grok 先只扩展 E2E，三个独立 P12F-G-B 用例形成真实业务红测；再实现 API/面板。验收逐条串行：聚焦、完整 history、checkpoint、技术 truth、商务 truth、lint、build；Codex 另跑前端全量。所有 Playwright 必须 `--workers=1 --retries=0`，禁止并行命令。
+冻结=`89b5728`、实现=`bb7c4f4`。真实 failure-first **3 failed / 0 passed / 0 did-not-run**，首个业务失败为列表加载后删除按钮缺失。两轮受限返修关闭旧闭包项目校验、成功后重载失败缺口、宽松 OR/首项/`Math.min` 假绿，并补齐 query+sourceKind+createdFrom+createdBefore 组合失败与恢复。
+
+Codex 独立串行通过聚焦/history/checkpoint/技术 truth/商务 truth/前端全量 **4/47/51/28/18/310 passed**；lint、build、diff-check、精确三文件、空暂存区、最终哈希与静态禁区门通过。所有 Playwright 必须继续显式 `--workers=1 --retries=0` 串行运行，禁止并行命令。
 
 ## P13-A 任务 SSE 工作空间鉴权（已完成）
 
