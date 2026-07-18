@@ -918,6 +918,16 @@ cd C:\Users\Administrator\biaoshu\backend
 
 Grok 与 Codex 最终均通过 **14/71/93/39/1110 passed**；Codex 独立全量 1620.30 秒，仅 1 条既有 Starlette/httpx 弃用告警。`py_compile`、`git diff --check`、精确五文件、空暂存区与最终 SHA-256 全部通过。P12F-G-B 只可另包实现前端确认、加载态、成功重载、失败保留和迟到隔离。
 
+## P12F-G-B 单条修订删除前端（已审计，当前文档冻结）
+
+契约=`docs/p12f-revision-delete-frontend-contract.md`、计划=`docs/plans/2026-07-18-p12f-revision-delete-frontend-plan.md`。三文件白名单为 API、技术/商务共用面板、history E2E；冻结哈希分别为 `4EB053C...B02D433`、`524D5AC...F81FF`、`D7BFAE7...63BB`。共享 `apiFetch` 已支持 204 与 DELETE CSRF，禁止修改后端、共享请求层或 workspace hook。
+
+联调必须确认：默认、点击删除、取消均零 DELETE；固定内联确认后精确一次 DELETE，query 为空、body 为空、无重试；成功固定中文并重载第一批，普通态 GET page，搜索态保留 query/sourceKind/createdFrom/createdBefore 后 POST search；失败列表、草稿和已应用条件保值且零重载。
+
+确认和执行期间折叠、筛选、搜索、刷新、加载更多及全部行操作真实 disabled；进入确认先清摘要/当前对比/body-diff/pair/restore 意图。A→B 双 gate 必须证明旧 DELETE 和旧重载的 success/catch/finally 不污染 B 或清除 B busy。editor-state GET/PUT、restore、checkpoint create、外网、URL/存储/Cookie/console 泄漏均为零。
+
+Grok 先只扩展 E2E，三个独立 P12F-G-B 用例形成真实业务红测；再实现 API/面板。验收逐条串行：聚焦、完整 history、checkpoint、技术 truth、商务 truth、lint、build；Codex 另跑前端全量。所有 Playwright 必须 `--workers=1 --retries=0`，禁止并行命令。
+
 ## P13-A 任务 SSE 工作空间鉴权（已完成）
 
 冻结=`e8dfa61`，实现=`1509aa2`。required 模式继续由认证中间件负责无会话 401；SSE 路由连接前短 Session 复用统一 `get_workspace_id`，因此 finance/hr/bidder 固定 `role_forbidden`，非成员显式头固定 `workspace_forbidden`，无头原生 EventSource 使用会话 `activeWorkspaceId`。disabled 仍支持默认空间与合法显式头。
