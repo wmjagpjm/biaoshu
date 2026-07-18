@@ -1307,19 +1307,21 @@ def test_service_and_api_source_no_write_ops_ast_supplement(disabled_client):
 
 def test_no_write_routes_on_revision_history(disabled_client):
     """
-    用途：除精确 C2 POST restore 外，修订历史仍无其他写路由。
+    用途：除精确 C2 POST restore 与 P12F-G-A DELETE 单条修订外，修订历史仍无其他写路由。
     二次开发：C2 注册 POST .../restore 后，空 body 固定 422 且零写；
-      不得弱化列表/详情 PUT/PATCH/DELETE 与 POST 列表/详情的 404/405 守卫。
+      G-A 注册 DELETE .../{revisionId} 后，合法空 body 固定 204 且仅删目标行；
+      不得弱化列表/详情 PUT/PATCH 与 POST 列表/详情的 404/405 守卫。
     """
     client = disabled_client
     pid = _create_project(client)
     _put_state(client, pid, tag="nowrite")
     rid = _db_rev_rows(pid)[0]["id"]
     before = _domain_snapshot(pid)
-    restore_path = f"{_url(pid, rid)}/restore"
+    detail_path = _url(pid, rid)
+    restore_path = f"{detail_path}/restore"
 
     for method in ("post", "put", "patch", "delete"):
-        for path in (_url(pid), _url(pid, rid), restore_path):
+        for path in (_url(pid), detail_path, restore_path):
             fn = getattr(client, method)
             if method in ("post", "put", "patch"):
                 res = fn(path, json={})
@@ -1335,7 +1337,25 @@ def test_no_write_routes_on_revision_history(disabled_client):
                 )
                 assert res.status_code not in (200, 201)
                 continue
-            # 除精确 C2 POST 外仍无其他写路由
+            # 精确 P12F-G-A DELETE 单条修订：合法空请求 204，仅删目标
+            if method == "delete" and path == detail_path:
+                assert res.status_code == 204, (
+                    method,
+                    path,
+                    res.status_code,
+                    res.text,
+                )
+                assert res.headers.get("Cache-Control") == "no-store"
+                assert res.content == b""
+                assert res.text == ""
+                # 目标已删；revisions 精确等于 before 减目标；其余域不变
+                expected_revs = [r for r in before["revisions"] if r["id"] != rid]
+                assert _db_rev_rows(pid) == expected_revs
+                assert _db_cp_rows(pid) == before["checkpoints"]
+                assert _db_editor_state_row(pid) == before["editor_state"]
+                assert _db_project_row(pid) == before["project"]
+                continue
+            # 除精确 C2 POST / G-A DELETE 外仍无其他写路由
             assert res.status_code in (404, 405), (
                 method,
                 path,
@@ -1344,8 +1364,16 @@ def test_no_write_routes_on_revision_history(disabled_client):
             )
             assert res.status_code != 200
             assert res.status_code != 201
+            assert res.status_code != 204
 
-    assert _domain_snapshot(pid) == before
+    # 列表/restore 路径上的非法写仍零副作用；详情 DELETE 已消耗目标行
+    after = _domain_snapshot(pid)
+    expected_revs = [r for r in before["revisions"] if r["id"] != rid]
+    assert after["revisions"] == expected_revs
+    assert after["checkpoints"] == before["checkpoints"]
+    assert after["editor_state"] == before["editor_state"]
+    assert after["project"] == before["project"]
+    assert rid not in {r["id"] for r in after["revisions"]}
 
 
 def test_unknown_query_params_do_not_filter_or_search_body(disabled_client):

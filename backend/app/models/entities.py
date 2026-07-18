@@ -1492,11 +1492,13 @@ class EditorStateRevisionRow(Base):
     """
     模块：P12C-A editor-state 有限自动修订账本
     用途：与手动/安全检查点独立的最近自动修订快照（每项目最近 10 条）。
-    对接：editor_state_revision_service.record_editor_state_transition。
+    对接：editor_state_revision_service.record_editor_state_transition；
+      单条物理删除见 editor_state_revision_delete_service。
     二次开发：
-      - 禁止客户端投稿 snapshot/source；A 包无生产写入者、无公开 API
+      - 禁止客户端投稿 snapshot/source；写入仅经 transition 记账
       - 不得复用 editor_state_checkpoints 的 20 条裁剪域
-      - 列表/最新/裁剪不得投影 snapshot_json；不提供删除/浏览/恢复端点
+      - 列表/最新/裁剪不得投影 snapshot_json；浏览/恢复见 history/restore；
+        单条物理删除仅限独立 delete 服务，无批量/软删除/本表外级联
     """
 
     __tablename__ = "editor_state_revisions"

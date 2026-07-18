@@ -1,16 +1,19 @@
 """
-模块：P12C-C1/C2/P12D-A/P12E-A/P12E-B/P12F-B/P12F-D/P12F-E-A/P12F-F-A editor-state
-  修订历史只读、游标页、来源/时间范围筛选、可见内容搜索、受限恢复、差异摘要与正文差异路由
+模块：P12C-C1/C2/P12D-A/P12E-A/P12E-B/P12F-B/P12F-D/P12F-E-A/P12F-F-A/P12F-G-A editor-state
+  修订历史只读、游标页、来源/时间范围筛选、可见内容搜索、受限恢复、差异摘要与正文差异、
+  单条物理删除路由
 用途：项目最近 10 条修订元数据列表、键集游标页（可选 sourceKind/createdFrom/createdBefore）、
-  有界可见内容搜索、单条按需详情、单条受限恢复、与当前状态差异摘要、单/双修订正文差异。
+  有界可见内容搜索、单条按需详情、单条受限恢复、与当前状态差异摘要、单/双修订正文差异、
+  单条自动修订物理删除。
 对接：/api/projects/{projectId}/editor-state-revisions*；
   editor_state_revision_history_service；
   editor_state_revision_restore_service；
   editor_state_revision_comparison_service；
-  editor_state_revision_body_diff_service；deps.get_workspace_id。
+  editor_state_revision_body_diff_service；
+  editor_state_revision_delete_service；deps.get_workspace_id。
 二次开发：
   - 复用 get_workspace_id（disabled 兼容，required 仅 bid_writer）；
-  - POST 继续既有 CSRF；所有成功/业务错误 Cache-Control: no-store；
+  - POST/DELETE 继续既有 CSRF；所有成功/业务错误 Cache-Control: no-store；
   - 错误固定 code/message（409 另含 currentStateVersion），不反射 ID/正文/路径/SQL/关键词；
   - 未知查询参数不得改变固定排序/上限/来源全集/正文不可搜索边界；
   - 静态 /page 与 /search 必须注册在动态 /{revision_id} 之前；页大小服务端固定 10；
@@ -18,6 +21,7 @@
   - search 仅 POST body 承载关键词，list/page 五列投影不变；
   - comparison/body-diff 只读，禁止写库/锁/审计；
   - P12E-B 双修订 body-diff 两侧均经 C1 校验，禁止读取当前 editor-state；
+  - DELETE 必须无 query 且 body 严格零长度；成功固定空 204；
   - 不得把 revision ID/state version/原始快照/关键词放入成功或错误响应。
 """
 
@@ -60,6 +64,10 @@ from app.services.editor_state_revision_body_diff_service import (
 from app.services.editor_state_revision_comparison_service import (
     EditorStateRevisionComparisonError,
 )
+from app.services.editor_state_revision_delete_service import (
+    EditorStateRevisionDeleteError,
+    delete_editor_state_revision as delete_editor_state_revision_svc,
+)
 from app.services.editor_state_revision_history_service import (
     EditorStateRevisionHistoryError,
 )
@@ -75,10 +83,37 @@ _SEARCH_REQUEST_INVALID_DETAIL = {
     "message": "修订搜索请求无效",
 }
 
+# P12F-G-A 删除请求 query/body 校验失败的固定脱敏 detail；禁止反射输入
+_DELETE_REQUEST_INVALID_DETAIL = {
+    "code": "editor_state_revision_delete_request_invalid",
+    "message": "修订删除请求无效",
+}
+
 
 def _no_store(response: Response) -> None:
     """用途：P12C-C1/C2 响应固定禁止缓存。"""
     response.headers["Cache-Control"] = "no-store"
+
+
+def _raise_delete_request_invalid() -> NoReturn:
+    """
+    用途：DELETE 路由专用；任意 query 或非空 body 固定脱敏 422。
+    二次开发：禁止回显 query/body/路径/header/异常原文。
+    """
+    raise HTTPException(
+        status_code=422,
+        detail=dict(_DELETE_REQUEST_INVALID_DETAIL),
+        headers={"Cache-Control": "no-store"},
+    ) from None
+
+
+def _raise_delete_error(exc: EditorStateRevisionDeleteError) -> NoReturn:
+    """用途：映射删除服务层固定错误。"""
+    raise HTTPException(
+        status_code=exc.status_code,
+        detail=exc.as_detail(),
+        headers={"Cache-Control": "no-store"},
+    ) from None
 
 
 def _raise_search_request_invalid() -> NoReturn:
@@ -311,6 +346,45 @@ def get_editor_state_revision(
         created_at=data["created_at"],
         snapshot=data["snapshot"],
     )
+
+
+@router.delete(
+    "/{project_id}/editor-state-revisions/{revision_id}",
+    status_code=204,
+    response_class=Response,
+)
+async def delete_editor_state_revision(
+    project_id: str,
+    revision_id: str,
+    request: Request,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    workspace_id: Annotated[str, Depends(get_workspace_id)],
+) -> Response:
+    """
+    用途：单条物理删除当前工作空间项目内的自动修订；成功空 204。
+    对接：P12F-G-A；editor_state_revision_delete_service。
+    二次开发：
+      - 任意 query 或非空 body（含 {}、null、文本）固定 422 脱敏；
+      - 成功严格空正文 + no-store；不回显 ID/版本/计数/正文；
+      - 不改变 /page /search 静态优先级与其它 GET/POST 语义。
+    """
+    _no_store(response)
+    if request.query_params:
+        _raise_delete_request_invalid()
+    try:
+        raw = await request.body()
+    except Exception:
+        _raise_delete_request_invalid()
+    if raw:
+        _raise_delete_request_invalid()
+    try:
+        delete_editor_state_revision_svc(
+            db, workspace_id, project_id, revision_id
+        )
+    except EditorStateRevisionDeleteError as exc:
+        _raise_delete_error(exc)
+    return Response(status_code=204, headers={"Cache-Control": "no-store"})
 
 
 @router.get(
