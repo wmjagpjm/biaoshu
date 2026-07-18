@@ -1,12 +1,13 @@
 /**
- * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B / P12F-F-B / P12F-G-B
- *       双工作区修订历史、对比、正文差异、游标分页、来源与时间范围筛选、可见内容搜索、单条删除前端 E2E
+ * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B / P12F-F-B / P12F-G-B / P12F-H
+ *       双工作区修订历史、对比、正文差异、游标分页、来源与时间范围筛选、可见内容搜索、单条删除、单条命名前端 E2E
  * 用途：技术标/商务标证明默认折叠零请求、按需列表/摘要/对比/正文差异、双修订正文差异、
  *       二次确认 restore、游标页首屏与加载更多、来源筛选、本地时间范围应用/清除、
  *       显式内容搜索 POST、单条删除确认/唯一 DELETE/成功重载/失败保留、
+ *       单条命名保存/覆盖/清除/失败保值/互斥迟到/商务共用与数据最小化、
  *       执行时 expected、唯一 editor-state GET、失败阻断、迟到隔离与数据最小化。
  * 对接：Playwright chromium headless workers=1 retries=0；route 探针
- *       （含 comparison/body-diff/pair/page/search/delete arrived/complete/cursor/sourceKind/createdFrom/createdBefore/query body）。
+ *       （含 comparison/body-diff/pair/page/search/delete/display-name arrived/complete/cursor/sourceKind/createdFrom/createdBefore/query body）。
  * 二次开发：禁止固定 sleep、.or(...)、>=1 冒充、宽泛状态码、route fallback 假成功。
  */
 import {
@@ -107,6 +108,14 @@ const DELETE_CONFIRM =
 const MSG_DELETE_OK = "已删除所选修订";
 /** P12F-G-B 删除失败固定文案 */
 const MSG_DELETE_FAIL = "删除修订失败，当前列表已保留";
+/** P12F-H 命名在途固定文案 */
+const MSG_NAME_SAVING = "保存名称中…";
+/** P12F-H 命名成功固定文案 */
+const MSG_NAME_OK = "修订名称已保存";
+/** P12F-H 清除名称成功固定文案 */
+const MSG_NAME_CLEARED = "修订名称已清除";
+/** P12F-H 命名失败固定文案 */
+const MSG_NAME_FAIL = "保存修订名称失败，当前名称已保留";
 
 /** 权威 13 键固定顺序（与后端 CANONICAL_STATE_KEYS 对齐） */
 const CANONICAL_FIELD_ORDER = [
@@ -172,6 +181,8 @@ type RevisionMeta = {
   snapshotBytes: number;
   sourceKind: string;
   createdAt: string;
+  /** P12F-H 六键；缺省 null */
+  displayName: string | null;
 };
 
 type RevisionDetail = RevisionMeta & {
@@ -252,6 +263,13 @@ type DeleteMode =
   | { kind: "hold"; gate: HoldGate }
   | { kind: "http_error"; status: number };
 
+/** P12F-H 单条命名模式：正常 / 挂起后成功 / 挂起后 HTTP 错误 / 即时 HTTP 错误 */
+type NameMode =
+  | { kind: "ok" }
+  | { kind: "hold"; gate: HoldGate; then: "ok" }
+  | { kind: "hold"; gate: HoldGate; then: "http_error"; status: number }
+  | { kind: "http_error"; status: number };
+
 /** P12F-G-B DELETE 探针到达记录：无 query/body */
 type DeleteProbeHit = {
   projectId: string;
@@ -261,6 +279,21 @@ type DeleteProbeHit = {
   postData: string | null;
   queryKeys: string[];
   search: string;
+};
+
+/** P12F-H PATCH display-name 探针到达记录：精确 body 一键 + 实际 CSRF 头 */
+type NameProbeHit = {
+  projectId: string;
+  revisionId: string;
+  method: string;
+  path: string;
+  postData: string | null;
+  queryKeys: string[];
+  search: string;
+  bodyKeys: string[];
+  displayName: string | null | undefined;
+  /** 小写请求头 x-csrf-token 的实际值；缺失为 null */
+  csrfToken: string | null;
 };
 
 /** page 探针到达记录：含 cursor/sourceKind/时间与查询键，供精确零旁路断言 */
@@ -434,6 +467,15 @@ type ProbeState = {
     revisionId: string;
     status: number;
   }>;
+  /** P12F-H PATCH display-name 到达（gate 前） */
+  nameLog: NameProbeHit[];
+  /** P12F-H PATCH display-name 响应已 fulfill */
+  nameCompleteLog: Array<{
+    projectId: string;
+    revisionId: string;
+    status: number;
+    displayName: string | null;
+  }>;
   editorGetLog: Array<{ projectId: string; path: string }>;
   putMode: PutMode;
   restoreMode: RestoreMode;
@@ -445,6 +487,7 @@ type ProbeState = {
   bodyDiffMode: BodyDiffMode;
   pairBodyDiffMode: PairBodyDiffMode;
   deleteMode: DeleteMode;
+  nameMode: NameMode;
   restoreModeByProject: Record<string, RestoreMode>;
   listModeByProject: Record<string, ListMode>;
   pageModeByProject: Record<string, PageMode>;
@@ -464,6 +507,8 @@ type ProbeState = {
   pairBodyDiffModeByPairKey: Record<string, PairBodyDiffMode>;
   deleteModeByProject: Record<string, DeleteMode>;
   deleteModeByRevisionId: Record<string, DeleteMode>;
+  nameModeByProject: Record<string, NameMode>;
+  nameModeByRevisionId: Record<string, NameMode>;
   listResponseOverride: unknown | null;
   pageResponseOverride: unknown | null;
   /** 按 cursor 键固定 page 响应（null cursor 用 ""） */
@@ -490,6 +535,11 @@ type ProbeState = {
   checkpointListLog: string[];
   /** 检查点 create POST 探针（互斥/令牌验证） */
   checkpointCreateLog: string[];
+  /**
+   * P12F-H：为 true 时 bootstrap 走 authRequired，触发 /auth/csrf 续发 e2e-csrf，
+   * 使命名 PATCH 携带精确 x-csrf-token。默认 false 保持其余用例 disabled 兼容。
+   */
+  authRequired: boolean;
 };
 
 function seedStateVersion(n: number): string {
@@ -642,6 +692,7 @@ function createProbeState(mode: Mode): ProbeState {
     },
     revisions: { [aId]: [], [bId]: [] },
     details: {},
+    authRequired: false,
     versionSeq: versionSeq + 1,
     revisionSeq: 0,
     checkpointSeq: 0,
@@ -663,6 +714,8 @@ function createProbeState(mode: Mode): ProbeState {
     pairBodyDiffCompleteLog: [],
     deleteLog: [],
     deleteCompleteLog: [],
+    nameLog: [],
+    nameCompleteLog: [],
     editorGetLog: [],
     putMode: { kind: "ok" },
     restoreMode: { kind: "ok" },
@@ -674,6 +727,7 @@ function createProbeState(mode: Mode): ProbeState {
     bodyDiffMode: { kind: "ok" },
     pairBodyDiffMode: { kind: "ok" },
     deleteMode: { kind: "ok" },
+    nameMode: { kind: "ok" },
     restoreModeByProject: {},
     listModeByProject: {},
     pageModeByProject: {},
@@ -690,6 +744,8 @@ function createProbeState(mode: Mode): ProbeState {
     pairBodyDiffModeByPairKey: {},
     deleteModeByProject: {},
     deleteModeByRevisionId: {},
+    nameModeByProject: {},
+    nameModeByRevisionId: {},
     listResponseOverride: null,
     pageResponseOverride: null,
     pageResponseByCursor: {},
@@ -732,6 +788,19 @@ function resolveDeleteMode(
   );
 }
 
+/** 用途：解析命名 PATCH 模式；按 revisionId 优先，其次 project，最后全局 */
+function resolveNameMode(
+  state: ProbeState,
+  projectId: string,
+  revisionId: string,
+): NameMode {
+  return (
+    state.nameModeByRevisionId[revisionId] ??
+    state.nameModeByProject[projectId] ??
+    state.nameMode
+  );
+}
+
 /** 用途：DELETE arrived 计数（可按 project/revision 过滤） */
 function deleteHitCount(
   state: ProbeState,
@@ -739,6 +808,32 @@ function deleteHitCount(
   revisionId?: string,
 ): number {
   return state.deleteLog.filter(
+    (h) =>
+      (projectId == null || h.projectId === projectId) &&
+      (revisionId == null || h.revisionId === revisionId),
+  ).length;
+}
+
+/** 用途：命名 PATCH arrived 计数 */
+function nameHitCount(
+  state: ProbeState,
+  projectId?: string,
+  revisionId?: string,
+): number {
+  return state.nameLog.filter(
+    (h) =>
+      (projectId == null || h.projectId === projectId) &&
+      (revisionId == null || h.revisionId === revisionId),
+  ).length;
+}
+
+/** 用途：命名 PATCH complete 计数 */
+function nameCompleteCount(
+  state: ProbeState,
+  projectId?: string,
+  revisionId?: string,
+): number {
+  return state.nameCompleteLog.filter(
     (h) =>
       (projectId == null || h.projectId === projectId) &&
       (revisionId == null || h.revisionId === revisionId),
@@ -1550,11 +1645,31 @@ async function installRoutes(page: Page, state: ProbeState) {
       return;
     }
     if (path === "/api/auth/bootstrap-status" && method === "GET") {
-      await json(route, { mode: "disabled", bootstrapped: true });
+      await json(route, {
+        bootstrapped: true,
+        authRequired: Boolean(state.authRequired),
+      });
       return;
     }
     if (path === "/api/auth/me" && method === "GET") {
-      await json(route, { id: "user_e2e", name: "e2e" });
+      if (state.authRequired) {
+        // 强制走 /auth/csrf 续发，使内存 CSRF=e2e-csrf
+        await json(route, {
+          user: { id: "user_e2e", username: "e2e" },
+          workspaces: [
+            {
+              id: "ws_e2e",
+              name: "E2E",
+              role: "bid_writer",
+              isOwner: true,
+            },
+          ],
+          activeWorkspaceId: "ws_e2e",
+          csrfToken: null,
+        });
+      } else {
+        await json(route, { id: "user_e2e", name: "e2e" });
+      }
       return;
     }
     if (path === "/api/auth/csrf" && method === "GET") {
@@ -2394,12 +2509,14 @@ async function installRoutes(page: Page, state: ProbeState) {
           : bizRestoredEditor(prev, restoredVersion);
 
       // 恢复成功后在列表头部追加 revision_restore 时间点；保留上限 20（P12F-A）
+      // P12F-H：恢复不复制名称，新行 displayName 固定 null
       const newMeta: RevisionMeta = {
         revisionId: allocateRevisionId(state),
         stateVersion: restoredVersion,
         snapshotBytes: 256,
         sourceKind: "revision_restore",
         createdAt: new Date().toISOString(),
+        displayName: null,
       };
       state.revisions[pid] = [newMeta, ...(state.revisions[pid] || [])].slice(
         0,
@@ -2420,6 +2537,168 @@ async function installRoutes(page: Page, state: ProbeState) {
         safetyCheckpointId: safetyId,
         stateVersion: restoredVersion,
         restoredAt: new Date().toISOString(),
+      });
+      return;
+    }
+
+    // P12F-H 单条命名：精确 PATCH .../display-name；body 仅 displayName；成功原位更新探针 meta
+    const revNameMatch = path.match(
+      /^\/api\/projects\/([^/]+)\/editor-state-revisions\/([^/]+)\/display-name\/?$/,
+    );
+    if (revNameMatch && method === "PATCH") {
+      const pid = revNameMatch[1];
+      const revisionId = revNameMatch[2];
+      const queryKeys = [...url.searchParams.keys()];
+      const postData = req.postData();
+      const headers = req.headers();
+      // Playwright 头名为小写；记录实际 x-csrf-token 值（缺失为 null）
+      const csrfRaw = headers["x-csrf-token"];
+      const csrfToken = typeof csrfRaw === "string" ? csrfRaw : null;
+      let bodyKeys: string[] = [];
+      let displayName: string | null | undefined = undefined;
+      if (postData != null && postData !== "") {
+        try {
+          const parsed = JSON.parse(postData) as unknown;
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            const body = parsed as Record<string, unknown>;
+            bodyKeys = Object.keys(body);
+            if (Object.prototype.hasOwnProperty.call(body, "displayName")) {
+              const v = body.displayName;
+              if (v === null) displayName = null;
+              else if (typeof v === "string") displayName = v;
+              else displayName = undefined;
+            }
+          }
+        } catch {
+          bodyKeys = [];
+          displayName = undefined;
+        }
+      }
+      if (!known.has(pid)) {
+        state.forbiddenHits.push(`${method} ${path}`);
+        await json(route, { detail: "not_found" }, 404);
+        return;
+      }
+      // arrived：gate 前记录
+      state.nameLog.push({
+        projectId: pid,
+        revisionId,
+        method,
+        path,
+        postData,
+        queryKeys,
+        search: url.search,
+        bodyKeys,
+        displayName,
+        csrfToken,
+      });
+      if (queryKeys.length > 0 || url.search.length > 1) {
+        state.forbiddenHits.push(`${method} ${path}${url.search}`);
+      }
+      const nameMode = resolveNameMode(state, pid, revisionId);
+      if (nameMode.kind === "hold") {
+        await nameMode.gate.wait();
+        // hold 后可显式失败：类型收窄 then，禁止 any 变异
+        if (nameMode.then === "http_error") {
+          await json(
+            route,
+            {
+              detail: {
+                code: "editor_state_revision_display_name_error",
+                message: "保存修订名称失败",
+              },
+            },
+            nameMode.status,
+          );
+          state.nameCompleteLog.push({
+            projectId: pid,
+            revisionId,
+            status: nameMode.status,
+            displayName: null,
+          });
+          return;
+        }
+        // then === "ok"：继续成功路径
+      }
+      if (nameMode.kind === "http_error") {
+        await json(
+          route,
+          {
+            detail: {
+              code: "editor_state_revision_display_name_error",
+              message: "保存修订名称失败",
+            },
+          },
+          nameMode.status,
+        );
+        state.nameCompleteLog.push({
+          projectId: pid,
+          revisionId,
+          status: nameMode.status,
+          displayName: null,
+        });
+        return;
+      }
+      const list = state.revisions[pid] || [];
+      const idx = list.findIndex((r) => r.revisionId === revisionId);
+      if (idx < 0) {
+        await json(
+          route,
+          {
+            detail: {
+              code: "editor_state_revision_not_found",
+              message: "修订不存在",
+            },
+          },
+          404,
+        );
+        state.nameCompleteLog.push({
+          projectId: pid,
+          revisionId,
+          status: 404,
+          displayName: null,
+        });
+        return;
+      }
+      // 仅当 body 精确一键且值为 string|null 时成功；否则 422
+      if (
+        bodyKeys.length !== 1 ||
+        bodyKeys[0] !== "displayName" ||
+        (displayName !== null && typeof displayName !== "string")
+      ) {
+        await json(
+          route,
+          {
+            detail: {
+              code: "editor_state_revision_display_name_invalid",
+              message: "修订名称无效",
+            },
+          },
+          422,
+        );
+        state.nameCompleteLog.push({
+          projectId: pid,
+          revisionId,
+          status: 422,
+          displayName: null,
+        });
+        return;
+      }
+      // 探针侧原位更新六键 displayName；不重排、不重载 page/search
+      const meta = list[idx];
+      meta.displayName = displayName;
+      list[idx] = meta;
+      const detail = state.details[revisionId];
+      if (detail) {
+        detail.displayName = displayName;
+        state.details[revisionId] = detail;
+      }
+      await json(route, { displayName });
+      state.nameCompleteLog.push({
+        projectId: pid,
+        revisionId,
+        status: 200,
+        displayName,
       });
       return;
     }
@@ -2734,6 +3013,7 @@ function seedRevisions(
       snapshotBytes: 100 + i,
       sourceKind,
       createdAt: new Date(Date.UTC(2026, 6, 16, 10, i, 0)).toISOString(),
+      displayName: null,
     };
     const editor = state.projects[projectId];
     const snap = canonicalSnapshot(editor);
@@ -11954,5 +12234,729 @@ test.describe("P12F-G-B 终态静态自检", () => {
     expect(count(/test\.fixme\s*[.(]/)).toBe(0);
     // 可选链取第 0 项
     expect(count(/\)\[0\]\?/)).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P12F-H 单条修订命名前端（三用例互不 serial 跳过）
+// failure-first：必须先进入页面且列表已加载，再因命名入口/六键呈现缺失失败。
+// ---------------------------------------------------------------------------
+
+test.describe("P12F-H 技术标保存覆盖清除与失败保值", () => {
+  test("P12F-H 技术标：列表已加载后命名入口可见；输入/取消零 PATCH；保存/覆盖/清除精确一次；失败保值；非法前端零请求", async ({
+    page,
+  }) => {
+    const state = createProbeState("tech");
+    state.authRequired = true;
+    const seeded = seedRevisions(state, TECH_A, 3, [
+      "browser_put",
+      "task",
+      "revise",
+    ]);
+    const target0 = seeded[0].revisionId;
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+
+    await openWorkspace(page, "tech", TECH_A);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(1);
+    // 既有列表已加载（failure-first 必须越过此步）
+    await expect(page.getByTestId("editor-state-revision-item-0")).toBeVisible();
+    await expect(page.getByTestId("editor-state-revision-item-1")).toBeVisible();
+    expect(state.nameLog.length).toBe(0);
+
+    // 命名入口（生产 UI 未实现时在此业务失败）
+    const nameBtn = page.getByTestId("editor-state-revision-name-0");
+    await expect(nameBtn).toBeVisible();
+    await nameBtn.click();
+    const nameInput = page.getByTestId("editor-state-revision-name-input-0");
+    await expect(nameInput).toBeVisible();
+
+    // 输入零 PATCH
+    await nameInput.fill("初版名称");
+    expect(state.nameLog.length).toBe(0);
+
+    // 取消零 PATCH，列表不变
+    await page.getByTestId("editor-state-revision-name-cancel-0").click();
+    await expect(nameInput).toHaveCount(0);
+    expect(state.nameLog.length).toBe(0);
+    expect(state.nameCompleteLog.length).toBe(0);
+
+    // 非法输入（前端可判定）零请求：空串 / 纯空白 / 41 码点
+    await page.getByTestId("editor-state-revision-name-0").click();
+    await nameInput.fill("   ");
+    await page.getByTestId("editor-state-revision-name-save-0").click();
+    expect(state.nameLog.length).toBe(0);
+    await nameInput.fill("字".repeat(41));
+    await page.getByTestId("editor-state-revision-name-save-0").click();
+    expect(state.nameLog.length).toBe(0);
+
+    // 合法保存：精确一次 PATCH
+    const pageBefore = pageHitCount(state, TECH_A);
+    const searchBefore = state.searchLog.length;
+    const editorGetsBefore = state.editorGetLog.length;
+    const putBefore = state.putLog.length;
+    const restoreBefore = state.restoreLog.length;
+    const cpBefore = state.checkpointCreateLog.length;
+    const deleteBefore = state.deleteLog.length;
+    await nameInput.fill("初版名称");
+    await page.getByTestId("editor-state-revision-name-save-0").click();
+    await expect
+      .poll(() => nameCompleteCount(state, TECH_A, target0), { timeout: 10_000 })
+      .toBe(1);
+    expect(nameHitCount(state, TECH_A, target0)).toBe(1);
+    const hit0 = state.nameLog[0];
+    expect(hit0.method).toBe("PATCH");
+    expect(hit0.path).toBe(
+      `/api/projects/${TECH_A}/editor-state-revisions/${target0}/display-name`,
+    );
+    expect(hit0.queryKeys).toEqual([]);
+    expect(hit0.search).toBe("");
+    expect(hit0.bodyKeys).toEqual(["displayName"]);
+    expect(hit0.displayName).toBe("初版名称");
+    expect(typeof hit0.postData).toBe("string");
+    expect(JSON.parse(hit0.postData as string)).toEqual({
+      displayName: "初版名称",
+    });
+    expect(state.nameCompleteLog[0].status).toBe(200);
+    expect(state.nameCompleteLog[0].displayName).toBe("初版名称");
+    expect(hit0.csrfToken).toBe("e2e-csrf");
+    await expect(page.getByTestId("editor-state-revision-status")).toHaveText(
+      MSG_NAME_OK,
+    );
+    await expect(
+      page.getByTestId("editor-state-revision-display-name-0"),
+    ).toHaveText("初版名称");
+    // 成功原位更新，零 page/search 重载
+    expect(pageHitCount(state, TECH_A)).toBe(pageBefore);
+    expect(state.searchLog.length).toBe(searchBefore);
+    expect(state.editorGetLog.length).toBe(editorGetsBefore);
+    expect(state.putLog.length).toBe(putBefore);
+    expect(state.restoreLog.length).toBe(restoreBefore);
+    expect(state.checkpointCreateLog.length).toBe(cpBefore);
+    expect(state.deleteLog.length).toBe(deleteBefore);
+    expect(state.externalHits).toEqual([]);
+
+    // 覆盖（失败保值前置：当前 DOM 名为「覆盖名」）
+    await page.getByTestId("editor-state-revision-name-0").click();
+    await page.getByTestId("editor-state-revision-name-input-0").fill("覆盖名");
+    await page.getByTestId("editor-state-revision-name-save-0").click();
+    await expect
+      .poll(() => nameCompleteCount(state, TECH_A, target0), { timeout: 10_000 })
+      .toBe(2);
+    expect(nameHitCount(state, TECH_A, target0)).toBe(2);
+    expect(state.nameLog[1].method).toBe("PATCH");
+    expect(state.nameLog[1].path).toBe(
+      `/api/projects/${TECH_A}/editor-state-revisions/${target0}/display-name`,
+    );
+    expect(state.nameLog[1].queryKeys).toEqual([]);
+    expect(state.nameLog[1].search).toBe("");
+    expect(state.nameLog[1].bodyKeys).toEqual(["displayName"]);
+    expect(state.nameLog[1].displayName).toBe("覆盖名");
+    expect(typeof state.nameLog[1].postData).toBe("string");
+    expect(JSON.parse(state.nameLog[1].postData as string)).toEqual({
+      displayName: "覆盖名",
+    });
+    expect(state.nameLog[1].csrfToken).toBe("e2e-csrf");
+    expect(state.nameCompleteLog[1].status).toBe(200);
+    await expect(
+      page.getByTestId("editor-state-revision-display-name-0"),
+    ).toHaveText("覆盖名");
+    await expect(page.getByTestId("editor-state-revision-status")).toHaveText(
+      MSG_NAME_OK,
+    );
+
+    // 失败保值：在非空原名「覆盖名」上 HTTP 500 尝试「失败名」
+    state.nameModeByRevisionId[target0] = { kind: "http_error", status: 500 };
+    await page.getByTestId("editor-state-revision-name-0").click();
+    await page.getByTestId("editor-state-revision-name-input-0").fill("失败名");
+    await page.getByTestId("editor-state-revision-name-save-0").click();
+    await expect
+      .poll(() => nameCompleteCount(state, TECH_A, target0), { timeout: 10_000 })
+      .toBe(3);
+    expect(nameHitCount(state, TECH_A, target0)).toBe(3);
+    const hitFail = state.nameLog[2];
+    expect(hitFail.method).toBe("PATCH");
+    expect(hitFail.path).toBe(
+      `/api/projects/${TECH_A}/editor-state-revisions/${target0}/display-name`,
+    );
+    expect(hitFail.queryKeys).toEqual([]);
+    expect(hitFail.search).toBe("");
+    expect(hitFail.bodyKeys).toEqual(["displayName"]);
+    expect(hitFail.displayName).toBe("失败名");
+    expect(typeof hitFail.postData).toBe("string");
+    expect(JSON.parse(hitFail.postData as string)).toEqual({
+      displayName: "失败名",
+    });
+    expect(hitFail.csrfToken).toBe("e2e-csrf");
+    expect(state.nameCompleteLog[2].status).toBe(500);
+    await expect(page.getByTestId("editor-state-revision-status")).toHaveText(
+      MSG_NAME_FAIL,
+    );
+    // DOM 仍保留非空原名；输入草稿仍为失败名
+    await expect(
+      page.getByTestId("editor-state-revision-display-name-0"),
+    ).toHaveText("覆盖名");
+    await expect(
+      page.getByTestId("editor-state-revision-name-input-0"),
+    ).toHaveValue("失败名");
+    expect(pageHitCount(state, TECH_A)).toBe(pageBefore);
+    expect(state.searchLog.length).toBe(searchBefore);
+    expect(state.editorGetLog.length).toBe(editorGetsBefore);
+    expect(state.putLog.length).toBe(putBefore);
+    expect(state.restoreLog.length).toBe(restoreBefore);
+    expect(state.checkpointCreateLog.length).toBe(cpBefore);
+    expect(state.deleteLog.length).toBe(deleteBefore);
+    expect(state.externalHits).toEqual([]);
+
+    // 恢复 name mode 后执行清除 null（第四次 PATCH）
+    state.nameModeByRevisionId[target0] = { kind: "ok" };
+    await page.getByTestId("editor-state-revision-name-clear-0").click();
+    await expect
+      .poll(() => nameCompleteCount(state, TECH_A, target0), { timeout: 10_000 })
+      .toBe(4);
+    expect(nameHitCount(state, TECH_A, target0)).toBe(4);
+    expect(state.nameLog[3].method).toBe("PATCH");
+    expect(state.nameLog[3].path).toBe(
+      `/api/projects/${TECH_A}/editor-state-revisions/${target0}/display-name`,
+    );
+    expect(state.nameLog[3].queryKeys).toEqual([]);
+    expect(state.nameLog[3].search).toBe("");
+    expect(state.nameLog[3].bodyKeys).toEqual(["displayName"]);
+    expect(state.nameLog[3].displayName).toBeNull();
+    expect(typeof state.nameLog[3].postData).toBe("string");
+    expect(JSON.parse(state.nameLog[3].postData as string)).toEqual({
+      displayName: null,
+    });
+    expect(state.nameLog[3].csrfToken).toBe("e2e-csrf");
+    expect(state.nameCompleteLog[3].status).toBe(200);
+    expect(state.nameCompleteLog[3].displayName).toBeNull();
+    await expect(page.getByTestId("editor-state-revision-status")).toHaveText(
+      MSG_NAME_CLEARED,
+    );
+    await expect(
+      page.getByTestId("editor-state-revision-display-name-0"),
+    ).toHaveCount(0);
+    // 终态：四次 PATCH 完整序列 CSRF 均为 e2e-csrf；日志长度精确 4
+    expect(state.nameLog.length).toBe(4);
+    expect(state.nameCompleteLog.length).toBe(4);
+    expect(state.nameLog.map((h) => h.csrfToken)).toEqual([
+      "e2e-csrf",
+      "e2e-csrf",
+      "e2e-csrf",
+      "e2e-csrf",
+    ]);
+    expect(pageHitCount(state, TECH_A)).toBe(pageBefore);
+    expect(state.searchLog.length).toBe(searchBefore);
+    expect(state.editorGetLog.length).toBe(editorGetsBefore);
+    expect(state.putLog.length).toBe(putBefore);
+    expect(state.restoreLog.length).toBe(restoreBefore);
+    expect(state.checkpointCreateLog.length).toBe(cpBefore);
+    expect(state.deleteLog.length).toBe(deleteBefore);
+    expect(state.externalHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+  });
+});
+
+test.describe("P12F-H 技术标互斥与迟到隔离", () => {
+  test("P12F-H 技术标：命名确认清其它意图；非命名控件真实 disabled；A/B 双 hold 迟到 success/failure 不解锁在途 B", async ({
+    page,
+  }) => {
+    const state = createProbeState("tech");
+    state.authRequired = true;
+    expect(state.revisions[TECH_A].length).toBe(0);
+    seedRevisions(state, TECH_A, 4, [
+      "browser_put",
+      "task",
+      "revise",
+      "callback",
+    ]);
+    seedRevisions(state, TECH_B, 3, ["browser_put", "task", "revise"]);
+    expect(state.revisions[TECH_A].length).toBe(4);
+    expect(state.revisions[TECH_B].length).toBe(3);
+    const targetA = state.revisions[TECH_A][0].revisionId;
+    const targetB = state.revisions[TECH_B][0].revisionId;
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+
+    await openWorkspace(page, "tech", TECH_A);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(1);
+    await expect(page.getByTestId("editor-state-revision-item-0")).toBeVisible();
+
+    // 先点摘要意图，再进入命名——命名确认应清除其它意图
+    const detailBefore = state.detailLog.length;
+    await page.getByTestId("editor-state-revision-summary-1").click();
+    await expect
+      .poll(() => state.detailLog.length, { timeout: 10_000 })
+      .toBe(detailBefore + 1);
+    await page.getByTestId("editor-state-revision-name-0").click();
+    await expect(
+      page.getByTestId("editor-state-revision-name-input-0"),
+    ).toBeVisible();
+    await expect(page.getByTestId("editor-state-revision-toggle")).toBeDisabled();
+    await expect(page.getByTestId("editor-state-revision-refresh")).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-source-filter"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-search-input"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-search-apply"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-restore-1"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-delete-1"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-summary-1"),
+    ).toBeDisabled();
+
+    // ---------- 路径 1：A-success hold，切 B 后 B 也 hold；释放 A 时 B 仍在途 ----------
+    const gateAOk = createHoldGate();
+    state.nameModeByRevisionId[targetA] = {
+      kind: "hold",
+      gate: gateAOk,
+      then: "ok",
+    };
+    const pageABeforeOk = pageHitCount(state, TECH_A);
+    const searchABeforeOk = state.searchLog.filter(
+      (h) => h.projectId === TECH_A,
+    ).length;
+    const putBeforeOk = state.putLog.length;
+    const restoreBeforeOk = state.restoreLog.length;
+    const cpBeforeOk = state.checkpointCreateLog.length;
+    const deleteBeforeOk = state.deleteLog.length;
+
+    await page.getByTestId("editor-state-revision-name-input-0").fill("项目A名");
+    await page.getByTestId("editor-state-revision-name-save-0").click();
+    await gateAOk.waitUntilEntered(1);
+    await expect
+      .poll(() => nameHitCount(state, TECH_A, targetA), { timeout: 10_000 })
+      .toBe(1);
+    expect(nameCompleteCount(state, TECH_A, targetA)).toBe(0);
+    await expect(page.getByTestId("editor-state-revision-status")).toHaveText(
+      MSG_NAME_SAVING,
+    );
+
+    // 切 B，B 也 hold
+    const gateBOk = createHoldGate();
+    state.nameModeByRevisionId[targetB] = {
+      kind: "hold",
+      gate: gateBOk,
+      then: "ok",
+    };
+    await page.goto(`/technical-plan/${TECH_B}/analysis`);
+    await expect(
+      page.getByTestId("technical-editor-workspace"),
+    ).toBeVisible();
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_B), { timeout: 10_000 })
+      .toBe(1);
+    await expect(page.getByTestId("editor-state-revision-item-0")).toBeVisible();
+    const pageBBeforeName = pageHitCount(state, TECH_B);
+    const searchBBeforeName = state.searchLog.filter(
+      (h) => h.projectId === TECH_B,
+    ).length;
+    // 切 B 后 editor-state GET 已完成；命名/释放不得再增加
+    const editorGetAfterBOpen = state.editorGetLog.length;
+    await page.getByTestId("editor-state-revision-name-0").click();
+    await page.getByTestId("editor-state-revision-name-input-0").fill("项目B名");
+    await page.getByTestId("editor-state-revision-name-save-0").click();
+    await gateBOk.waitUntilEntered(1);
+    await expect
+      .poll(() => nameHitCount(state, TECH_B, targetB), { timeout: 10_000 })
+      .toBe(1);
+    expect(nameCompleteCount(state, TECH_B, targetB)).toBe(0);
+    await expect(page.getByTestId("editor-state-revision-status")).toHaveText(
+      MSG_NAME_SAVING,
+    );
+    // B 在途：input/save/cancel 与非命名控件真实 disabled
+    await expect(
+      page.getByTestId("editor-state-revision-name-input-0"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-name-save-0"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-name-cancel-0"),
+    ).toBeDisabled();
+    await expect(page.getByTestId("editor-state-revision-refresh")).toBeDisabled();
+    await expect(page.getByTestId("editor-state-revision-toggle")).toBeDisabled();
+
+    // 释放 A success：B complete 仍 0；B 仍“保存名称中…”；控件仍 disabled
+    gateAOk.release();
+    await expect
+      .poll(() => nameCompleteCount(state, TECH_A, targetA), { timeout: 10_000 })
+      .toBe(1);
+    expect(nameCompleteCount(state, TECH_B, targetB)).toBe(0);
+    await expect(page.getByTestId("editor-state-revision-status")).toHaveText(
+      MSG_NAME_SAVING,
+    );
+    await expect(
+      page.getByTestId("editor-state-revision-name-input-0"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-name-save-0"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-name-cancel-0"),
+    ).toBeDisabled();
+    await expect(page.getByTestId("editor-state-revision-refresh")).toBeDisabled();
+    expect(pageHitCount(state, TECH_B)).toBe(pageBBeforeName);
+    expect(
+      state.searchLog.filter((h) => h.projectId === TECH_B).length,
+    ).toBe(searchBBeforeName);
+
+    // 释放 B：成功原位
+    gateBOk.release();
+    await expect
+      .poll(() => nameCompleteCount(state, TECH_B, targetB), { timeout: 10_000 })
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-display-name-0"),
+    ).toHaveText("项目B名");
+    await expect(page.getByTestId("editor-state-revision-status")).toHaveText(
+      MSG_NAME_OK,
+    );
+    expect(nameHitCount(state, TECH_A, targetA)).toBe(1);
+    expect(nameHitCount(state, TECH_B, targetB)).toBe(1);
+    expect(state.nameLog.length).toBe(2);
+    expect(state.nameCompleteLog.length).toBe(2);
+    expect(state.nameLog.map((h) => h.csrfToken)).toEqual([
+      "e2e-csrf",
+      "e2e-csrf",
+    ]);
+    expect(pageHitCount(state, TECH_A)).toBe(pageABeforeOk);
+    expect(
+      state.searchLog.filter((h) => h.projectId === TECH_A).length,
+    ).toBe(searchABeforeOk);
+    // 命名/释放不触发 editor-state GET；切 B 的导航 GET 已计入 editorGetAfterBOpen
+    expect(state.editorGetLog.length).toBe(editorGetAfterBOpen);
+    expect(state.putLog.length).toBe(putBeforeOk);
+    expect(state.restoreLog.length).toBe(restoreBeforeOk);
+    expect(state.checkpointCreateLog.length).toBe(cpBeforeOk);
+    expect(state.deleteLog.length).toBe(deleteBeforeOk);
+    expect(state.externalHits).toEqual([]);
+
+    // ---------- 路径 2：A-failure hold，切 B 新一轮 B hold；释放 A 500 不解锁 B ----------
+    const gateAFail = createHoldGate();
+    state.nameModeByRevisionId[targetA] = {
+      kind: "hold",
+      gate: gateAFail,
+      then: "http_error",
+      status: 500,
+    };
+    const aHitBeforeFail = nameHitCount(state, TECH_A, targetA);
+    const aCompleteBeforeFail = nameCompleteCount(state, TECH_A, targetA);
+    const pageABeforeFail = pageCompleteCount(state, TECH_A);
+    await page.goto(`/technical-plan/${TECH_A}/analysis`);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(pageABeforeFail + 1);
+    // A 路径1 success 后已有 displayName；仍进入命名
+    await page.getByTestId("editor-state-revision-name-0").click();
+    await page.getByTestId("editor-state-revision-name-input-0").fill("A失败迟到");
+    await page.getByTestId("editor-state-revision-name-save-0").click();
+    await gateAFail.waitUntilEntered(1);
+    await expect
+      .poll(() => nameHitCount(state, TECH_A, targetA), { timeout: 10_000 })
+      .toBe(aHitBeforeFail + 1);
+    expect(nameCompleteCount(state, TECH_A, targetA)).toBe(aCompleteBeforeFail);
+
+    const gateBFail = createHoldGate();
+    state.nameModeByRevisionId[targetB] = {
+      kind: "hold",
+      gate: gateBFail,
+      then: "ok",
+    };
+    const bHitBeforeFailPath = nameHitCount(state, TECH_B, targetB);
+    const bCompleteBeforeFailPath = nameCompleteCount(state, TECH_B, targetB);
+    const pageBBeforeFailPath = pageCompleteCount(state, TECH_B);
+    const putBeforeFail = state.putLog.length;
+    const restoreBeforeFail = state.restoreLog.length;
+    const cpBeforeFail = state.checkpointCreateLog.length;
+    const deleteBeforeFail = state.deleteLog.length;
+    await page.goto(`/technical-plan/${TECH_B}/analysis`);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_B), { timeout: 10_000 })
+      .toBe(pageBBeforeFailPath + 1);
+    await expect(
+      page.getByTestId("editor-state-revision-display-name-0"),
+    ).toHaveText("项目B名");
+    // 切 B 后 editor-state GET 已完成；命名/释放不得再增加
+    const editorGetAfterBOpenFail = state.editorGetLog.length;
+    await page.getByTestId("editor-state-revision-name-0").click();
+    await page
+      .getByTestId("editor-state-revision-name-input-0")
+      .fill("项目B第二轮");
+    await page.getByTestId("editor-state-revision-name-save-0").click();
+    await gateBFail.waitUntilEntered(1);
+    await expect
+      .poll(() => nameHitCount(state, TECH_B, targetB), { timeout: 10_000 })
+      .toBe(bHitBeforeFailPath + 1);
+    expect(nameCompleteCount(state, TECH_B, targetB)).toBe(
+      bCompleteBeforeFailPath,
+    );
+    await expect(page.getByTestId("editor-state-revision-status")).toHaveText(
+      MSG_NAME_SAVING,
+    );
+    const pageBDuringBHold = pageHitCount(state, TECH_B);
+    const searchBDuringBHold = state.searchLog.filter(
+      (h) => h.projectId === TECH_B,
+    ).length;
+
+    // 释放 A 500：A catch/finally 不得改 B 名称/状态/解锁
+    gateAFail.release();
+    await expect
+      .poll(() => nameCompleteCount(state, TECH_A, targetA), { timeout: 10_000 })
+      .toBe(aCompleteBeforeFail + 1);
+    expect(nameCompleteCount(state, TECH_B, targetB)).toBe(
+      bCompleteBeforeFailPath,
+    );
+    await expect(page.getByTestId("editor-state-revision-status")).toHaveText(
+      MSG_NAME_SAVING,
+    );
+    await expect(
+      page.getByTestId("editor-state-revision-display-name-0"),
+    ).toHaveText("项目B名");
+    await expect(
+      page.getByTestId("editor-state-revision-name-input-0"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-name-save-0"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-name-cancel-0"),
+    ).toBeDisabled();
+    await expect(page.getByTestId("editor-state-revision-refresh")).toBeDisabled();
+    expect(pageHitCount(state, TECH_B)).toBe(pageBDuringBHold);
+    expect(
+      state.searchLog.filter((h) => h.projectId === TECH_B).length,
+    ).toBe(searchBDuringBHold);
+
+    // 释放 B：第二轮成功
+    gateBFail.release();
+    await expect
+      .poll(() => nameCompleteCount(state, TECH_B, targetB), { timeout: 10_000 })
+      .toBe(bCompleteBeforeFailPath + 1);
+    await expect(
+      page.getByTestId("editor-state-revision-display-name-0"),
+    ).toHaveText("项目B第二轮");
+    await expect(page.getByTestId("editor-state-revision-status")).toHaveText(
+      MSG_NAME_OK,
+    );
+    expect(nameHitCount(state, TECH_A, targetA)).toBe(aHitBeforeFail + 1);
+    expect(nameHitCount(state, TECH_B, targetB)).toBe(bHitBeforeFailPath + 1);
+    // 路径1 A/B + 路径2 A/B 共 4 次；完整 CSRF 序列
+    expect(state.nameLog.length).toBe(4);
+    expect(state.nameCompleteLog.length).toBe(4);
+    expect(state.nameLog.map((h) => h.csrfToken)).toEqual([
+      "e2e-csrf",
+      "e2e-csrf",
+      "e2e-csrf",
+      "e2e-csrf",
+    ]);
+    expect(state.editorGetLog.length).toBe(editorGetAfterBOpenFail);
+    expect(state.putLog.length).toBe(putBeforeFail);
+    expect(state.restoreLog.length).toBe(restoreBeforeFail);
+    expect(state.checkpointCreateLog.length).toBe(cpBeforeFail);
+    expect(state.deleteLog.length).toBe(deleteBeforeFail);
+    expect(state.externalHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+  });
+});
+
+test.describe("P12F-H 商务标共用入口与数据最小化", () => {
+  test("P12F-H 商务标：同一命名入口；HTML marker 作文本；URL/存储/Cookie/console 无泄漏；零 editor-state/restore/checkpoint/DELETE/page 重载/外网", async ({
+    page,
+  }) => {
+    const state = createProbeState("biz");
+    state.authRequired = true;
+    const seeded = seedRevisions(state, BIZ_A, 2, ["browser_put", "task"]);
+    const target0 = seeded[0].revisionId;
+    const HTML_MARK = "<img src=x onerror=window.__p12fh_xss=1>";
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+
+    await openWorkspace(page, "biz", BIZ_A);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageCompleteCount(state, BIZ_A), { timeout: 10_000 })
+      .toBe(1);
+    await expect(page.getByTestId("editor-state-revision-item-0")).toBeVisible();
+
+    const pageBefore = pageHitCount(state, BIZ_A);
+    const editorGetsBefore = state.editorGetLog.length;
+    const putBefore = state.putLog.length;
+    const restoreBefore = state.restoreLog.length;
+    const cpBefore = state.checkpointCreateLog.length;
+    const deleteBefore = state.deleteLog.length;
+    const searchBefore = state.searchLog.length;
+
+    await page.getByTestId("editor-state-revision-name-0").click();
+    await page
+      .getByTestId("editor-state-revision-name-input-0")
+      .fill(HTML_MARK);
+    await page.getByTestId("editor-state-revision-name-save-0").click();
+    await expect
+      .poll(() => nameCompleteCount(state, BIZ_A, target0), { timeout: 10_000 })
+      .toBe(1);
+    expect(state.nameLog.length).toBe(1);
+    expect(state.nameCompleteLog.length).toBe(1);
+    expect(state.nameLog[0].method).toBe("PATCH");
+    expect(state.nameLog[0].path).toBe(
+      `/api/projects/${BIZ_A}/editor-state-revisions/${target0}/display-name`,
+    );
+    expect(state.nameLog[0].queryKeys).toEqual([]);
+    expect(state.nameLog[0].search).toBe("");
+    expect(state.nameLog[0].bodyKeys).toEqual(["displayName"]);
+    expect(state.nameLog[0].displayName).toBe(HTML_MARK);
+    expect(typeof state.nameLog[0].postData).toBe("string");
+    expect(JSON.parse(state.nameLog[0].postData as string)).toEqual({
+      displayName: HTML_MARK,
+    });
+    expect(state.nameLog.map((h) => h.csrfToken)).toEqual(["e2e-csrf"]);
+    expect(state.nameCompleteLog[0].status).toBe(200);
+    await expect(
+      page.getByTestId("editor-state-revision-display-name-0"),
+    ).toHaveText(HTML_MARK);
+    // 不得当作 HTML 执行
+    const xss = await page.evaluate(() => (window as { __p12fh_xss?: number }).__p12fh_xss);
+    expect(xss).toBe(undefined);
+    // 文本节点而非 img
+    await expect(
+      page.getByTestId("editor-state-revision-display-name-0").locator("img"),
+    ).toHaveCount(0);
+
+    await expect(page.getByTestId("editor-state-revision-status")).toHaveText(
+      MSG_NAME_OK,
+    );
+    expect(pageHitCount(state, BIZ_A)).toBe(pageBefore);
+    expect(state.searchLog.length).toBe(searchBefore);
+    expect(state.editorGetLog.length).toBe(editorGetsBefore);
+    expect(state.putLog.length).toBe(putBefore);
+    expect(state.restoreLog.length).toBe(restoreBefore);
+    expect(state.checkpointCreateLog.length).toBe(cpBefore);
+    expect(state.deleteLog.length).toBe(deleteBefore);
+    expect(state.externalHits).toEqual([]);
+
+    // URL / 存储 / Cookie / console 无名称与 revisionId 泄漏
+    expect(page.url()).not.toContain(HTML_MARK);
+    expect(page.url()).not.toContain(target0);
+    const persist = await page.evaluate(() => ({
+      ls: JSON.stringify(window.localStorage),
+      ss: JSON.stringify(window.sessionStorage),
+      cookie: document.cookie,
+    }));
+    expect(persist.ls).not.toContain(HTML_MARK);
+    expect(persist.ss).not.toContain(HTML_MARK);
+    expect(persist.cookie).not.toContain(HTML_MARK);
+    expect(persist.ls).not.toContain(target0);
+    expect(persist.ss).not.toContain(target0);
+    expect(persist.cookie).not.toContain(target0);
+    const consoleBlob = guards.consoleLogs.join("\n");
+    expect(consoleBlob).not.toContain(HTML_MARK);
+    expect(consoleBlob).not.toContain(target0);
+    expect(consoleBlob).not.toMatch(/csrf/i);
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P12F-H 终态静态自检（仅扫描上列三用例源码；本 describe 不计入扫描范围）
+// ---------------------------------------------------------------------------
+test.describe("P12F-H 终态静态自检", () => {
+  test("P12F-H marker 后禁止项精确零命中", () => {
+    const selfPath = fileURLToPath(import.meta.url);
+    const sourcePath = path.resolve(selfPath);
+    expect(sourcePath.endsWith("editor-state-revision-history.spec.ts")).toBe(
+      true,
+    );
+    const full = fs.readFileSync(sourcePath, "utf8");
+    const beginMark = "// P12F-H 单条修订命名前端";
+    const endMark = "// P12F-H 终态静态自检";
+    const begin = full.indexOf(beginMark);
+    const end = full.indexOf(endMark);
+    expect(begin).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(begin);
+    const block = full.slice(begin, end);
+
+    const count = (re: RegExp): number => {
+      const flags = re.flags.includes("g") ? re.flags : `${re.flags}g`;
+      const matched = block.match(new RegExp(re.source, flags));
+      if (matched === null) return 0;
+      return matched.length;
+    };
+
+    // 权威列表不得空数组兜底
+    expect(count(/\|\|\s*\[\]/)).toBe(0);
+    // postData 不得用 || "{}" 逃逸
+    expect(count(/\|\|\s*"\{\}"/)).toBe(0);
+    expect(count(/\|\|\s*'\{\}'/)).toBe(0);
+    // 已断言长度后禁止 Math.min 收缩可见计数
+    expect(count(/Math\.min\s*\(/)).toBe(0);
+    // 弱存在/定义断言
+    expect(count(/toBeTruthy\s*\(/)).toBe(0);
+    expect(count(/toBeFalsy\s*\(/)).toBe(0);
+    expect(count(/toBeDefined\s*\(/)).toBe(0);
+    expect(count(/toBeUndefined\s*\(/)).toBe(0);
+    // Playwright 宽松定位 / 固定 sleep / 强制点击 / 条件跳过
+    expect(count(/\.or\s*\(/)).toBe(0);
+    expect(count(/waitForTimeout\s*\(/)).toBe(0);
+    expect(count(/force\s*:\s*true/)).toBe(0);
+    expect(count(/test\.skip\s*[.(]/)).toBe(0);
+    expect(count(/test\.fixme\s*[.(]/)).toBe(0);
+    // 可选链取第 0 项
+    expect(count(/\)\[0\]\?/)).toBe(0);
+    // 宽计数 >=1（带空格）；旧字段 hasCsrf 零命中
+    expect(count(/>=\s*1/)).toBe(0);
+    expect(count(/hasCsrf/)).toBe(0);
+  });
+
+  test("P12F-H 生产面板 pendingNameIdRef.current === revisionId 可执行守卫", () => {
+    // 精确限定到两个命名处理函数，禁止宽泛 includes 冒充
+    const panelPath = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../src/features/editor-state-revisions/EditorStateRevisionPanel.tsx",
+    );
+    expect(fs.existsSync(panelPath)).toBe(true);
+    const src = fs.readFileSync(panelPath, "utf8");
+    expect(src.includes("pendingNameIdRef")).toBe(true);
+    expect(src.includes("const pendingNameIdRef = useRef")).toBe(true);
+
+    const extractFn = (name: string): string => {
+      const re = new RegExp(
+        `const ${name} = useCallback\\([\\s\\S]*?\\n  \\}, \\[`,
+      );
+      const m = src.match(re);
+      expect(m).not.toBeNull();
+      return m![0];
+    };
+    const saveFn = extractFn("handleNameSave");
+    const clearFn = extractFn("handleNameClear");
+    const guardRe = /pendingNameIdRef\.current\s*===\s*revisionId/g;
+    const saveHits = saveFn.match(guardRe);
+    const clearHits = clearFn.match(guardRe);
+    expect(saveHits === null ? 0 : saveHits.length).toBe(1);
+    expect(clearHits === null ? 0 : clearHits.length).toBe(1);
+    // 可执行代码中该守卫恰好两次（save + clear 各一）；剔除注释避免自命中
+    const noBlockComments = src.replace(/\/\*[\s\S]*?\*\//g, "");
+    const noLineComments = noBlockComments.replace(/^\s*\/\/.*$/gm, "");
+    const allHits = noLineComments.match(guardRe);
+    expect(allHits === null ? 0 : allHits.length).toBe(2);
   });
 });

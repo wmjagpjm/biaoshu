@@ -1,12 +1,14 @@
 """
 模块：P12C-C1 / P12F-A / P12F-B / P12F-D / P12F-E-A / P12F-F-A editor-state 修订历史只读服务
 用途：默认最近 10 条修订元数据列表、键集游标页、可选 sourceKind/时间范围筛选、
-  有界可见内容搜索与单条按需详情；list/page 绝不加载 snapshot_json，仅 search 有界六列含快照。
+  有界可见内容搜索与单条按需详情；list/page 六列且绝不读 snapshot_json；
+  detail/search 七列含 snapshot_json，其中 search 候选有界。
 对接：api.editor_state_revisions；EditorStateRevisionRow；
   editor_state_service / editor_state_revision_service 权威常量与算法。
 二次开发：
   - 全程只读：禁止 commit/rollback/flush/refresh/锁/审计/写配额/读当前 editor-state/检查点；
-  - 项目校验只投影 Project.id；列表/页五列投影；详情/搜索六列 + workspace/project 作用域；
+  - 项目校验只投影 Project.id；列表/页六列投影且绝不读 snapshot_json；
+    详情/搜索七列含 snapshot_json（search 候选有界）+ workspace/project 作用域；
   - 列表上限 MAX_REVISIONS_LIST 与页大小 REVISION_PAGE_SIZE 字面量固定 10，禁止绑定写入保留 20；
   - 搜索候选窗 LIMIT 20 固定，不补扫第 21 条；字段白名单 + 对象/字符串叶预算；
   - 游标页 LIMIT 11 前瞻、键集谓词；无时间无来源 esrc1；仅来源 esrc2；任一时间边界 esrc3；
@@ -658,6 +660,54 @@ def _require_project_id(db: Session, workspace_id: str, project_id: str) -> None
         )
 
 
+def _char_forbidden_in_display_name(ch: str) -> bool:
+    """用途：读取路径拒绝控制/行分隔/双向字符；与命名服务可见安全规则对齐。"""
+    code = ord(ch)
+    if code < 0x20 or code == 0x7F or (0x80 <= code <= 0x9F):
+        return True
+    if ch in ("\u2028", "\u2029"):
+        return True
+    if ch in (
+        "\u061c",
+        "\u200e",
+        "\u200f",
+        "\u202a",
+        "\u202b",
+        "\u202c",
+        "\u202d",
+        "\u202e",
+        "\u2066",
+        "\u2067",
+        "\u2068",
+        "\u2069",
+    ):
+        return True
+    return False
+
+
+def _validate_stored_display_name(value: Any) -> str | None:
+    """
+    用途：严格校验库内 display_name；null 合法；坏类型/长度/字符固定 corrupt。
+    规则：已规范字符串须等于 NFKC、首尾无空白、1..40 码点、无控制/双向字符。
+    """
+    if value is None:
+        return None
+    if type(value) is not str:
+        raise _corrupt() from None
+    if value == "" or value.strip() != value:
+        raise _corrupt() from None
+    for ch in value:
+        if _char_forbidden_in_display_name(ch):
+            raise _corrupt() from None
+    normalized = unicodedata.normalize("NFKC", value)
+    if normalized != value:
+        raise _corrupt() from None
+    n = len(value)
+    if n < 1 or n > 40:
+        raise _corrupt() from None
+    return value
+
+
 def _validate_meta_fields(
     *,
     revision_id: Any,
@@ -665,10 +715,11 @@ def _validate_meta_fields(
     snapshot_bytes: Any,
     source_kind: Any,
     created_at: Any,
-) -> tuple[str, str, int, str, datetime]:
+    display_name: Any = None,
+) -> tuple[str, str, int, str, datetime, str | None]:
     """
     用途：严格校验列表/详情共用元数据；任一异常固定 corrupt。
-    规则：esr_ ID、esv_ 版本、1..2MiB 字节、固定来源枚举、datetime 时间。
+    规则：esr_ ID、esv_ 版本、1..2MiB 字节、固定来源枚举、datetime 时间、可选 displayName。
     """
     try:
         if not isinstance(revision_id, str) or not REVISION_ID_PATTERN.fullmatch(
@@ -691,12 +742,14 @@ def _validate_meta_fields(
             raise _corrupt() from None
         if not isinstance(created_at, datetime):
             raise _corrupt() from None
+        name = _validate_stored_display_name(display_name)
         return (
             revision_id,
             state_version,
             snapshot_bytes,
             source_kind,
             created_at,
+            name,
         )
     except EditorStateRevisionHistoryError:
         raise
@@ -765,7 +818,7 @@ def list_editor_state_revisions(
     project_id: str,
 ) -> dict[str, Any]:
     """
-    用途：固定最近 10 条元数据列表；SQL 显式五列投影，绝不含 snapshot_json。
+    用途：固定最近 10 条元数据列表；SQL 显式六列投影（含 display_name），绝不含 snapshot_json。
     对接：GET /api/projects/{projectId}/editor-state-revisions。
     """
     _require_project_id(db, workspace_id, project_id)
@@ -777,6 +830,7 @@ def list_editor_state_revisions(
                 EditorStateRevisionRow.snapshot_bytes,
                 EditorStateRevisionRow.source_kind,
                 EditorStateRevisionRow.created_at,
+                EditorStateRevisionRow.display_name,
             )
             .where(
                 EditorStateRevisionRow.workspace_id == workspace_id,
@@ -796,12 +850,13 @@ def list_editor_state_revisions(
 
     items: list[dict[str, Any]] = []
     for row in rows:
-        rid, ver, nbytes, source, created = _validate_meta_fields(
+        rid, ver, nbytes, source, created, dname = _validate_meta_fields(
             revision_id=row.id,
             state_version=row.state_version,
             snapshot_bytes=row.snapshot_bytes,
             source_kind=row.source_kind,
             created_at=row.created_at,
+            display_name=row.display_name,
         )
         items.append(
             {
@@ -810,6 +865,7 @@ def list_editor_state_revisions(
                 "snapshot_bytes": nbytes,
                 "source_kind": source,
                 "created_at": created,
+                "display_name": dname,
             }
         )
     return {"items": items}
@@ -949,6 +1005,7 @@ def list_editor_state_revisions_page(
                 EditorStateRevisionRow.snapshot_bytes,
                 EditorStateRevisionRow.source_kind,
                 EditorStateRevisionRow.created_at,
+                EditorStateRevisionRow.display_name,
             )
             .where(
                 EditorStateRevisionRow.workspace_id == workspace_id,
@@ -985,12 +1042,13 @@ def list_editor_state_revisions_page(
     # 完整校验含 lookahead 的全部行；任一损坏整页固定 corrupt
     validated: list[dict[str, Any]] = []
     for row in rows:
-        rid, ver, nbytes, source, created = _validate_meta_fields(
+        rid, ver, nbytes, source, created, dname = _validate_meta_fields(
             revision_id=row.id,
             state_version=row.state_version,
             snapshot_bytes=row.snapshot_bytes,
             source_kind=row.source_kind,
             created_at=row.created_at,
+            display_name=row.display_name,
         )
         validated.append(
             {
@@ -999,6 +1057,7 @@ def list_editor_state_revisions_page(
                 "snapshot_bytes": nbytes,
                 "source_kind": source,
                 "created_at": created,
+                "display_name": dname,
             }
         )
 
@@ -1047,6 +1106,7 @@ def get_editor_state_revision(
                 EditorStateRevisionRow.snapshot_bytes,
                 EditorStateRevisionRow.source_kind,
                 EditorStateRevisionRow.created_at,
+                EditorStateRevisionRow.display_name,
                 EditorStateRevisionRow.snapshot_json,
             ).where(
                 EditorStateRevisionRow.id == revision_id,
@@ -1064,12 +1124,13 @@ def get_editor_state_revision(
             404, CODE_REVISION_NOT_FOUND, MSG_REVISION_NOT_FOUND
         )
 
-    rid, ver, nbytes, source, created = _validate_meta_fields(
+    rid, ver, nbytes, source, created, dname = _validate_meta_fields(
         revision_id=row.id,
         state_version=row.state_version,
         snapshot_bytes=row.snapshot_bytes,
         source_kind=row.source_kind,
         created_at=row.created_at,
+        display_name=row.display_name,
     )
     snapshot = _validate_snapshot_payload(
         snapshot_json=row.snapshot_json,
@@ -1083,6 +1144,7 @@ def get_editor_state_revision(
         "snapshot_bytes": nbytes,
         "source_kind": source,
         "created_at": created,
+        "display_name": dname,
         "snapshot": snapshot,
     }
 
@@ -1248,13 +1310,13 @@ def list_editor_state_revision_search(
     created_before: Any = None,
 ) -> dict[str, Any]:
     """
-    用途：在最新 20 条元数据候选中按可见字段字面搜索；只返回五键元数据。
+    用途：在最新 20 条元数据候选中按可见字段字面搜索；只返回六键元数据。
     对接：POST .../editor-state-revisions/search。
     二次开发：
       - 顺序：项目存在 → 来源 → 时间 → 关键词；
-      - SQL 精确六列 + workspace/project + 可选来源/时间 + ORDER BY created_at DESC,id DESC LIMIT 20；
+      - SQL 七列（含 display_name + snapshot）+ workspace/project + 可选来源/时间；
       - 先完整校验全部候选再匹配；坏行/预算超限整次 corrupt；
-      - 禁止 OFFSET/COUNT/LIKE/JSON SQL/N+1/补扫第 21 条/写操作。
+      - 禁止 OFFSET/COUNT/LIKE/JSON SQL/N+1/补扫第 21 条/写操作；名称不参与匹配。
     """
     _require_project_id(db, workspace_id, project_id)
 
@@ -1271,6 +1333,7 @@ def list_editor_state_revision_search(
                 EditorStateRevisionRow.snapshot_bytes,
                 EditorStateRevisionRow.source_kind,
                 EditorStateRevisionRow.created_at,
+                EditorStateRevisionRow.display_name,
                 EditorStateRevisionRow.snapshot_json,
             )
             .where(
@@ -1298,12 +1361,13 @@ def list_editor_state_revision_search(
     # 先完整校验全部候选；任一行损坏整次失败（与关键词是否命中无关）
     validated: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for row in rows:
-        rid, ver, nbytes, source, created = _validate_meta_fields(
+        rid, ver, nbytes, source, created, dname = _validate_meta_fields(
             revision_id=row.id,
             state_version=row.state_version,
             snapshot_bytes=row.snapshot_bytes,
             source_kind=row.source_kind,
             created_at=row.created_at,
+            display_name=row.display_name,
         )
         snapshot = _validate_snapshot_payload(
             snapshot_json=row.snapshot_json,
@@ -1319,6 +1383,7 @@ def list_editor_state_revision_search(
                     "snapshot_bytes": nbytes,
                     "source_kind": source,
                     "created_at": created,
+                    "display_name": dname,
                 },
                 snapshot,
             )

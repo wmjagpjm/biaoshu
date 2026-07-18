@@ -1545,6 +1545,8 @@ class EditorStateRevisionRow(Base):
     snapshot_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     # 固定内部来源枚举；禁止任意字符串
     source_kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    # P12F-H：可选展示名称；新修订默认 null；ORM 长度 160 仅存储上界，不替代服务端码点校验
+    display_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

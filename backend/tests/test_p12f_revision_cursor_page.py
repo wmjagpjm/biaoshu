@@ -41,7 +41,7 @@ _WS_OTHER = "ws_other_p12fb"
 _SECRET = "SECRET_P12FB_BODY_MUST_NOT_LEAK"
 _PATH_MARKER = "/api/projects/leaked/editor-state-revisions/page"
 _META_KEYS = frozenset(
-    {"revisionId", "stateVersion", "snapshotBytes", "sourceKind", "createdAt"}
+    {"revisionId", "stateVersion", "snapshotBytes", "sourceKind", "createdAt", "displayName"}
 )
 _PAGE_TOP = frozenset({"items", "nextCursor"})
 _LIST_TOP = frozenset({"items"})

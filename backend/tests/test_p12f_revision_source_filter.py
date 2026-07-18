@@ -44,7 +44,7 @@ _WS_OTHER = "ws_other_p12fd"
 _SECRET = "SECRET_P12FD_BODY_MUST_NOT_LEAK"
 _PATH_MARKER = "/api/projects/leaked/editor-state-revisions/page"
 _META_KEYS = frozenset(
-    {"revisionId", "stateVersion", "snapshotBytes", "sourceKind", "createdAt"}
+    {"revisionId", "stateVersion", "snapshotBytes", "sourceKind", "createdAt", "displayName"}
 )
 _PAGE_TOP = frozenset({"items", "nextCursor"})
 _LIST_TOP = frozenset({"items"})
@@ -1391,13 +1391,15 @@ def test_filter_sql_five_columns_source_predicate_limit_11(disabled_client):
     found_limit_11 = False
     found_source_pred = False
     found_keyset = False
-    found_five_cols = False
-    _FIVE_COLS = (
+    found_six_cols = False
+    # P12F-H：page 元数据六键对应 SQL 六列（原五列 + display_name）
+    _SIX_COLS = (
         "id",
         "state_version",
         "snapshot_bytes",
         "source_kind",
         "created_at",
+        "display_name",
     )
 
     def _param_list(parameters: object) -> list[object]:
@@ -1483,9 +1485,9 @@ def test_filter_sql_five_columns_source_predicate_limit_11(disabled_client):
         match = re.search(r"(?is)\bSELECT\b(.*?)\bFROM\b", compact)
         assert match is not None
         select_list = match.group(1).strip()
-        # 精确五列投影：仅 id/state_version/snapshot_bytes/source_kind/created_at
+        # 精确六列投影：id/state_version/snapshot_bytes/source_kind/created_at/display_name
         raw_parts = [p.strip() for p in select_list.split(",")]
-        assert len(raw_parts) == 5, (raw_parts, sql)
+        assert len(raw_parts) == 6, (raw_parts, sql)
         normalized_cols: list[str] = []
         for part in raw_parts:
             col = part.lower()
@@ -1496,8 +1498,8 @@ def test_filter_sql_five_columns_source_predicate_limit_11(disabled_client):
             # 去掉可能的引号
             col = col.strip("`\"[]")
             normalized_cols.append(col)
-        assert normalized_cols == list(_FIVE_COLS), (normalized_cols, sql)
-        found_five_cols = True
+        assert normalized_cols == list(_SIX_COLS), (normalized_cols, sql)
+        found_six_cols = True
 
         # 来源谓词：必须精确 source_kind =（禁用 IS）；绑定含且仅使用显式 task
         if re.search(r"\bsource_kind\s*=", low) is not None:
@@ -1517,7 +1519,7 @@ def test_filter_sql_five_columns_source_predicate_limit_11(disabled_client):
         if _assert_keyset_predicate(low):
             found_keyset = True
 
-    assert found_five_cols, f"未证明精确五列投影: {rev_selects}"
+    assert found_six_cols, f"未证明精确六列投影: {rev_selects}"
     assert found_limit_11, f"未证明精确 LIMIT 11: {rev_selects}"
     assert found_source_pred, f"未发现 source_kind = 且仅绑定 task: {rev_selects}"
     assert found_keyset, f"未发现精确键集谓词(created_at</= 与 id< 组合): {rev_selects}"

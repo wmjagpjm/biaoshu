@@ -46,7 +46,7 @@ _ROLE_PASSWORDS = {
     "bidder": "TestPass-P12CC1-Bidder-0001!",
 }
 _META_KEYS = frozenset(
-    {"revisionId", "stateVersion", "snapshotBytes", "sourceKind", "createdAt"}
+    {"revisionId", "stateVersion", "snapshotBytes", "sourceKind", "createdAt", "displayName"}
 )
 _DETAIL_KEYS = _META_KEYS | frozenset({"snapshot"})
 _LIST_TOP = frozenset({"items"})

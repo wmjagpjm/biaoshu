@@ -2020,8 +2020,8 @@ class ContentFuseApplicationConsumeOut(BaseModel):
 
 class EditorStateRevisionMetaOut(BaseModel):
     """
-    模块：P12C-C1 修订历史元数据
-    用途：列表项字段，不含 snapshot 正文。
+    模块：P12C-C1 / P12F-H 修订历史元数据
+    用途：列表项字段，不含 snapshot 正文；精确六键含可选 displayName。
     对接：GET /api/projects/{projectId}/editor-state-revisions。
     二次开发：禁止附加 projectId/正文/路径/用户/任务字段。
     """
@@ -2033,6 +2033,7 @@ class EditorStateRevisionMetaOut(BaseModel):
     snapshot_bytes: int = Field(serialization_alias="snapshotBytes")
     source_kind: str = Field(serialization_alias="sourceKind")
     created_at: datetime = Field(serialization_alias="createdAt")
+    display_name: str | None = Field(serialization_alias="displayName")
 
 
 class EditorStateRevisionListOut(BaseModel):
@@ -2082,8 +2083,8 @@ class EditorStateRevisionSearch(BaseModel):
 
 class EditorStateRevisionDetailOut(BaseModel):
     """
-    模块：P12C-C1 修订历史详情
-    用途：元数据 + 已校验的规范 snapshot 对象。
+    模块：P12C-C1 / P12F-H 修订历史详情
+    用途：六键元数据 + 已校验的规范 snapshot 对象。
     对接：GET .../editor-state-revisions/{revisionId}。
     二次开发：snapshot 必须服务端重验键集/字节/版本后返回。
     """
@@ -2095,7 +2096,34 @@ class EditorStateRevisionDetailOut(BaseModel):
     snapshot_bytes: int = Field(serialization_alias="snapshotBytes")
     source_kind: str = Field(serialization_alias="sourceKind")
     created_at: datetime = Field(serialization_alias="createdAt")
+    display_name: str | None = Field(serialization_alias="displayName")
     snapshot: dict[str, Any]
+
+
+class EditorStateRevisionDisplayNameUpdate(BaseModel):
+    """
+    模块：P12F-H 单条修订命名请求
+    用途：仅 camelCase displayName；null 清除；值以 Any 原样承接后由 service 规范化。
+    对接：PATCH .../editor-state-revisions/{revisionId}/display-name。
+    二次开发：extra=forbid；禁止 populate_by_name；snake_case/缺失/额外键 422。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: Any = Field(alias="displayName")
+
+
+class EditorStateRevisionDisplayNameOut(BaseModel):
+    """
+    模块：P12F-H 单条修订命名响应
+    用途：成功仅回 displayName（string|null）。
+    对接：PATCH .../editor-state-revisions/{revisionId}/display-name。
+    二次开发：禁止回显 revisionId/版本/正文/路径。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    display_name: str | None = Field(serialization_alias="displayName")
 
 
 class EditorStateRevisionRestore(BaseModel):

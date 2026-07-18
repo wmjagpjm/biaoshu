@@ -45,7 +45,7 @@ _SECRET = "SECRET_P12FFA_BODY_MUST_NOT_LEAK"
 _SECRET_EXTRA = "SECRET_P12FFA_EXTRA_KEY_MUST_NOT_LEAK"
 _PATH_MARKER = "/api/projects/leaked/editor-state-revisions/search"
 _META_KEYS = frozenset(
-    {"revisionId", "stateVersion", "snapshotBytes", "sourceKind", "createdAt"}
+    {"revisionId", "stateVersion", "snapshotBytes", "sourceKind", "createdAt", "displayName"}
 )
 _SEARCH_TOP = frozenset({"items"})
 _LIST_TOP = frozenset({"items"})
@@ -1699,12 +1699,14 @@ def test_search_sql_six_columns_limit_20_no_forbidden_constructs(disabled_client
     # 反假绿：必须恰好一次 revision SELECT，禁止 N+1
     assert len(rev_selects) == 1, f"revision SELECT 次数异常: {len(rev_selects)} {rev_selects}"
 
-    _SIX_COLS = (
+    # P12F-H：搜索候选 SQL 七列（元数据六键对应五原列 + display_name + snapshot_json）
+    _SEARCH_COLS = (
         "id",
         "state_version",
         "snapshot_bytes",
         "source_kind",
         "created_at",
+        "display_name",
         "snapshot_json",
     )
 
@@ -1741,7 +1743,7 @@ def test_search_sql_six_columns_limit_20_no_forbidden_constructs(disabled_client
     match = re.search(r"(?is)\bSELECT\b(.*?)\bFROM\b", compact)
     assert match is not None
     normalized = _normalize_cols(match.group(1).strip())
-    assert normalized == list(_SIX_COLS), normalized
+    assert normalized == list(_SEARCH_COLS), normalized
 
     assert re.search(r"\bworkspace_id\s*=", low)
     assert re.search(r"\bproject_id\s*=", low)

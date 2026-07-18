@@ -193,6 +193,38 @@ def migrate_editor_state_revisions_revision_restore_source(conn) -> None:
     )
 
 
+def migrate_editor_state_revisions_display_name(conn) -> None:
+    """
+    用途：P12F-H 在九来源 CHECK 迁移成功后幂等加 nullable display_name 列。
+    对接：ensure_schema_columns；仅 SQLite 生效。
+    二次开发：
+      - 表不存在时 no-op（create_all 按新 ORM 建列）；
+      - 列已存在立即 no-op；
+      - 加列失败必须抛出让外层 begin 回滚并阻止启动；禁止吞异常后继续。
+    """
+    dialect_name = getattr(getattr(conn, "dialect", None), "name", None)
+    if dialect_name != "sqlite":
+        return
+
+    row = conn.exec_driver_sql(
+        "SELECT name FROM sqlite_master "
+        "WHERE type='table' AND name='editor_state_revisions'"
+    ).fetchone()
+    if row is None:
+        return
+
+    cols = conn.exec_driver_sql("PRAGMA table_info(editor_state_revisions)").fetchall()
+    # PRAGMA table_info：cid, name, type, notnull, dflt_value, pk
+    existing = {r[1] for r in cols if r is not None and len(r) > 1}
+    if "display_name" in existing:
+        return
+
+    # 单行字面量：便于验收扫描 ADD COLUMN display_name
+    conn.exec_driver_sql(
+        "ALTER TABLE editor_state_revisions ADD COLUMN display_name VARCHAR(160)"
+    )
+
+
 def ensure_schema_columns(target_engine=None) -> None:
     """
     用途：SQLite 个人版轻量加列（create_all 不会改已有表）。
@@ -291,3 +323,5 @@ def ensure_schema_columns(target_engine=None) -> None:
                 pass
         # P12C-C2：九来源 CHECK 迁移失败必须回滚并阻止启动（不吞异常）
         migrate_editor_state_revisions_revision_restore_source(conn)
+        # P12F-H：九来源迁移成功后幂等加 display_name；失败阻止启动
+        migrate_editor_state_revisions_display_name(conn)

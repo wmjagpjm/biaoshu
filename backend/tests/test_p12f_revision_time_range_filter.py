@@ -44,7 +44,7 @@ _WS_OTHER = "ws_other_p12fea"
 _SECRET = "SECRET_P12FEA_BODY_MUST_NOT_LEAK"
 _PATH_MARKER = "/api/projects/leaked/editor-state-revisions/page"
 _META_KEYS = frozenset(
-    {"revisionId", "stateVersion", "snapshotBytes", "sourceKind", "createdAt"}
+    {"revisionId", "stateVersion", "snapshotBytes", "sourceKind", "createdAt", "displayName"}
 )
 _PAGE_TOP = frozenset({"items", "nextCursor"})
 _LIST_TOP = frozenset({"items"})
@@ -2087,12 +2087,14 @@ def test_time_range_sql_five_columns_predicates_limit_11(disabled_client):
     assert "func.count" not in svc_src
     assert "COUNT(*)" not in svc_src.upper()
 
-    _FIVE_COLS = (
+    # P12F-H：page 元数据六键对应 SQL 六列（原五列 + display_name）
+    _SIX_COLS = (
         "id",
         "state_version",
         "snapshot_bytes",
         "source_kind",
         "created_at",
+        "display_name",
     )
 
     def _param_list(parameters: object) -> list[object]:
@@ -2162,12 +2164,12 @@ def test_time_range_sql_five_columns_predicates_limit_11(disabled_client):
         """用途：精确计数 created_at =，排除 >= / => 误匹配。"""
         return len(re.findall(r"\bcreated_at\s*=(?!>)", sql_low))
 
-    def _assert_five_cols(compact: str) -> None:
+    def _assert_six_cols(compact: str) -> None:
         match = re.search(r"(?is)\bSELECT\b(.*?)\bFROM\b", compact)
         assert match is not None
         select_list = match.group(1).strip()
         raw_parts = [p.strip() for p in select_list.split(",")]
-        assert len(raw_parts) == 5, (raw_parts, compact)
+        assert len(raw_parts) == 6, (raw_parts, compact)
         normalized_cols: list[str] = []
         for part in raw_parts:
             col = part.lower()
@@ -2177,7 +2179,7 @@ def test_time_range_sql_five_columns_predicates_limit_11(disabled_client):
                 col = col.rsplit(".", 1)[-1].strip()
             col = col.strip("`\"[]")
             normalized_cols.append(col)
-        assert normalized_cols == list(_FIVE_COLS), (normalized_cols, compact)
+        assert normalized_cols == list(_SIX_COLS), (normalized_cols, compact)
 
     def _assert_common_filters(sql_low: str, params: object, *, label: str) -> None:
         assert re.search(r"\bworkspace_id\s*=", sql_low), f"{label} 缺 workspace_id: {sql_low}"
@@ -2199,7 +2201,7 @@ def test_time_range_sql_five_columns_predicates_limit_11(disabled_client):
         low = compact.lower()
         assert "snapshot_json" not in low, sql
         assert "count(" not in low
-        _assert_five_cols(compact)
+        _assert_six_cols(compact)
         if _has_keyset_predicate(low):
             second_page_sqls.append((compact, params, low))
         else:
@@ -2208,7 +2210,7 @@ def test_time_range_sql_five_columns_predicates_limit_11(disabled_client):
     assert first_page_sqls, f"未捕获首屏无键集 revision SELECT: {rev_selects}"
     assert second_page_sqls, f"未捕获第二页键集 revision SELECT: {rev_selects}"
 
-    # —— 首屏：精确五列 + workspace/project + source + 唯一 from + 唯一 before + LIMIT11 ——
+    # —— 首屏：精确六列 + workspace/project + source + 唯一 from + 唯一 before + LIMIT11 ——
     first_ok = False
     for compact, params, low in first_page_sqls:
         # 首屏不得含键集结构（created_at = 与 id <）

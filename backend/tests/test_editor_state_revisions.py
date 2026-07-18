@@ -251,6 +251,7 @@ def test_table_columns_constraints_indexes_and_fk_cascade(disabled_client):
         "state_version",
         "snapshot_bytes",
         "source_kind",
+        "display_name",
         "created_at",
     }
     fks = insp.get_foreign_keys("editor_state_revisions")

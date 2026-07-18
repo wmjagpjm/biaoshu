@@ -1,19 +1,22 @@
 /**
- * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B / P12F-F-B / P12F-G-B
+ * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B / P12F-F-B / P12F-G-B / P12F-H
  *       双工作区共用修订历史折叠面板
  * 用途：默认折叠零请求；展开游标页；可选来源筛选；本地时间范围草稿显式应用/清除；
  *       显式可见内容搜索 POST；手动加载更多至最多 20 条；按需摘要；按需与当前对比；按需正文差异；
- *       内存双侧选择与双修订正文差异；内联二次确认后 restore；内联二次确认后单条 DELETE。
- * 对接：editorStateRevisionApi（含 page/search/comparison/body-diff/pair/delete）；技术/商务 hook 的 restoreRevision 回调。
+ *       内存双侧选择与双修订正文差异；内联二次确认后 restore；内联二次确认后单条 DELETE；
+ *       内联命名保存/覆盖/清除（成功原位更新，失败保值）。
+ * 对接：editorStateRevisionApi（含 page/search/comparison/body-diff/pair/delete/display-name）；
+ *       技术/商务 hook 的 restoreRevision 回调。
  * 二次开发：
  *   - 不渲染 revisionId/stateVersion/cursor/UTC query/snapshot 正文/内部字段键/字段值/op 原值/关键词到固定文案
- *   - 项目切换/折叠/卸载用会话代次隔离迟到 page/search/load-more/detail/comparison/body-diff/pair/restore/delete
- *   - 摘要、比较、正文差异、双修订差异、恢复确认、删除确认同一时刻只保留一个当前意图；交叉作废
+ *   - 名称仅 React 文本；禁止 HTML 注入 / URL / 存储 / Cookie / console 泄漏
+ *   - 项目切换/折叠/卸载用会话代次隔离迟到 page/search/load-more/detail/comparison/body-diff/pair/restore/delete/name
+ *   - 摘要、比较、正文差异、双修订差异、恢复确认、删除确认、命名同一时刻只保留一个当前意图；交叉作废
  *   - 时间/搜索草稿与已应用值分离；来源/刷新/恢复/删除/加载更多只读已应用范围
  *   - 固定中文脱敏；禁止 console/存储/URL/Cookie/剪贴板/下载/轮询/外网
  *   - 无创建/批量删除/自动搜索/自动分页/预取；双修订选择仅内存；游标仅内存 + 规定 API 查询
  *   - 搜索态无加载更多；关键词仅输入控件值 + React 内存 + 一次 POST body
- *   - 删除不依赖 editor-state expected version；不得仅因 props.disabled 永久隐藏
+ *   - 删除/命名不依赖 editor-state expected version；不得仅因 props.disabled 永久隐藏
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -31,9 +34,11 @@ import {
   getEditorStateRevisionSummary,
   listEditorStateRevisionPage,
   MAX_RETAINED_REVISIONS,
+  normalizeDisplayNameForSave,
   REVISION_SOURCE_KINDS,
   REVISION_SOURCE_LABELS,
   searchEditorStateRevisions,
+  setEditorStateRevisionDisplayName,
   type BodyDiffOp,
   type EditorStateRevisionBodyDiff,
   type EditorStateRevisionComparison,
@@ -72,6 +77,14 @@ const MSG_RESTORE_BLOCKED = "当前无法恢复，请先处理版本冲突或重
 const MSG_DELETE_OK = "已删除所选修订";
 /** P12F-G-B 删除失败固定中文 */
 const MSG_DELETE_FAIL = "删除修订失败，当前列表已保留";
+/** P12F-H 命名在途固定中文 */
+const MSG_NAME_SAVING = "保存名称中…";
+/** P12F-H 命名成功固定中文 */
+const MSG_NAME_OK = "修订名称已保存";
+/** P12F-H 清除名称成功固定中文 */
+const MSG_NAME_CLEARED = "修订名称已清除";
+/** P12F-H 命名失败固定中文 */
+const MSG_NAME_FAIL = "保存修订名称失败，当前名称已保留";
 /** P12F-E-B 时间范围无效固定中文 */
 const MSG_TIME_RANGE_INVALID = "时间范围无效，请检查开始和结束时间";
 /** P12F-F-B 搜索关键词校验失败固定中文 */
@@ -247,6 +260,12 @@ export function EditorStateRevisionPanel({
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   /** P12F-G-B：删除请求在途 */
   const [deleteBusy, setDeleteBusy] = useState(false);
+  /** P12F-H：进入内联命名的修订 id（仅内存） */
+  const [pendingNameId, setPendingNameId] = useState<string | null>(null);
+  /** P12F-H：命名输入草稿（仅内存，不写存储/URL） */
+  const [nameDraft, setNameDraft] = useState("");
+  /** P12F-H：命名 PATCH 在途 */
+  const [nameBusy, setNameBusy] = useState(false);
   /** 当前展开摘要的修订 id（仅内存） */
   const [summaryRevisionId, setSummaryRevisionId] = useState<string | null>(
     null,
@@ -309,6 +328,17 @@ export function EditorStateRevisionPanel({
    * 旧 delete 的 success/catch/finally 不得写新项目忙碌/文案/列表。
    */
   const deleteGenRef = useRef(0);
+  /**
+   * P12F-H 命名请求代次：项目切换/折叠/卸载/另一修订命名递增；
+   * 旧 name 的 success/catch/finally 不得写新项目忙碌/文案/列表/解锁。
+   */
+  const nameGenRef = useRef(0);
+  /**
+   * P12F-H 在途命名 revisionId 同步镜像（仅内存，render 同步）；
+   * success/catch/finally 必须显式核对 pendingNameIdRef.current === revisionId，
+   * 旧 A finally 不得解锁 B 新一轮命名。
+   */
+  const pendingNameIdRef = useRef<string | null>(null);
   /** 同步在途门：连续点击/双击不得产生第二个在途请求 */
   const loadMoreInFlightRef = useRef(false);
   /** items 同步镜像，供 load-more 合并校验（避免闭包过期） */
@@ -332,6 +362,7 @@ export function EditorStateRevisionPanel({
   appliedBeforeRef.current = appliedBefore;
   appliedSearchRef.current = appliedSearch;
   projectIdRef.current = projectId;
+  pendingNameIdRef.current = pendingNameId;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -397,6 +428,7 @@ export function EditorStateRevisionPanel({
     pairBodyDiffGenRef.current += 1;
     loadMoreGenRef.current += 1;
     deleteGenRef.current += 1;
+    nameGenRef.current += 1;
     loadMoreInFlightRef.current = false;
     setExpanded(false);
     setItems([]);
@@ -432,6 +464,10 @@ export function EditorStateRevisionPanel({
     setPendingRestoreId(null);
     setDeleteBusy(false);
     setPendingDeleteId(null);
+    setNameBusy(false);
+    pendingNameIdRef.current = null;
+    setPendingNameId(null);
+    setNameDraft("");
     setSummaryRevisionId(null);
     setSummary(null);
     setComparisonRevisionId(null);
@@ -468,6 +504,12 @@ export function EditorStateRevisionPanel({
       setListError(null);
       setPendingRestoreId(null);
       setPendingDeleteId(null);
+      // 列表重载：退出命名意图（不打断已在途的 nameGen 结果隔离）
+      nameGenRef.current += 1;
+      setNameBusy(false);
+      pendingNameIdRef.current = null;
+      setPendingNameId(null);
+      setNameDraft("");
       clearSummaryState();
       clearComparisonState();
       clearBodyDiffState();
@@ -1552,26 +1594,247 @@ export function EditorStateRevisionPanel({
     setPendingDeleteId(null);
   }, [deleteBusy]);
 
+  /**
+   * 用途：进入内联命名；清除其它意图；输入零请求。
+   */
+  const handleNameClick = useCallback(
+    (revisionId: string, currentName: string | null) => {
+      if (
+        !expanded ||
+        listLoading ||
+        loadMoreLoading ||
+        restoreBusy ||
+        deleteBusy ||
+        nameBusy ||
+        pendingDeleteId != null ||
+        pendingRestoreId != null
+      ) {
+        return;
+      }
+      // 命名确认：作废在途 detail/comparison/body-diff/pair/load-more，清其它意图
+      invalidateDetail();
+      invalidateComparison();
+      invalidateBodyDiff();
+      invalidatePairBodyDiff();
+      loadMoreGenRef.current += 1;
+      loadMoreInFlightRef.current = false;
+      setLoadMoreLoading(false);
+      setLoadMoreError(null);
+      clearSummaryState();
+      clearComparisonState();
+      clearBodyDiffState();
+      clearPairBodyDiffState();
+      setPendingRestoreId(null);
+      setPendingDeleteId(null);
+      nameGenRef.current += 1;
+      pendingNameIdRef.current = revisionId;
+      setPendingNameId(revisionId);
+      setNameDraft(currentName ?? "");
+      setNameBusy(false);
+    },
+    [
+      expanded,
+      listLoading,
+      loadMoreLoading,
+      restoreBusy,
+      deleteBusy,
+      nameBusy,
+      pendingDeleteId,
+      pendingRestoreId,
+      invalidateDetail,
+      invalidateComparison,
+      invalidateBodyDiff,
+      invalidatePairBodyDiff,
+      clearSummaryState,
+      clearComparisonState,
+      clearBodyDiffState,
+      clearPairBodyDiffState,
+    ],
+  );
+
+  const handleNameCancel = useCallback(() => {
+    if (nameBusy) return;
+    nameGenRef.current += 1;
+    pendingNameIdRef.current = null;
+    setPendingNameId(null);
+    setNameDraft("");
+  }, [nameBusy]);
+
+  /**
+   * 用途：保存合法非空名称；非法零请求；success/catch/finally 含 revisionId 围栏。
+   */
+  const handleNameSave = useCallback(async () => {
+    if (
+      !expanded ||
+      !projectId ||
+      !pendingNameId ||
+      nameBusy ||
+      listLoading ||
+      loadMoreLoading ||
+      restoreBusy ||
+      deleteBusy
+    ) {
+      return;
+    }
+    const normalized = normalizeDisplayNameForSave(nameDraft);
+    if (normalized === null) {
+      // 前端可判定非法：零 PATCH
+      return;
+    }
+    const session = sessionRef.current;
+    const myGen = ++nameGenRef.current;
+    const revisionId = pendingNameId;
+    const projectAtStart = projectId;
+    // 在途期间显式绑定本轮 revisionId（render 同步之外的即时写入）
+    pendingNameIdRef.current = revisionId;
+    setNameBusy(true);
+    setStatusMessage(MSG_NAME_SAVING);
+    setStatusTone(null);
+    const stillCurrent = () =>
+      mountedRef.current &&
+      session === sessionRef.current &&
+      myGen === nameGenRef.current &&
+      projectIdRef.current === projectAtStart &&
+      pendingNameIdRef.current === revisionId;
+    try {
+      const saved = await setEditorStateRevisionDisplayName(
+        projectAtStart,
+        revisionId,
+        normalized,
+      );
+      if (!stillCurrent()) return;
+      // 成功：先清 busy 再收口 pending，避免 finally 因 ref 清空而卡死 nameBusy
+      setNameBusy(false);
+      setItems((prev) =>
+        prev.map((it) =>
+          it.revisionId === revisionId ? { ...it, displayName: saved } : it,
+        ),
+      );
+      pendingNameIdRef.current = null;
+      setPendingNameId(null);
+      setNameDraft("");
+      setStatusMessage(MSG_NAME_OK);
+      setStatusTone("ok");
+    } catch {
+      if (!stillCurrent()) return;
+      setStatusMessage(MSG_NAME_FAIL);
+      setStatusTone("err");
+      // 失败保值：保留原 displayName 与草稿
+    } finally {
+      if (stillCurrent()) {
+        setNameBusy(false);
+      }
+    }
+  }, [
+    expanded,
+    projectId,
+    pendingNameId,
+    nameBusy,
+    listLoading,
+    loadMoreLoading,
+    restoreBusy,
+    deleteBusy,
+    nameDraft,
+  ]);
+
+  /**
+   * 用途：清除已有名称（仅已有名称可用）；发送 null。
+   */
+  const handleNameClear = useCallback(async () => {
+    if (
+      !expanded ||
+      !projectId ||
+      !pendingNameId ||
+      nameBusy ||
+      listLoading ||
+      loadMoreLoading ||
+      restoreBusy ||
+      deleteBusy
+    ) {
+      return;
+    }
+    const existing = itemsRef.current.find((it) => it.revisionId === pendingNameId);
+    if (!existing || existing.displayName == null) {
+      return;
+    }
+    const session = sessionRef.current;
+    const myGen = ++nameGenRef.current;
+    const revisionId = pendingNameId;
+    const projectAtStart = projectId;
+    pendingNameIdRef.current = revisionId;
+    setNameBusy(true);
+    setStatusMessage(MSG_NAME_SAVING);
+    setStatusTone(null);
+    const stillCurrent = () =>
+      mountedRef.current &&
+      session === sessionRef.current &&
+      myGen === nameGenRef.current &&
+      projectIdRef.current === projectAtStart &&
+      pendingNameIdRef.current === revisionId;
+    try {
+      const saved = await setEditorStateRevisionDisplayName(
+        projectAtStart,
+        revisionId,
+        null,
+      );
+      if (!stillCurrent()) return;
+      // 成功：先清 busy 再收口 pending，避免 finally 因 ref 清空而卡死 nameBusy
+      setNameBusy(false);
+      setItems((prev) =>
+        prev.map((it) =>
+          it.revisionId === revisionId ? { ...it, displayName: saved } : it,
+        ),
+      );
+      pendingNameIdRef.current = null;
+      setPendingNameId(null);
+      setNameDraft("");
+      setStatusMessage(MSG_NAME_CLEARED);
+      setStatusTone("ok");
+    } catch {
+      if (!stillCurrent()) return;
+      setStatusMessage(MSG_NAME_FAIL);
+      setStatusTone("err");
+    } finally {
+      if (stillCurrent()) {
+        setNameBusy(false);
+      }
+    }
+  }, [
+    expanded,
+    projectId,
+    pendingNameId,
+    nameBusy,
+    listLoading,
+    loadMoreLoading,
+    restoreBusy,
+    deleteBusy,
+  ]);
+
   // 删除确认或在途：除确认删除/取消规则外全局锁定
   const deleteUiLocked = pendingDeleteId != null || deleteBusy;
-  // 恢复：全状态阻断 / 首屏加载 / 加载更多/删除在途时禁用
+  // 命名确认或在途：除输入/保存/清除/取消外全局锁定
+  const nameUiLocked = pendingNameId != null || nameBusy;
+  /** 删除或命名意图互斥锁 */
+  const exclusiveUiLocked = deleteUiLocked || nameUiLocked;
+  // 恢复：全状态阻断 / 首屏加载 / 加载更多/删除/命名在途时禁用
   const restoreDisabled =
     disabled ||
     restoreBusy ||
     deleteBusy ||
+    nameBusy ||
     listLoading ||
     loadMoreLoading ||
-    deleteUiLocked;
-  /** 比较/正文差异/pair：restore/delete 在途或删除确认期间禁用 */
-  const compareDisabled = restoreBusy || deleteUiLocked;
-  const bodyDiffDisabled = restoreBusy || deleteUiLocked;
-  const pairSelectDisabled = restoreBusy || deleteUiLocked;
+    exclusiveUiLocked;
+  /** 比较/正文差异/pair：restore/delete/name 在途或确认期间禁用 */
+  const compareDisabled = restoreBusy || exclusiveUiLocked;
+  const bodyDiffDisabled = restoreBusy || exclusiveUiLocked;
+  const pairSelectDisabled = restoreBusy || exclusiveUiLocked;
   const pairCompareReady =
     !!pairBeforeId &&
     !!pairAfterId &&
     pairBeforeId !== pairAfterId &&
     !restoreBusy &&
-    !deleteUiLocked &&
+    !exclusiveUiLocked &&
     !pairBodyDiffLoading;
   // 搜索态 cursor 恒为 null，永不显示加载更多
   const showLoadMore = nextCursor != null && appliedSearch == null;
@@ -1579,15 +1842,28 @@ export function EditorStateRevisionPanel({
     loadMoreLoading ||
     listLoading ||
     restoreBusy ||
-    deleteUiLocked ||
+    exclusiveUiLocked ||
     !nextCursor ||
     appliedSearch != null;
-  /** 列表/加载更多/恢复/删除在途或删除确认：来源、时间、搜索均真实 disabled */
+  /** 列表/加载更多/恢复/删除/命名在途或确认：来源、时间、搜索均真实 disabled */
   const filterControlsDisabled =
-    listLoading || loadMoreLoading || restoreBusy || deleteUiLocked;
-  /** 删除按钮：不依赖 props.disabled；受列表/加载更多/恢复/删除阻断 */
+    listLoading || loadMoreLoading || restoreBusy || exclusiveUiLocked;
+  /** 删除按钮：不依赖 props.disabled；受列表/加载更多/恢复/删除/命名阻断 */
   const deleteDisabled =
-    listLoading || loadMoreLoading || restoreBusy || deleteBusy;
+    listLoading ||
+    loadMoreLoading ||
+    restoreBusy ||
+    deleteBusy ||
+    nameBusy ||
+    nameUiLocked;
+  /** 命名按钮：列表/加载更多/恢复/删除/命名阻断 */
+  const nameDisabled =
+    listLoading ||
+    loadMoreLoading ||
+    restoreBusy ||
+    deleteBusy ||
+    nameBusy ||
+    deleteUiLocked;
   /** 应用时间：至少一个草稿非空且不在途 */
   const timeApplyDisabled =
     filterControlsDisabled ||
@@ -1618,7 +1894,7 @@ export function EditorStateRevisionPanel({
           className="btn btn-ghost btn-sm"
           data-testid="editor-state-revision-toggle"
           aria-expanded={expanded}
-          disabled={deleteUiLocked}
+          disabled={exclusiveUiLocked}
           onClick={handleToggle}
         >
           {expanded ? "收起修订历史" : "修订历史"}
@@ -1633,8 +1909,10 @@ export function EditorStateRevisionPanel({
                 listLoading ||
                 restoreBusy ||
                 deleteBusy ||
+                nameBusy ||
                 loadMoreLoading ||
-                pendingDeleteId != null
+                pendingDeleteId != null ||
+                pendingNameId != null
               }
               onClick={handleRefresh}
             >
@@ -2087,6 +2365,7 @@ export function EditorStateRevisionPanel({
             {items.map((item, index) => {
               const confirmingRestore = pendingRestoreId === item.revisionId;
               const confirmingDelete = pendingDeleteId === item.revisionId;
+              const namingThis = pendingNameId === item.revisionId;
               const showingSummary =
                 summaryRevisionId === item.revisionId && summary != null;
               const showingComparison =
@@ -2122,6 +2401,13 @@ export function EditorStateRevisionPanel({
                       {formatRevisionSourceLabel(item.sourceKind)}
                     </span>
                     <span>{formatRevisionBytes(item.snapshotBytes)}</span>
+                    {item.displayName != null ? (
+                      <span
+                        data-testid={`editor-state-revision-display-name-${index}`}
+                      >
+                        {item.displayName}
+                      </span>
+                    ) : null}
                   </div>
                   {showingSummary ? (
                     <div
@@ -2286,7 +2572,63 @@ export function EditorStateRevisionPanel({
                         : null}
                     </div>
                   ) : null}
-                  {confirmingDelete ? (
+                  {namingThis ? (
+                    <div
+                      data-testid={`editor-state-revision-name-wrap-${index}`}
+                      style={{ marginTop: 8 }}
+                    >
+                      <input
+                        type="text"
+                        data-testid={`editor-state-revision-name-input-${index}`}
+                        value={nameDraft}
+                        disabled={nameBusy}
+                        onChange={(e) => setNameDraft(e.target.value)}
+                        maxLength={80}
+                        style={{
+                          width: "100%",
+                          maxWidth: 320,
+                          boxSizing: "border-box",
+                          marginBottom: 8,
+                        }}
+                        aria-label="修订名称"
+                      />
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-sm"
+                          data-testid={`editor-state-revision-name-save-${index}`}
+                          disabled={nameBusy || listLoading || loadMoreLoading}
+                          onClick={() => {
+                            void handleNameSave();
+                          }}
+                        >
+                          {nameBusy ? MSG_NAME_SAVING : "保存"}
+                        </button>
+                        {item.displayName != null ? (
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            data-testid={`editor-state-revision-name-clear-${index}`}
+                            disabled={nameBusy || listLoading || loadMoreLoading}
+                            onClick={() => {
+                              void handleNameClear();
+                            }}
+                          >
+                            清除名称
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          data-testid={`editor-state-revision-name-cancel-${index}`}
+                          disabled={nameBusy}
+                          onClick={handleNameCancel}
+                        >
+                          取消
+                        </button>
+                      </div>
+                    </div>
+                  ) : confirmingDelete ? (
                     <div
                       data-testid={`editor-state-revision-confirm-delete-wrap-${index}`}
                       style={{ marginTop: 8 }}
@@ -2306,7 +2648,12 @@ export function EditorStateRevisionPanel({
                           type="button"
                           className="btn btn-primary btn-sm"
                           data-testid={`editor-state-revision-confirm-delete-${index}`}
-                          disabled={deleteBusy || listLoading || loadMoreLoading}
+                          disabled={
+                            deleteBusy ||
+                            nameBusy ||
+                            listLoading ||
+                            loadMoreLoading
+                          }
                           onClick={() => {
                             void handleConfirmDelete();
                           }}
@@ -2317,7 +2664,7 @@ export function EditorStateRevisionPanel({
                           type="button"
                           className="btn btn-ghost btn-sm"
                           data-testid={`editor-state-revision-cancel-delete-${index}`}
-                          disabled={deleteBusy}
+                          disabled={deleteBusy || nameBusy}
                           onClick={handleCancelDelete}
                         >
                           取消
@@ -2392,7 +2739,7 @@ export function EditorStateRevisionPanel({
                         type="button"
                         className="btn btn-ghost btn-sm"
                         data-testid={`editor-state-revision-summary-${index}`}
-                        disabled={restoreBusy || deleteUiLocked}
+                        disabled={restoreBusy || exclusiveUiLocked}
                         onClick={() => {
                           void handleSummaryClick(item);
                         }}
@@ -2439,8 +2786,19 @@ export function EditorStateRevisionPanel({
                       <button
                         type="button"
                         className="btn btn-ghost btn-sm"
+                        data-testid={`editor-state-revision-name-${index}`}
+                        disabled={nameDisabled}
+                        onClick={() =>
+                          handleNameClick(item.revisionId, item.displayName)
+                        }
+                      >
+                        命名
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
                         data-testid={`editor-state-revision-delete-${index}`}
-                        disabled={deleteDisabled || deleteUiLocked}
+                        disabled={deleteDisabled || exclusiveUiLocked}
                         onClick={() => handleDeleteClick(item.revisionId)}
                       >
                         删除

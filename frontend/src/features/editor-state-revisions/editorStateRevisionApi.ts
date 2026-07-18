@@ -1,13 +1,13 @@
 /**
- * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B / P12F-F-B / P12F-G-B
- *       editor-state 修订历史、对比、正文差异、游标页、可见内容搜索与单条删除 API 封装
+ * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B / P12F-F-B / P12F-G-B / P12F-H
+ *       editor-state 修订历史、对比、正文差异、游标页、可见内容搜索、单条删除与单条命名 API 封装
  * 用途：严格校验 list/page/detail/restore/comparison/body-diff/pair-body-diff/search 响应 shape；详情仅在 API 栈内解析并压缩为有界摘要；
- *       单条 DELETE 无 query/body，成功依赖 204 空体。
- * 对接：GET|POST|DELETE /api/projects/{id}/editor-state-revisions*；page 游标分页（可选 sourceKind/createdFrom/createdBefore）；
- *       search POST body（query+可选来源/时间）；comparison/body-diff/pair 只读 GET；delete 无 body；apiFetch。
+ *       单条 DELETE 无 query/body，成功依赖 204 空体；单条 PATCH display-name 精确一键 body/响应。
+ * 对接：GET|POST|DELETE|PATCH /api/projects/{id}/editor-state-revisions*；page 游标分页（可选 sourceKind/createdFrom/createdBefore）；
+ *       search POST body（query+可选来源/时间）；comparison/body-diff/pair 只读 GET；delete 无 body；display-name PATCH；apiFetch。
  * 二次开发：
  *   - 禁止把原始 snapshot 返回给 React；禁止本地生成 revisionId/version/cursor
- *   - 禁止把响应原文、路径、后端 detail、字段值/键名/游标/时间/关键词字面量拼进错误文案
+ *   - 禁止把响应原文、路径、后端 detail、字段值/键名/游标/时间/关键词/名称字面量拼进错误文案
  *   - 九类来源白名单；旧列表/页最多 10 条；search 最多 20 条且无 nextCursor
  *   - comparison 顶层精确四键 + 13 键有序子序列
  *   - body-diff 顶层精确六键（current/target）；pair 顶层精确六键（before/after）；item 五键；hunk 二键
@@ -15,6 +15,7 @@
  *   - 时间 query 仅精确 24 字符 UTC 毫秒；顺序 sourceKind→createdFrom→createdBefore→cursor
  *   - search body 顺序 query→sourceKind→createdFrom→createdBefore；禁止 URL query/cursor
  *   - delete 仅 method DELETE；禁止 query/body/retry/读取响应 JSON
+ *   - meta 精确六键含 displayName；命名 PATCH 禁止 query/retry/额外 header；响应精确一键
  */
 
 import { apiFetch } from "../../shared/lib/api";
@@ -58,24 +59,32 @@ export const REVISION_SOURCE_LABELS: Record<RevisionSourceKind, string> = {
   revision_restore: "修订恢复",
 };
 
-/** 列表项精确五键 */
+/** 列表项精确六键（P12F-H 含 displayName） */
 const META_KEYS = [
   "revisionId",
   "stateVersion",
   "snapshotBytes",
   "sourceKind",
   "createdAt",
+  "displayName",
 ] as const;
 
-/** 详情精确六键 */
+/** 详情精确七键（六键元数据 + snapshot） */
 const DETAIL_KEYS = [
   "revisionId",
   "stateVersion",
   "snapshotBytes",
   "sourceKind",
   "createdAt",
+  "displayName",
   "snapshot",
 ] as const;
+
+/** 命名成功响应精确一键 */
+const DISPLAY_NAME_OUT_KEYS = ["displayName"] as const;
+
+/** 展示名称 Unicode 码点上限（与后端契约对齐） */
+const DISPLAY_NAME_MAX_CODEPOINTS = 40;
 
 /** restore 成功体精确三键 */
 const RESTORE_KEYS = [
@@ -297,6 +306,8 @@ export type EditorStateRevisionMeta = {
   snapshotBytes: number;
   sourceKind: RevisionSourceKind;
   createdAt: string;
+  /** 可选展示名称；null 表示未命名 */
+  displayName: string | null;
 };
 
 /**
@@ -414,7 +425,83 @@ export type EditorStateRevisionPairBodyDiff = {
 };
 
 /**
- * 用途：严格解析列表元数据；精确五键，任一字段非法抛固定错误。
+ * 用途：判断字符是否为命名可见安全规则禁止字符。
+ */
+function isForbiddenDisplayNameChar(ch: string): boolean {
+  const code = ch.codePointAt(0) ?? 0;
+  if (code < 0x20 || code === 0x7f || (code >= 0x80 && code <= 0x9f)) {
+    return true;
+  }
+  if (ch === "\u2028" || ch === "\u2029") return true;
+  if (
+    ch === "\u061c" ||
+    ch === "\u200e" ||
+    ch === "\u200f" ||
+    ch === "\u202a" ||
+    ch === "\u202b" ||
+    ch === "\u202c" ||
+    ch === "\u202d" ||
+    ch === "\u202e" ||
+    ch === "\u2066" ||
+    ch === "\u2067" ||
+    ch === "\u2068" ||
+    ch === "\u2069"
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * 用途：严格解析/校验 displayName 字段（响应与本地可判定保存值）。
+ * 规则：null 合法；string 须 NFKC 后等于自身、首尾无空白、1..40 码点、无控制/双向字符。
+ */
+export function parseDisplayNameValue(value: unknown): string | null {
+  if (value === null) return null;
+  if (typeof value !== "string") {
+    throw new Error("revision_display_name_invalid");
+  }
+  if (value === "" || value.trim() !== value) {
+    throw new Error("revision_display_name_invalid");
+  }
+  for (const ch of value) {
+    if (isForbiddenDisplayNameChar(ch)) {
+      throw new Error("revision_display_name_invalid");
+    }
+  }
+  const normalized = value.normalize("NFKC");
+  if (normalized !== value) {
+    throw new Error("revision_display_name_invalid");
+  }
+  const n = [...value].length;
+  if (n < 1 || n > DISPLAY_NAME_MAX_CODEPOINTS) {
+    throw new Error("revision_display_name_invalid");
+  }
+  return value;
+}
+
+/**
+ * 用途：前端保存前可判定合法非空名称；非法返回 null（调用方零请求）。
+ * 规则：trim 后非空；NFKC；1..40；无控制/双向；规范化后仍首尾无空白。
+ */
+export function normalizeDisplayNameForSave(raw: string): string | null {
+  if (typeof raw !== "string") return null;
+  if (raw === "" || raw.trim() !== raw) return null;
+  for (const ch of raw) {
+    if (isForbiddenDisplayNameChar(ch)) return null;
+  }
+  const normalized = raw.normalize("NFKC");
+  if (normalized === "" || normalized.trim() !== normalized) return null;
+  for (const ch of normalized) {
+    if (isForbiddenDisplayNameChar(ch)) return null;
+  }
+  const n = [...normalized].length;
+  if (n < 1 || n > DISPLAY_NAME_MAX_CODEPOINTS) return null;
+  return normalized;
+}
+
+/**
+ * 用途：严格解析列表元数据；精确六键，任一字段非法抛固定错误。
  */
 export function parseRevisionMeta(raw: unknown): EditorStateRevisionMeta {
   if (!raw || typeof raw !== "object") {
@@ -442,12 +529,19 @@ export function parseRevisionMeta(raw: unknown): EditorStateRevisionMeta {
   if (typeof o.createdAt !== "string" || !o.createdAt.trim()) {
     throw new Error("revision_meta_invalid");
   }
+  let displayName: string | null;
+  try {
+    displayName = parseDisplayNameValue(o.displayName);
+  } catch {
+    throw new Error("revision_meta_invalid");
+  }
   return {
     revisionId: o.revisionId,
     stateVersion: o.stateVersion,
     snapshotBytes: o.snapshotBytes,
     sourceKind: o.sourceKind as RevisionSourceKind,
     createdAt: o.createdAt,
+    displayName,
   };
 }
 
@@ -553,14 +647,16 @@ export function parseRevisionDetail(
     snapshotBytes: o.snapshotBytes,
     sourceKind: o.sourceKind,
     createdAt: o.createdAt,
+    displayName: o.displayName,
   });
-  // 五项元数据必须与当前列表项逐值一致
+  // 六项元数据必须与当前列表项逐值一致
   if (
     meta.revisionId !== expectedMeta.revisionId ||
     meta.stateVersion !== expectedMeta.stateVersion ||
     meta.snapshotBytes !== expectedMeta.snapshotBytes ||
     meta.sourceKind !== expectedMeta.sourceKind ||
-    meta.createdAt !== expectedMeta.createdAt
+    meta.createdAt !== expectedMeta.createdAt ||
+    meta.displayName !== expectedMeta.displayName
   ) {
     throw new Error("revision_detail_meta_mismatch");
   }
@@ -1113,6 +1209,70 @@ export async function deleteEditorStateRevision(
     `/projects/${encodeURIComponent(projectId)}/editor-state-revisions/${encodeURIComponent(revisionId)}`,
     { method: "DELETE" },
   );
+}
+
+/**
+ * 用途：严格解析命名成功响应；精确一键 displayName；必须等于请求规范值。
+ */
+function parseDisplayNameResponse(
+  raw: unknown,
+  expected: string | null,
+): string | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("revision_display_name_invalid");
+  }
+  const o = raw as Record<string, unknown>;
+  if (!hasExactKeys(o, DISPLAY_NAME_OUT_KEYS)) {
+    throw new Error("revision_display_name_invalid");
+  }
+  const parsed = parseDisplayNameValue(o.displayName);
+  if (parsed !== expected) {
+    throw new Error("revision_display_name_invalid");
+  }
+  return parsed;
+}
+
+/**
+ * 用途：PATCH 单条修订展示名称；精确 body {displayName}；成功回规范值。
+ * 对接：PATCH /projects/{projectId}/editor-state-revisions/{revisionId}/display-name
+ * 约束：
+ *   - 非法 revisionId 或名称（非 null 且非合法字符串）在发请求前固定抛出
+ *   - 禁止 query/retry/轮询/额外 header
+ *   - 响应精确一键且等于请求规范值
+ */
+export async function setEditorStateRevisionDisplayName(
+  projectId: string,
+  revisionId: string,
+  displayName: string | null,
+): Promise<string | null> {
+  if (!isValidRevisionId(revisionId)) {
+    throw new Error("revision_id_invalid");
+  }
+  let normalized: string | null;
+  if (displayName === null) {
+    normalized = null;
+  } else if (typeof displayName === "string") {
+    // 请求侧已规范或可规范的非空名称；再次严格校验
+    try {
+      const via = normalizeDisplayNameForSave(displayName);
+      if (via === null) {
+        throw new Error("revision_display_name_invalid");
+      }
+      normalized = via;
+    } catch {
+      throw new Error("revision_display_name_invalid");
+    }
+  } else {
+    throw new Error("revision_display_name_invalid");
+  }
+  const raw = await apiFetch<unknown>(
+    `/projects/${encodeURIComponent(projectId)}/editor-state-revisions/${encodeURIComponent(revisionId)}/display-name`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ displayName: normalized }),
+    },
+  );
+  return parseDisplayNameResponse(raw, normalized);
 }
 
 /**
