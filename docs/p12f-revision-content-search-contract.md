@@ -3,7 +3,7 @@
 模块：P12F-F-A 双工作区修订可见内容搜索后端
 用途：在有限自动修订账本中按用户可见标题/正文做受控字面搜索，只返回匹配修订的既有五键元数据。
 对接：`editor_state_revision_history_service`、修订历史路由/Schema、P12F-A 20 条/20 MiB 保留边界、P12F-D/E 来源与时间筛选合同。
-状态：2026-07-18 已完成只读审计，当前文档即冻结边界；Grok 负责严格四文件 failure-first 实现，Codex 负责独立审查、串行验收、中文文档闭环和协作分支推送。
+状态：2026-07-18 已完成 failure-first、两轮受限返修、Codex 独立验收和实现推送；冻结=`b2eed7c`，实现=`e6516e8`。
 
 ## 1. 审计结论与方案选择
 
@@ -93,3 +93,14 @@ Grok 必须先只新建专项测试，三个生产文件哈希保持冻结值；
 7. required bid_writer + Cookie + CSRF 成功，缺/错 CSRF 与非 bid_writer 受既有门禁；disabled 可用；成功/业务错误五域零写且无业务审计，CSRF 失败保留既有安全审计；无正文/关键词日志或响应。
 
 Grok 至少依次运行：新专项；P12F-E-A 时间范围；P12F-D 来源；P12F-B 游标；P12C-C1 只读历史；后端全量；`py_compile`；`git diff --check`；精确四文件、空暂存区和 AST/源码禁区扫描。测试一律串行，禁止 xdist。Codex 独立重跑并审查反假绿后才可提交。
+
+## 8. 完成交付与独立验收
+
+- 冻结提交=`b2eed7c`；实现提交=`e6516e8`。原始任务/首轮回执=`msg_ab2e31c47bec41cea1800673d62dd866`/`msg_ca71c93c8daf4297901972b7f17b21a6`。
+- 真实 failure-first 为 **18 failed / 3 passed**，首个真实业务失败是 POST 搜索路由 405；没有用收集、fixture 或环境失败冒充红测。
+- 第一轮返修 task/review=`msg_5288187034e54751a8663e1262d6f284`/`msg_82c572a14d2544c88161bbcc58c84e05`：关闭默认 Pydantic 422 回显原始 `input`、`businessQuote` 容器漏计、非字符串宽状态码、SQL/N+1、真实禁止字段、对象/字符串预算、CSRF 审计与任务域假绿。路由改为手工安全解析 JSON 对象，外壳失败统一固定脱敏 422。
+- 第二轮 test-only 返修 task/review=`msg_c32879f80cc5474f8ef0ae91413a7bd9`/`msg_2188e539e693431cb29b0211afd48e08`：补齐 4097 对象早期允许字段命中、精确当前 writer actor、跨空间固定 message、唯一项目 SELECT、真实 `bad_out`、搜索函数 AST regex 禁区、最终路由精确成功命名及未使用变量清理。
+- Grok 最终专项/受影响回归为 **23/203 passed**，并保留第一轮返修后端全量 **1096 passed**。Codex 独立串行复验为专项 **23 passed（16.48s）**、受影响回归 **203 passed（295.39s）**、后端全量 **1096 passed（1658.59s）**；均只有 1 条既有 Starlette/httpx 弃用告警。
+- Codex 独立 `py_compile`、`git diff --check`、AST/弱断言扫描、精确四文件、空暂存区和无根目录临时文件均通过；验收回执=`msg_554d0035e24d437086f3a1d14bbef1ad`。
+- 最终 SHA-256：路由=`E56B0BF69A1DD425DFBF3FCD68F210E2664A9D693571E11467C462F10DDFDC08`，Schema=`474680ECEC41BEACACE624A6F154B5951167C1EEC23AEF4D48AAC708CD277221`，service=`8EACFAD08E213B14F8FF3FC5A3DBE93F3F9A17D02BCA282FF79BF8D51C350B2C`，专项测试=`584441E80D4C22DF4D616DB94E2D70CBBBF849260B5A314666F8C891F1B3995B`。
+- P12F-F-B 前端搜索入口仍未实现；必须另行审计 API 封装、共用面板和 E2E，再冻结独立前端白名单。片段/高亮、自动搜索、缓存、跨项目搜索、来源多选、日期预设、命名/固定/删除及多人协作继续不在 A 包。
