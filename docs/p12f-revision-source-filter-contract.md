@@ -3,7 +3,7 @@
 模块：P12F-D 双工作区修订历史来源筛选
 用途：在 P12F-B/C 有界游标页和共用修订面板上，按九类服务端权威来源筛选技术标与商务标修订，同时保持分页稳定、写链安全和数据最小化。
 对接：`editor_state_revisions` 路由、`editor_state_revision_history_service`、`editorStateRevisionApi`、`EditorStateRevisionPanel`、后端专项测试与既有修订历史 E2E。
-状态：2026-07-17 已冻结，待 Grok 按本文 failure-first 实现；Codex 独立审查、验收、文档闭环和提交推送。
+状态：2026-07-18 已完成并推送；冻结=`a2acdf3`、实现=`587df9a`。Grok 负责六文件 failure-first 实现与三轮受限返修，Codex 完成独立审查、全量验收、中文文档闭环和提交推送。
 
 ## 1. 审计结论
 
@@ -96,3 +96,11 @@ Grok 至少运行：后端新专项、`test_p12f_revision_cursor_page.py`、`tes
 ## 8. 明确未做
 
 本包不做正文/标题搜索、日期筛选、多来源组合、命名、固定、删除、导出、分享、total/hasMore、页码、无限滚动、自动加载、跨项目历史、历史回填、多人协作、SSE 扩展或数据库变更。
+
+## 9. 完成证据
+
+- 真实 failure-first：后端 **38 failed / 17 passed**，首个业务失败为接口忽略 `sourceKind`；前端 **2 failed / 0 passed / 1 did-not-run**，首个业务失败为筛选器不存在。生产四文件在红测前与冻结提交哈希一致。
+- Grok 原任务/首轮回执=`msg_441102447c64467f8bd27a4d0b241d94`/`msg_f1f94a200185467c88f2f07ff626e896`。第一次 test-only 返修=`msg_308b3e60e72b4cecaeb9853a6ee2f54f`/`msg_61426868c5454cb8b56b7a97362ef34a`；第二次错误优先级与 SQL 证据返修=`msg_025f0d26538147b58e4949d08d459bfa`/`msg_21c4ff084afc4555a992c2fc37bb3b3e`；最后一次源码门禁返修=`msg_23a1993ce6334808b410aaf1e25faa98`/`msg_06291046a6494d508528c01378d85241`。
+- 三轮审查依次关闭恒真/宽泛测试证据、筛选第二页失败保值与恢复在途禁用证据、Cookie 漏检、契约第 42 行 `esrc2`+非法筛选错误码优先级、SQL 精确 `LIMIT 11`/键集谓词，以及残留 `assert A or B`。Codex 验收回执=`msg_d977b2ead50b4f8292852c9b2de95b08`。
+- Codex 独立后端专项/旧游标与 C1 回归/后端全量为 **68/48/986 passed**；前端 P12F-D/history/技术 truth/商务 truth/checkpoint 为 **3/37/28/18/51 passed**；前端全量 **300 passed（7.5m）**。所有 Playwright 均 `--workers=1 --retries=0` 串行。
+- `lint`、`build`、三 Python 文件 `py_compile`、`git diff --check`、精确六文件、空暂存区和弱断言扫描均通过；build 仅保留既有大 chunk 提示，后端仅保留既有 Starlette/httpx 弃用警告。

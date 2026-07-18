@@ -831,13 +831,17 @@ Codex 独立 P12F-C/history/技术真值/商务真值/checkpoint 为 **4/34/28/1
 
 无限滚动、自动预取、搜索/筛选/删除、total/hasMore、页码、跨项目历史、多人协作和后端修改仍未进入 P12F-C；其中单一来源筛选已由 P12F-D 独立审计冻结，见下节。
 
-## P12F-D 修订来源筛选（已冻结，待实现）
+## P12F-D 修订来源筛选（已完成）
 
 契约=`docs/p12f-revision-source-filter-contract.md`、计划=`docs/plans/2026-07-17-p12f-revision-source-filter-plan.md`。只扩展既有 `/editor-state-revisions/page` 和技术/商务共用面板：无筛选继续 `esrc1 {i,t}`，精确单来源筛选使用 `sourceKind` 与绑定该来源的 `esrc2 {i,s,t}`；两版游标或来源不匹配固定 400，不得静默漏项。
 
 后端继续五列投影、`LIMIT 11`、双键键集分页、no-store 和五域零写；前端只展示“全部来源”及九类固定中文标签，筛选分页仍手动加载且最多 20 条。刷新/恢复保留当前筛选，折叠保留、项目切换重置，旧筛选请求需 arrived+complete 迟到隔离。严格六文件，Grok 先形成后端/前端真实业务红测；Codex 审查、独立全量验收和提交推送。
 
-正文/标题搜索、日期或多来源组合、删除、命名、固定、自动加载、跨项目历史和多人协作不在 P12F-D。
+冻结=`a2acdf3`、实现=`587df9a`。真实 failure-first 为后端 **38 failed / 17 passed**、前端 **2 failed / 0 passed / 1 did-not-run**。三轮审查关闭弱断言/SQL/AST 与前端失败保值和恢复在途证据、Cookie 漏检、`esrc2`+非法筛选错误优先级、精确 `LIMIT 11`/键集结构及最后一个 `assert A or B`。
+
+Codex 独立后端专项/旧游标-C1 回归/全量 **68/48/986 passed**；前端 P12F-D/history/技术 truth/商务 truth/checkpoint/全量 **3/37/28/18/51/300 passed**。所有 Playwright 使用 `--workers=1 --retries=0` 串行；lint/build/py_compile/diff-check/精确六文件/空暂存区/弱断言零命中均通过。原任务/首轮回执=`msg_441102447c64467f8bd27a4d0b241d94`/`msg_f1f94a200185467c88f2f07ff626e896`，三轮返修 task/review=`msg_308b3e60e72b4cecaeb9853a6ee2f54f`/`msg_61426868c5454cb8b56b7a97362ef34a`、`msg_025f0d26538147b58e4949d08d459bfa`/`msg_21c4ff084afc4555a992c2fc37bb3b3e`、`msg_23a1993ce6334808b410aaf1e25faa98`/`msg_06291046a6494d508528c01378d85241`；验收=`msg_d977b2ead50b4f8292852c9b2de95b08`。
+
+正文/标题搜索、日期或多来源组合、删除、命名、固定、自动加载、跨项目历史和多人协作仍不在 P12F-D。
 
 ## P13-A 任务 SSE 工作空间鉴权（已完成）
 
