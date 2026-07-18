@@ -3,7 +3,7 @@
 模块：P12F-H 技术标/商务标共用自动修订单条命名
 用途：为有限自动修订增加可选展示名称，提供严格单条写接口、列表呈现、清除名称和跨项目迟到隔离。
 对接：`EditorStateRevisionRow`、修订 history/name service、`editor_state_revisions` 路由与 schema、共用修订 API/面板/history E2E。
-状态：2026-07-18 已完成只读审计；初始冻结=`0660145`。Failure-first 后发现六键元数据会使六份既有后端精确合同测试必须同步，第一次范围修订将白名单由十文件扩为十六文件；Codex 独立回归随后以 **1 failed / 131 passed** 暴露 `test_editor_state_revisions.py` 的真实 SQLite 精确列集合仍冻结为旧八列，第二次范围修订只把该基线测试加入，最终边界为十七文件。除此之外不得扩张。Grok 只实现/自测、不暂存、不提交、不推送；Codex 负责独立审查、验收、中文闭环和协作分支推送。
+状态：2026-07-18 已完成并推送；初始冻结=`0660145`，第一次范围修订=`0db935b`，第二次范围修订=`aca68b6`，实现=`b4338ba`。Failure-first 后发现六键元数据会使六份既有后端精确合同测试必须同步，第一次范围修订将白名单由十文件扩为十六文件；Codex 独立回归随后以 **1 failed / 131 passed** 暴露 `test_editor_state_revisions.py` 的真实 SQLite 精确列集合仍冻结为旧八列，第二次范围修订只把该基线测试加入，最终实现严格保持十七文件。Grok 只实现/自测、未暂存、未提交、未推送；Codex 已完成四轮受限审查、独立验收、中文闭环和协作分支推送。
 
 ## 1. 选择与边界
 
@@ -140,3 +140,11 @@ Grok 与 Codex 分别逐条串行运行：
 ## 10. 明确未做
 
 不做固定/置顶/收藏、保护裁剪、批量命名、标签/备注、名称搜索、排序、导出/分享、软删除/回收站、检查点命名、跨项目历史、多人实时协作、SSE/WebSocket、审计扩展、数据库索引、缓存/离线队列或通用 metadata 框架。
+
+## 11. 完成与验收记录
+
+1. 有效 failure-first：后端 **30 failed / 0 passed / 0 errors**，首个业务失败为新 PATCH 路由 404；前端 **3 failed / 1 passed**，首个业务失败为列表加载后不存在命名入口。
+2. 四轮受限审查依次关闭：固定 404 文案与真实 rowcount/事务/旧库迁移证据；冗余名称规范化条件与精确 `VARCHAR(160)`；恢复计数弱断言、真实 CSRF、失败保留非空原名、Cookie 泄漏和 A/B 迟到围栏；最后仅同步真实 SQLite 精确列集合基线。最终未扩出十七文件。
+3. Codex 后端严格串行独立验收：专项 **30 passed**；六组兼容回归 **240 passed**；第二次范围修订前真实回归 **1 failed / 131 passed**，修订后 **132 passed**；全量 **1140 passed**。均只含 1 条既有 Starlette/httpx 弃用告警。
+4. Codex 前端严格串行独立验收：P12F-H/history/checkpoint/技术 truth/商务 truth 分别 **5/52/51/28/18 passed**；lint、build 均通过。首轮全量为 **314 passed / 1 failed**，唯一失败是既有 P8B local 项目进入页瞬时重定向，独立复验 **1 passed**；无代码变更的第二轮完整全量 **315/315 passed**。
+5. 所有 Playwright 均显式 `--workers=1 --retries=0`，所有 pytest 均无 xdist、无并发分组。`py_compile`、`git diff --check`、精确十七文件、空暂存区、SHA-256、AST/SQL/弱断言/泄漏禁区全部通过；实现提交 `b4338ba` 已推送到 `origin/collab/grok-code-codex-review`。

@@ -930,13 +930,15 @@ Grok 与 Codex 最终均通过 **14/71/93/39/1110 passed**；Codex 独立全量 
 
 Codex 独立串行通过聚焦/history/checkpoint/技术 truth/商务 truth/前端全量 **4/47/51/28/18/310 passed**；lint、build、diff-check、精确三文件、空暂存区、最终哈希与静态禁区门通过。所有 Playwright 必须继续显式 `--workers=1 --retries=0` 串行运行，禁止并行命令。
 
-## P12F-H 单条修订命名（已审计，当前文档冻结）
+## P12F-H 单条修订命名（已完成并推送）
 
-契约=`docs/p12f-revision-display-name-contract.md`、计划=`docs/plans/2026-07-18-p12f-revision-display-name-plan.md`。初始冻结=`0660145`；failure-first 后因六键精确响应必然影响六份既有后端合同测试，当前范围修订把白名单扩为十六文件：ORM/SQLite 加列/schema/路由/history/name service/新专项、共用 API/面板/history E2E，加 history/page/source/time/search/delete 六份机械测试同步。两个新后端文件冻结时不存在，其余精确哈希见契约第 8 节。
+契约=`docs/p12f-revision-display-name-contract.md`、计划=`docs/plans/2026-07-18-p12f-revision-display-name-plan.md`。初始冻结=`0660145`，两次范围修订=`0db935b`/`aca68b6`，实现=`b4338ba`。最终十七文件包括 ORM/SQLite 加列/schema/路由/history/name service/新专项、共用 API/面板/history E2E、history/page/source/time/search/delete 六份机械元数据同步，以及 Codex 回归暴露的真实 SQLite 精确列集合基线。
 
 联调必须确认：存量与新修订默认 `displayName=null`；合法名称保存、覆盖、清除均精确一次 PATCH，响应一键/no-store；非法输入、query、extra、跨空间、角色和 CSRF 固定脱敏。list/page/search/detail 六键一致，名称不改变排序、游标、搜索命中、快照或裁剪。
 
 前端输入/取消零请求，成功原位更新且零 page/search 重载，失败保留原名称；命名与摘要/对比/body-diff/pair/恢复/删除/刷新/筛选/加载更多互斥。A→B hold 必须证明旧 success/catch/finally 不污染或解锁 B；名称仅以 React 文本显示，URL/存储/Cookie/console/错误/外网零泄漏。固定/置顶、裁剪保护、名称搜索、批量和检查点命名不在本包。
+
+真实 failure-first 为后端 **30 failed / 0 passed / 0 errors**、前端 **3 failed / 1 passed**。四轮受限审查关闭精确错误与事务/迁移、严格类型、真实 CSRF、失败保值、迟到围栏、Cookie 泄漏和精确列基线。Codex 后端独立串行 **30/240/132/1140 passed**；前端 **5/52/51/28/18/315 passed**，lint/build/py_compile/diff/十七文件/哈希/静态禁区均通过。首轮全量唯一 P8B 瞬时导航失败为 **314 passed / 1 failed**，独立 **1 passed** 后无代码变更完整复验 **315/315 passed**。Playwright 继续强制 `--workers=1 --retries=0`。
 
 ## P13-A 任务 SSE 工作空间鉴权（已完成）
 
