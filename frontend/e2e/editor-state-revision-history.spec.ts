@@ -1,10 +1,11 @@
 /**
- * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B 双工作区修订历史、对比、正文差异、游标分页、来源与时间范围筛选前端 E2E
+ * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B / P12F-F-B
+ *       双工作区修订历史、对比、正文差异、游标分页、来源与时间范围筛选、可见内容搜索前端 E2E
  * 用途：技术标/商务标证明默认折叠零请求、按需列表/摘要/对比/正文差异、双修订正文差异、
  *       二次确认 restore、游标页首屏与加载更多、来源筛选、本地时间范围应用/清除、
- *       执行时 expected、唯一 editor-state GET、失败阻断、迟到隔离与数据最小化。
+ *       显式内容搜索 POST、执行时 expected、唯一 editor-state GET、失败阻断、迟到隔离与数据最小化。
  * 对接：Playwright chromium headless workers=1 retries=0；route 探针
- *       （含 comparison/body-diff/pair/page arrived/complete/cursor/sourceKind/createdFrom/createdBefore）。
+ *       （含 comparison/body-diff/pair/page/search arrived/complete/cursor/sourceKind/createdFrom/createdBefore/query body）。
  * 二次开发：禁止固定 sleep、.or(...)、>=1 冒充、宽泛状态码、route fallback 假成功。
  */
 import {
@@ -79,6 +80,13 @@ const PAGE_CURSOR_V3_LEN_257 = PAGE_CURSOR_V3_LEN_256 + "A";
 const PAGE_CURSOR_BAD_SHAPE = "not_a_valid_cursor_value";
 /** P12F-E-B 时间范围无效固定中文 */
 const MSG_TIME_RANGE_INVALID = "时间范围无效，请检查开始和结束时间";
+/** P12F-F-B 搜索关键词校验失败固定中文 */
+const MSG_SEARCH_QUERY_INVALID =
+  "搜索关键词需为 1 至 64 个字符，且不能含首尾空白或控制字符";
+/** P12F-F-B 搜索空结果固定中文 */
+const MSG_SEARCH_EMPTY = "未找到匹配修订";
+/** P12F-F-B 搜索失败固定中文 */
+const MSG_SEARCH_FAIL = "修订内容搜索失败，请稍后重试";
 const MSG_RESTORE_OK = "已恢复到所选修订";
 const MSG_RESTORE_BLOCKED =
   "当前无法恢复，请先处理版本冲突或重新载入";
@@ -218,6 +226,11 @@ type PageMode =
   | { kind: "ok" }
   | { kind: "hold"; gate: HoldGate }
   | { kind: "http_error"; status: number };
+/** P12F-F-B 搜索模式：正常 / 挂起 / HTTP 错误 */
+type SearchMode =
+  | { kind: "ok" }
+  | { kind: "hold"; gate: HoldGate }
+  | { kind: "http_error"; status: number };
 type DetailMode = { kind: "ok" } | { kind: "hold"; gate: HoldGate };
 type ComparisonMode = { kind: "ok" } | { kind: "hold"; gate: HoldGate };
 type BodyDiffMode = { kind: "ok" } | { kind: "hold"; gate: HoldGate };
@@ -238,6 +251,22 @@ type PageProbeHit = {
   postData: string | null;
   queryKeys: string[];
   search: string;
+};
+
+/** P12F-F-B search 探针到达记录：无 URL query，body 精确键顺序 */
+type SearchProbeHit = {
+  projectId: string;
+  query: string | null;
+  sourceKind: string | null;
+  createdFrom: string | null;
+  createdBefore: string | null;
+  method: string;
+  path: string;
+  postData: string | null;
+  queryKeys: string[];
+  search: string;
+  bodyKeys: string[];
+  body: Record<string, unknown> | null;
 };
 
 type ComparisonSummary = {
@@ -315,6 +344,16 @@ type ProbeState = {
     createdFrom: string | null;
     createdBefore: string | null;
   }>;
+  /** P12F-F-B search 到达（gate 前），含 body 解析字段 */
+  searchLog: SearchProbeHit[];
+  /** P12F-F-B search 响应已 fulfill（await json 返回后） */
+  searchCompleteLog: Array<{
+    projectId: string;
+    query: string | null;
+    sourceKind: string | null;
+    createdFrom: string | null;
+    createdBefore: string | null;
+  }>;
   /** 按 cursor 键固定第二页游标；筛选场景可用 esrc2 */
   pageSecondCursorBySource: Record<string, string>;
   /** 时间范围激活时第二页游标（默认 esrc3） */
@@ -365,6 +404,7 @@ type ProbeState = {
   restoreMode: RestoreMode;
   listMode: ListMode;
   pageMode: PageMode;
+  searchMode: SearchMode;
   detailMode: DetailMode;
   comparisonMode: ComparisonMode;
   bodyDiffMode: BodyDiffMode;
@@ -374,6 +414,9 @@ type ProbeState = {
   pageModeByProject: Record<string, PageMode>;
   /** 按 cursor 固定 page hold/错误（第二页） */
   pageModeByCursor: Record<string, PageMode>;
+  searchModeByProject: Record<string, SearchMode>;
+  /** 按 query 字面量固定 search hold/错误 */
+  searchModeByQuery: Record<string, SearchMode>;
   detailModeByProject: Record<string, DetailMode>;
   detailModeByRevisionId: Record<string, DetailMode>;
   comparisonModeByProject: Record<string, ComparisonMode>;
@@ -389,6 +432,9 @@ type ProbeState = {
   pageResponseByCursor: Record<string, unknown>;
   /** 自定义第二页游标；默认 PAGE_CURSOR_SECOND */
   pageSecondCursor: string;
+  searchResponseOverride: unknown | null;
+  /** 按 query 字面量固定 search 响应 */
+  searchResponseByQuery: Record<string, unknown>;
   detailResponseOverride: unknown | null;
   restoreResponseOverride: unknown | null;
   comparisonResponseOverride: unknown | null;
@@ -567,6 +613,8 @@ function createProbeState(mode: Mode): ProbeState {
     listCompleteLog: [],
     pageLog: [],
     pageCompleteLog: [],
+    searchLog: [],
+    searchCompleteLog: [],
     detailLog: [],
     detailCompleteLog: [],
     comparisonLog: [],
@@ -580,6 +628,7 @@ function createProbeState(mode: Mode): ProbeState {
     restoreMode: { kind: "ok" },
     listMode: { kind: "ok" },
     pageMode: { kind: "ok" },
+    searchMode: { kind: "ok" },
     detailMode: { kind: "ok" },
     comparisonMode: { kind: "ok" },
     bodyDiffMode: { kind: "ok" },
@@ -588,6 +637,8 @@ function createProbeState(mode: Mode): ProbeState {
     listModeByProject: {},
     pageModeByProject: {},
     pageModeByCursor: {},
+    searchModeByProject: {},
+    searchModeByQuery: {},
     detailModeByProject: {},
     detailModeByRevisionId: {},
     comparisonModeByProject: {},
@@ -602,6 +653,8 @@ function createProbeState(mode: Mode): ProbeState {
     pageSecondCursor: PAGE_CURSOR_SECOND,
     pageSecondCursorBySource: {},
     pageSecondCursorForTime: PAGE_CURSOR_TIME_SECOND,
+    searchResponseOverride: null,
+    searchResponseByQuery: {},
     detailResponseOverride: null,
     restoreResponseOverride: null,
     comparisonResponseOverride: null,
@@ -637,6 +690,126 @@ function resolvePageMode(
     return state.pageModeByCursor[cursor];
   }
   return state.pageModeByProject[projectId] ?? state.pageMode;
+}
+
+/** 用途：解析 search 模式；按 query 字面量优先 */
+function resolveSearchMode(
+  state: ProbeState,
+  projectId: string,
+  query: string | null,
+): SearchMode {
+  if (query != null && state.searchModeByQuery[query]) {
+    return state.searchModeByQuery[query];
+  }
+  return state.searchModeByProject[projectId] ?? state.searchMode;
+}
+
+/** 用途：统计某项目 search 到达次数 */
+function searchHitCount(state: ProbeState, projectId: string): number {
+  return state.searchLog.filter((h) => h.projectId === projectId).length;
+}
+
+/** 用途：统计某项目 search 完成次数 */
+function searchCompleteCount(state: ProbeState, projectId: string): number {
+  return state.searchCompleteLog.filter((h) => h.projectId === projectId)
+    .length;
+}
+
+/** 用途：统计精确 query+source+time 组合的 search 到达次数 */
+function searchHitCountForFilter(
+  state: ProbeState,
+  projectId: string,
+  query: string | null,
+  sourceKind: string | null,
+  createdFrom: string | null,
+  createdBefore: string | null,
+): number {
+  return state.searchLog.filter(
+    (h) =>
+      h.projectId === projectId &&
+      h.query === query &&
+      h.sourceKind === sourceKind &&
+      h.createdFrom === createdFrom &&
+      h.createdBefore === createdBefore,
+  ).length;
+}
+
+/** 用途：统计精确 query+source+time 组合的 search 完成次数 */
+function searchCompleteCountForFilter(
+  state: ProbeState,
+  projectId: string,
+  query: string | null,
+  sourceKind: string | null,
+  createdFrom: string | null,
+  createdBefore: string | null,
+): number {
+  return state.searchCompleteLog.filter(
+    (h) =>
+      h.projectId === projectId &&
+      h.query === query &&
+      h.sourceKind === sourceKind &&
+      h.createdFrom === createdFrom &&
+      h.createdBefore === createdBefore,
+  ).length;
+}
+
+/**
+ * 用途：探针侧 NFKC+casefold 连续字面匹配可见字符串叶；
+ *   仅用于 E2E 默认真值，不冒充完整后端白名单算法。
+ */
+function probeSnapshotContainsQuery(
+  snap: Record<string, unknown> | undefined,
+  query: string,
+): boolean {
+  if (!snap || typeof query !== "string" || query.length === 0) return false;
+  const needle = query.normalize("NFKC").toLocaleLowerCase();
+  const stack: unknown[] = [snap];
+  let visits = 0;
+  while (stack.length > 0) {
+    const cur = stack.pop();
+    visits += 1;
+    if (visits > 8192) return false;
+    if (typeof cur === "string") {
+      if (cur.normalize("NFKC").toLocaleLowerCase().includes(needle)) {
+        return true;
+      }
+      continue;
+    }
+    if (Array.isArray(cur)) {
+      for (const item of cur) stack.push(item);
+      continue;
+    }
+    if (cur && typeof cur === "object") {
+      for (const v of Object.values(cur as Record<string, unknown>)) {
+        stack.push(v);
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * 用途：构建默认 search 响应；来源/时间过滤后最多 20 条；
+ *   按 query 字面匹配 snapshot 可见字符串；无 nextCursor。
+ */
+function buildDefaultSearchPayload(
+  state: ProbeState,
+  projectId: string,
+  query: string,
+  sourceKind: string | null,
+  createdFrom: string | null,
+  createdBefore: string | null,
+): { items: RevisionMeta[] } {
+  const allRaw = state.revisions[projectId] || [];
+  const filtered = allRaw.filter((it) => {
+    if (sourceKind != null && it.sourceKind !== sourceKind) return false;
+    if (!matchesCreatedAtRange(it.createdAt, createdFrom, createdBefore)) {
+      return false;
+    }
+    const detail = state.details[it.revisionId];
+    return probeSnapshotContainsQuery(detail?.snapshot, query);
+  });
+  return { items: filtered.slice(0, 20) };
 }
 
 /** 用途：统计某项目 page 到达次数 */
@@ -1439,6 +1612,165 @@ async function installRoutes(page: Page, state: ProbeState) {
         }, 201);
         return;
       }
+    }
+
+    // P12F-F-B 内容搜索：必须在 page/list/detail 之前匹配，避免 "search" 被当 revisionId
+    const revSearchMatch = path.match(
+      /^\/api\/projects\/([^/]+)\/editor-state-revisions\/search\/?$/,
+    );
+    if (revSearchMatch) {
+      const pid = revSearchMatch[1];
+      const queryKeys = [...url.searchParams.keys()];
+      const postData = req.postData();
+      let body: Record<string, unknown> | null = null;
+      let bodyKeys: string[] = [];
+      let query: string | null = null;
+      let sourceKind: string | null = null;
+      let createdFrom: string | null = null;
+      let createdBefore: string | null = null;
+      if (postData != null && postData !== "") {
+        try {
+          const parsed = JSON.parse(postData) as unknown;
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            body = parsed as Record<string, unknown>;
+            bodyKeys = Object.keys(body);
+            if (typeof body.query === "string") query = body.query;
+            if (typeof body.sourceKind === "string") sourceKind = body.sourceKind;
+            else if (body.sourceKind === null) sourceKind = null;
+            if (typeof body.createdFrom === "string") createdFrom = body.createdFrom;
+            else if (body.createdFrom === null) createdFrom = null;
+            if (typeof body.createdBefore === "string") {
+              createdBefore = body.createdBefore;
+            } else if (body.createdBefore === null) {
+              createdBefore = null;
+            }
+          }
+        } catch {
+          body = null;
+          bodyKeys = [];
+        }
+      }
+      if (!known.has(pid)) {
+        state.forbiddenHits.push(`${method} ${path}`);
+        await json(route, { detail: "not_found" }, 404);
+        return;
+      }
+      if (method !== "POST") {
+        state.forbiddenHits.push(`${method} ${path}`);
+        await json(route, { detail: "method_not_allowed" }, 405);
+        return;
+      }
+      // URL 不得带 search/q/cursor 等 query
+      if (queryKeys.length > 0 || url.search.length > 1) {
+        state.forbiddenHits.push(`${method} ${path}${url.search}`);
+      }
+      // body 只允许 query / sourceKind / createdFrom / createdBefore
+      const allowedBodyKeys = new Set([
+        "query",
+        "sourceKind",
+        "createdFrom",
+        "createdBefore",
+      ]);
+      for (const k of bodyKeys) {
+        if (!allowedBodyKeys.has(k)) {
+          state.forbiddenHits.push(`search_extra_key:${k}`);
+        }
+      }
+      if (body == null || typeof body.query !== "string") {
+        state.forbiddenHits.push("search_body_invalid");
+      }
+      // arrived：gate 前记录
+      state.searchLog.push({
+        projectId: pid,
+        query,
+        sourceKind,
+        createdFrom,
+        createdBefore,
+        method,
+        path,
+        postData,
+        queryKeys,
+        search: url.search,
+        bodyKeys,
+        body,
+      });
+      const completeHit = {
+        projectId: pid,
+        query,
+        sourceKind,
+        createdFrom,
+        createdBefore,
+      };
+      const searchMode = resolveSearchMode(state, pid, query);
+      if (searchMode.kind === "hold") {
+        await searchMode.gate.wait();
+      }
+      if (searchMode.kind === "http_error") {
+        await json(
+          route,
+          {
+            detail: {
+              code: "editor_state_revision_search_error",
+              message: "search error",
+            },
+          },
+          searchMode.status,
+        );
+        state.searchCompleteLog.push(completeHit);
+        return;
+      }
+      if (state.searchResponseOverride != null) {
+        await json(route, state.searchResponseOverride);
+        state.searchCompleteLog.push(completeHit);
+        return;
+      }
+      if (query != null && state.searchResponseByQuery[query] != null) {
+        await json(route, state.searchResponseByQuery[query]);
+        state.searchCompleteLog.push(completeHit);
+        return;
+      }
+      if (query == null || typeof query !== "string") {
+        await json(
+          route,
+          {
+            detail: {
+              code: "editor_state_revision_search_query_invalid",
+              message: "修订搜索关键词无效",
+            },
+          },
+          400,
+        );
+        state.searchCompleteLog.push(completeHit);
+        return;
+      }
+      if (
+        sourceKind !== null &&
+        !NINE_SOURCES.includes(sourceKind)
+      ) {
+        await json(
+          route,
+          {
+            detail: {
+              code: "editor_state_revision_source_invalid",
+              message: "修订来源筛选无效",
+            },
+          },
+          400,
+        );
+        state.searchCompleteLog.push(completeHit);
+        return;
+      }
+      const built = buildDefaultSearchPayload(
+        state,
+        pid,
+        query,
+        sourceKind,
+        createdFrom,
+        createdBefore,
+      );
+      await json(route, { items: built.items });
+      state.searchCompleteLog.push(completeHit);
+      return;
     }
 
     // P12F-C/D 游标页：必须在旧 list 与 detail 之前匹配，避免 path 段 "page" 被当 revisionId
@@ -3133,12 +3465,12 @@ test.describe("P12C-C3 技术标修订历史", () => {
       page.getByTestId("editor-state-revision-list-error"),
     ).toContainText(MSG_LIST_FAIL);
 
-    // 无创建/删除/diff/搜索
+    // 无创建/删除；禁止错误命名「搜索修订」（P12F-F-B 合法入口为「内容搜索」+「搜索」）
     await expect(
       page.getByTestId("editor-state-revision-create"),
     ).toHaveCount(0);
-    await expect(page.getByText("删除修订")).toHaveCount(0);
-    await expect(page.getByText("搜索修订")).toHaveCount(0);
+    await expect(page.getByText("删除修订", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("搜索修订", { exact: true })).toHaveCount(0);
   });
 
   test("P12D-B 技术标：按需对比成功/一致、严格解析、中文标签、summary/compare/restore 互斥与零泄漏", async ({
@@ -8665,5 +8997,1333 @@ test.describe("P12F-E-B 商务标修订历史时间范围筛选", () => {
     expect(consoleBiz).not.toContain("esrc3_");
     expect(consoleBiz).not.toContain(PAGE_CURSOR_TIME_SECOND);
     expect(seeded.length).toBe(11);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P12F-F-B 修订可见内容搜索前端（三用例互不 serial 跳过）
+// ---------------------------------------------------------------------------
+
+/**
+ * 用途：把指定修订的 snapshot 章节/商务字段写入可搜索标记，供探针默认匹配。
+ */
+function stampSearchableMarker(
+  state: ProbeState,
+  revisionId: string,
+  marker: string,
+  mode: Mode,
+) {
+  const detail = state.details[revisionId];
+  if (!detail) return;
+  const snap = { ...detail.snapshot };
+  if (mode === "tech") {
+    const chapters = Array.isArray(snap.chapters)
+      ? [...(snap.chapters as Array<Record<string, unknown>>)]
+      : [];
+    if (chapters.length === 0) {
+      chapters.push({ id: "ch_search", title: marker, body: marker });
+    } else {
+      const first = { ...(chapters[0] as Record<string, unknown>) };
+      first.title = `${String(first.title ?? "")}${marker}`;
+      first.body = `${String(first.body ?? "")}${marker}`;
+      chapters[0] = first;
+    }
+    snap.chapters = chapters;
+  } else {
+    const commits = Array.isArray(snap.businessCommit)
+      ? [...(snap.businessCommit as Array<Record<string, unknown>>)]
+      : [];
+    commits.push({ title: marker, body: marker });
+    snap.businessCommit = commits;
+  }
+  state.details[revisionId] = { ...detail, snapshot: snap };
+}
+
+/**
+ * 用途：构造严格合法五键 search item，供 parser 坏响应/21 条边界注入。
+ * 约束：revisionId/stateVersion 使用探针同款 esr_/esv_ 外壳；不依赖列表种子。
+ */
+function makeValidSearchMeta(n: number): RevisionMeta {
+  return {
+    revisionId: seedRevisionId(n),
+    stateVersion: seedStateVersion(n),
+    snapshotBytes: 100 + (n % 50),
+    sourceKind: "task",
+    createdAt: "2026-07-16T10:00:00.000Z",
+  };
+}
+
+test.describe("P12F-F-B 技术标显式搜索", () => {
+  // 独立 describe，禁止跨用例 serial 首失败 did-not-run
+  test("P12F-F-B 技术标：输入零请求、非法零请求保值、有效 POST 无 URL query/精确 body、严格五键/唯一/最多20、空态/失败/刷新/清除、搜索态无加载更多", async ({
+    page,
+  }) => {
+    const state = createProbeState("tech");
+    const SEARCH_MARK = "P12FFB_TECH_HIT_MARK";
+    const SEARCH_Q = "P12FFB_TECH_HIT";
+    const EMPTY_Q = "NO_MATCH_TOKEN_XYZ";
+    const seeded = seedRevisions(
+      state,
+      TECH_A,
+      21,
+      Array.from({ length: 21 }, (_, i) => (i % 2 === 0 ? "task" : "revise")),
+    );
+    // 最新 20 候选窗：给前 20 条打标记（列表倒序索引 0 为最新）
+    for (let i = 0; i < 20; i++) {
+      stampSearchableMarker(state, seeded[i].revisionId, SEARCH_MARK, "tech");
+    }
+    // 第 21 条不打标，证明候选窗边界由探针/后端控制
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+
+    await openWorkspace(page, "tech", TECH_A);
+    expect(state.searchLog.length).toBe(0);
+    expect(state.pageLog.length).toBe(0);
+    await expect(
+      page.getByTestId("editor-state-revision-search-input"),
+    ).toHaveCount(0);
+
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(1);
+    expect(state.searchLog.length).toBe(0);
+    expect(state.listLog.length).toBe(0);
+
+    const searchInput = page.getByTestId("editor-state-revision-search-input");
+    const searchApply = page.getByTestId("editor-state-revision-search-apply");
+    const searchClear = page.getByTestId("editor-state-revision-search-clear");
+    await expect(searchInput).toBeVisible();
+    await expect(searchApply).toBeVisible();
+    await expect(searchClear).toBeVisible();
+    await expect(page.getByText("内容搜索", { exact: true })).toBeVisible();
+
+    // 输入零请求
+    const pageBeforeType = state.pageLog.length;
+    const searchBeforeType = state.searchLog.length;
+    await searchInput.fill(SEARCH_Q);
+    expect(state.searchLog.length).toBe(searchBeforeType);
+    expect(state.pageLog.length).toBe(pageBeforeType);
+
+    // 非法：首尾空白 / 空串 / C0 / DEL / C1 / 65 ASCII — 零请求 + 固定错误 + 列表保值
+    await expect(
+      page.getByTestId("editor-state-revision-item-0"),
+    ).toBeVisible();
+    const illegalCases = [
+      "  ab",
+      "ab  ",
+      "   ",
+      "\u0001ab", // C0
+      "ab\u007F", // DEL U+007F
+      "ab\u0080", // C1 U+0080
+      "a".repeat(65),
+    ];
+    for (const bad of illegalCases) {
+      await searchInput.fill(bad);
+      const s0 = state.searchLog.length;
+      const p0 = state.pageLog.length;
+      await searchApply.click();
+      await expect(
+        page.getByTestId("editor-state-revision-search-error"),
+      ).toHaveText(MSG_SEARCH_QUERY_INVALID);
+      expect(state.searchLog.length).toBe(s0);
+      expect(state.pageLog.length).toBe(p0);
+      await expect(
+        page.getByTestId("editor-state-revision-item-0"),
+      ).toBeVisible();
+      // 错误不得反射原值
+      const errText = await page
+        .getByTestId("editor-state-revision-search-error")
+        .innerText();
+      expect(errText).not.toContain(bad.trim() || "\u0001");
+      expect(errText).not.toContain(bad);
+    }
+
+    // 64 个 astral Unicode 码点合法：UTF-16 .length=128 不得误拒；原样 POST +1
+    const ASTRAL_CP = "\u{1F600}";
+    const astral64 = ASTRAL_CP.repeat(64);
+    const astral65 = ASTRAL_CP.repeat(65);
+    expect([...astral64].length).toBe(64);
+    expect(astral64.length).toBe(128);
+    expect([...astral65].length).toBe(65);
+    expect(astral65.length).toBe(130);
+    const pageBeforeAstral = state.pageLog.length;
+    const searchBeforeAstral = state.searchLog.length;
+    await searchInput.fill(astral64);
+    await searchApply.click();
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(
+            state,
+            TECH_A,
+            astral64,
+            null,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    expect(state.searchLog.length).toBe(searchBeforeAstral + 1);
+    expect(state.pageLog.length).toBe(pageBeforeAstral);
+    const astralHit = state.searchLog[state.searchLog.length - 1];
+    expect(astralHit.query).toBe(astral64);
+    expect(astralHit.body).toEqual({ query: astral64 });
+    expect(astralHit.postData).toBe(JSON.stringify({ query: astral64 }));
+    expect(astralHit.queryKeys).toEqual([]);
+    expect(astralHit.search).toBe("");
+    await expect(
+      page.getByTestId("editor-state-revision-search-active"),
+    ).toBeVisible();
+    await expect(page.getByTestId("editor-state-revision-empty")).toHaveText(
+      MSG_SEARCH_EMPTY,
+    );
+
+    // 65 个 astral 码点非法：零 search/page；已应用 astral64 与空列表保留
+    await searchInput.fill(astral65);
+    const astral65SearchBefore = state.searchLog.length;
+    const astral65PageBefore = state.pageLog.length;
+    await searchApply.click();
+    await expect(
+      page.getByTestId("editor-state-revision-search-error"),
+    ).toHaveText(MSG_SEARCH_QUERY_INVALID);
+    expect(state.searchLog.length).toBe(astral65SearchBefore);
+    expect(state.pageLog.length).toBe(astral65PageBefore);
+    await expect(
+      page.getByTestId("editor-state-revision-search-active"),
+    ).toBeVisible();
+    await expect(page.getByTestId("editor-state-revision-empty")).toHaveText(
+      MSG_SEARCH_EMPTY,
+    );
+    const astral65Err = await page
+      .getByTestId("editor-state-revision-search-error")
+      .innerText();
+    expect(astral65Err).not.toContain(astral65);
+    expect(astral65Err).not.toContain(ASTRAL_CP);
+
+    // 有效搜索：精确 POST +1，无 URL query，精确 body 键序
+    await searchInput.fill(SEARCH_Q);
+    const searchBefore = state.searchLog.length;
+    const pageBefore = state.pageLog.length;
+    await searchApply.click();
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(
+            state,
+            TECH_A,
+            SEARCH_Q,
+            null,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    expect(state.searchLog.length).toBe(searchBefore + 1);
+    expect(state.pageLog.length).toBe(pageBefore);
+    const hit = state.searchLog[state.searchLog.length - 1];
+    expect(hit.method).toBe("POST");
+    expect(hit.path).toBe(
+      `/api/projects/${TECH_A}/editor-state-revisions/search`,
+    );
+    expect(hit.queryKeys).toEqual([]);
+    expect(hit.search).toBe("");
+    expect(hit.query).toBe(SEARCH_Q);
+    expect(hit.sourceKind).toBeNull();
+    expect(hit.createdFrom).toBeNull();
+    expect(hit.createdBefore).toBeNull();
+    expect(hit.bodyKeys).toEqual(["query"]);
+    expect(hit.body).toEqual({ query: SEARCH_Q });
+    expect(hit.postData).toBe(JSON.stringify({ query: SEARCH_Q }));
+
+    await expect(
+      page.getByTestId("editor-state-revision-search-active"),
+    ).toBeVisible();
+    // 严格最多 20、唯一、无加载更多
+    for (let i = 0; i < 20; i++) {
+      await expect(
+        page.getByTestId(`editor-state-revision-item-${i}`),
+      ).toBeVisible();
+    }
+    await expect(page.getByTestId("editor-state-revision-item-20")).toHaveCount(
+      0,
+    );
+    await expect(
+      page.getByTestId("editor-state-revision-load-more"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-search-error"),
+    ).toHaveCount(0);
+
+    // 同值再点搜索：零重发（不得用同值零重发冒充坏响应请求）
+    const sameBefore = state.searchLog.length;
+    await searchApply.click();
+    expect(state.searchLog.length).toBe(sameBefore);
+
+    // 严格 parser：真实坏响应 — 独立 query 各精确 POST +1；固定失败；不回退 page
+    const validOne = makeValidSearchMeta(9101);
+    const parserCases: Array<{ query: string; body: unknown }> = [
+      {
+        // 顶层额外键
+        query: "PARSER_TOP_EXTRA",
+        body: { items: [validOne], extra: true },
+      },
+      {
+        // item 缺少五键之一（createdAt）
+        query: "PARSER_ITEM_MISS",
+        body: {
+          items: [
+            {
+              revisionId: seedRevisionId(9102),
+              stateVersion: seedStateVersion(9102),
+              snapshotBytes: 12,
+              sourceKind: "task",
+            },
+          ],
+        },
+      },
+      {
+        // item 多额外键
+        query: "PARSER_ITEM_EXTRA",
+        body: {
+          items: [{ ...makeValidSearchMeta(9103), leaked: "x" }],
+        },
+      },
+      {
+        // 两个 item 同一 revisionId
+        query: "PARSER_DUP_ID",
+        body: {
+          items: [
+            makeValidSearchMeta(9104),
+            {
+              ...makeValidSearchMeta(9104),
+              stateVersion: seedStateVersion(9199),
+            },
+          ],
+        },
+      },
+      {
+        // 21 个合法且 ID 唯一
+        query: "PARSER_OVER_20",
+        body: {
+          items: Array.from({ length: 21 }, (_, i) =>
+            makeValidSearchMeta(9200 + i),
+          ),
+        },
+      },
+    ];
+    for (const c of parserCases) {
+      state.searchResponseByQuery[c.query] = c.body;
+      const pageBeforeBad = state.pageLog.length;
+      const hitBeforeBad = searchHitCountForFilter(
+        state,
+        TECH_A,
+        c.query,
+        null,
+        null,
+        null,
+      );
+      const completeBeforeBad = searchCompleteCountForFilter(
+        state,
+        TECH_A,
+        c.query,
+        null,
+        null,
+        null,
+      );
+      await searchInput.fill(c.query);
+      await searchApply.click();
+      await expect
+        .poll(
+          () =>
+            searchCompleteCountForFilter(
+              state,
+              TECH_A,
+              c.query,
+              null,
+              null,
+              null,
+            ),
+          { timeout: 10_000 },
+        )
+        .toBe(completeBeforeBad + 1);
+      expect(
+        searchHitCountForFilter(state, TECH_A, c.query, null, null, null),
+      ).toBe(hitBeforeBad + 1);
+      expect(state.pageLog.length).toBe(pageBeforeBad);
+      const badHit = state.searchLog[state.searchLog.length - 1];
+      expect(badHit.method).toBe("POST");
+      expect(badHit.query).toBe(c.query);
+      expect(badHit.queryKeys).toEqual([]);
+      expect(badHit.search).toBe("");
+      await expect(
+        page.getByTestId("editor-state-revision-list-error"),
+      ).toHaveText(MSG_SEARCH_FAIL);
+      await expect(
+        page.getByTestId("editor-state-revision-item-0"),
+      ).toHaveCount(0);
+      await expect(searchInput).toHaveValue(c.query);
+      await expect(
+        page.getByTestId("editor-state-revision-search-active"),
+      ).toBeVisible();
+      await expect(
+        page.getByTestId("editor-state-revision-load-more"),
+      ).toHaveCount(0);
+      // 失败文案不得反射 query 或坏 shape 关键字
+      const failText = await page
+        .getByTestId("editor-state-revision-list-error")
+        .innerText();
+      expect(failText).not.toContain(c.query);
+      expect(failText).not.toContain("extra");
+      expect(failText).not.toContain("leaked");
+    }
+
+    // 恢复正常 byQuery 后：刷新重试独立 query 成功（空结果合法）
+    delete state.searchResponseByQuery["PARSER_TOP_EXTRA"];
+    delete state.searchResponseByQuery["PARSER_ITEM_MISS"];
+    delete state.searchResponseByQuery["PARSER_ITEM_EXTRA"];
+    delete state.searchResponseByQuery["PARSER_DUP_ID"];
+    delete state.searchResponseByQuery["PARSER_OVER_20"];
+    // 当前已应用为 PARSER_OVER_20；清除 override 后刷新应 POST +1 且空态成功
+    const recoverQuery = "PARSER_OVER_20";
+    const recoverHitBefore = searchHitCountForFilter(
+      state,
+      TECH_A,
+      recoverQuery,
+      null,
+      null,
+      null,
+    );
+    const recoverPageBefore = state.pageLog.length;
+    await page.getByTestId("editor-state-revision-refresh").click();
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(
+            state,
+            TECH_A,
+            recoverQuery,
+            null,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(recoverHitBefore + 1);
+    expect(
+      searchHitCountForFilter(state, TECH_A, recoverQuery, null, null, null),
+    ).toBe(recoverHitBefore + 1);
+    expect(state.pageLog.length).toBe(recoverPageBefore);
+    await expect(
+      page.getByTestId("editor-state-revision-list-error"),
+    ).toHaveCount(0);
+    await expect(page.getByTestId("editor-state-revision-empty")).toHaveText(
+      MSG_SEARCH_EMPTY,
+    );
+    await expect(
+      page.getByTestId("editor-state-revision-search-active"),
+    ).toBeVisible();
+
+    // 空态
+    await searchInput.fill(EMPTY_Q);
+    const emptyBefore = searchHitCountForFilter(
+      state,
+      TECH_A,
+      EMPTY_Q,
+      null,
+      null,
+      null,
+    );
+    await searchApply.click();
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(
+            state,
+            TECH_A,
+            EMPTY_Q,
+            null,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(emptyBefore + 1);
+    expect(
+      searchHitCountForFilter(state, TECH_A, EMPTY_Q, null, null, null),
+    ).toBe(emptyBefore + 1);
+    await expect(page.getByTestId("editor-state-revision-empty")).toHaveText(
+      MSG_SEARCH_EMPTY,
+    );
+    await expect(page.getByTestId("editor-state-revision-item-0")).toHaveCount(
+      0,
+    );
+    // 不得回退未筛选列表
+    expect(state.pageLog.length).toBe(pageBefore);
+
+    // 失败：固定中文、列表空、已应用关键词保留；刷新重试仍 search POST
+    state.searchModeByProject[TECH_A] = { kind: "http_error", status: 500 };
+    await searchInput.fill(SEARCH_Q);
+    const failBefore = searchCompleteCountForFilter(
+      state,
+      TECH_A,
+      SEARCH_Q,
+      null,
+      null,
+      null,
+    );
+    await searchApply.click();
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(
+            state,
+            TECH_A,
+            SEARCH_Q,
+            null,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(failBefore + 1);
+    await expect(
+      page.getByTestId("editor-state-revision-list-error"),
+    ).toHaveText(MSG_SEARCH_FAIL);
+    await expect(page.getByTestId("editor-state-revision-item-0")).toHaveCount(
+      0,
+    );
+    await expect(searchInput).toHaveValue(SEARCH_Q);
+    await expect(
+      page.getByTestId("editor-state-revision-search-active"),
+    ).toBeVisible();
+
+    state.searchModeByProject[TECH_A] = { kind: "ok" };
+    const refreshBefore = searchHitCountForFilter(
+      state,
+      TECH_A,
+      SEARCH_Q,
+      null,
+      null,
+      null,
+    );
+    const pageBeforeRefresh = state.pageLog.length;
+    await page.getByTestId("editor-state-revision-refresh").click();
+    await expect
+      .poll(
+        () =>
+          searchHitCountForFilter(state, TECH_A, SEARCH_Q, null, null, null),
+        { timeout: 10_000 },
+      )
+      .toBe(refreshBefore + 1);
+    expect(state.pageLog.length).toBe(pageBeforeRefresh);
+    await expect(
+      page.getByTestId("editor-state-revision-list-error"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-item-0"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-load-more"),
+    ).toHaveCount(0);
+
+    // 清除搜索：恢复 page 第一页；本来非空 → 精确 +1 page
+    const clearPageBefore = state.pageLog.length;
+    const clearSearchBefore = state.searchLog.length;
+    const clearPageCompleteBefore = pageCompleteCount(state, TECH_A);
+    await searchClear.click();
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(clearPageCompleteBefore + 1);
+    expect(state.pageLog.length).toBe(clearPageBefore + 1);
+    expect(state.searchLog.length).toBe(clearSearchBefore);
+    const clearHit = state.pageLog[state.pageLog.length - 1];
+    expect(clearHit.cursor).toBeNull();
+    expect(clearHit.sourceKind).toBeNull();
+    expect(clearHit.method).toBe("GET");
+    await expect(searchInput).toHaveValue("");
+    await expect(
+      page.getByTestId("editor-state-revision-search-active"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-search-error"),
+    ).toHaveCount(0);
+    // 清除后可出现加载更多（21>10）
+    await expect(
+      page.getByTestId("editor-state-revision-load-more"),
+    ).toBeVisible();
+
+    // 全空再清除：零请求
+    const emptyClearPage = state.pageLog.length;
+    const emptyClearSearch = state.searchLog.length;
+    await searchClear.click();
+    expect(state.pageLog.length).toBe(emptyClearPage);
+    expect(state.searchLog.length).toBe(emptyClearSearch);
+
+    expect(state.listLog.length).toBe(0);
+    expect(state.forbiddenHits).toEqual([]);
+    expect(state.externalHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+    await assertNoIdLeak(page, state, guards.consoleLogs);
+
+    // 关键词不得进入 URL/存储/Cookie/console/页面固定文案
+    const persist = await page.evaluate(() => ({
+      href: location.href,
+      cookie: document.cookie,
+      ls: Object.keys(localStorage)
+        .map((k) => `${k}=${localStorage.getItem(k)}`)
+        .join("\n"),
+      ss: Object.keys(sessionStorage)
+        .map((k) => `${k}=${sessionStorage.getItem(k)}`)
+        .join("\n"),
+      body: document.body?.innerText ?? "",
+    }));
+    for (const blob of [
+      persist.href,
+      persist.cookie,
+      persist.ls,
+      persist.ss,
+    ]) {
+      expect(blob).not.toContain(SEARCH_Q);
+      expect(blob).not.toContain(SEARCH_MARK);
+      expect(blob).not.toContain(EMPTY_Q);
+    }
+    expect(persist.body).not.toContain(SEARCH_MARK);
+    expect(persist.body).not.toContain(MSG_SEARCH_FAIL);
+    const consoleBlob = guards.consoleLogs.join("\n");
+    expect(consoleBlob).not.toContain(SEARCH_Q);
+    expect(consoleBlob).not.toContain(SEARCH_MARK);
+    expect(seeded.length).toBe(21);
+  });
+});
+
+test.describe("P12F-F-B 技术标组合与迟到隔离", () => {
+  test.use({ timezoneId: "Asia/Shanghai" });
+
+  test("P12F-F-B 技术标：来源+时间 body、筛选变化保持 query、折叠保留、项目切换重置、arrived/complete gate 与旧 success/catch/finally 零污染", async ({
+    page,
+  }) => {
+    const state = createProbeState("tech");
+    const SEARCH_MARK = "P12FFB_COMBO_MARK";
+    const SEARCH_Q = "P12FFB_COMBO";
+    const seededA = seedRevisions(
+      state,
+      TECH_A,
+      12,
+      Array.from({ length: 11 }, () => "task").concat(["revise"]),
+    );
+    syncRevisionCreatedAts(state, TECH_A, "2026-07-16T00:00:00.000Z", 1);
+    for (const it of seededA) {
+      if (it.sourceKind === "task") {
+        stampSearchableMarker(state, it.revisionId, SEARCH_MARK, "tech");
+      }
+    }
+    seedRevisions(
+      state,
+      TECH_B,
+      5,
+      Array.from({ length: 5 }, () => "callback"),
+    );
+    syncRevisionCreatedAts(state, TECH_B, "2026-07-17T00:00:00.000Z", 1);
+
+    const UTC_FROM = "2026-07-16T00:00:00.000Z";
+    const UTC_BEFORE = "2026-07-16T00:10:00.000Z";
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+    await openWorkspace(page, "tech", TECH_A);
+    await expandRevisionPanel(page);
+    await expect.poll(() => pageCompleteCount(state, TECH_A)).toBe(1);
+
+    const filter = page.getByTestId("editor-state-revision-source-filter");
+    const fromInput = page.getByTestId("editor-state-revision-created-from");
+    const beforeInput = page.getByTestId(
+      "editor-state-revision-created-before",
+    );
+    const timeApply = page.getByTestId("editor-state-revision-time-apply");
+    const searchInput = page.getByTestId("editor-state-revision-search-input");
+    const searchApply = page.getByTestId("editor-state-revision-search-apply");
+
+    // 来源 + 双边时间 + 搜索：body 键序 query → sourceKind → createdFrom → createdBefore
+    await filter.selectOption({ label: "任务写入" });
+    await expect
+      .poll(() => pageHitCountForSource(state, TECH_A, "task"), {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    await fromInput.fill("2026-07-16T08:00");
+    await beforeInput.fill("2026-07-16T08:10");
+    await timeApply.click();
+    await expect
+      .poll(
+        () =>
+          pageHitCountForTimeFilter(
+            state,
+            TECH_A,
+            "task",
+            UTC_FROM,
+            UTC_BEFORE,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+
+    await searchInput.fill(SEARCH_Q);
+    const comboSearchBefore = state.searchLog.length;
+    const pageBeforeCombo = state.pageLog.length;
+    await searchApply.click();
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(
+            state,
+            TECH_A,
+            SEARCH_Q,
+            "task",
+            UTC_FROM,
+            UTC_BEFORE,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    expect(state.searchLog.length).toBe(comboSearchBefore + 1);
+    expect(state.pageLog.length).toBe(pageBeforeCombo);
+    const comboHit = state.searchLog[state.searchLog.length - 1];
+    expect(comboHit.method).toBe("POST");
+    expect(comboHit.queryKeys).toEqual([]);
+    expect(comboHit.search).toBe("");
+    expect(comboHit.bodyKeys).toEqual([
+      "query",
+      "sourceKind",
+      "createdFrom",
+      "createdBefore",
+    ]);
+    expect(comboHit.body).toEqual({
+      query: SEARCH_Q,
+      sourceKind: "task",
+      createdFrom: UTC_FROM,
+      createdBefore: UTC_BEFORE,
+    });
+    await expect(
+      page.getByTestId("editor-state-revision-search-active"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-load-more"),
+    ).toHaveCount(0);
+
+    // 来源变化：保持 query，重新 POST search（非 page）
+    const srcBefore = searchHitCountForFilter(
+      state,
+      TECH_A,
+      SEARCH_Q,
+      "revise",
+      UTC_FROM,
+      UTC_BEFORE,
+    );
+    const pageBeforeSrc = state.pageLog.length;
+    await filter.selectOption({ label: "智能修订" });
+    await expect
+      .poll(
+        () =>
+          searchHitCountForFilter(
+            state,
+            TECH_A,
+            SEARCH_Q,
+            "revise",
+            UTC_FROM,
+            UTC_BEFORE,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(srcBefore + 1);
+    expect(state.pageLog.length).toBe(pageBeforeSrc);
+    expect(state.searchLog[state.searchLog.length - 1].query).toBe(SEARCH_Q);
+    await expect(searchInput).toHaveValue(SEARCH_Q);
+
+    // 切回来源 task 继续
+    await filter.selectOption({ label: "任务写入" });
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(
+            state,
+            TECH_A,
+            SEARCH_Q,
+            "task",
+            UTC_FROM,
+            UTC_BEFORE,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(2);
+
+    // 时间变化保持 query
+    await beforeInput.fill("2026-07-16T08:05");
+    const UTC_BEFORE_0805 = "2026-07-16T00:05:00.000Z";
+    const timeBefore = searchHitCountForFilter(
+      state,
+      TECH_A,
+      SEARCH_Q,
+      "task",
+      UTC_FROM,
+      UTC_BEFORE_0805,
+    );
+    await timeApply.click();
+    await expect
+      .poll(
+        () =>
+          searchHitCountForFilter(
+            state,
+            TECH_A,
+            SEARCH_Q,
+            "task",
+            UTC_FROM,
+            UTC_BEFORE_0805,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(timeBefore + 1);
+    expect(state.searchLog[state.searchLog.length - 1].query).toBe(SEARCH_Q);
+    expect(state.searchLog[state.searchLog.length - 1].createdBefore).toBe(
+      UTC_BEFORE_0805,
+    );
+
+    // 恢复 08:10 便于后续
+    await beforeInput.fill("2026-07-16T08:10");
+    await timeApply.click();
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(
+            state,
+            TECH_A,
+            SEARCH_Q,
+            "task",
+            UTC_FROM,
+            UTC_BEFORE,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(3);
+
+    // 折叠再展开：保留草稿/已应用关键词/来源/时间，重新 POST
+    await page.getByTestId("editor-state-revision-toggle").click();
+    await expect(page.getByTestId("editor-state-revision-body")).toHaveCount(0);
+    const reopenBefore = searchHitCountForFilter(
+      state,
+      TECH_A,
+      SEARCH_Q,
+      "task",
+      UTC_FROM,
+      UTC_BEFORE,
+    );
+    const pageBeforeReopen = state.pageLog.length;
+    await expandRevisionPanel(page);
+    await expect
+      .poll(
+        () =>
+          searchHitCountForFilter(
+            state,
+            TECH_A,
+            SEARCH_Q,
+            "task",
+            UTC_FROM,
+            UTC_BEFORE,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(reopenBefore + 1);
+    expect(state.pageLog.length).toBe(pageBeforeReopen);
+    await expect(searchInput).toHaveValue(SEARCH_Q);
+    await expect(filter).toHaveValue("task");
+    await expect(fromInput).toHaveValue("2026-07-16T08:00");
+    await expect(beforeInput).toHaveValue("2026-07-16T08:10");
+    await expect(
+      page.getByTestId("editor-state-revision-search-active"),
+    ).toBeVisible();
+
+    // arrived+complete 迟到：挂起 search → 折叠释放不得污染
+    const lateGate = createHoldGate();
+    state.searchModeByProject[TECH_A] = { kind: "hold", gate: lateGate };
+    await page.getByTestId("editor-state-revision-refresh").click();
+    await lateGate.waitUntilEntered(1);
+    const arrivedHeld = searchHitCountForFilter(
+      state,
+      TECH_A,
+      SEARCH_Q,
+      "task",
+      UTC_FROM,
+      UTC_BEFORE,
+    );
+    const completeHeld = searchCompleteCountForFilter(
+      state,
+      TECH_A,
+      SEARCH_Q,
+      "task",
+      UTC_FROM,
+      UTC_BEFORE,
+    );
+    await expect(searchInput).toBeDisabled();
+    await expect(searchApply).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-search-clear"),
+    ).toBeDisabled();
+    await expect(filter).toBeDisabled();
+    await page.getByTestId("editor-state-revision-toggle").click();
+    await expect(page.getByTestId("editor-state-revision-body")).toHaveCount(0);
+    lateGate.release();
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(
+            state,
+            TECH_A,
+            SEARCH_Q,
+            "task",
+            UTC_FROM,
+            UTC_BEFORE,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(completeHeld + 1);
+    expect(
+      searchHitCountForFilter(
+        state,
+        TECH_A,
+        SEARCH_Q,
+        "task",
+        UTC_FROM,
+        UTC_BEFORE,
+      ),
+    ).toBe(arrivedHeld);
+    // 折叠态：无 body，旧结果不得写回
+    await expect(page.getByTestId("editor-state-revision-body")).toHaveCount(0);
+    await expect(page.getByTestId("editor-state-revision-item-0")).toHaveCount(
+      0,
+    );
+
+    // 重开后正常；再测项目切换：旧 A catch 与 B page loading 真实重叠
+    state.searchModeByProject[TECH_A] = { kind: "ok" };
+    await expandRevisionPanel(page);
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(
+            state,
+            TECH_A,
+            SEARCH_Q,
+            "task",
+            UTC_FROM,
+            UTC_BEFORE,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(completeHeld + 2);
+    await expect(searchInput).toHaveValue(SEARCH_Q);
+
+    // A search 进入 hold；切到 B 后首次展开并使 B page 独立 hold — 不得先等 A 完成
+    const aCatchGate = createHoldGate();
+    const bPageGate = createHoldGate();
+    state.searchModeByProject[TECH_A] = { kind: "hold", gate: aCatchGate };
+    await page.getByTestId("editor-state-revision-refresh").click();
+    await aCatchGate.waitUntilEntered(1);
+    const aArrivedAtHold = searchHitCount(state, TECH_A);
+    const aCompleteAtHold = searchCompleteCount(state, TECH_A);
+    const aSearchLogAtHold = state.searchLog.length;
+    expect(aArrivedAtHold).toBe(aCompleteAtHold + 1);
+
+    await openWorkspace(page, "tech", TECH_B);
+    // 新项目默认折叠，搜索控件不在 DOM；A 仍挂起
+    await expect(page.getByTestId("editor-state-revision-body")).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-search-input"),
+    ).toHaveCount(0);
+    expect(searchCompleteCount(state, TECH_A)).toBe(aCompleteAtHold);
+    expect(pageHitCount(state, TECH_B)).toBe(0);
+
+    // B 首次展开前挂起 page，制造与旧 A 的真实重叠窗口
+    state.pageModeByProject[TECH_B] = { kind: "hold", gate: bPageGate };
+    await expandRevisionPanel(page);
+    await bPageGate.waitUntilEntered(1);
+    expect(pageHitCount(state, TECH_B)).toBe(1);
+    expect(pageCompleteCount(state, TECH_B)).toBe(0);
+    // B loading 与搜索/来源/时间控件真实 disabled
+    await expect(
+      page.getByTestId("editor-state-revision-list-loading"),
+    ).toBeVisible();
+    const bSearchInput = page.getByTestId("editor-state-revision-search-input");
+    const bSearchApply = page.getByTestId("editor-state-revision-search-apply");
+    const bSearchClear = page.getByTestId("editor-state-revision-search-clear");
+    const bFilter = page.getByTestId("editor-state-revision-source-filter");
+    const bFrom = page.getByTestId("editor-state-revision-created-from");
+    const bBefore = page.getByTestId("editor-state-revision-created-before");
+    await expect(bSearchInput).toBeDisabled();
+    await expect(bSearchApply).toBeDisabled();
+    await expect(bSearchClear).toBeDisabled();
+    await expect(bFilter).toBeDisabled();
+    await expect(bFrom).toBeDisabled();
+    await expect(bBefore).toBeDisabled();
+    await expect(bSearchInput).toHaveValue("");
+    await expect(
+      page.getByTestId("editor-state-revision-search-active"),
+    ).toHaveCount(0);
+    await expect(bFilter).toHaveValue("");
+
+    // A gate 挂起后注入非法 shape；释放后路由读取 override → parser catch
+    state.searchResponseOverride = {
+      items: [makeValidSearchMeta(9301)],
+      extra: "late-catch",
+    };
+    aCatchGate.release();
+    await expect
+      .poll(() => searchCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(aCompleteAtHold + 1);
+    // arrived 已在 gate 前入账；释放只 complete，不得再 +1 到达
+    expect(searchHitCount(state, TECH_A)).toBe(aArrivedAtHold);
+    expect(state.searchLog.length).toBe(aSearchLogAtHold);
+
+    // B gate 尚未释放：旧 A catch 不得写入 B 的 MSG_SEARCH_FAIL/items；旧 finally 不得清 B loading/disabled
+    expect(pageCompleteCount(state, TECH_B)).toBe(0);
+    await expect(
+      page.getByTestId("editor-state-revision-list-loading"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-list-error"),
+    ).toHaveCount(0);
+    await expect(page.getByTestId("editor-state-revision-item-0")).toHaveCount(
+      0,
+    );
+    await expect(bSearchInput).toBeDisabled();
+    await expect(bSearchApply).toBeDisabled();
+    await expect(bSearchClear).toBeDisabled();
+    await expect(bFilter).toBeDisabled();
+    await expect(bFrom).toBeDisabled();
+    await expect(bBefore).toBeDisabled();
+    // 旧 A 完成不得触发 B 额外 page/search
+    expect(pageHitCount(state, TECH_B)).toBe(1);
+    expect(searchHitCount(state, TECH_B)).toBe(0);
+
+    // 释放 B：精确 page complete +1；正常展示且搜索草稿/已应用/来源/时间为空
+    state.searchResponseOverride = null;
+    state.searchModeByProject[TECH_A] = { kind: "ok" };
+    bPageGate.release();
+    state.pageModeByProject[TECH_B] = { kind: "ok" };
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_B), { timeout: 10_000 })
+      .toBe(1);
+    expect(pageHitCount(state, TECH_B)).toBe(1);
+    expect(searchHitCount(state, TECH_B)).toBe(0);
+    const bFirst = state.pageLog[state.pageLog.length - 1];
+    expect(bFirst.projectId).toBe(TECH_B);
+    expect(bFirst.cursor).toBeNull();
+    expect(bFirst.sourceKind).toBeNull();
+    expect(bFirst.createdFrom).toBeNull();
+    expect(bFirst.createdBefore).toBeNull();
+    expect(bFirst.queryKeys).toEqual([]);
+    await expect(
+      page.getByTestId("editor-state-revision-list-loading"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-list-error"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-item-0"),
+    ).toBeVisible();
+    await expect(bSearchInput).toBeEnabled();
+    await expect(bSearchInput).toHaveValue("");
+    await expect(
+      page.getByTestId("editor-state-revision-search-active"),
+    ).toHaveCount(0);
+    await expect(bFilter).toHaveValue("");
+    await expect(bFrom).toHaveValue("");
+    await expect(bBefore).toHaveValue("");
+
+    expect(state.listLog.length).toBe(0);
+    expect(state.forbiddenHits).toEqual([]);
+    expect(state.externalHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+    await assertNoIdLeak(page, state, guards.consoleLogs);
+  });
+});
+
+test.describe("P12F-F-B 商务标共享与恢复", () => {
+  test.use({ timezoneId: "Asia/Shanghai" });
+
+  test("P12F-F-B 商务标：共享入口、组合条件、搜索结果现有操作、恢复成功/重载失败后仍 search POST、项目重置与 URL/存储/Cookie/console/其它请求零关键词泄漏", async ({
+    page,
+  }) => {
+    const state = createProbeState("biz");
+    const SEARCH_MARK = "P12FFB_BIZ_HIT_MARK";
+    const SEARCH_Q = "P12FFB_BIZ_HIT";
+    const seeded = seedRevisions(
+      state,
+      BIZ_A,
+      6,
+      Array.from({ length: 6 }, () => "callback"),
+    );
+    syncRevisionCreatedAts(state, BIZ_A, "2026-07-16T00:00:00.000Z", 1);
+    for (const it of seeded) {
+      stampSearchableMarker(state, it.revisionId, SEARCH_MARK, "biz");
+    }
+    seedRevisions(
+      state,
+      BIZ_B,
+      3,
+      Array.from({ length: 3 }, () => "task"),
+    );
+
+    const UTC_FROM = "2026-07-16T00:00:00.000Z";
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+    await page.clock.install();
+
+    await openWorkspace(page, "biz", BIZ_A);
+    expect(state.searchLog.length).toBe(0);
+    await expandRevisionPanel(page);
+    await expect.poll(() => pageCompleteCount(state, BIZ_A)).toBe(1);
+
+    const filter = page.getByTestId("editor-state-revision-source-filter");
+    const fromInput = page.getByTestId("editor-state-revision-created-from");
+    const timeApply = page.getByTestId("editor-state-revision-time-apply");
+    const searchInput = page.getByTestId("editor-state-revision-search-input");
+    const searchApply = page.getByTestId("editor-state-revision-search-apply");
+    const searchClear = page.getByTestId("editor-state-revision-search-clear");
+
+    await expect(searchInput).toBeVisible();
+    await expect(searchApply).toBeVisible();
+    await expect(searchClear).toBeVisible();
+
+    await filter.selectOption({ label: "解析回传" });
+    await expect
+      .poll(() => pageHitCountForSource(state, BIZ_A, "callback"), {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    await fromInput.fill("2026-07-16T08:00");
+    await timeApply.click();
+    await expect
+      .poll(
+        () =>
+          pageHitCountForTimeFilter(
+            state,
+            BIZ_A,
+            "callback",
+            UTC_FROM,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+
+    await searchInput.fill(SEARCH_Q);
+    const pageBeforeSearch = state.pageLog.length;
+    await searchApply.click();
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(
+            state,
+            BIZ_A,
+            SEARCH_Q,
+            "callback",
+            UTC_FROM,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    expect(state.pageLog.length).toBe(pageBeforeSearch);
+    const bizHit = state.searchLog[state.searchLog.length - 1];
+    expect(bizHit.bodyKeys).toEqual([
+      "query",
+      "sourceKind",
+      "createdFrom",
+    ]);
+    expect(bizHit.body).toEqual({
+      query: SEARCH_Q,
+      sourceKind: "callback",
+      createdFrom: UTC_FROM,
+    });
+    expect(bizHit.queryKeys).toEqual([]);
+    expect(bizHit.search).toBe("");
+    await expect(
+      page.getByTestId("editor-state-revision-item-0"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-load-more"),
+    ).toHaveCount(0);
+
+    // 搜索结果：摘要可用
+    await page.getByTestId("editor-state-revision-summary-0").click();
+    await expect
+      .poll(() => state.detailCompleteLog.length, { timeout: 10_000 })
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-summary-body-0"),
+    ).toBeVisible();
+
+    // 恢复成功后仍 search POST（保留来源+时间+query）
+    const restoreGate = createHoldGate();
+    state.restoreMode = { kind: "gate", gate: restoreGate, then: "ok" };
+    const searchBeforeRestore = searchHitCountForFilter(
+      state,
+      BIZ_A,
+      SEARCH_Q,
+      "callback",
+      UTC_FROM,
+      null,
+    );
+    const pageBeforeRestore = state.pageLog.length;
+    const getsBefore = state.editorGetLog.filter(
+      (g) => g.projectId === BIZ_A,
+    ).length;
+    const expectedAtConfirm = state.projects[BIZ_A].stateVersion;
+    await page.getByTestId("editor-state-revision-restore-0").click();
+    await page.getByTestId("editor-state-revision-confirm-restore-0").click();
+    await restoreGate.waitUntilEntered(1);
+    await expect(searchInput).toBeDisabled();
+    await expect(searchApply).toBeDisabled();
+    await expect(searchClear).toBeDisabled();
+    await expect(filter).toBeDisabled();
+    expect(state.restoreLog.length).toBe(0);
+
+    restoreGate.release();
+    state.restoreMode = { kind: "ok" };
+    await expect
+      .poll(() => state.restoreLog.length, { timeout: 10_000 })
+      .toBe(1);
+    expect(state.restoreLog[0].body).toEqual({
+      expectedStateVersion: expectedAtConfirm,
+    });
+    await expect
+      .poll(
+        () =>
+          state.editorGetLog.filter((g) => g.projectId === BIZ_A).length -
+          getsBefore,
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect
+      .poll(
+        () =>
+          searchHitCountForFilter(
+            state,
+            BIZ_A,
+            SEARCH_Q,
+            "callback",
+            UTC_FROM,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(searchBeforeRestore + 1);
+    expect(state.pageLog.length).toBe(pageBeforeRestore);
+    await expect(searchInput).toHaveValue(SEARCH_Q);
+    await expect(filter).toHaveValue("callback");
+    await expect(fromInput).toHaveValue("2026-07-16T08:00");
+    await expect(
+      page.getByTestId("editor-state-revision-search-active"),
+    ).toBeVisible();
+
+    // reload_failed：恢复 POST=1 后 GET 失败，历史重载仍 search POST
+    state.nextEditorGetFail = true;
+    const searchBeforeReloadFail = searchHitCountForFilter(
+      state,
+      BIZ_A,
+      SEARCH_Q,
+      "callback",
+      UTC_FROM,
+      null,
+    );
+    const restoreBeforeFail = state.restoreLog.length;
+    await page.getByTestId("editor-state-revision-restore-0").click();
+    await page.getByTestId("editor-state-revision-confirm-restore-0").click();
+    await expect
+      .poll(() => state.restoreLog.length, { timeout: 10_000 })
+      .toBe(restoreBeforeFail + 1);
+    await expect(
+      page.getByTestId("editor-state-revision-status"),
+    ).toContainText(MSG_RESTORE_RELOAD_FAIL);
+    await expect
+      .poll(
+        () =>
+          searchHitCountForFilter(
+            state,
+            BIZ_A,
+            SEARCH_Q,
+            "callback",
+            UTC_FROM,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(searchBeforeReloadFail + 1);
+    expect(
+      state.searchLog[state.searchLog.length - 1].query,
+    ).toBe(SEARCH_Q);
+
+    // 项目切换重置
+    await openWorkspace(page, "biz", BIZ_B);
+    await expect(page.getByTestId("editor-state-revision-body")).toHaveCount(0);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageCompleteCount(state, BIZ_B), { timeout: 10_000 })
+      .toBe(1);
+    expect(searchHitCount(state, BIZ_B)).toBe(0);
+    await expect(
+      page.getByTestId("editor-state-revision-search-input"),
+    ).toHaveValue("");
+    await expect(
+      page.getByTestId("editor-state-revision-search-active"),
+    ).toHaveCount(0);
+
+    expect(state.listLog.length).toBe(0);
+    expect(state.forbiddenHits).toEqual([]);
+    expect(state.externalHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+    await assertNoIdLeak(page, state, guards.consoleLogs);
+
+    const persist = await page.evaluate(() => ({
+      href: location.href,
+      cookie: document.cookie,
+      ls: Object.keys(localStorage)
+        .map((k) => `${k}=${localStorage.getItem(k)}`)
+        .join("\n"),
+      ss: Object.keys(sessionStorage)
+        .map((k) => `${k}=${sessionStorage.getItem(k)}`)
+        .join("\n"),
+      body: document.body?.innerText ?? "",
+    }));
+    for (const blob of [
+      persist.href,
+      persist.cookie,
+      persist.ls,
+      persist.ss,
+    ]) {
+      expect(blob).not.toContain(SEARCH_Q);
+      expect(blob).not.toContain(SEARCH_MARK);
+    }
+    // 输入控件已空，页面正文也不得残留标记
+    expect(persist.body).not.toContain(SEARCH_MARK);
+    const consoleBlob = guards.consoleLogs.join("\n");
+    expect(consoleBlob).not.toContain(SEARCH_Q);
+    expect(consoleBlob).not.toContain(SEARCH_MARK);
+    // 其它请求路径不得携带关键词
+    for (const h of state.pageLog) {
+      expect(h.search).not.toContain(SEARCH_Q);
+      expect(h.postData ?? "").not.toContain(SEARCH_Q);
+    }
+    for (const h of state.searchLog) {
+      // search body 允许 query；URL 不允许
+      expect(h.search).toBe("");
+      expect(h.queryKeys).toEqual([]);
+    }
+    expect(seeded.length).toBe(6);
   });
 });

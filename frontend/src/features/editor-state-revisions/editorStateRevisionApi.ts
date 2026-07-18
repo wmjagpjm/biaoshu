@@ -1,14 +1,18 @@
 /**
- * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B editor-state 修订历史、对比、正文差异与游标页 API 封装
- * 用途：严格校验 list/page/detail/restore/comparison/body-diff/pair-body-diff 响应 shape；详情仅在 API 栈内解析并压缩为有界摘要。
- * 对接：GET|POST /api/projects/{id}/editor-state-revisions*；page 游标分页（可选 sourceKind/createdFrom/createdBefore）；comparison/body-diff/pair 只读 GET；apiFetch。
+ * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B / P12F-F-B
+ *       editor-state 修订历史、对比、正文差异、游标页与可见内容搜索 API 封装
+ * 用途：严格校验 list/page/detail/restore/comparison/body-diff/pair-body-diff/search 响应 shape；详情仅在 API 栈内解析并压缩为有界摘要。
+ * 对接：GET|POST /api/projects/{id}/editor-state-revisions*；page 游标分页（可选 sourceKind/createdFrom/createdBefore）；
+ *       search POST body（query+可选来源/时间）；comparison/body-diff/pair 只读 GET；apiFetch。
  * 二次开发：
  *   - 禁止把原始 snapshot 返回给 React；禁止本地生成 revisionId/version/cursor
- *   - 禁止把响应原文、路径、后端 detail、字段值/键名/游标/时间字面量拼进错误文案
- *   - 九类来源白名单；旧列表/页最多 10 条；comparison 顶层精确四键 + 13 键有序子序列
+ *   - 禁止把响应原文、路径、后端 detail、字段值/键名/游标/时间/关键词字面量拼进错误文案
+ *   - 九类来源白名单；旧列表/页最多 10 条；search 最多 20 条且无 nextCursor
+ *   - comparison 顶层精确四键 + 13 键有序子序列
  *   - body-diff 顶层精确六键（current/target）；pair 顶层精确六键（before/after）；item 五键；hunk 二键
  *   - page 顶层精确 items/nextCursor；游标仅 esrc1_/esrc2_/esrc3_ 外壳校验，禁止解码/本地生成
  *   - 时间 query 仅精确 24 字符 UTC 毫秒；顺序 sourceKind→createdFrom→createdBefore→cursor
+ *   - search body 顺序 query→sourceKind→createdFrom→createdBefore；禁止 URL query/cursor
  */
 
 import { apiFetch } from "../../shared/lib/api";
@@ -224,6 +228,12 @@ const MAX_BODY_DIFF_TOTAL_TEXT = 120_000;
 
 const MAX_LIST_ITEMS = 10;
 
+/** P12F-F-B 搜索结果上限：与后端候选窗一致，独立于 list/page 的 10 条合同 */
+const MAX_SEARCH_ITEMS = 20;
+
+/** 搜索关键词 NFKC 后 Unicode 码点上限 */
+const MAX_SEARCH_QUERY_CODEPOINTS = 64;
+
 /** P12F-A 保留上限：前端累计最多 20 条 */
 export const MAX_RETAINED_REVISIONS = 20;
 
@@ -294,6 +304,25 @@ export type EditorStateRevisionMeta = {
 export type EditorStateRevisionPage = {
   items: EditorStateRevisionMeta[];
   nextCursor: string | null;
+};
+
+/**
+ * 模块：可见内容搜索请求（P12F-F-B）
+ * 约束：query 必填原样；可选来源/时间仅非空时进入 body；无 cursor。
+ */
+export type EditorStateRevisionSearchQuery = {
+  query: string;
+  sourceKind?: RevisionSourceKind | null;
+  createdFrom?: string | null;
+  createdBefore?: string | null;
+};
+
+/**
+ * 模块：可见内容搜索响应（P12F-F-B）
+ * 约束：顶层精确 {items}；最多 20；revisionId 唯一；无 nextCursor。
+ */
+export type EditorStateRevisionSearchResult = {
+  items: EditorStateRevisionMeta[];
 };
 
 /**
@@ -807,6 +836,131 @@ export function parseRevisionPage(raw: unknown): EditorStateRevisionPage {
     throw new Error("revision_page_invalid");
   }
   return { items, nextCursor };
+}
+
+/**
+ * 用途：校验搜索关键词；与后端/面板一致，不静默 trim，失败固定内部错误名。
+ * 规则：原生字符串、首尾无空白、无 C0/C1/DEL，NFKC 后 1..64 个 Unicode 码点。
+ */
+export function assertValidSearchQuery(value: unknown): asserts value is string {
+  if (typeof value !== "string") {
+    throw new Error("revision_search_query_invalid");
+  }
+  if (value.length === 0) {
+    throw new Error("revision_search_query_invalid");
+  }
+  // 首尾空白（含全空白）
+  if (value.trim() !== value) {
+    throw new Error("revision_search_query_invalid");
+  }
+  // C0 / DEL / C1 控制字符
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f || (code >= 0x80 && code <= 0x9f)) {
+      throw new Error("revision_search_query_invalid");
+    }
+  }
+  const normalized = value.normalize("NFKC");
+  // Unicode 码点（代理对算 1）
+  let codepoints = 0;
+  for (const _ch of normalized) {
+    codepoints += 1;
+    if (codepoints > MAX_SEARCH_QUERY_CODEPOINTS) {
+      throw new Error("revision_search_query_invalid");
+    }
+  }
+  if (codepoints < 1) {
+    throw new Error("revision_search_query_invalid");
+  }
+}
+
+/**
+ * 用途：严格解析搜索响应；顶层精确 items；最多 20；页内 ID 唯一；禁止 nextCursor 等额外键。
+ */
+export function parseRevisionSearchResult(
+  raw: unknown,
+): EditorStateRevisionSearchResult {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("revision_search_invalid");
+  }
+  const o = raw as Record<string, unknown>;
+  if (!hasExactKeys(o, LIST_TOP_KEYS)) {
+    throw new Error("revision_search_invalid");
+  }
+  if (!Array.isArray(o.items)) {
+    throw new Error("revision_search_invalid");
+  }
+  if (o.items.length > MAX_SEARCH_ITEMS) {
+    throw new Error("revision_search_invalid");
+  }
+  const items = o.items.map((item) => parseRevisionMeta(item));
+  const seen = new Set<string>();
+  for (const meta of items) {
+    if (seen.has(meta.revisionId)) {
+      throw new Error("revision_search_invalid");
+    }
+    seen.add(meta.revisionId);
+  }
+  return { items };
+}
+
+/**
+ * 用途：POST 可见内容搜索；原样 query + 可选来源/时间；无 URL query。
+ * 对接：POST /projects/{projectId}/editor-state-revisions/search
+ * 约束：
+ *   - body 键序 query → sourceKind → createdFrom → createdBefore
+ *   - 仅非空可选键进入 body；禁止 cursor/limit/offset/page/search/q/snippet
+ *   - 关键词不得编码进 URL；不重试、不日志
+ */
+export async function searchEditorStateRevisions(
+  projectId: string,
+  query: EditorStateRevisionSearchQuery,
+): Promise<EditorStateRevisionSearchResult> {
+  assertValidSearchQuery(query.query);
+
+  const body: Record<string, unknown> = { query: query.query };
+
+  if (query.sourceKind != null) {
+    if (!SOURCE_KIND_SET.has(query.sourceKind)) {
+      throw new Error("revision_search_source_invalid");
+    }
+    body.sourceKind = query.sourceKind;
+  }
+
+  let normalizedFrom: string | null = null;
+  let normalizedBefore: string | null = null;
+  if (query.createdFrom != null && query.createdFrom !== "") {
+    if (!isValidUtcMillisString(query.createdFrom)) {
+      throw new Error("revision_search_time_range_invalid");
+    }
+    normalizedFrom = query.createdFrom;
+    body.createdFrom = query.createdFrom;
+  } else if (query.createdFrom === "") {
+    throw new Error("revision_search_time_range_invalid");
+  }
+  if (query.createdBefore != null && query.createdBefore !== "") {
+    if (!isValidUtcMillisString(query.createdBefore)) {
+      throw new Error("revision_search_time_range_invalid");
+    }
+    normalizedBefore = query.createdBefore;
+    body.createdBefore = query.createdBefore;
+  } else if (query.createdBefore === "") {
+    throw new Error("revision_search_time_range_invalid");
+  }
+  if (
+    normalizedFrom != null &&
+    normalizedBefore != null &&
+    !(normalizedFrom < normalizedBefore)
+  ) {
+    throw new Error("revision_search_time_range_invalid");
+  }
+
+  const path = `/projects/${encodeURIComponent(projectId)}/editor-state-revisions/search`;
+  const raw = await apiFetch<unknown>(path, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  return parseRevisionSearchResult(raw);
 }
 
 /**

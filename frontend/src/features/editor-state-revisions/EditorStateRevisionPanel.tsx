@@ -1,20 +1,23 @@
 /**
- * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B 双工作区共用修订历史折叠面板
+ * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B / P12F-F-B
+ *       双工作区共用修订历史折叠面板
  * 用途：默认折叠零请求；展开游标页；可选来源筛选；本地时间范围草稿显式应用/清除；
- *       手动加载更多至最多 20 条；按需摘要；按需与当前对比；按需正文差异；
+ *       显式可见内容搜索 POST；手动加载更多至最多 20 条；按需摘要；按需与当前对比；按需正文差异；
  *       内存双侧选择与双修订正文差异；内联二次确认后 restore。
- * 对接：editorStateRevisionApi（含 page/comparison/body-diff/pair）；技术/商务 hook 的 restoreRevision 回调。
+ * 对接：editorStateRevisionApi（含 page/search/comparison/body-diff/pair）；技术/商务 hook 的 restoreRevision 回调。
  * 二次开发：
- *   - 不渲染 revisionId/stateVersion/cursor/UTC query/snapshot 正文/内部字段键/字段值/op 原值
- *   - 项目切换/折叠/卸载用会话代次隔离迟到 page/load-more/detail/comparison/body-diff/pair/restore
+ *   - 不渲染 revisionId/stateVersion/cursor/UTC query/snapshot 正文/内部字段键/字段值/op 原值/关键词到固定文案
+ *   - 项目切换/折叠/卸载用会话代次隔离迟到 page/search/load-more/detail/comparison/body-diff/pair/restore
  *   - 摘要、比较、正文差异、双修订差异、恢复确认同一时刻只保留一个当前意图；交叉作废
- *   - 草稿与已应用 UTC 分离；来源/刷新/恢复/加载更多只读已应用范围
+ *   - 时间/搜索草稿与已应用值分离；来源/刷新/恢复/加载更多只读已应用范围
  *   - 固定中文脱敏；禁止 console/存储/URL/Cookie/剪贴板/下载/轮询/外网
- *   - 无创建/删除/搜索/自动分页/预取；双修订选择仅内存；游标仅内存 + 规定 API 查询
+ *   - 无创建/删除/自动搜索/自动分页/预取；双修订选择仅内存；游标仅内存 + 规定 API 查询
+ *   - 搜索态无加载更多；关键词仅输入控件值 + React 内存 + 一次 POST body
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  assertValidSearchQuery,
   formatBodyDiffKindLabel,
   formatCanonicalFieldLabel,
   formatRevisionBytes,
@@ -28,6 +31,7 @@ import {
   MAX_RETAINED_REVISIONS,
   REVISION_SOURCE_KINDS,
   REVISION_SOURCE_LABELS,
+  searchEditorStateRevisions,
   type BodyDiffOp,
   type EditorStateRevisionBodyDiff,
   type EditorStateRevisionComparison,
@@ -60,6 +64,15 @@ const MSG_RESTORE_RELOAD_FAIL =
 const MSG_RESTORE_BLOCKED = "当前无法恢复，请先处理版本冲突或重新载入";
 /** P12F-E-B 时间范围无效固定中文 */
 const MSG_TIME_RANGE_INVALID = "时间范围无效，请检查开始和结束时间";
+/** P12F-F-B 搜索关键词校验失败固定中文 */
+const MSG_SEARCH_QUERY_INVALID =
+  "搜索关键词需为 1 至 64 个字符，且不能含首尾空白或控制字符";
+/** P12F-F-B 搜索空结果固定中文 */
+const MSG_SEARCH_EMPTY = "未找到匹配修订";
+/** P12F-F-B 搜索失败固定中文 */
+const MSG_SEARCH_FAIL = "修订内容搜索失败，请稍后重试";
+/** 普通 page 空态固定中文 */
+const MSG_LIST_EMPTY = "暂无修订记录";
 
 /**
  * 用途：严格解析 datetime-local 本地值（YYYY-MM-DDTHH:mm）为 UTC 毫秒字符串。
@@ -183,6 +196,14 @@ export function EditorStateRevisionPanel({
   const [appliedBefore, setAppliedBefore] = useState<string | null>(null);
   /** 时间范围校验错误（固定中文） */
   const [timeError, setTimeError] = useState<string | null>(null);
+  /**
+   * 内容搜索草稿与已应用关键词分离；均只存 React 内存。
+   * 输入不发请求；显式搜索/Enter 才校验并应用。
+   */
+  const [searchDraft, setSearchDraft] = useState("");
+  const [appliedSearch, setAppliedSearch] = useState<string | null>(null);
+  /** 搜索关键词校验错误（固定中文，不反射原值） */
+  const [searchError, setSearchError] = useState<string | null>(null);
   /** 服务端 nextCursor；仅内存，不渲染 */
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
@@ -275,6 +296,8 @@ export function EditorStateRevisionPanel({
   /** 已应用 UTC 同步镜像；来源/刷新/恢复/加载更多只读此 ref，不读草稿 */
   const appliedFromRef = useRef<string | null>(null);
   const appliedBeforeRef = useRef<string | null>(null);
+  /** 已应用搜索关键词同步镜像；loadList 在 setState 后立即读取 */
+  const appliedSearchRef = useRef<string | null>(null);
   const mountedRef = useRef(true);
 
   // 保持 ref 与 state 同步
@@ -283,6 +306,7 @@ export function EditorStateRevisionPanel({
   sourceFilterRef.current = sourceFilter;
   appliedFromRef.current = appliedFrom;
   appliedBeforeRef.current = appliedBefore;
+  appliedSearchRef.current = appliedSearch;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -339,7 +363,7 @@ export function EditorStateRevisionPanel({
     setPairBodyDiffLoading(false);
   }, []);
 
-  // 项目切换：重置面板（来源/草稿/已应用时间/错误），作废在途 page/load-more/detail/comparison/body-diff/pair/restore
+  // 项目切换：重置面板（来源/时间/搜索草稿与已应用/错误），作废在途 page/search/load-more/detail/...
   useEffect(() => {
     sessionRef.current += 1;
     detailGenRef.current += 1;
@@ -359,6 +383,10 @@ export function EditorStateRevisionPanel({
     appliedFromRef.current = null;
     appliedBeforeRef.current = null;
     setTimeError(null);
+    setSearchDraft("");
+    setAppliedSearch(null);
+    appliedSearchRef.current = null;
+    setSearchError(null);
     setNextCursor(null);
     setListError(null);
     setLoadMoreError(null);
@@ -387,6 +415,10 @@ export function EditorStateRevisionPanel({
     setPairBodyDiff(null);
   }, [projectId]);
 
+  /**
+   * 用途：统一首屏加载；有已应用关键词走 search POST，否则 page GET。
+   * 迟到隔离：success/catch/finally 同时核对 mounted/session 与 query/source/from/before。
+   */
   const loadList = useCallback(
     async (session: number) => {
       if (!projectId) return;
@@ -411,46 +443,54 @@ export function EditorStateRevisionPanel({
       clearComparisonState();
       clearBodyDiffState();
       clearPairBodyDiffState();
-      // 绑定当前筛选（ref 可在 setState 后立即读取）；只读已应用 UTC，不读草稿
+      // 绑定当前已应用筛选（ref 可在 setState 后立即读取）；不读草稿
       const filter = sourceFilterRef.current;
       const from = appliedFromRef.current;
       const before = appliedBeforeRef.current;
+      const searchQ = appliedSearchRef.current;
+      const stillCurrent = () =>
+        mountedRef.current &&
+        session === sessionRef.current &&
+        sourceFilterRef.current === filter &&
+        appliedFromRef.current === from &&
+        appliedBeforeRef.current === before &&
+        appliedSearchRef.current === searchQ;
       try {
-        // 首屏：无参 / 仅来源 / 仅时间 / 来源+时间；不带 cursor
-        const hasFilter = Boolean(filter) || from != null || before != null;
-        const page = await listEditorStateRevisionPage(
-          projectId,
-          hasFilter
-            ? {
-                ...(filter ? { sourceKind: filter } : {}),
-                ...(from != null ? { createdFrom: from } : {}),
-                ...(before != null ? { createdBefore: before } : {}),
-              }
-            : undefined,
-        );
-        if (!mountedRef.current || session !== sessionRef.current) return;
-        // 筛选在请求期间被切换时，以 ref 为准再校验一次
-        if (sourceFilterRef.current !== filter) return;
-        if (appliedFromRef.current !== from) return;
-        if (appliedBeforeRef.current !== before) return;
-        setItems(page.items);
-        setNextCursor(page.nextCursor);
+        if (searchQ) {
+          // 搜索态：POST；cursor 固定清空；最多 20；无加载更多
+          const result = await searchEditorStateRevisions(projectId, {
+            query: searchQ,
+            ...(filter ? { sourceKind: filter } : {}),
+            ...(from != null ? { createdFrom: from } : {}),
+            ...(before != null ? { createdBefore: before } : {}),
+          });
+          if (!stillCurrent()) return;
+          setItems(result.items);
+          setNextCursor(null);
+        } else {
+          // 首屏 page：无参 / 仅来源 / 仅时间 / 来源+时间；不带 cursor
+          const hasFilter = Boolean(filter) || from != null || before != null;
+          const page = await listEditorStateRevisionPage(
+            projectId,
+            hasFilter
+              ? {
+                  ...(filter ? { sourceKind: filter } : {}),
+                  ...(from != null ? { createdFrom: from } : {}),
+                  ...(before != null ? { createdBefore: before } : {}),
+                }
+              : undefined,
+          );
+          if (!stillCurrent()) return;
+          setItems(page.items);
+          setNextCursor(page.nextCursor);
+        }
       } catch {
-        if (!mountedRef.current || session !== sessionRef.current) return;
-        if (sourceFilterRef.current !== filter) return;
-        if (appliedFromRef.current !== from) return;
-        if (appliedBeforeRef.current !== before) return;
-        setListError(MSG_LIST_FAIL);
+        if (!stillCurrent()) return;
+        setListError(searchQ ? MSG_SEARCH_FAIL : MSG_LIST_FAIL);
         setItems([]);
         setNextCursor(null);
       } finally {
-        if (
-          mountedRef.current &&
-          session === sessionRef.current &&
-          sourceFilterRef.current === filter &&
-          appliedFromRef.current === from &&
-          appliedBeforeRef.current === before
-        ) {
+        if (stillCurrent()) {
           setListLoading(false);
         }
       }
@@ -706,6 +746,84 @@ export function EditorStateRevisionPanel({
     setBeforeDraft(value);
     setTimeError(null);
   }, []);
+
+  /**
+   * 用途：编辑搜索草稿；零请求；清除校验错误。
+   */
+  const handleSearchDraftChange = useCallback((value: string) => {
+    setSearchDraft(value);
+    setSearchError(null);
+  }, []);
+
+  /**
+   * 用途：显式应用搜索（按钮/Enter）；不 trim；非法零请求保值；同值零重发。
+   */
+  const handleSearchApply = useCallback(() => {
+    if (!expanded || listLoading || restoreBusy || loadMoreLoading) return;
+    const raw = searchDraft;
+    try {
+      assertValidSearchQuery(raw);
+    } catch {
+      setSearchError(MSG_SEARCH_QUERY_INVALID);
+      return;
+    }
+    setSearchError(null);
+    // 同一已应用关键词再次搜索不重发
+    if (raw === appliedSearchRef.current) {
+      return;
+    }
+    // 有效新关键词：同步更新 ref/state，清空旧 items/cursor/错误/意图，再 POST
+    appliedSearchRef.current = raw;
+    setAppliedSearch(raw);
+    setItems([]);
+    setNextCursor(null);
+    setListError(null);
+    setLoadMoreError(null);
+    setStatusMessage(null);
+    setStatusTone(null);
+    const session = sessionRef.current;
+    void loadList(session);
+  }, [
+    expanded,
+    listLoading,
+    restoreBusy,
+    loadMoreLoading,
+    searchDraft,
+    loadList,
+  ]);
+
+  /**
+   * 用途：清除搜索草稿、已应用关键词与校验错误；
+   *   本来全空零请求，否则保留来源/已应用时间并恢复 page 第一页。
+   */
+  const handleSearchClear = useCallback(() => {
+    if (!expanded || listLoading || restoreBusy || loadMoreLoading) return;
+    const hadApplied = appliedSearchRef.current != null;
+    const hadDraft = searchDraft !== "";
+    setSearchDraft("");
+    setSearchError(null);
+    appliedSearchRef.current = null;
+    setAppliedSearch(null);
+    if (!hadApplied && !hadDraft) {
+      return;
+    }
+    // 有过搜索态：清空列表意图后走 page GET（来源/时间仍读已应用 ref）
+    setItems([]);
+    setNextCursor(null);
+    setListError(null);
+    setLoadMoreError(null);
+    setStatusMessage(null);
+    setStatusTone(null);
+    const session = sessionRef.current;
+    void loadList(session);
+  }, [
+    expanded,
+    listLoading,
+    restoreBusy,
+    loadMoreLoading,
+    searchDraft,
+    loadList,
+  ]);
 
   const handleToggle = useCallback(() => {
     if (expanded) {
@@ -1222,16 +1340,22 @@ export function EditorStateRevisionPanel({
     pairBeforeId !== pairAfterId &&
     !restoreBusy &&
     !pairBodyDiffLoading;
-  const showLoadMore = nextCursor != null;
+  // 搜索态 cursor 恒为 null，永不显示加载更多
+  const showLoadMore = nextCursor != null && appliedSearch == null;
   const loadMoreDisabled =
-    loadMoreLoading || listLoading || restoreBusy || !nextCursor;
-  /** 列表/加载更多/恢复在途时：来源、时间输入、应用、清除均真实 disabled */
+    loadMoreLoading ||
+    listLoading ||
+    restoreBusy ||
+    !nextCursor ||
+    appliedSearch != null;
+  /** 列表/加载更多/恢复在途时：来源、时间、搜索输入/搜索/清除均真实 disabled */
   const filterControlsDisabled =
     listLoading || loadMoreLoading || restoreBusy;
   /** 应用时间：至少一个草稿非空且不在途 */
   const timeApplyDisabled =
     filterControlsDisabled ||
     (fromDraft.trim() === "" && beforeDraft.trim() === "");
+  const searchActive = appliedSearch != null;
 
   return (
     <div
@@ -1400,6 +1524,59 @@ export function EditorStateRevisionPanel({
             >
               清除时间
             </button>
+            <label
+              htmlFor="editor-state-revision-search-input"
+              style={{
+                fontSize: 13,
+                color: "var(--text-muted, #4b5563)",
+              }}
+            >
+              内容搜索
+            </label>
+            <input
+              id="editor-state-revision-search-input"
+              type="text"
+              data-testid="editor-state-revision-search-input"
+              value={searchDraft}
+              disabled={filterControlsDisabled}
+              onChange={(e) => {
+                handleSearchDraftChange(e.target.value);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  handleSearchApply();
+                }
+              }}
+              style={{
+                fontSize: 13,
+                maxWidth: "100%",
+                minWidth: 140,
+                padding: "4px 8px",
+                borderRadius: 6,
+                border: "1px solid var(--border, #e5e7eb)",
+                background: "var(--surface, #fff)",
+                color: "var(--text, #111827)",
+              }}
+            />
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              data-testid="editor-state-revision-search-apply"
+              disabled={filterControlsDisabled}
+              onClick={handleSearchApply}
+            >
+              搜索
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              data-testid="editor-state-revision-search-clear"
+              disabled={filterControlsDisabled}
+              onClick={handleSearchClear}
+            >
+              清除搜索
+            </button>
           </div>
           {timeError ? (
             <p
@@ -1407,6 +1584,26 @@ export function EditorStateRevisionPanel({
               style={{ margin: "0 0 8px", color: "var(--danger)" }}
             >
               {timeError}
+            </p>
+          ) : null}
+          {searchError ? (
+            <p
+              data-testid="editor-state-revision-search-error"
+              style={{ margin: "0 0 8px", color: "var(--danger)" }}
+            >
+              {searchError}
+            </p>
+          ) : null}
+          {searchActive ? (
+            <p
+              data-testid="editor-state-revision-search-active"
+              style={{
+                margin: "0 0 8px",
+                color: "var(--text-muted, #4b5563)",
+                fontSize: 13,
+              }}
+            >
+              当前为内容搜索结果
             </p>
           ) : null}
           {statusMessage ? (
@@ -1484,7 +1681,7 @@ export function EditorStateRevisionPanel({
               data-testid="editor-state-revision-empty"
               style={{ margin: 0, color: "var(--text-muted, #6b7280)" }}
             >
-              暂无修订记录
+              {searchActive ? MSG_SEARCH_EMPTY : MSG_LIST_EMPTY}
             </p>
           ) : null}
           {items.length > 0 ? (
