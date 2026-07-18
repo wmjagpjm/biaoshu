@@ -1,10 +1,10 @@
 /**
- * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D 双工作区修订历史、对比、正文差异、游标分页与来源筛选前端 E2E
+ * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B 双工作区修订历史、对比、正文差异、游标分页、来源与时间范围筛选前端 E2E
  * 用途：技术标/商务标证明默认折叠零请求、按需列表/摘要/对比/正文差异、双修订正文差异、
- *       二次确认 restore、游标页首屏与加载更多、来源筛选、执行时 expected、唯一 editor-state GET、
- *       失败阻断、迟到隔离与数据最小化。
+ *       二次确认 restore、游标页首屏与加载更多、来源筛选、本地时间范围应用/清除、
+ *       执行时 expected、唯一 editor-state GET、失败阻断、迟到隔离与数据最小化。
  * 对接：Playwright chromium headless workers=1 retries=0；route 探针
- *       （含 comparison/body-diff/pair/page arrived/complete/cursor/sourceKind）。
+ *       （含 comparison/body-diff/pair/page arrived/complete/cursor/sourceKind/createdFrom/createdBefore）。
  * 二次开发：禁止固定 sleep、.or(...)、>=1 冒充、宽泛状态码、route fallback 假成功。
  */
 import {
@@ -65,8 +65,20 @@ const PAGE_CURSOR_SECOND = "esrc1_cGFnZTJjdXJzb3Jmb3JyZXZoaXN0";
  * 前端不得解码；仅原样回传，且必须与当前 sourceKind 同时出现。
  */
 const PAGE_CURSOR_FILTER_SECOND = "esrc2_ZmlsdGVycGFnZTJjdXJzb3Jmb3JyZXY";
+/**
+ * P12F-E-B 时间范围第二页不透明游标（外壳合法：esrc3_ + base64url 无 =）。
+ * 前端不得解码；仅原样回传，且必须与当前时间/来源条件同时出现。
+ */
+const PAGE_CURSOR_TIME_SECOND = "esrc3_dGltZXBhZ2UyY3Vyc29yZm9ycmV2aGlzdA";
+/** V3 外壳总长精确 256（前缀 6 + body 250），供上限验收 */
+const PAGE_CURSOR_V3_LEN_256 =
+  "esrc3_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_".repeat(4).slice(0, 250);
+/** V3 超长 257：前端 parser 必须拒绝 */
+const PAGE_CURSOR_V3_LEN_257 = PAGE_CURSOR_V3_LEN_256 + "A";
 /** 故意非法游标（缺前缀）——仅用于服务端/前端失败路径 */
 const PAGE_CURSOR_BAD_SHAPE = "not_a_valid_cursor_value";
+/** P12F-E-B 时间范围无效固定中文 */
+const MSG_TIME_RANGE_INVALID = "时间范围无效，请检查开始和结束时间";
 const MSG_RESTORE_OK = "已恢复到所选修订";
 const MSG_RESTORE_BLOCKED =
   "当前无法恢复，请先处理版本冲突或重新载入";
@@ -211,12 +223,16 @@ type ComparisonMode = { kind: "ok" } | { kind: "hold"; gate: HoldGate };
 type BodyDiffMode = { kind: "ok" } | { kind: "hold"; gate: HoldGate };
 type PairBodyDiffMode = { kind: "ok" } | { kind: "hold"; gate: HoldGate };
 
-/** page 探针到达记录：含 cursor/sourceKind 与查询键，供精确零旁路断言 */
+/** page 探针到达记录：含 cursor/sourceKind/时间与查询键，供精确零旁路断言 */
 type PageProbeHit = {
   projectId: string;
   cursor: string | null;
   /** 缺省 null 表示无 sourceKind query */
   sourceKind: string | null;
+  /** 缺省 null 表示无 createdFrom query */
+  createdFrom: string | null;
+  /** 缺省 null 表示无 createdBefore query */
+  createdBefore: string | null;
   method: string;
   path: string;
   postData: string | null;
@@ -289,16 +305,20 @@ type ProbeState = {
   listLog: string[];
   /** list 响应已 fulfill（await json 返回后）——用于证明迟到响应真正完成 */
   listCompleteLog: string[];
-  /** P12F-C/D page 到达（gate 前），含 cursor/sourceKind */
+  /** P12F-C/D/E-B page 到达（gate 前），含 cursor/sourceKind/时间 */
   pageLog: PageProbeHit[];
-  /** P12F-C/D page 响应已 fulfill（await json 返回后） */
+  /** P12F-C/D/E-B page 响应已 fulfill（await json 返回后） */
   pageCompleteLog: Array<{
     projectId: string;
     cursor: string | null;
     sourceKind: string | null;
+    createdFrom: string | null;
+    createdBefore: string | null;
   }>;
   /** 按 cursor 键固定第二页游标；筛选场景可用 esrc2 */
   pageSecondCursorBySource: Record<string, string>;
+  /** 时间范围激活时第二页游标（默认 esrc3） */
+  pageSecondCursorForTime: string;
   detailLog: Array<{ projectId: string; revisionId: string }>;
   /** detail 响应已 fulfill（await json 返回后）——用于证明迟到响应真正完成 */
   detailCompleteLog: Array<{ projectId: string; revisionId: string }>;
@@ -581,6 +601,7 @@ function createProbeState(mode: Mode): ProbeState {
     pageResponseByCursor: {},
     pageSecondCursor: PAGE_CURSOR_SECOND,
     pageSecondCursorBySource: {},
+    pageSecondCursorForTime: PAGE_CURSOR_TIME_SECOND,
     detailResponseOverride: null,
     restoreResponseOverride: null,
     comparisonResponseOverride: null,
@@ -680,26 +701,88 @@ function pageCompleteCountForSourceCursor(
   ).length;
 }
 
+/** 用途：统计精确时间+来源+cursor 组合的 page 到达次数 */
+function pageHitCountForTimeFilter(
+  state: ProbeState,
+  projectId: string,
+  sourceKind: string | null,
+  createdFrom: string | null,
+  createdBefore: string | null,
+  cursor: string | null,
+): number {
+  return state.pageLog.filter(
+    (h) =>
+      h.projectId === projectId &&
+      h.sourceKind === sourceKind &&
+      h.createdFrom === createdFrom &&
+      h.createdBefore === createdBefore &&
+      h.cursor === cursor,
+  ).length;
+}
+
+/** 用途：统计精确时间+来源+cursor 组合的 page 完成次数 */
+function pageCompleteCountForTimeFilter(
+  state: ProbeState,
+  projectId: string,
+  sourceKind: string | null,
+  createdFrom: string | null,
+  createdBefore: string | null,
+  cursor: string | null,
+): number {
+  return state.pageCompleteLog.filter(
+    (h) =>
+      h.projectId === projectId &&
+      h.sourceKind === sourceKind &&
+      h.createdFrom === createdFrom &&
+      h.createdBefore === createdBefore &&
+      h.cursor === cursor,
+  ).length;
+}
+
 /**
- * 用途：构建默认游标页响应；可选 sourceKind 服务端过滤；
- *   无筛选 nextCursor=esrc1 探针；有筛选 nextCursor=esrc2 探针。
+ * 用途：半开区间 [createdFrom, createdBefore) 服务端时间过滤；
+ *   ISO UTC 毫秒字符串可字典序比较。
+ */
+function matchesCreatedAtRange(
+  createdAt: string,
+  createdFrom: string | null,
+  createdBefore: string | null,
+): boolean {
+  if (createdFrom != null && createdAt < createdFrom) return false;
+  if (createdBefore != null && !(createdAt < createdBefore)) return false;
+  return true;
+}
+
+/**
+ * 用途：构建默认游标页响应；可选 sourceKind + [from,before) 服务端过滤；
+ *   无筛选 nextCursor=esrc1；仅来源 esrc2；时间范围 esrc3。
  */
 function buildDefaultPagePayload(
   state: ProbeState,
   projectId: string,
   cursor: string | null,
   sourceKind: string | null = null,
+  createdFrom: string | null = null,
+  createdBefore: string | null = null,
 ): { items: RevisionMeta[]; nextCursor: string | null } | { error: "cursor" } {
   const allRaw = state.revisions[projectId] || [];
-  const all =
-    sourceKind == null
-      ? allRaw
-      : allRaw.filter((it) => it.sourceKind === sourceKind);
-  const secondCursor =
-    sourceKind == null
-      ? state.pageSecondCursor
-      : (state.pageSecondCursorBySource[sourceKind] ??
-        PAGE_CURSOR_FILTER_SECOND);
+  const hasTime = createdFrom != null || createdBefore != null;
+  const all = allRaw.filter((it) => {
+    if (sourceKind != null && it.sourceKind !== sourceKind) return false;
+    if (!matchesCreatedAtRange(it.createdAt, createdFrom, createdBefore)) {
+      return false;
+    }
+    return true;
+  });
+  let secondCursor: string;
+  if (hasTime) {
+    secondCursor = state.pageSecondCursorForTime;
+  } else if (sourceKind == null) {
+    secondCursor = state.pageSecondCursor;
+  } else {
+    secondCursor =
+      state.pageSecondCursorBySource[sourceKind] ?? PAGE_CURSOR_FILTER_SECOND;
+  }
   if (cursor == null) {
     const items = all.slice(0, 10);
     const nextCursor = all.length > 10 ? secondCursor : null;
@@ -710,7 +793,11 @@ function buildDefaultPagePayload(
     return { items, nextCursor: null };
   }
   // 兼容无筛选默认第二页游标
-  if (sourceKind == null && cursor === state.pageSecondCursor) {
+  if (
+    !hasTime &&
+    sourceKind == null &&
+    cursor === state.pageSecondCursor
+  ) {
     const items = all.slice(10, 20);
     return { items, nextCursor: null };
   }
@@ -1367,6 +1454,11 @@ async function installRoutes(page: Page, state: ProbeState) {
       // sourceKind：缺省 null；空串也按字面记录（前端不得发送空串）
       const rawSource = url.searchParams.get("sourceKind");
       const sourceKind = rawSource === null ? null : rawSource;
+      // createdFrom/createdBefore：缺省 null；空串也按字面记录（前端不得发送空串）
+      const rawFrom = url.searchParams.get("createdFrom");
+      const createdFrom = rawFrom === null ? null : rawFrom;
+      const rawBefore = url.searchParams.get("createdBefore");
+      const createdBefore = rawBefore === null ? null : rawBefore;
       const postData = req.postData();
       if (!known.has(pid)) {
         state.forbiddenHits.push(`${method} ${path}`);
@@ -1378,17 +1470,26 @@ async function installRoutes(page: Page, state: ProbeState) {
         await json(route, { detail: "method_not_allowed" }, 405);
         return;
       }
-      // arrived：gate 前记录，含 cursor/sourceKind 与查询键
+      // arrived：gate 前记录，含 cursor/sourceKind/时间与查询键
       state.pageLog.push({
         projectId: pid,
         cursor,
         sourceKind,
+        createdFrom,
+        createdBefore,
         method,
         path,
         postData,
         queryKeys,
         search: url.search,
       });
+      const completeHit = {
+        projectId: pid,
+        cursor,
+        sourceKind,
+        createdFrom,
+        createdBefore,
+      };
       const pageMode = resolvePageMode(state, pid, cursor);
       if (pageMode.kind === "hold") {
         await pageMode.gate.wait();
@@ -1404,18 +1505,18 @@ async function installRoutes(page: Page, state: ProbeState) {
           },
           pageMode.status,
         );
-        state.pageCompleteLog.push({ projectId: pid, cursor, sourceKind });
+        state.pageCompleteLog.push(completeHit);
         return;
       }
       if (state.pageResponseOverride != null) {
         await json(route, state.pageResponseOverride);
-        state.pageCompleteLog.push({ projectId: pid, cursor, sourceKind });
+        state.pageCompleteLog.push(completeHit);
         return;
       }
       const cursorKey = cursor ?? "";
       if (state.pageResponseByCursor[cursorKey] != null) {
         await json(route, state.pageResponseByCursor[cursorKey]);
-        state.pageCompleteLog.push({ projectId: pid, cursor, sourceKind });
+        state.pageCompleteLog.push(completeHit);
         return;
       }
       // 非法 sourceKind 字面量（探针侧）：仅用于失败路径；合法九类或 null 继续
@@ -1433,10 +1534,17 @@ async function installRoutes(page: Page, state: ProbeState) {
           },
           400,
         );
-        state.pageCompleteLog.push({ projectId: pid, cursor, sourceKind });
+        state.pageCompleteLog.push(completeHit);
         return;
       }
-      const built = buildDefaultPagePayload(state, pid, cursor, sourceKind);
+      const built = buildDefaultPagePayload(
+        state,
+        pid,
+        cursor,
+        sourceKind,
+        createdFrom,
+        createdBefore,
+      );
       if ("error" in built) {
         await json(
           route,
@@ -1448,14 +1556,14 @@ async function installRoutes(page: Page, state: ProbeState) {
           },
           400,
         );
-        state.pageCompleteLog.push({ projectId: pid, cursor, sourceKind });
+        state.pageCompleteLog.push(completeHit);
         return;
       }
       await json(route, {
         items: built.items,
         nextCursor: built.nextCursor,
       });
-      state.pageCompleteLog.push({ projectId: pid, cursor, sourceKind });
+      state.pageCompleteLog.push(completeHit);
       return;
     }
 
@@ -2097,8 +2205,12 @@ async function assertNoIdLeak(
   expect(consoleBlob).not.toMatch(/\bsnapshot\b/i);
   expect(consoleBlob).not.toContain(PAGE_CURSOR_SECOND);
   expect(consoleBlob).not.toContain(PAGE_CURSOR_FILTER_SECOND);
+  expect(consoleBlob).not.toContain(PAGE_CURSOR_TIME_SECOND);
   expect(consoleBlob).not.toContain("esrc1_");
   expect(consoleBlob).not.toContain("esrc2_");
+  expect(consoleBlob).not.toContain("esrc3_");
+  expect(consoleBlob).not.toContain("createdFrom");
+  expect(consoleBlob).not.toContain("createdBefore");
 }
 
 function debounceMs(mode: Mode) {
@@ -7235,6 +7347,1323 @@ test.describe("P12F-D 商务标修订历史来源筛选", () => {
     expect(consoleBiz).not.toContain("esrc2_");
     expect(consoleBiz).not.toContain(PAGE_CURSOR_FILTER_SECOND);
     expect(consoleBiz).not.toContain(SNAPSHOT_BODY_LEAK);
+    expect(seeded.length).toBe(11);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P12F-E-B 修订历史时间范围筛选
+// ---------------------------------------------------------------------------
+
+/** 用途：同步 seed 后 detail 的 createdAt 为可控 UTC 毫秒序列 */
+function syncRevisionCreatedAts(
+  state: ProbeState,
+  projectId: string,
+  startUtcMs: string,
+  stepMinutes = 1,
+): RevisionMeta[] {
+  const list = state.revisions[projectId] || [];
+  const start = Date.parse(startUtcMs);
+  for (let i = 0; i < list.length; i++) {
+    const at = new Date(start + i * stepMinutes * 60_000).toISOString();
+    list[i].createdAt = at;
+    if (state.details[list[i].revisionId]) {
+      state.details[list[i].revisionId].createdAt = at;
+    }
+  }
+  return list;
+}
+
+test.describe("P12F-E-B 技术标修订历史时间范围筛选", () => {
+  test.describe.configure({ mode: "serial" });
+  test.use({ timezoneId: "Asia/Shanghai" });
+
+  test("P12F-E-B 技术标：默认无时间；上海 08:00→UTC；单边/双边/来源/query顺序/同值零重发/倒序保值/清除；V3第二页；空态；失败", async ({
+    page,
+  }) => {
+    const state = createProbeState("tech");
+    // 11 task + 3 revise，时间从 2026-07-16T00:00Z 起每分钟一条
+    const taskSources = Array.from({ length: 11 }, () => "task");
+    const reviseSources = Array.from({ length: 3 }, () => "revise");
+    const seeded = seedRevisions(
+      state,
+      TECH_A,
+      14,
+      taskSources.concat(reviseSources),
+    );
+    syncRevisionCreatedAts(state, TECH_A, "2026-07-16T00:00:00.000Z", 1);
+    state.pageSecondCursorForTime = PAGE_CURSOR_TIME_SECOND;
+
+    const UTC_FROM_0800 = "2026-07-16T00:00:00.000Z"; // 上海本地 08:00
+    const UTC_BEFORE_0810 = "2026-07-16T00:10:00.000Z"; // 上海本地 08:10
+    const UTC_BEFORE_0805 = "2026-07-16T00:05:00.000Z"; // 上海本地 08:05
+
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+
+    await openWorkspace(page, "tech", TECH_A);
+    expect(state.pageLog.length).toBe(0);
+    await expect(
+      page.getByTestId("editor-state-revision-created-from"),
+    ).toHaveCount(0);
+
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(1);
+    const firstHit = state.pageLog[0];
+    expect(firstHit.method).toBe("GET");
+    expect(firstHit.postData).toBeNull();
+    expect(firstHit.cursor).toBeNull();
+    expect(firstHit.sourceKind).toBeNull();
+    expect(firstHit.createdFrom).toBeNull();
+    expect(firstHit.createdBefore).toBeNull();
+    expect(firstHit.queryKeys).toEqual([]);
+    expect(firstHit.search).toBe("");
+
+    const fromInput = page.getByTestId("editor-state-revision-created-from");
+    const beforeInput = page.getByTestId(
+      "editor-state-revision-created-before",
+    );
+    const applyBtn = page.getByTestId("editor-state-revision-time-apply");
+    const clearBtn = page.getByTestId("editor-state-revision-time-clear");
+    await expect(fromInput).toBeVisible();
+    await expect(beforeInput).toBeVisible();
+    await expect(applyBtn).toBeVisible();
+    await expect(clearBtn).toBeVisible();
+    await expect(applyBtn).toBeDisabled();
+
+    // 上海本地 08:00 → UTC 00:00:00.000Z（单边 createdFrom）
+    await fromInput.fill("2026-07-16T08:00");
+    await expect(applyBtn).toBeEnabled();
+    const pageBeforeFrom = state.pageLog.length;
+    await applyBtn.click();
+    await expect
+      .poll(
+        () =>
+          pageHitCountForTimeFilter(
+            state,
+            TECH_A,
+            null,
+            UTC_FROM_0800,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect
+      .poll(
+        () =>
+          pageCompleteCountForTimeFilter(
+            state,
+            TECH_A,
+            null,
+            UTC_FROM_0800,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    expect(state.pageLog.length).toBe(pageBeforeFrom + 1);
+    const fromHit = state.pageLog[state.pageLog.length - 1];
+    expect(fromHit.createdFrom).toBe(UTC_FROM_0800);
+    expect(fromHit.createdBefore).toBeNull();
+    expect(fromHit.sourceKind).toBeNull();
+    expect(fromHit.cursor).toBeNull();
+    expect(fromHit.postData).toBeNull();
+    expect(fromHit.queryKeys).toEqual(["createdFrom"]);
+    expect(fromHit.search).toBe(
+      `?createdFrom=${encodeURIComponent(UTC_FROM_0800)}`,
+    );
+    await expect(
+      page.getByTestId("editor-state-revision-item-0"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-load-more"),
+    ).toBeVisible();
+
+    // 同值零重发
+    const sameBefore = state.pageLog.length;
+    await applyBtn.click();
+    expect(state.pageLog.length).toBe(sameBefore);
+
+    // 双边：本地 08:00–08:10 → [00:00, 00:10) UTC；恰 10 条
+    await beforeInput.fill("2026-07-16T08:10");
+    await applyBtn.click();
+    await expect
+      .poll(
+        () =>
+          pageHitCountForTimeFilter(
+            state,
+            TECH_A,
+            null,
+            UTC_FROM_0800,
+            UTC_BEFORE_0810,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    const bothHit = state.pageLog[state.pageLog.length - 1];
+    expect(bothHit.createdFrom).toBe(UTC_FROM_0800);
+    expect(bothHit.createdBefore).toBe(UTC_BEFORE_0810);
+    expect(bothHit.queryKeys).toEqual(["createdFrom", "createdBefore"]);
+    expect(bothHit.search).toBe(
+      `?createdFrom=${encodeURIComponent(UTC_FROM_0800)}&createdBefore=${encodeURIComponent(UTC_BEFORE_0810)}`,
+    );
+    for (let i = 0; i < 10; i++) {
+      await expect(
+        page.getByTestId(`editor-state-revision-item-${i}`),
+      ).toBeVisible();
+    }
+    await expect(page.getByTestId("editor-state-revision-item-10")).toHaveCount(
+      0,
+    );
+    await expect(
+      page.getByTestId("editor-state-revision-load-more"),
+    ).toHaveCount(0);
+
+    // 来源 + 时间：query 顺序 sourceKind → createdFrom → createdBefore
+    const filter = page.getByTestId("editor-state-revision-source-filter");
+    await filter.selectOption({ label: "任务写入" });
+    await expect
+      .poll(
+        () =>
+          pageHitCountForTimeFilter(
+            state,
+            TECH_A,
+            "task",
+            UTC_FROM_0800,
+            UTC_BEFORE_0810,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    const comboHit = state.pageLog[state.pageLog.length - 1];
+    expect(comboHit.sourceKind).toBe("task");
+    expect(comboHit.createdFrom).toBe(UTC_FROM_0800);
+    expect(comboHit.createdBefore).toBe(UTC_BEFORE_0810);
+    expect(comboHit.queryKeys).toEqual([
+      "sourceKind",
+      "createdFrom",
+      "createdBefore",
+    ]);
+    expect(comboHit.search).toBe(
+      `?sourceKind=task&createdFrom=${encodeURIComponent(UTC_FROM_0800)}&createdBefore=${encodeURIComponent(UTC_BEFORE_0810)}`,
+    );
+    for (let i = 0; i < 10; i++) {
+      await expect(
+        page.getByTestId(`editor-state-revision-source-${i}`),
+      ).toHaveText("任务写入");
+    }
+
+    // 倒序无效：零请求 + 固定错误 + 列表保值
+    const beforeInvalid = state.pageLog.length;
+    await fromInput.fill("2026-07-16T09:00");
+    await beforeInput.fill("2026-07-16T08:00");
+    await applyBtn.click();
+    await expect(
+      page.getByTestId("editor-state-revision-time-error"),
+    ).toHaveText(MSG_TIME_RANGE_INVALID);
+    expect(state.pageLog.length).toBe(beforeInvalid);
+    await expect(
+      page.getByTestId("editor-state-revision-item-0"),
+    ).toBeVisible();
+    await fromInput.fill("2026-07-16T08:00");
+    await expect(
+      page.getByTestId("editor-state-revision-time-error"),
+    ).toHaveCount(0);
+
+    // 清除：保留来源，无时间
+    const clearHitsBefore = pageHitCountForTimeFilter(
+      state,
+      TECH_A,
+      "task",
+      null,
+      null,
+      null,
+    );
+    await clearBtn.click();
+    await expect
+      .poll(
+        () =>
+          pageHitCountForTimeFilter(state, TECH_A, "task", null, null, null),
+        { timeout: 10_000 },
+      )
+      .toBe(clearHitsBefore + 1);
+    const afterClearHit = state.pageLog[state.pageLog.length - 1];
+    expect(afterClearHit.sourceKind).toBe("task");
+    expect(afterClearHit.createdFrom).toBeNull();
+    expect(afterClearHit.createdBefore).toBeNull();
+    expect(afterClearHit.queryKeys).toEqual(["sourceKind"]);
+    await expect(fromInput).toHaveValue("");
+    await expect(beforeInput).toHaveValue("");
+
+    // 全空清除不重发
+    const clearEmptyBefore = state.pageLog.length;
+    await clearBtn.click();
+    expect(state.pageLog.length).toBe(clearEmptyBefore);
+
+    // 单边 createdBefore：本地 08:05 → UTC 00:05；task 且 < 00:05 → 5 条
+    await beforeInput.fill("2026-07-16T08:05");
+    await applyBtn.click();
+    await expect
+      .poll(
+        () =>
+          pageHitCountForTimeFilter(
+            state,
+            TECH_A,
+            "task",
+            null,
+            UTC_BEFORE_0805,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    const beforeOnlyHit = state.pageLog[state.pageLog.length - 1];
+    expect(beforeOnlyHit.createdFrom).toBeNull();
+    expect(beforeOnlyHit.createdBefore).toBe(UTC_BEFORE_0805);
+    expect(beforeOnlyHit.sourceKind).toBe("task");
+    expect(beforeOnlyHit.queryKeys).toEqual(["sourceKind", "createdBefore"]);
+    for (let i = 0; i < 5; i++) {
+      await expect(
+        page.getByTestId(`editor-state-revision-item-${i}`),
+      ).toBeVisible();
+    }
+    await expect(page.getByTestId("editor-state-revision-item-5")).toHaveCount(
+      0,
+    );
+
+    // 空态
+    await fromInput.fill("2026-07-20T08:00");
+    await beforeInput.fill("2026-07-20T09:00");
+    await applyBtn.click();
+    const emptyFrom = "2026-07-20T00:00:00.000Z";
+    const emptyBefore = "2026-07-20T01:00:00.000Z";
+    await expect
+      .poll(
+        () =>
+          pageHitCountForTimeFilter(
+            state,
+            TECH_A,
+            "task",
+            emptyFrom,
+            emptyBefore,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect(page.getByTestId("editor-state-revision-empty")).toBeVisible();
+    await expect(page.getByTestId("editor-state-revision-item-0")).toHaveCount(
+      0,
+    );
+
+    // 首屏失败不回退
+    state.pageModeByProject[TECH_A] = { kind: "http_error", status: 500 };
+    await fromInput.fill("2026-07-16T08:00");
+    await beforeInput.fill("2026-07-16T08:10");
+    const failCompleteBefore = pageCompleteCountForTimeFilter(
+      state,
+      TECH_A,
+      "task",
+      UTC_FROM_0800,
+      UTC_BEFORE_0810,
+      null,
+    );
+    await applyBtn.click();
+    await expect
+      .poll(
+        () =>
+          pageCompleteCountForTimeFilter(
+            state,
+            TECH_A,
+            "task",
+            UTC_FROM_0800,
+            UTC_BEFORE_0810,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(failCompleteBefore + 1);
+    await expect(
+      page.getByTestId("editor-state-revision-list-error"),
+    ).toHaveText(MSG_LIST_FAIL);
+    await expect(page.getByTestId("editor-state-revision-item-0")).toHaveCount(
+      0,
+    );
+    await expect(fromInput).toHaveValue("2026-07-16T08:00");
+    await expect(beforeInput).toHaveValue("2026-07-16T08:10");
+
+    // 刷新重试仍带完整条件
+    state.pageModeByProject[TECH_A] = { kind: "ok" };
+    const failHitsBefore = pageHitCountForTimeFilter(
+      state,
+      TECH_A,
+      "task",
+      UTC_FROM_0800,
+      UTC_BEFORE_0810,
+      null,
+    );
+    await page.getByTestId("editor-state-revision-refresh").click();
+    await expect
+      .poll(
+        () =>
+          pageHitCountForTimeFilter(
+            state,
+            TECH_A,
+            "task",
+            UTC_FROM_0800,
+            UTC_BEFORE_0810,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(failHitsBefore + 1);
+    await expect(
+      page.getByTestId("editor-state-revision-list-error"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-item-0"),
+    ).toBeVisible();
+
+    // V3 第二页：仅 from + task → 11 条
+    await fromInput.fill("2026-07-16T08:00");
+    await beforeInput.fill("");
+    const v3FirstCompleteBefore = pageCompleteCountForTimeFilter(
+      state,
+      TECH_A,
+      "task",
+      UTC_FROM_0800,
+      null,
+      null,
+    );
+    await applyBtn.click();
+    await expect
+      .poll(
+        () =>
+          pageCompleteCountForTimeFilter(
+            state,
+            TECH_A,
+            "task",
+            UTC_FROM_0800,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(v3FirstCompleteBefore + 1);
+    await expect(
+      page.getByTestId("editor-state-revision-load-more"),
+    ).toBeVisible();
+
+    // 第二页失败保值 + 同 cursor 重试
+    state.pageModeByCursor[PAGE_CURSOR_TIME_SECOND] = {
+      kind: "http_error",
+      status: 500,
+    };
+    await page.getByTestId("editor-state-revision-load-more").click();
+    await expect
+      .poll(
+        () =>
+          pageHitCountForTimeFilter(
+            state,
+            TECH_A,
+            "task",
+            UTC_FROM_0800,
+            null,
+            PAGE_CURSOR_TIME_SECOND,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    const failMoreHit = state.pageLog[state.pageLog.length - 1];
+    expect(failMoreHit.cursor).toBe(PAGE_CURSOR_TIME_SECOND);
+    expect(failMoreHit.sourceKind).toBe("task");
+    expect(failMoreHit.createdFrom).toBe(UTC_FROM_0800);
+    expect(failMoreHit.createdBefore).toBeNull();
+    expect(failMoreHit.queryKeys).toEqual([
+      "sourceKind",
+      "createdFrom",
+      "cursor",
+    ]);
+    expect(failMoreHit.search).toBe(
+      `?sourceKind=task&createdFrom=${encodeURIComponent(UTC_FROM_0800)}&cursor=${encodeURIComponent(PAGE_CURSOR_TIME_SECOND)}`,
+    );
+    for (let i = 0; i < 10; i++) {
+      await expect(
+        page.getByTestId(`editor-state-revision-item-${i}`),
+      ).toBeVisible();
+    }
+    await expect(page.getByTestId("editor-state-revision-item-10")).toHaveCount(
+      0,
+    );
+    await expect(
+      page.getByTestId("editor-state-revision-load-more-error"),
+    ).toHaveText(MSG_LOAD_MORE_FAIL);
+
+    state.pageModeByCursor[PAGE_CURSOR_TIME_SECOND] = { kind: "ok" };
+    await page.getByTestId("editor-state-revision-load-more").click();
+    await expect
+      .poll(
+        () =>
+          pageHitCountForTimeFilter(
+            state,
+            TECH_A,
+            "task",
+            UTC_FROM_0800,
+            null,
+            PAGE_CURSOR_TIME_SECOND,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(2);
+    await expect(
+      page.getByTestId("editor-state-revision-item-10"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-load-more-error"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-load-more"),
+    ).toHaveCount(0);
+    await expect(page.getByTestId("editor-state-revision-item-11")).toHaveCount(
+      0,
+    );
+
+    // V3 256 外壳：override nextCursor 后第二页原样回传
+    const allSrcCompleteBefore = pageCompleteCountForTimeFilter(
+      state,
+      TECH_A,
+      null,
+      UTC_FROM_0800,
+      null,
+      null,
+    );
+    await filter.selectOption({ label: "全部来源" });
+    await expect
+      .poll(
+        () =>
+          pageCompleteCountForTimeFilter(
+            state,
+            TECH_A,
+            null,
+            UTC_FROM_0800,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(allSrcCompleteBefore + 1);
+    const tenItems = (state.revisions[TECH_A] || []).slice(0, 10);
+    state.pageResponseByCursor[""] = {
+      items: tenItems,
+      nextCursor: PAGE_CURSOR_V3_LEN_256,
+    };
+    state.pageSecondCursorForTime = PAGE_CURSOR_V3_LEN_256;
+    state.pageModeByCursor[PAGE_CURSOR_V3_LEN_256] = { kind: "ok" };
+    state.pageResponseByCursor[PAGE_CURSOR_V3_LEN_256] = {
+      items: (state.revisions[TECH_A] || []).slice(10, 14),
+      nextCursor: null,
+    };
+    const v3RefreshCompleteBefore = pageCompleteCountForTimeFilter(
+      state,
+      TECH_A,
+      null,
+      UTC_FROM_0800,
+      null,
+      null,
+    );
+    await page.getByTestId("editor-state-revision-refresh").click();
+    await expect
+      .poll(
+        () =>
+          pageCompleteCountForTimeFilter(
+            state,
+            TECH_A,
+            null,
+            UTC_FROM_0800,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(v3RefreshCompleteBefore + 1);
+    await expect(
+      page.getByTestId("editor-state-revision-load-more"),
+    ).toBeVisible();
+    delete state.pageResponseByCursor[""];
+    const v3Before = pageHitCountForTimeFilter(
+      state,
+      TECH_A,
+      null,
+      UTC_FROM_0800,
+      null,
+      PAGE_CURSOR_V3_LEN_256,
+    );
+    await page.getByTestId("editor-state-revision-load-more").click();
+    await expect
+      .poll(
+        () =>
+          pageHitCountForTimeFilter(
+            state,
+            TECH_A,
+            null,
+            UTC_FROM_0800,
+            null,
+            PAGE_CURSOR_V3_LEN_256,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(v3Before + 1);
+    const v3Hit = state.pageLog[state.pageLog.length - 1];
+    expect(v3Hit.cursor).toBe(PAGE_CURSOR_V3_LEN_256);
+    expect(v3Hit.cursor!.length).toBe(256);
+    expect(v3Hit.createdFrom).toBe(UTC_FROM_0800);
+    await expect(
+      page.getByTestId("editor-state-revision-item-10"),
+    ).toBeVisible();
+    await expect(page.getByTestId("editor-state-revision-item-14")).toHaveCount(
+      0,
+    );
+
+    // V3 257 超长：首屏 nextCursor 恰 257 字符 → parseRevisionPage 整页失败
+    const bad257CompleteBefore = pageCompleteCountForTimeFilter(
+      state,
+      TECH_A,
+      null,
+      UTC_FROM_0800,
+      null,
+      null,
+    );
+    const bad257SecondHitsBefore = pageHitCountForTimeFilter(
+      state,
+      TECH_A,
+      null,
+      UTC_FROM_0800,
+      null,
+      PAGE_CURSOR_V3_LEN_257,
+    );
+    state.pageResponseByCursor[""] = {
+      items: tenItems,
+      nextCursor: PAGE_CURSOR_V3_LEN_257,
+    };
+    await page.getByTestId("editor-state-revision-refresh").click();
+    await expect
+      .poll(
+        () =>
+          pageCompleteCountForTimeFilter(
+            state,
+            TECH_A,
+            null,
+            UTC_FROM_0800,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(bad257CompleteBefore + 1);
+    await expect(
+      page.getByTestId("editor-state-revision-list-error"),
+    ).toHaveText(MSG_LIST_FAIL);
+    await expect(page.getByTestId("editor-state-revision-item-0")).toHaveCount(
+      0,
+    );
+    await expect(
+      page.getByTestId("editor-state-revision-load-more"),
+    ).toHaveCount(0);
+    expect(
+      pageHitCountForTimeFilter(
+        state,
+        TECH_A,
+        null,
+        UTC_FROM_0800,
+        null,
+        PAGE_CURSOR_V3_LEN_257,
+      ),
+    ).toBe(bad257SecondHitsBefore);
+    // 清理 override，避免污染后续阶段
+    delete state.pageResponseByCursor[""];
+
+    expect(state.listLog.length).toBe(0);
+    expect(state.forbiddenHits).toEqual([]);
+    expect(state.externalHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+    await assertNoIdLeak(page, state, guards.consoleLogs);
+
+    const persist = await page.evaluate(() => {
+      const ls: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k) ls.push(`${k}=${localStorage.getItem(k)}`);
+      }
+      const ss: string[] = [];
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const k = sessionStorage.key(i);
+        if (k) ss.push(`${k}=${sessionStorage.getItem(k)}`);
+      }
+      return {
+        ls: ls.join("\n"),
+        ss: ss.join("\n"),
+        href: location.href,
+        cookie: document.cookie,
+        body: document.body?.innerText ?? "",
+      };
+    });
+    for (const blob of [
+      persist.ls,
+      persist.ss,
+      persist.href,
+      persist.cookie ?? "",
+    ]) {
+      expect(blob).not.toContain("createdFrom");
+      expect(blob).not.toContain("createdBefore");
+      expect(blob).not.toContain("esrc3_");
+      expect(blob).not.toContain(PAGE_CURSOR_TIME_SECOND);
+      expect(blob).not.toContain(UTC_FROM_0800);
+      expect(blob).not.toContain(SNAPSHOT_BODY_LEAK);
+    }
+    expect(persist.body).not.toContain("createdFrom=");
+    expect(persist.body).not.toContain("esrc3_");
+    expect(persist.body).not.toContain(PAGE_CURSOR_TIME_SECOND);
+    expect(persist.body).not.toContain(UTC_FROM_0800);
+    for (const item of seeded) {
+      expect(persist.body).not.toContain(item.revisionId);
+      expect(persist.body).not.toContain(item.stateVersion);
+    }
+    const consoleBlob = guards.consoleLogs.join("\n");
+    expect(consoleBlob).not.toContain("createdFrom");
+    expect(consoleBlob).not.toContain("createdBefore");
+    expect(consoleBlob).not.toContain("esrc3_");
+    expect(consoleBlob).not.toContain(PAGE_CURSOR_TIME_SECOND);
+    expect(seeded.length).toBe(14);
+    expect(PAGE_CURSOR_V3_LEN_256.length).toBe(256);
+    expect(PAGE_CURSOR_V3_LEN_257.length).toBe(257);
+  });
+
+  test("P12F-E-B 技术标：应用清意图；草稿不影响刷新/来源；折叠保留；项目切换重置；首屏与 load-more 迟到隔离", async ({
+    page,
+  }) => {
+    const state = createProbeState("tech");
+    seedRevisions(
+      state,
+      TECH_A,
+      12,
+      Array.from({ length: 11 }, () => "task").concat(["revise"]),
+    );
+    syncRevisionCreatedAts(state, TECH_A, "2026-07-16T00:00:00.000Z", 1);
+    seedRevisions(
+      state,
+      TECH_B,
+      5,
+      Array.from({ length: 5 }, () => "callback"),
+    );
+    syncRevisionCreatedAts(state, TECH_B, "2026-07-17T00:00:00.000Z", 1);
+    state.pageSecondCursorForTime = PAGE_CURSOR_TIME_SECOND;
+
+    const UTC_FROM = "2026-07-16T00:00:00.000Z";
+    const firstTask = state.revisions[TECH_A][0];
+    state.details[firstTask.revisionId].snapshot = {
+      ...state.details[firstTask.revisionId].snapshot,
+      chapters: [{ id: "ch", title: "时间筛选章节", body: "TIME_BODY_LEAK" }],
+    };
+
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+    await openWorkspace(page, "tech", TECH_A);
+    await expandRevisionPanel(page);
+    await expect.poll(() => pageCompleteCount(state, TECH_A)).toBe(1);
+
+    await page.getByTestId("editor-state-revision-summary-0").click();
+    await expect
+      .poll(() => state.detailCompleteLog.length, { timeout: 10_000 })
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-summary-body-0"),
+    ).toBeVisible();
+    await page.getByTestId("editor-state-revision-pair-select-before-0").click();
+    await page.getByTestId("editor-state-revision-pair-select-after-1").click();
+    await page.getByTestId("editor-state-revision-restore-0").click();
+    await expect(
+      page.getByTestId("editor-state-revision-confirm-0"),
+    ).toBeVisible();
+
+    const fromInput = page.getByTestId("editor-state-revision-created-from");
+    const applyBtn = page.getByTestId("editor-state-revision-time-apply");
+    await fromInput.fill("2026-07-16T08:00");
+    await applyBtn.click();
+    await expect
+      .poll(
+        () =>
+          pageCompleteCountForTimeFilter(
+            state,
+            TECH_A,
+            null,
+            UTC_FROM,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-summary-body-0"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-confirm-0"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-pair-result"),
+    ).toHaveCount(0);
+
+    // 草稿不影响刷新
+    await fromInput.fill("2026-07-16T09:00");
+    const beforeRefresh = pageHitCountForTimeFilter(
+      state,
+      TECH_A,
+      null,
+      UTC_FROM,
+      null,
+      null,
+    );
+    const draftUtc = "2026-07-16T01:00:00.000Z";
+    await page.getByTestId("editor-state-revision-refresh").click();
+    await expect
+      .poll(
+        () =>
+          pageHitCountForTimeFilter(
+            state,
+            TECH_A,
+            null,
+            UTC_FROM,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(beforeRefresh + 1);
+    expect(
+      pageHitCountForTimeFilter(state, TECH_A, null, draftUtc, null, null),
+    ).toBe(0);
+    expect(state.pageLog[state.pageLog.length - 1].createdFrom).toBe(UTC_FROM);
+
+    // 草稿不影响来源切换
+    const filter = page.getByTestId("editor-state-revision-source-filter");
+    await filter.selectOption({ label: "任务写入" });
+    await expect
+      .poll(
+        () =>
+          pageHitCountForTimeFilter(
+            state,
+            TECH_A,
+            "task",
+            UTC_FROM,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    expect(
+      pageHitCountForTimeFilter(state, TECH_A, "task", draftUtc, null, null),
+    ).toBe(0);
+    await fromInput.fill("2026-07-16T08:00");
+
+    // 折叠再展开保留
+    await page.getByTestId("editor-state-revision-toggle").click();
+    await expect(page.getByTestId("editor-state-revision-body")).toHaveCount(0);
+    const taskTimeBefore = pageHitCountForTimeFilter(
+      state,
+      TECH_A,
+      "task",
+      UTC_FROM,
+      null,
+      null,
+    );
+    await expandRevisionPanel(page);
+    await expect
+      .poll(
+        () =>
+          pageHitCountForTimeFilter(
+            state,
+            TECH_A,
+            "task",
+            UTC_FROM,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(taskTimeBefore + 1);
+    await expect(filter).toHaveValue("task");
+    await expect(fromInput).toHaveValue("2026-07-16T08:00");
+    const reopenHit = state.pageLog[state.pageLog.length - 1];
+    expect(reopenHit.sourceKind).toBe("task");
+    expect(reopenHit.createdFrom).toBe(UTC_FROM);
+    expect(reopenHit.cursor).toBeNull();
+
+    // 首屏 arrived+complete 迟到隔离
+    const lateGate = createHoldGate();
+    state.pageModeByProject[TECH_A] = { kind: "hold", gate: lateGate };
+    await page.getByTestId("editor-state-revision-refresh").click();
+    await lateGate.waitUntilEntered(1);
+    const arrivedHeld = pageHitCountForTimeFilter(
+      state,
+      TECH_A,
+      "task",
+      UTC_FROM,
+      null,
+      null,
+    );
+    const completeHeld = pageCompleteCountForTimeFilter(
+      state,
+      TECH_A,
+      "task",
+      UTC_FROM,
+      null,
+      null,
+    );
+    await expect(filter).toBeDisabled();
+    await expect(fromInput).toBeDisabled();
+    await expect(applyBtn).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-time-clear"),
+    ).toBeDisabled();
+    await page.getByTestId("editor-state-revision-toggle").click();
+    await expect(page.getByTestId("editor-state-revision-body")).toHaveCount(0);
+    lateGate.release();
+    await expect
+      .poll(
+        () =>
+          pageCompleteCountForTimeFilter(
+            state,
+            TECH_A,
+            "task",
+            UTC_FROM,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(completeHeld + 1);
+    await expect(page.getByTestId("editor-state-revision-body")).toHaveCount(0);
+    expect(
+      pageHitCountForTimeFilter(state, TECH_A, "task", UTC_FROM, null, null),
+    ).toBe(arrivedHeld);
+
+    // load-more 迟到隔离
+    state.pageModeByProject[TECH_A] = { kind: "ok" };
+    await expandRevisionPanel(page);
+    await expect
+      .poll(
+        () =>
+          pageCompleteCountForTimeFilter(
+            state,
+            TECH_A,
+            "task",
+            UTC_FROM,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(completeHeld + 2);
+    await expect(
+      page.getByTestId("editor-state-revision-load-more"),
+    ).toBeVisible();
+    const loadGate = createHoldGate();
+    state.pageModeByCursor[PAGE_CURSOR_TIME_SECOND] = {
+      kind: "hold",
+      gate: loadGate,
+    };
+    await page.getByTestId("editor-state-revision-load-more").click();
+    await loadGate.waitUntilEntered(1);
+    await expect(filter).toBeDisabled();
+    await expect(fromInput).toBeDisabled();
+    await expect(applyBtn).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-time-clear"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-refresh"),
+    ).toBeDisabled();
+    await page.getByTestId("editor-state-revision-toggle").click();
+    await expect(page.getByTestId("editor-state-revision-body")).toHaveCount(0);
+    loadGate.release();
+    await expect
+      .poll(
+        () =>
+          pageCompleteCountForTimeFilter(
+            state,
+            TECH_A,
+            "task",
+            UTC_FROM,
+            null,
+            PAGE_CURSOR_TIME_SECOND,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect(page.getByTestId("editor-state-revision-body")).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-revision-load-more-error"),
+    ).toHaveCount(0);
+
+    // 同一 TECH_A 重新展开：证明迟到第二页 success/catch/finally 未写；首屏精确 +1
+    state.pageModeByCursor[PAGE_CURSOR_TIME_SECOND] = { kind: "ok" };
+    const reopenFirstCompleteBefore = pageCompleteCountForTimeFilter(
+      state,
+      TECH_A,
+      "task",
+      UTC_FROM,
+      null,
+      null,
+    );
+    const lateSecondComplete = pageCompleteCountForTimeFilter(
+      state,
+      TECH_A,
+      "task",
+      UTC_FROM,
+      null,
+      PAGE_CURSOR_TIME_SECOND,
+    );
+    await expandRevisionPanel(page);
+    await expect
+      .poll(
+        () =>
+          pageCompleteCountForTimeFilter(
+            state,
+            TECH_A,
+            "task",
+            UTC_FROM,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(reopenFirstCompleteBefore + 1);
+    await expect(
+      page.getByTestId("editor-state-revision-item-0"),
+    ).toBeVisible();
+    await expect(page.getByTestId("editor-state-revision-item-10")).toHaveCount(
+      0,
+    );
+    await expect(
+      page.getByTestId("editor-state-revision-load-more-error"),
+    ).toHaveCount(0);
+    expect(
+      pageCompleteCountForTimeFilter(
+        state,
+        TECH_A,
+        "task",
+        UTC_FROM,
+        null,
+        PAGE_CURSOR_TIME_SECOND,
+      ),
+    ).toBe(lateSecondComplete);
+
+    // 项目切换重置
+    await openWorkspace(page, "tech", TECH_B);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageHitCountForSource(state, TECH_B, null), {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    const bFrom = page.getByTestId("editor-state-revision-created-from");
+    const bFilter = page.getByTestId("editor-state-revision-source-filter");
+    await expect(bFilter).toHaveValue("");
+    await expect(bFrom).toHaveValue("");
+    const bHit = state.pageLog[state.pageLog.length - 1];
+    expect(bHit.projectId).toBe(TECH_B);
+    expect(bHit.sourceKind).toBeNull();
+    expect(bHit.createdFrom).toBeNull();
+    expect(bHit.createdBefore).toBeNull();
+    expect(bHit.queryKeys).toEqual([]);
+
+    expect(state.listLog.length).toBe(0);
+    expect(state.forbiddenHits).toEqual([]);
+    expect(state.externalHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+    await assertNoIdLeak(page, state, guards.consoleLogs);
+    const console2 = guards.consoleLogs.join("\n");
+    expect(console2).not.toContain("createdFrom");
+    expect(console2).not.toContain("esrc3_");
+    expect(console2).not.toContain(PAGE_CURSOR_TIME_SECOND);
+    expect(console2).not.toContain("TIME_BODY_LEAK");
+  });
+});
+
+test.describe("P12F-E-B 商务标修订历史时间范围筛选", () => {
+  test.describe.configure({ mode: "serial" });
+  test.use({ timezoneId: "Asia/Shanghai" });
+
+  test("P12F-E-B 商务标：共享入口；刷新/恢复保留来源+时间；在途禁用；唯一 restore；零泄漏", async ({
+    page,
+  }) => {
+    const state = createProbeState("biz");
+    const seeded = seedRevisions(
+      state,
+      BIZ_A,
+      11,
+      Array.from({ length: 11 }, () => "callback"),
+    );
+    syncRevisionCreatedAts(state, BIZ_A, "2026-07-16T00:00:00.000Z", 1);
+    state.pageSecondCursorForTime = PAGE_CURSOR_TIME_SECOND;
+    const UTC_FROM = "2026-07-16T00:00:00.000Z";
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+    await page.clock.install();
+
+    await openWorkspace(page, "biz", BIZ_A);
+    expect(state.pageLog.length).toBe(0);
+
+    await expandRevisionPanel(page);
+    await expect.poll(() => pageCompleteCount(state, BIZ_A)).toBe(1);
+    expect(state.pageLog[0].createdFrom).toBeNull();
+    expect(state.pageLog[0].queryKeys).toEqual([]);
+
+    const filter = page.getByTestId("editor-state-revision-source-filter");
+    const fromInput = page.getByTestId("editor-state-revision-created-from");
+    const applyBtn = page.getByTestId("editor-state-revision-time-apply");
+    await expect(fromInput).toBeVisible();
+    await filter.selectOption({ label: "解析回传" });
+    await expect
+      .poll(() => pageHitCountForSource(state, BIZ_A, "callback"), {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    await fromInput.fill("2026-07-16T08:00");
+    await applyBtn.click();
+    await expect
+      .poll(
+        () =>
+          pageHitCountForTimeFilter(
+            state,
+            BIZ_A,
+            "callback",
+            UTC_FROM,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    const selHit = state.pageLog[state.pageLog.length - 1];
+    expect(selHit.sourceKind).toBe("callback");
+    expect(selHit.createdFrom).toBe(UTC_FROM);
+    expect(selHit.queryKeys).toEqual(["sourceKind", "createdFrom"]);
+    expect(selHit.search).toBe(
+      `?sourceKind=callback&createdFrom=${encodeURIComponent(UTC_FROM)}`,
+    );
+
+    // 刷新保留来源+时间
+    const beforeRefresh = pageHitCountForTimeFilter(
+      state,
+      BIZ_A,
+      "callback",
+      UTC_FROM,
+      null,
+      null,
+    );
+    await page.getByTestId("editor-state-revision-refresh").click();
+    await expect
+      .poll(
+        () =>
+          pageHitCountForTimeFilter(
+            state,
+            BIZ_A,
+            "callback",
+            UTC_FROM,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(beforeRefresh + 1);
+    expect(state.pageLog[state.pageLog.length - 1].createdFrom).toBe(UTC_FROM);
+    expect(state.pageLog[state.pageLog.length - 1].sourceKind).toBe("callback");
+    await expect(filter).toHaveValue("callback");
+    await expect(fromInput).toHaveValue("2026-07-16T08:00");
+
+    // 第二页 esrc3 全量重复
+    await page.getByTestId("editor-state-revision-load-more").click();
+    await expect
+      .poll(
+        () =>
+          pageCompleteCountForTimeFilter(
+            state,
+            BIZ_A,
+            "callback",
+            UTC_FROM,
+            null,
+            PAGE_CURSOR_TIME_SECOND,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    const moreHit = state.pageLog[state.pageLog.length - 1];
+    expect(moreHit.cursor).toBe(PAGE_CURSOR_TIME_SECOND);
+    expect(moreHit.sourceKind).toBe("callback");
+    expect(moreHit.createdFrom).toBe(UTC_FROM);
+    expect(moreHit.queryKeys).toEqual([
+      "sourceKind",
+      "createdFrom",
+      "cursor",
+    ]);
+    expect(moreHit.search).toBe(
+      `?sourceKind=callback&createdFrom=${encodeURIComponent(UTC_FROM)}&cursor=${encodeURIComponent(PAGE_CURSOR_TIME_SECOND)}`,
+    );
+    await expect(
+      page.getByTestId("editor-state-revision-item-10"),
+    ).toBeVisible();
+
+    // 恢复在途禁用 + 唯一写链
+    const restoreGate = createHoldGate();
+    state.restoreMode = { kind: "gate", gate: restoreGate, then: "ok" };
+    const pageBeforeRestore = pageHitCount(state, BIZ_A);
+    const pageFirstBeforeRestore = pageHitCountForTimeFilter(
+      state,
+      BIZ_A,
+      "callback",
+      UTC_FROM,
+      null,
+      null,
+    );
+    const getsBefore = state.editorGetLog.filter(
+      (g) => g.projectId === BIZ_A,
+    ).length;
+    const expectedAtConfirm = state.projects[BIZ_A].stateVersion;
+    await page.getByTestId("editor-state-revision-restore-0").click();
+    await page.getByTestId("editor-state-revision-confirm-restore-0").click();
+    await restoreGate.waitUntilEntered(1);
+    expect(state.restoreLog.length).toBe(0);
+    await expect(filter).toBeDisabled();
+    await expect(fromInput).toBeDisabled();
+    await expect(applyBtn).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-time-clear"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-refresh"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-confirm-restore-0"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-revision-cancel-restore-0"),
+    ).toBeDisabled();
+    expect(pageHitCount(state, BIZ_A)).toBe(pageBeforeRestore);
+    expect(
+      state.editorGetLog.filter((g) => g.projectId === BIZ_A).length,
+    ).toBe(getsBefore);
+
+    restoreGate.release();
+    state.restoreMode = { kind: "ok" };
+    await expect
+      .poll(() => state.restoreLog.length, { timeout: 10_000 })
+      .toBe(1);
+    expect(state.restoreLog.length).toBe(1);
+    expect(state.restoreLog[0].body).toEqual({
+      expectedStateVersion: expectedAtConfirm,
+    });
+    await expect
+      .poll(
+        () =>
+          state.editorGetLog.filter((g) => g.projectId === BIZ_A).length -
+          getsBefore,
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect
+      .poll(() => pageHitCount(state, BIZ_A) - pageBeforeRestore, {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    await expect
+      .poll(
+        () =>
+          pageHitCountForTimeFilter(
+            state,
+            BIZ_A,
+            "callback",
+            UTC_FROM,
+            null,
+            null,
+          ) - pageFirstBeforeRestore,
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    const reloadHit = state.pageLog[state.pageLog.length - 1];
+    expect(reloadHit.sourceKind).toBe("callback");
+    expect(reloadHit.createdFrom).toBe(UTC_FROM);
+    expect(reloadHit.cursor).toBeNull();
+    expect(reloadHit.queryKeys).toEqual(["sourceKind", "createdFrom"]);
+    await expect(filter).toHaveValue("callback");
+    await expect(fromInput).toHaveValue("2026-07-16T08:00");
+    await expect(filter).toBeEnabled();
+    await expect(fromInput).toBeEnabled();
+    await expect(page.getByTestId("editor-state-revision-item-10")).toHaveCount(
+      0,
+    );
+
+    expect(state.listLog.length).toBe(0);
+    expect(state.forbiddenHits).toEqual([]);
+    expect(state.externalHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+    await assertNoIdLeak(page, state, guards.consoleLogs);
+
+    const persistBiz = await page.evaluate(() => ({
+      href: location.href,
+      cookie: document.cookie,
+      ls: (() => {
+        const out: string[] = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k) out.push(`${k}=${localStorage.getItem(k)}`);
+        }
+        return out.join("\n");
+      })(),
+      ss: (() => {
+        const out: string[] = [];
+        for (let i = 0; i < sessionStorage.length; i++) {
+          const k = sessionStorage.key(i);
+          if (k) out.push(`${k}=${sessionStorage.getItem(k)}`);
+        }
+        return out.join("\n");
+      })(),
+      body: document.body?.innerText ?? "",
+    }));
+    for (const blob of [
+      persistBiz.href,
+      persistBiz.ls,
+      persistBiz.ss,
+      persistBiz.cookie ?? "",
+    ]) {
+      expect(blob).not.toContain("createdFrom");
+      expect(blob).not.toContain("createdBefore");
+      expect(blob).not.toContain("esrc3_");
+      expect(blob).not.toContain(PAGE_CURSOR_TIME_SECOND);
+      expect(blob).not.toContain(UTC_FROM);
+      expect(blob).not.toContain(SNAPSHOT_BODY_LEAK);
+    }
+    expect(persistBiz.body).not.toContain("esrc3_");
+    expect(persistBiz.body).not.toContain(UTC_FROM);
+    for (const item of seeded) {
+      expect(persistBiz.body).not.toContain(item.revisionId);
+      expect(persistBiz.body).not.toContain(item.stateVersion);
+    }
+    const consoleBiz = guards.consoleLogs.join("\n");
+    expect(consoleBiz).not.toContain("createdFrom");
+    expect(consoleBiz).not.toContain("esrc3_");
+    expect(consoleBiz).not.toContain(PAGE_CURSOR_TIME_SECOND);
     expect(seeded.length).toBe(11);
   });
 });

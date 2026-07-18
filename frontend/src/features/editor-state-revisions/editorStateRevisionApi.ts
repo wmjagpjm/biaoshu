@@ -1,13 +1,14 @@
 /**
- * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D editor-state 修订历史、对比、正文差异与游标页 API 封装
+ * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B editor-state 修订历史、对比、正文差异与游标页 API 封装
  * 用途：严格校验 list/page/detail/restore/comparison/body-diff/pair-body-diff 响应 shape；详情仅在 API 栈内解析并压缩为有界摘要。
- * 对接：GET|POST /api/projects/{id}/editor-state-revisions*；page 游标分页（可选 sourceKind）；comparison/body-diff/pair 只读 GET；apiFetch。
+ * 对接：GET|POST /api/projects/{id}/editor-state-revisions*；page 游标分页（可选 sourceKind/createdFrom/createdBefore）；comparison/body-diff/pair 只读 GET；apiFetch。
  * 二次开发：
  *   - 禁止把原始 snapshot 返回给 React；禁止本地生成 revisionId/version/cursor
- *   - 禁止把响应原文、路径、后端 detail、字段值/键名/游标拼进错误文案
+ *   - 禁止把响应原文、路径、后端 detail、字段值/键名/游标/时间字面量拼进错误文案
  *   - 九类来源白名单；旧列表/页最多 10 条；comparison 顶层精确四键 + 13 键有序子序列
  *   - body-diff 顶层精确六键（current/target）；pair 顶层精确六键（before/after）；item 五键；hunk 二键
- *   - page 顶层精确 items/nextCursor；游标仅 esrc1_/esrc2_ 外壳校验，禁止解码/本地生成
+ *   - page 顶层精确 items/nextCursor；游标仅 esrc1_/esrc2_/esrc3_ 外壳校验，禁止解码/本地生成
+ *   - 时间 query 仅精确 24 字符 UTC 毫秒；顺序 sourceKind→createdFrom→createdBefore→cursor
  */
 
 import { apiFetch } from "../../shared/lib/api";
@@ -83,17 +84,36 @@ const LIST_TOP_KEYS = ["items"] as const;
 /** page 顶层精确 items + nextCursor */
 const PAGE_TOP_KEYS = ["items", "nextCursor"] as const;
 
-/** 游标完整长度上限（与后端合同对齐） */
-const MAX_PAGE_CURSOR_LEN = 192;
+/** V1/V2 游标完整长度上限（与后端合同对齐） */
+const MAX_PAGE_CURSOR_LEN_V12 = 192;
+
+/** V3 时间范围游标完整长度上限（P12F-E-A/B） */
+const MAX_PAGE_CURSOR_LEN_V3 = 256;
 
 /** 无筛选游标版本前缀 */
 const PAGE_CURSOR_PREFIX_V1 = "esrc1_";
 
-/** 有筛选游标版本前缀（P12F-D） */
+/** 有来源筛选游标版本前缀（P12F-D） */
 const PAGE_CURSOR_PREFIX_V2 = "esrc2_";
+
+/** 时间范围游标版本前缀（P12F-E-A/B） */
+const PAGE_CURSOR_PREFIX_V3 = "esrc3_";
 
 /** base64url 安全字符（无 =） */
 const PAGE_CURSOR_BODY_RE = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * 精确 24 字符 ASCII UTC 毫秒：YYYY-MM-DDTHH:MM:SS.sssZ
+ * 只接受大写 T/Z 与三位毫秒。
+ */
+const UTC_MILLIS_RE =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.(\d{3})Z$/;
+
+/** 合法 UTC 毫秒闭区间下界 */
+const UTC_MILLIS_MIN = Date.parse("1970-01-01T00:00:00.000Z");
+
+/** 合法 UTC 毫秒闭区间上界 */
+const UTC_MILLIS_MAX = Date.parse("9999-12-31T23:59:59.999Z");
 
 /** 权威 13 键（与后端 CANONICAL_STATE_KEYS 对齐） */
 const CANONICAL_SNAPSHOT_KEYS = [
@@ -681,20 +701,30 @@ export async function listEditorStateRevisions(
 
 /**
  * 用途：校验不透明游标外壳；禁止解码或本地生成。
- * 规则：完整长度 ≤192、无首尾空白、前缀 esrc1_ 或 esrc2_、其余仅 base64url 安全字符且无 =。
+ * 规则：
+ *   - esrc1_/esrc2_：完整长度 ≤192
+ *   - esrc3_：完整长度 ≤256
+ *   - 无首尾空白、其余仅 base64url 安全字符且无 =
  */
 export function isValidPageCursor(value: unknown): value is string {
   if (typeof value !== "string") return false;
-  if (value.length === 0 || value.length > MAX_PAGE_CURSOR_LEN) return false;
+  if (value.length === 0) return false;
   if (value.trim() !== value) return false;
   let prefix: string | null = null;
-  if (value.startsWith(PAGE_CURSOR_PREFIX_V2)) {
+  let maxLen: number;
+  if (value.startsWith(PAGE_CURSOR_PREFIX_V3)) {
+    prefix = PAGE_CURSOR_PREFIX_V3;
+    maxLen = MAX_PAGE_CURSOR_LEN_V3;
+  } else if (value.startsWith(PAGE_CURSOR_PREFIX_V2)) {
     prefix = PAGE_CURSOR_PREFIX_V2;
+    maxLen = MAX_PAGE_CURSOR_LEN_V12;
   } else if (value.startsWith(PAGE_CURSOR_PREFIX_V1)) {
     prefix = PAGE_CURSOR_PREFIX_V1;
+    maxLen = MAX_PAGE_CURSOR_LEN_V12;
   } else {
     return false;
   }
+  if (value.length > maxLen) return false;
   const body = value.slice(prefix.length);
   if (body.length === 0) return false;
   if (body.includes("=")) return false;
@@ -702,12 +732,40 @@ export function isValidPageCursor(value: unknown): value is string {
 }
 
 /**
- * 模块：游标页查询参数（P12F-D）
- * 四种精确组合：无参 / 仅 sourceKind / 仅 cursor / sourceKind+cursor。
+ * 用途：校验精确 24 字符 ASCII UTC 毫秒时间；合法日历往返且在 1970..9999。
+ * 约束：失败不反射输入；拒绝空串/空白/偏移/非三位毫秒。
+ */
+export function isValidUtcMillisString(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  if (value.length !== 24) return false;
+  // 必须为纯 ASCII（正则已限数字与 T/Z/:/.）
+  for (let i = 0; i < value.length; i++) {
+    if (value.charCodeAt(i) > 127) return false;
+  }
+  const m = UTC_MILLIS_RE.exec(value);
+  if (!m) return false;
+  const year = Number(m[1]);
+  if (year < 1970 || year > 9999) return false;
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return false;
+  if (parsed < UTC_MILLIS_MIN || parsed > UTC_MILLIS_MAX) return false;
+  // 日历规范往返：拒绝 02-30 等非法日期被 Date 归一化
+  if (new Date(parsed).toISOString() !== value) return false;
+  return true;
+}
+
+/**
+ * 模块：游标页查询参数（P12F-D / P12F-E-B）
+ * 组合：无参 / 仅 sourceKind / 仅 cursor / sourceKind+cursor /
+ *       单边或双边时间 / 来源+时间 / 来源+时间+cursor。
  */
 export type EditorStateRevisionPageQuery = {
   cursor?: string | null;
   sourceKind?: RevisionSourceKind | null;
+  /** 包含下界；精确 24 字符 UTC 毫秒 */
+  createdFrom?: string | null;
+  /** 排除上界；精确 24 字符 UTC 毫秒 */
+  createdBefore?: string | null;
 };
 
 /**
@@ -752,10 +810,14 @@ export function parseRevisionPage(raw: unknown): EditorStateRevisionPage {
 }
 
 /**
- * 用途：GET 游标页；支持无参、仅 sourceKind、仅 cursor、sourceKind+cursor 四种精确 GET。
- * 对接：GET /projects/{projectId}/editor-state-revisions/page[?sourceKind=&cursor=]
- * 约束：禁止 limit/offset/page/total/hasMore/source/search/q；无 body；禁止解码/生成游标。
- * 兼容：第二参可为历史 cursor 字符串，或 {cursor, sourceKind} 对象。
+ * 用途：GET 游标页；支持来源、UTC 时间范围与 cursor 的精确组合 GET。
+ * 对接：GET /projects/{projectId}/editor-state-revisions/page[?sourceKind=&createdFrom=&createdBefore=&cursor=]
+ * 约束：
+ *   - query 顺序固定 sourceKind → createdFrom → createdBefore → cursor
+ *   - 只发送存在的非空值；无 body；禁止解码/生成游标或从游标采用筛选
+ *   - 时间必须为精确 24 字符 UTC 毫秒；双边严格 from < before
+ *   - 禁止 limit/offset/page/total/hasMore/source/search/q/dateFrom 等别名
+ * 兼容：第二参可为历史 cursor 字符串，或查询对象。
  */
 export async function listEditorStateRevisionPage(
   projectId: string,
@@ -763,6 +825,8 @@ export async function listEditorStateRevisionPage(
 ): Promise<EditorStateRevisionPage> {
   let cursor: string | null | undefined;
   let sourceKind: RevisionSourceKind | null | undefined;
+  let createdFrom: string | null | undefined;
+  let createdBefore: string | null | undefined;
   if (
     cursorOrQuery !== null &&
     cursorOrQuery !== undefined &&
@@ -771,9 +835,13 @@ export async function listEditorStateRevisionPage(
     const q = cursorOrQuery as EditorStateRevisionPageQuery;
     cursor = q.cursor;
     sourceKind = q.sourceKind ?? undefined;
+    createdFrom = q.createdFrom ?? undefined;
+    createdBefore = q.createdBefore ?? undefined;
   } else {
     cursor = cursorOrQuery as string | null | undefined;
     sourceKind = undefined;
+    createdFrom = undefined;
+    createdBefore = undefined;
   }
 
   let path = `/projects/${encodeURIComponent(projectId)}/editor-state-revisions/page`;
@@ -784,6 +852,34 @@ export async function listEditorStateRevisionPage(
       throw new Error("revision_page_source_invalid");
     }
     parts.push(`sourceKind=${encodeURIComponent(sourceKind)}`);
+  }
+  // 时间：空串/空白/非法格式/越界/倒序 → 固定内部脱敏错误，不带输入
+  let normalizedFrom: string | null = null;
+  let normalizedBefore: string | null = null;
+  if (createdFrom != null && createdFrom !== "") {
+    if (!isValidUtcMillisString(createdFrom)) {
+      throw new Error("revision_page_time_range_invalid");
+    }
+    normalizedFrom = createdFrom;
+    parts.push(`createdFrom=${encodeURIComponent(createdFrom)}`);
+  } else if (createdFrom === "") {
+    throw new Error("revision_page_time_range_invalid");
+  }
+  if (createdBefore != null && createdBefore !== "") {
+    if (!isValidUtcMillisString(createdBefore)) {
+      throw new Error("revision_page_time_range_invalid");
+    }
+    normalizedBefore = createdBefore;
+    parts.push(`createdBefore=${encodeURIComponent(createdBefore)}`);
+  } else if (createdBefore === "") {
+    throw new Error("revision_page_time_range_invalid");
+  }
+  if (
+    normalizedFrom != null &&
+    normalizedBefore != null &&
+    !(normalizedFrom < normalizedBefore)
+  ) {
+    throw new Error("revision_page_time_range_invalid");
   }
   // null/undefined → 不带 cursor；空字符串或其它非法游标 → 固定错误
   if (cursor != null) {

@@ -1,12 +1,14 @@
 /**
- * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D 双工作区共用修订历史折叠面板
- * 用途：默认折叠零请求；展开游标页；可选来源筛选；手动加载更多至最多 20 条；按需摘要；
- *       按需与当前对比；按需正文差异；内存双侧选择与双修订正文差异；内联二次确认后 restore。
+ * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B 双工作区共用修订历史折叠面板
+ * 用途：默认折叠零请求；展开游标页；可选来源筛选；本地时间范围草稿显式应用/清除；
+ *       手动加载更多至最多 20 条；按需摘要；按需与当前对比；按需正文差异；
+ *       内存双侧选择与双修订正文差异；内联二次确认后 restore。
  * 对接：editorStateRevisionApi（含 page/comparison/body-diff/pair）；技术/商务 hook 的 restoreRevision 回调。
  * 二次开发：
- *   - 不渲染 revisionId/stateVersion/cursor/snapshot 正文/内部字段键/字段值/op 原值
+ *   - 不渲染 revisionId/stateVersion/cursor/UTC query/snapshot 正文/内部字段键/字段值/op 原值
  *   - 项目切换/折叠/卸载用会话代次隔离迟到 page/load-more/detail/comparison/body-diff/pair/restore
  *   - 摘要、比较、正文差异、双修订差异、恢复确认同一时刻只保留一个当前意图；交叉作废
+ *   - 草稿与已应用 UTC 分离；来源/刷新/恢复/加载更多只读已应用范围
  *   - 固定中文脱敏；禁止 console/存储/URL/Cookie/剪贴板/下载/轮询/外网
  *   - 无创建/删除/搜索/自动分页/预取；双修订选择仅内存；游标仅内存 + 规定 API 查询
  */
@@ -56,6 +58,64 @@ const MSG_RESTORE_FAIL = "恢复修订失败，本地内容已保留";
 const MSG_RESTORE_RELOAD_FAIL =
   "恢复已完成，但刷新失败，请重新载入远端内容";
 const MSG_RESTORE_BLOCKED = "当前无法恢复，请先处理版本冲突或重新载入";
+/** P12F-E-B 时间范围无效固定中文 */
+const MSG_TIME_RANGE_INVALID = "时间范围无效，请检查开始和结束时间";
+
+/**
+ * 用途：严格解析 datetime-local 本地值（YYYY-MM-DDTHH:mm）为 UTC 毫秒字符串。
+ * 规则：按浏览器本地时区构造 Date，逐字段回验，合法才 toISOString()；禁止拼 Z。
+ * 返回：精确 24 字符 UTC 毫秒，或 null（非法/不存在/DST 归一化/越界）。
+ */
+function localDatetimeLocalToUtcMillis(raw: string): string | null {
+  if (typeof raw !== "string" || raw.trim() !== raw || raw.length === 0) {
+    return null;
+  }
+  // 仅接受 YYYY-MM-DDTHH:mm（分钟步长；无秒）
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(raw);
+  if (!m) return null;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  const hour = Number(m[4]);
+  const minute = Number(m[5]);
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    !Number.isInteger(hour) ||
+    !Number.isInteger(minute)
+  ) {
+    return null;
+  }
+  if (month < 1 || month > 12) return null;
+  if (day < 1 || day > 31) return null;
+  if (hour < 0 || hour > 23) return null;
+  if (minute < 0 || minute > 59) return null;
+  // 本地 Date 构造（月从 0 起）
+  const d = new Date(year, month - 1, day, hour, minute, 0, 0);
+  if (Number.isNaN(d.getTime())) return null;
+  // 逐字段回验：拒绝不存在日期与 DST 归一化
+  if (
+    d.getFullYear() !== year ||
+    d.getMonth() !== month - 1 ||
+    d.getDate() !== day ||
+    d.getHours() !== hour ||
+    d.getMinutes() !== minute ||
+    d.getSeconds() !== 0 ||
+    d.getMilliseconds() !== 0
+  ) {
+    return null;
+  }
+  const iso = d.toISOString();
+  // 转换后 UTC 年须四位且在 1970..9999
+  if (iso.length !== 24) return null;
+  const utcYear = d.getUTCFullYear();
+  if (utcYear < 1970 || utcYear > 9999) return null;
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(iso)) {
+    return null;
+  }
+  return iso;
+}
 
 /** 恢复回调结果（与版本化外部写 runner 对齐） */
 export type RevisionRestoreOutcome =
@@ -112,6 +172,17 @@ export function EditorStateRevisionPanel({
    * 仅内存 + select 值；不写 URL/存储/Cookie。
    */
   const [sourceFilter, setSourceFilter] = useState<"" | RevisionSourceKind>("");
+  /**
+   * 本地时间草稿（datetime-local 值）；与已应用 UTC 分离。
+   * 仅内存 + input 值；不写 URL/存储/Cookie。
+   */
+  const [fromDraft, setFromDraft] = useState("");
+  const [beforeDraft, setBeforeDraft] = useState("");
+  /** 已应用 UTC 毫秒（null=未应用该边界）；仅内存，不渲染 */
+  const [appliedFrom, setAppliedFrom] = useState<string | null>(null);
+  const [appliedBefore, setAppliedBefore] = useState<string | null>(null);
+  /** 时间范围校验错误（固定中文） */
+  const [timeError, setTimeError] = useState<string | null>(null);
   /** 服务端 nextCursor；仅内存，不渲染 */
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
@@ -201,12 +272,17 @@ export function EditorStateRevisionPanel({
   const nextCursorRef = useRef<string | null>(null);
   /** sourceFilter 同步镜像，供 loadList/load-more 在 setState 后立即读取 */
   const sourceFilterRef = useRef<"" | RevisionSourceKind>("");
+  /** 已应用 UTC 同步镜像；来源/刷新/恢复/加载更多只读此 ref，不读草稿 */
+  const appliedFromRef = useRef<string | null>(null);
+  const appliedBeforeRef = useRef<string | null>(null);
   const mountedRef = useRef(true);
 
   // 保持 ref 与 state 同步
   itemsRef.current = items;
   nextCursorRef.current = nextCursor;
   sourceFilterRef.current = sourceFilter;
+  appliedFromRef.current = appliedFrom;
+  appliedBeforeRef.current = appliedBefore;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -263,7 +339,7 @@ export function EditorStateRevisionPanel({
     setPairBodyDiffLoading(false);
   }, []);
 
-  // 项目切换：重置面板（含筛选→全部来源），作废在途 page/load-more/detail/comparison/body-diff/pair/restore
+  // 项目切换：重置面板（来源/草稿/已应用时间/错误），作废在途 page/load-more/detail/comparison/body-diff/pair/restore
   useEffect(() => {
     sessionRef.current += 1;
     detailGenRef.current += 1;
@@ -276,6 +352,13 @@ export function EditorStateRevisionPanel({
     setItems([]);
     setSourceFilter("");
     sourceFilterRef.current = "";
+    setFromDraft("");
+    setBeforeDraft("");
+    setAppliedFrom(null);
+    setAppliedBefore(null);
+    appliedFromRef.current = null;
+    appliedBeforeRef.current = null;
+    setTimeError(null);
     setNextCursor(null);
     setListError(null);
     setLoadMoreError(null);
@@ -328,24 +411,35 @@ export function EditorStateRevisionPanel({
       clearComparisonState();
       clearBodyDiffState();
       clearPairBodyDiffState();
-      // 绑定当前筛选（ref 可在 setState 后立即读取）
+      // 绑定当前筛选（ref 可在 setState 后立即读取）；只读已应用 UTC，不读草稿
       const filter = sourceFilterRef.current;
+      const from = appliedFromRef.current;
+      const before = appliedBeforeRef.current;
       try {
-        // 首屏：全部来源无 query；有筛选仅 sourceKind
+        // 首屏：无参 / 仅来源 / 仅时间 / 来源+时间；不带 cursor
+        const hasFilter = Boolean(filter) || from != null || before != null;
         const page = await listEditorStateRevisionPage(
           projectId,
-          filter
-            ? { sourceKind: filter }
+          hasFilter
+            ? {
+                ...(filter ? { sourceKind: filter } : {}),
+                ...(from != null ? { createdFrom: from } : {}),
+                ...(before != null ? { createdBefore: before } : {}),
+              }
             : undefined,
         );
         if (!mountedRef.current || session !== sessionRef.current) return;
         // 筛选在请求期间被切换时，以 ref 为准再校验一次
         if (sourceFilterRef.current !== filter) return;
+        if (appliedFromRef.current !== from) return;
+        if (appliedBeforeRef.current !== before) return;
         setItems(page.items);
         setNextCursor(page.nextCursor);
       } catch {
         if (!mountedRef.current || session !== sessionRef.current) return;
         if (sourceFilterRef.current !== filter) return;
+        if (appliedFromRef.current !== from) return;
+        if (appliedBeforeRef.current !== before) return;
         setListError(MSG_LIST_FAIL);
         setItems([]);
         setNextCursor(null);
@@ -353,7 +447,9 @@ export function EditorStateRevisionPanel({
         if (
           mountedRef.current &&
           session === sessionRef.current &&
-          sourceFilterRef.current === filter
+          sourceFilterRef.current === filter &&
+          appliedFromRef.current === from &&
+          appliedBeforeRef.current === before
         ) {
           setListLoading(false);
         }
@@ -370,7 +466,7 @@ export function EditorStateRevisionPanel({
 
   /**
    * 用途：手动加载更多；同步在途门 + 代次；成功顺序追加；失败保值可重试。
-   * 筛选第二页：当前 sourceKind + 服务端原 esrc2。
+   * 第二页：显式重复已应用 sourceKind + createdFrom/createdBefore + 服务端原 esrc2/esrc3。
    */
   const handleLoadMore = useCallback(async () => {
     if (!expanded || !projectId) return;
@@ -383,20 +479,24 @@ export function EditorStateRevisionPanel({
     const myGen = ++loadMoreGenRef.current;
     const session = sessionRef.current;
     const filter = sourceFilterRef.current;
+    const from = appliedFromRef.current;
+    const before = appliedBeforeRef.current;
     setLoadMoreLoading(true);
     setLoadMoreError(null);
     try {
-      const page = await listEditorStateRevisionPage(
-        projectId,
-        filter
-          ? { cursor, sourceKind: filter }
-          : { cursor },
-      );
+      const page = await listEditorStateRevisionPage(projectId, {
+        cursor,
+        ...(filter ? { sourceKind: filter } : {}),
+        ...(from != null ? { createdFrom: from } : {}),
+        ...(before != null ? { createdBefore: before } : {}),
+      });
       if (
         !mountedRef.current ||
         myGen !== loadMoreGenRef.current ||
         session !== sessionRef.current ||
-        sourceFilterRef.current !== filter
+        sourceFilterRef.current !== filter ||
+        appliedFromRef.current !== from ||
+        appliedBeforeRef.current !== before
       ) {
         return;
       }
@@ -424,7 +524,9 @@ export function EditorStateRevisionPanel({
         !mountedRef.current ||
         myGen !== loadMoreGenRef.current ||
         session !== sessionRef.current ||
-        sourceFilterRef.current !== filter
+        sourceFilterRef.current !== filter ||
+        appliedFromRef.current !== from ||
+        appliedBeforeRef.current !== before
       ) {
         return;
       }
@@ -438,7 +540,9 @@ export function EditorStateRevisionPanel({
         mountedRef.current &&
         myGen === loadMoreGenRef.current &&
         session === sessionRef.current &&
-        sourceFilterRef.current === filter
+        sourceFilterRef.current === filter &&
+        appliedFromRef.current === from &&
+        appliedBeforeRef.current === before
       ) {
         setLoadMoreLoading(false);
       }
@@ -446,7 +550,7 @@ export function EditorStateRevisionPanel({
   }, [expanded, projectId, listLoading, restoreBusy, loadMoreLoading]);
 
   /**
-   * 用途：切换来源筛选；同值不重发；立即清空旧列表/意图并加载新第一页。
+   * 用途：切换来源筛选；同值不重发；保留已应用时间；立即清空旧列表/意图并加载新第一页。
    */
   const handleSourceFilterChange = useCallback(
     (raw: string) => {
@@ -463,7 +567,7 @@ export function EditorStateRevisionPanel({
       } else {
         return;
       }
-      // 同步写入 ref，保证随后 loadList 读到新筛选
+      // 同步写入 ref，保证随后 loadList 读到新筛选（时间仍读已应用 ref）
       sourceFilterRef.current = next;
       setSourceFilter(next);
       // 切换筛选：清空旧列表与意图，失败不回退旧结果
@@ -485,6 +589,123 @@ export function EditorStateRevisionPanel({
       loadList,
     ],
   );
+
+  /**
+   * 用途：应用本地时间草稿；严格转 UTC；同值零重发；非法零请求保值。
+   */
+  const handleTimeApply = useCallback(() => {
+    if (!expanded || listLoading || restoreBusy || loadMoreLoading) return;
+    const rawFrom = fromDraft.trim() === "" ? "" : fromDraft;
+    const rawBefore = beforeDraft.trim() === "" ? "" : beforeDraft;
+    // 至少一个非空（按钮也应 disabled，此处双保险）
+    if (rawFrom === "" && rawBefore === "") return;
+
+    let nextFrom: string | null = null;
+    let nextBefore: string | null = null;
+    if (rawFrom !== "") {
+      nextFrom = localDatetimeLocalToUtcMillis(rawFrom);
+      if (nextFrom == null) {
+        setTimeError(MSG_TIME_RANGE_INVALID);
+        return;
+      }
+    }
+    if (rawBefore !== "") {
+      nextBefore = localDatetimeLocalToUtcMillis(rawBefore);
+      if (nextBefore == null) {
+        setTimeError(MSG_TIME_RANGE_INVALID);
+        return;
+      }
+    }
+    // 双边严格开始早于结束
+    if (
+      nextFrom != null &&
+      nextBefore != null &&
+      !(nextFrom < nextBefore)
+    ) {
+      setTimeError(MSG_TIME_RANGE_INVALID);
+      return;
+    }
+    setTimeError(null);
+    // 同规范范围不重发
+    if (
+      nextFrom === appliedFromRef.current &&
+      nextBefore === appliedBeforeRef.current
+    ) {
+      return;
+    }
+    // 先同步更新已应用 ref，再清空旧列表/意图并取新第一页
+    appliedFromRef.current = nextFrom;
+    appliedBeforeRef.current = nextBefore;
+    setAppliedFrom(nextFrom);
+    setAppliedBefore(nextBefore);
+    setItems([]);
+    setNextCursor(null);
+    setListError(null);
+    setLoadMoreError(null);
+    setStatusMessage(null);
+    setStatusTone(null);
+    const session = sessionRef.current;
+    void loadList(session);
+  }, [
+    expanded,
+    listLoading,
+    restoreBusy,
+    loadMoreLoading,
+    fromDraft,
+    beforeDraft,
+    loadList,
+  ]);
+
+  /**
+   * 用途：清除时间草稿、已应用范围与错误；全空无状态不重发，否则保留来源取无时间第一页。
+   */
+  const handleTimeClear = useCallback(() => {
+    if (!expanded || listLoading || restoreBusy || loadMoreLoading) return;
+    const hadApplied =
+      appliedFromRef.current != null || appliedBeforeRef.current != null;
+    const hadDraft = fromDraft !== "" || beforeDraft !== "";
+    setFromDraft("");
+    setBeforeDraft("");
+    setTimeError(null);
+    appliedFromRef.current = null;
+    appliedBeforeRef.current = null;
+    setAppliedFrom(null);
+    setAppliedBefore(null);
+    // 原本无草稿且无已应用：不重发
+    if (!hadApplied && !hadDraft) {
+      return;
+    }
+    // 否则保留来源，只取无时间条件第一页
+    setItems([]);
+    setNextCursor(null);
+    setListError(null);
+    setLoadMoreError(null);
+    setStatusMessage(null);
+    setStatusTone(null);
+    const session = sessionRef.current;
+    void loadList(session);
+  }, [
+    expanded,
+    listLoading,
+    restoreBusy,
+    loadMoreLoading,
+    fromDraft,
+    beforeDraft,
+    loadList,
+  ]);
+
+  /**
+   * 用途：编辑时间草稿时清除校验错误（不触发请求）。
+   */
+  const handleFromDraftChange = useCallback((value: string) => {
+    setFromDraft(value);
+    setTimeError(null);
+  }, []);
+
+  const handleBeforeDraftChange = useCallback((value: string) => {
+    setBeforeDraft(value);
+    setTimeError(null);
+  }, []);
 
   const handleToggle = useCallback(() => {
     if (expanded) {
@@ -1004,9 +1225,13 @@ export function EditorStateRevisionPanel({
   const showLoadMore = nextCursor != null;
   const loadMoreDisabled =
     loadMoreLoading || listLoading || restoreBusy || !nextCursor;
-  /** 列表/加载更多/恢复在途时禁用来源筛选器 */
-  const sourceFilterDisabled =
+  /** 列表/加载更多/恢复在途时：来源、时间输入、应用、清除均真实 disabled */
+  const filterControlsDisabled =
     listLoading || loadMoreLoading || restoreBusy;
+  /** 应用时间：至少一个草稿非空且不在途 */
+  const timeApplyDisabled =
+    filterControlsDisabled ||
+    (fromDraft.trim() === "" && beforeDraft.trim() === "");
 
   return (
     <div
@@ -1078,7 +1303,7 @@ export function EditorStateRevisionPanel({
               id="editor-state-revision-source-filter"
               data-testid="editor-state-revision-source-filter"
               value={sourceFilter}
-              disabled={sourceFilterDisabled}
+              disabled={filterControlsDisabled}
               onChange={(e) => {
                 handleSourceFilterChange(e.target.value);
               }}
@@ -1099,7 +1324,91 @@ export function EditorStateRevisionPanel({
                 </option>
               ))}
             </select>
+            <label
+              htmlFor="editor-state-revision-created-from"
+              style={{
+                fontSize: 13,
+                color: "var(--text-muted, #4b5563)",
+              }}
+            >
+              开始时间（含）
+            </label>
+            <input
+              id="editor-state-revision-created-from"
+              type="datetime-local"
+              step={60}
+              data-testid="editor-state-revision-created-from"
+              value={fromDraft}
+              disabled={filterControlsDisabled}
+              onChange={(e) => {
+                handleFromDraftChange(e.target.value);
+              }}
+              style={{
+                fontSize: 13,
+                maxWidth: "100%",
+                padding: "4px 8px",
+                borderRadius: 6,
+                border: "1px solid var(--border, #e5e7eb)",
+                background: "var(--surface, #fff)",
+                color: "var(--text, #111827)",
+              }}
+            />
+            <label
+              htmlFor="editor-state-revision-created-before"
+              style={{
+                fontSize: 13,
+                color: "var(--text-muted, #4b5563)",
+              }}
+            >
+              结束时间（不含）
+            </label>
+            <input
+              id="editor-state-revision-created-before"
+              type="datetime-local"
+              step={60}
+              data-testid="editor-state-revision-created-before"
+              value={beforeDraft}
+              disabled={filterControlsDisabled}
+              onChange={(e) => {
+                handleBeforeDraftChange(e.target.value);
+              }}
+              style={{
+                fontSize: 13,
+                maxWidth: "100%",
+                padding: "4px 8px",
+                borderRadius: 6,
+                border: "1px solid var(--border, #e5e7eb)",
+                background: "var(--surface, #fff)",
+                color: "var(--text, #111827)",
+              }}
+            />
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              data-testid="editor-state-revision-time-apply"
+              disabled={timeApplyDisabled}
+              onClick={handleTimeApply}
+            >
+              应用时间
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              data-testid="editor-state-revision-time-clear"
+              disabled={filterControlsDisabled}
+              onClick={handleTimeClear}
+            >
+              清除时间
+            </button>
           </div>
+          {timeError ? (
+            <p
+              data-testid="editor-state-revision-time-error"
+              style={{ margin: "0 0 8px", color: "var(--danger)" }}
+            >
+              {timeError}
+            </p>
+          ) : null}
           {statusMessage ? (
             <p
               data-testid="editor-state-revision-status"
