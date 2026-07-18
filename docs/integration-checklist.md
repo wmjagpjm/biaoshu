@@ -930,6 +930,14 @@ Grok 与 Codex 最终均通过 **14/71/93/39/1110 passed**；Codex 独立全量 
 
 Codex 独立串行通过聚焦/history/checkpoint/技术 truth/商务 truth/前端全量 **4/47/51/28/18/310 passed**；lint、build、diff-check、精确三文件、空暂存区、最终哈希与静态禁区门通过。所有 Playwright 必须继续显式 `--workers=1 --retries=0` 串行运行，禁止并行命令。
 
+## P12F-H 单条修订命名（已审计，当前文档冻结）
+
+契约=`docs/p12f-revision-display-name-contract.md`、计划=`docs/plans/2026-07-18-p12f-revision-display-name-plan.md`。十文件白名单覆盖 ORM/SQLite 加列/schema/路由/history/name service/后端专项，以及共用 API/面板/history E2E；两个新后端文件冻结时不存在，其余精确哈希见契约第 8 节。
+
+联调必须确认：存量与新修订默认 `displayName=null`；合法名称保存、覆盖、清除均精确一次 PATCH，响应一键/no-store；非法输入、query、extra、跨空间、角色和 CSRF 固定脱敏。list/page/search/detail 六键一致，名称不改变排序、游标、搜索命中、快照或裁剪。
+
+前端输入/取消零请求，成功原位更新且零 page/search 重载，失败保留原名称；命名与摘要/对比/body-diff/pair/恢复/删除/刷新/筛选/加载更多互斥。A→B hold 必须证明旧 success/catch/finally 不污染或解锁 B；名称仅以 React 文本显示，URL/存储/Cookie/console/错误/外网零泄漏。固定/置顶、裁剪保护、名称搜索、批量和检查点命名不在本包。
+
 ## P13-A 任务 SSE 工作空间鉴权（已完成）
 
 冻结=`e8dfa61`，实现=`1509aa2`。required 模式继续由认证中间件负责无会话 401；SSE 路由连接前短 Session 复用统一 `get_workspace_id`，因此 finance/hr/bidder 固定 `role_forbidden`，非成员显式头固定 `workspace_forbidden`，无头原生 EventSource 使用会话 `activeWorkspaceId`。disabled 仍支持默认空间与合法显式头。

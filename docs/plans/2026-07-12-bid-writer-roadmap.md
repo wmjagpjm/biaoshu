@@ -365,7 +365,7 @@ P8D 与 P8E 本机外置解析助手均已完成并推送：P8D 计划=`30d066f`
 
 **P12E-A 单条修订正文差异预览已完成**：冻结=`5aa205c`、实现=`f9f067e`。只读 GET 返回精确六键和有界章节行差异；前端技术/商务共用按需入口、严格 parser、四意图互斥与 arrived/complete 迟到隔离。Codex 首轮审查复现第 101 个差异章仍进入 difflib，Grok 以真实 **1 failed / 1 passed** 红测返修为 **2 passed**；Codex 独立通过专项/回归/后端全量 **23/27/854**，history/checkpoint/truth/前端全量 **27/51/46/290 passed**。任意历史两两比较、删除、搜索、分页、正文自动恢复和多人协作继续不进入 A 包。
 
-**下一步**：P13-A 与 P12F-D/E-A/E-B/F-A/F-B/G-A/G-B 均已完成。先只读审计剩余主线，在命名/固定、搜索片段/高亮、跨项目历史、多人协作等候选中选择最小独立包，重新编写契约、计划和精确白名单后再交 Grok；多选/批量/软删除、检查点删除和 SSE 扩展不得顺带合包。
+**下一步**：P13-A 与 P12F-D/E-A/E-B/F-A/F-B/G-A/G-B 均已完成。剩余主线只读审计选择 **P12F-H 单条修订命名**：当前文档提交即冻结 nullable 名称列、独立 PATCH、六键元数据与共用前端十文件，交 Grok failure-first。固定/置顶及裁剪保护、名称搜索、批量、检查点命名、跨项目历史、多人协作和 SSE 扩展继续不得合包。
 
 **P12E-B 已完成并推送**：双修订正文差异后端基础，契约=`docs/p12e-revision-pair-body-diff-contract.md`，计划=`docs/plans/2026-07-17-p12e-revision-pair-body-diff-plan.md`，冻结=`00ef081`、实现=`5a5b08a`。只比较同 workspace/project 的两个历史修订，暂不提供前端入口；Grok 仅改四个后端文件并发送 review_request，Codex 独立验收后提交推送。专项/回归/全量 **13/23/50/867 passed**，合并专项 **86 passed**，仅 1 条既有 Starlette/httpx 弃用告警。
 
@@ -392,6 +392,8 @@ P12E-B 真实 failure-first 为 13 项红测：11 项路由缺失 404、1 项同
 **P12F-G-A 已完成并推送**：契约=`docs/p12f-revision-delete-backend-contract.md`，计划=`docs/plans/2026-07-18-p12f-revision-delete-backend-plan.md`，冻结=`c176cb5`、实现=`d2555d4`。新增单一无 query/body 的 DELETE，成功空 204；独立服务只投影 Project.id，再以 workspace/project/revision 三谓词删除恰好一行并唯一 commit，故障全 rollback。真实 failure-first 为 **10 failed / 3 passed / 0 did-not-run**；首轮实现暴露并行测试污染共享 SQLite、`rowcount=None` 误映射 404、断言假绿和旧历史只读守卫冲突，最终以严格五文件边界修正并关闭。Codex 独立串行通过专项/历史搜索回归/恢复保留回归/鉴权/后端全量 **14/71/93/39/1110 passed**，编译、diff、AST、哈希与空暂存区通过。当前 editor-state、检查点、其它修订及既有 list/page/search/detail/diff/restore 合同不变；前端入口随后由 P12F-G-B 交付，其它版本治理能力仍未实现。
 
 **P12F-G-B 已完成并推送**：契约=`docs/p12f-revision-delete-frontend-contract.md`，计划=`docs/plans/2026-07-18-p12f-revision-delete-frontend-plan.md`，冻结=`89b5728`、实现=`bb7c4f4`。严格三文件新增单条“删除”与内联确认；确认前/取消零请求，确认精确一次无 query/body DELETE。成功保留已应用来源/时间/搜索并重载第一批，失败保留列表；project/session/delete generation 隔离旧 success/catch/finally。真实红测 **3/0/0**，两轮受限返修关闭项目旧闭包和 E2E 假绿；Codex 独立通过 **4/47/51/28/18/310 passed** 及 lint/build/diff/白名单/哈希门。后端、共享请求层、workspace hook、多选/批量/软删除/撤销/回收站均未改变。
+
+**P12F-H 已审计，当前文档冻结**：契约=`docs/p12f-revision-display-name-contract.md`，计划=`docs/plans/2026-07-18-p12f-revision-display-name-plan.md`。严格十文件为修订行增加 nullable `display_name`，新增单条 PATCH 和 list/page/search/detail 六键元数据，技术/商务共用面板原位保存/覆盖/清除。名称不进入搜索匹配、游标或裁剪保护；固定/置顶、批量、检查点命名、跨项目历史与多人协作均未授权。
 
 **P13-A 已完成并推送**：契约=`docs/p13a-task-sse-workspace-auth-contract.md`，计划=`docs/plans/2026-07-17-p13a-task-sse-workspace-auth-plan.md`，冻结=`e8dfa61`、实现=`1509aa2`。SSE 连接前短 Session 复用统一 workspace/成员/bid_writer 解析，流内每轮按 workspace/project/task 再校验；disabled、原生 EventSource、事件/回退不变。真实 failure-first **8 failed / 5 passed**；Codex 一轮 test-only 返修关闭恒真泄漏断言、secret marker 跳过和宽松三参，独立通过 **13/72/918 passed**。首次全量只因 20 分钟外层时限不足终止，40 分钟外层干净重跑为 **918 passed in 1310.97s**。
 ## P12D-B 完成状态（2026-07-17）
