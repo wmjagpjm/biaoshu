@@ -3,7 +3,7 @@
 模块：P12F-H 技术标/商务标共用自动修订单条命名
 用途：为有限自动修订增加可选展示名称，提供严格单条写接口、列表呈现、清除名称和跨项目迟到隔离。
 对接：`EditorStateRevisionRow`、修订 history/name service、`editor_state_revisions` 路由与 schema、共用修订 API/面板/history E2E。
-状态：2026-07-18 已完成只读审计；初始冻结=`0660145`。Failure-first 后发现六键元数据会使六份既有后端精确合同测试必须同步，当前范围修订提交将白名单由十文件扩为十六文件；除此之外不得扩张。Grok 只实现/自测、不暂存、不提交、不推送；Codex 负责独立审查、验收、中文闭环和协作分支推送。
+状态：2026-07-18 已完成只读审计；初始冻结=`0660145`。Failure-first 后发现六键元数据会使六份既有后端精确合同测试必须同步，第一次范围修订将白名单由十文件扩为十六文件；Codex 独立回归随后以 **1 failed / 131 passed** 暴露 `test_editor_state_revisions.py` 的真实 SQLite 精确列集合仍冻结为旧八列，第二次范围修订只把该基线测试加入，最终边界为十七文件。除此之外不得扩张。Grok 只实现/自测、不暂存、不提交、不推送；Codex 负责独立审查、验收、中文闭环和协作分支推送。
 
 ## 1. 选择与边界
 
@@ -93,7 +93,7 @@ Failure-first 只允许新建后端专项测试和修改既有 history E2E；八
 
 关键断言必须精确。禁止 `.or(...)`、`>=1`、宽状态、条件断言、固定 sleep、skip/xpass、吞异常、只等 arrived 不等 complete、route fallback 假成功、`force:true`、可选首项、`Math.min` 截断或 `A || []` 掩盖夹具缺失。
 
-## 8. 十六文件白名单与冻结哈希
+## 8. 十七文件白名单与冻结哈希
 
 Grok 只允许修改/新建：
 
@@ -113,8 +113,11 @@ Grok 只允许修改/新建：
 14. `backend/tests/test_p12f_revision_time_range_filter.py` — `8AB11FF9C9230BA4827F27D00CF0DF83BC9CC92C5CB0A019842F4E2A039BE358`
 15. `backend/tests/test_p12f_revision_content_search.py` — `584441E80D4C22DF4D616DB94E2D70CBBBF849260B5A314666F8C891F1B3995B`
 16. `backend/tests/test_p12f_revision_delete.py` — `C04D054751BEDF10614138CA1F8CCFE7F160CEDD6C0F4B3C6E9438BEC5044668`
+17. `backend/tests/test_editor_state_revisions.py` — `4E02BC7B2316AC8847D49FE3CE0FE89596A8C9DBC389BCCA701FB3780B8D90D1`
 
 第 11～16 项只允许同步 `displayName` 六键精确断言，以及 content-search 的既有候选 SELECT 从六列扩为七列、delete 的只读投影 AST 守卫增加 `display_name`；禁止借机放宽状态、计数、SQL、鉴权、搜索、删除或数据最小化合同。禁止修改其它后端/测试、共享 `apiFetch`、workspace hook、检查点、配置、依赖/锁文件、文档或 Git 历史。Grok 不得 `git add/commit/push`。
+
+第 17 项只允许在 `test_table_columns_constraints_indexes_and_fk_cascade` 的精确列集合中增加字面量 `display_name`；外键、索引、CHECK、级联、插入失败、计数和其它测试字节均不得改变。该扩围依据是 Codex 独立回归的真实失败，不得借机修正或重构其它既有断言。
 
 ## 9. 串行验收门
 
@@ -132,7 +135,7 @@ Grok 与 Codex 分别逐条串行运行：
 10. `npm run lint`、`npm run build`
 11. Codex 额外串行前端全量 `npx --no-install playwright test --workers=1 --retries=0`
 
-所有 pytest 共用 SQLite 测试库，禁止 xdist、并发分组或与 Playwright 并行。最后检查 `py_compile`、`git diff --check`、精确十六文件、空暂存区、哈希、AST/SQL/弱断言/泄漏禁区。
+所有 pytest 共用 SQLite 测试库，禁止 xdist、并发分组或与 Playwright 并行。最后检查 `py_compile`、`git diff --check`、精确十七文件、空暂存区、哈希、AST/SQL/弱断言/泄漏禁区。
 
 ## 10. 明确未做
 
