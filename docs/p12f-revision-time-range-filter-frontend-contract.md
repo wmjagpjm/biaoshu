@@ -3,7 +3,7 @@
 模块：P12F-E-B 双工作区修订历史时间范围筛选前端
 用途：在 P12F-E-A 严格 UTC 时间范围后端之上，为技术标与商务标共用修订面板增加本地时间输入、显式应用/清除、来源组合与稳定分页。
 对接：`editorStateRevisionApi`、`EditorStateRevisionPanel`、既有 `editor-state-revision-history.spec.ts`、P12F-E-A `createdFrom/createdBefore/esrc3` 合同。
-状态：2026-07-18 已完成只读审计，当前文档即冻结边界；Grok 严格三文件 failure-first 实现，Codex 负责独立审查、串行 E2E 验收、中文文档闭环和协作分支推送。
+状态：2026-07-18 已完成并推送；冻结=`a31e50e`，实现=`f9127ec`。Grok 严格三文件 failure-first 实现，Codex 完成独立审查、串行 E2E 验收、中文文档闭环和协作分支推送。
 
 ## 1. 审计与方案选择
 
@@ -92,3 +92,12 @@ E2E 至少覆盖：
 6. 禁止固定 sleep、`.or(...)`、宽泛 2xx/计数、只等 arrived、条件跳过关键断言、`force:true` 或 route fallback 冒充成功。
 
 Grok 至少依次运行：P12F-E-B 聚焦；完整 history；技术 truth；商务 truth；checkpoint restore；`npm run lint`；`npm run build`；`git diff --check`；精确三文件与空暂存区。所有 Playwright 显式 `--workers=1 --retries=0` 串行。前端全量由 Codex 独立执行。
+
+## 8. 完成与验收记录
+
+- 冻结提交=`a31e50e`，实现提交=`f9127ec`；最终只修改本契约规定的三个前端文件，后端、依赖、锁文件、路由、CSS、存储和 URL 均未改。
+- 真实 failure-first 为 **0 passed / 2 failed / 1 did not run**，首个失败是开始时间控件不存在；生产两文件哈希保持冻结值，属于有效业务红测。
+- Grok 原任务/首轮回执=`msg_e3d1972aa28d442c92382f67e85003b0`/`msg_c322467045704332a69c55bf9d57ee94`；Codex 发现五处宽松计数、V3 257 字符未进 parser、第二页查询串未精确比较和迟到 load-more 未在同项目重开后验污，受限 E2E-only 返修 task/review=`msg_aa86d5c6708c4b6fb7d0c7f7e917c5f2`/`msg_5c2808c3069d424c9714b5e7c7915255`；验收=`msg_489249aa6c264cc8a7125f07179b2d36`。
+- Codex 独立通过 P12F-E-B/history/技术 truth/商务 truth/checkpoint **3/40/28/18/51 passed**，`npm run lint`、`npm run build`、`git diff --check`、精确三文件、空暂存区及弱断言扫描均通过。检查点实际文件名为 `e2e/editor-state-checkpoint-restore.spec.ts`。
+- 前端全量首轮在冻结范围外既有“双击确认恢复”测试的第二个 `locator.click` 偶发等待超时，真实结果 **294 passed / 1 failed / 8 did not run**；该检查点文件独立 **51/51 passed**。不改任何代码、仍以 `--workers=1 --retries=0` 完整复验为 **303/303 passed（8.3m）**，首轮失败证据保留且未用 Playwright retry 掩盖。
+- 最终 SHA-256：API=`DD49CC4D53389C3760797CDA8D87536131DAF12671AEF1F642EAADFC09372375`，面板=`1F29D4FB0A9A840B954963CC51D8176DC254E6D4EBFC4C02B4C52C2D0F2546D9`，history E2E=`AB27FE3E1DEB0CD8A3BD8AAF5DDB8CDD0F6DE0D6517CEB1F28B0FDC1B45B23C7`。
