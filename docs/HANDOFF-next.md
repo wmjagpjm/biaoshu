@@ -1,13 +1,13 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-18（P12F-D 修订来源筛选已实现、独立验收并推送）
+> **交接日期**：2026-07-18（P12F-D 已闭环；P12F-E-A 修订时间范围筛选后端已审计，当前冻结待下发）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
 > **协作分支功能基线**：P12F-D 冻结=`a2acdf3`、实现=`587df9a`、文档闭环见当前 HEAD；P13-A 冻结=`e8dfa61`、实现=`1509aa2`；P12F-C 冻结=`bb1ae3e`、实现=`fe99f5a`；P12F-B 冻结=`4ddd896`、实现=`c84a94d`；P12F-A 冻结=`e713fb3`、实现=`24f4cf2`；P12E-A 冻结=`5aa205c`、实现=`f9f067e`；P12E-B 冻结=`00ef081`、实现=`5a5b08a`；P12E-C 冻结=`8b40bf4`、实现=`b6a4375`；P12D-B 冻结=`fc19d93`、实现=`35ab377`、验收闭环=`c7cf67f`；P12D-A 冻结=`2cc6ee3`、实现=`9445fcc`；P9C-R1 冻结=`cd70ef0`、实现=`b53dcce`；其余既有功能基线见本文 §11。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
 > **最新增量基线**：P12F-D 已在共用修订面板交付九类权威来源单选筛选；无筛选保持 `esrc1`，筛选分页使用与显式来源严格绑定的规范 `esrc2`。P13-A 的任务 SSE 工作空间鉴权及 P12F-A/B/C 的 20 条/20 MiB、有界游标页和手动加载更多继续保留。
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **本地状态**：P12F-D 冻结=`a2acdf3`、实现=`587df9a` 已推送；本次仅完成中文文档闭环，随后只读审计剩余主线并重新冻结下一最小包。
+> **本地状态**：P12F-D 冻结=`a2acdf3`、实现=`587df9a`、文档=`bc11edd` 已推送；当前执行包为 P12F-E-A，契约=`docs/p12f-revision-time-range-filter-contract.md`、计划=`docs/plans/2026-07-18-p12f-revision-time-range-filter-plan.md`，冻结提交以当前 HEAD 为准。
 > **验收基线**：P12F-D failure-first 后端 **38 failed / 17 passed**、前端 **2 failed / 0 passed / 1 did-not-run**；Codex 独立后端 **68/48/986 passed**，前端 **3/37/28/18/51/300 passed**。P13-A 独立 **13/72/918 passed**。**所有 Playwright E2E 共用 SQLite 重置库，必须逐条串行运行，禁止并行。**
 
 ---
@@ -21,8 +21,8 @@
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
 当前进度：P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/B、P12E-A/B/C、P12F-A/B/C/D、P13-A、P9D、P9C-R1、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。P12F-D 冻结=`a2acdf3`、实现=`587df9a`；后端/前端全量基线 986/300 passed。
 当前状态：技术标与商务标共用修订面板已支持“全部来源”及九类权威来源单选筛选；无筛选保持 `esrc1`，筛选分页使用与显式 `sourceKind` 严格绑定的 `esrc2`。刷新/恢复/折叠/项目切换和迟到隔离均已验收。
-当前执行包：P12F-D 已实现、独立验收、中文实现提交并推送。六文件白名单随本包关闭，不得直接沿用；Grok 当前等待下一份已提交的冻结契约与精确任务。
-下一步：只读审计剩余主线，选择新的最小独立包，先写中文契约与计划并提交推送冻结点，再通过既有 Grok 消息箱下发。正文搜索、日期/多选筛选、删除、跨项目历史、多人协作及 SSE 扩展不能未经新契约混入。所有 E2E 继续 `--workers=1 --retries=0` 串行运行。
+当前执行包：P12F-E-A 修订时间范围筛选后端基础。只扩展既有 `/editor-state-revisions/page`，新增严格 UTC `createdFrom` 包含下界、`createdBefore` 排除上界与绑定范围/来源/位置的 `esrc3`；严格三文件，前端不在 A 包。
+下一步：提交并推送冻结文档后，通过既有 Grok 消息箱下发三文件 failure-first 实现；Codex 独立审查、受影响回归和后端全量验收。前端日期控件、正文搜索、来源多选、命名/固定/删除、跨项目历史、多人协作及 SSE 扩展不得混入。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -457,7 +457,7 @@ frontend/src/features/
 | 技术标 | editor-state 真值 | P11C 已完成并推送（计划/契约=`24b7ba8`、安全细化=`c5b3eec`、前端=`1441509`）：只认服务端 editor-state，旧键忽略保值，失败固定脱敏，required Cookie/CSRF、409/M3-D 与 A→B 挂起保存隔离均有 E2E |
 | 导出 | `structure` / `min_heading_left_enabled` | P9A 已实现：叶子标题左侧强调线（`c1ff160`）；整章布局与 `structure` 仍不做，详见 `docs/plans/2026-07-13-p9a-word-layout-plan.md` |
 | 业务 | 其他外部标讯数据源 | P9B 已完成唯一的国能 e 招单站受控追踪；其他网站/API/RSS、定时同步和浏览器外网请求仍未接，须另立计划 |
-| 技术标 | 通用版本、响应矩阵与解析增强 | M3-D 已交付最近 20 批恢复；P12B 已完成全状态版本、围栏、检查点恢复；P12C-A/B/C 已完成九来源修订、默认最近 10 条列表、按需摘要和双工作区恢复；P12D-A/B 已完成字段摘要与“与当前对比”；P12E-A/B/C 已完成单修订对当前及双历史修订的有界正文差异；P12F-A/B/C/D 已完成最多 20 条/20 MiB 有界保留、后端游标页、前端手动加载更多及九类来源单选筛选。仍未接：正文/日期/多选搜索筛选、自动批量比较、完整时间线、删除、跨项目历史、多人协作、解析器自动部署/模型打包、真实模型验收与其他交付增强 |
+| 技术标 | 通用版本、响应矩阵与解析增强 | M3-D 已交付最近 20 批恢复；P12B 已完成全状态版本、围栏、检查点恢复；P12C-A/B/C 已完成九来源修订、默认最近 10 条列表、按需摘要和双工作区恢复；P12D-A/B 已完成字段摘要与“与当前对比”；P12E-A/B/C 已完成单修订对当前及双历史修订的有界正文差异；P12F-A/B/C/D 已完成最多 20 条/20 MiB 有界保留、后端游标页、前端手动加载更多及九类来源单选筛选。P12F-E-A 时间范围后端已审计冻结、待实现；仍未接前端日期控件、正文/多选搜索筛选、自动批量比较、完整时间线、删除、跨项目历史、多人协作、解析器自动部署/模型打包、真实模型验收与其他交付增强 |
 | 资产 | 卡片化知识/多模板融合 | 阶段 1 模板 + 阶段 2 卡片库（`53e012f`）；阶段 3 M3-A 至 M3-D 均已完成，最新计划=`d326c7d`、后端=`6a5f61f`、前端=`b89a387` |
 | RAG | 真语义大模型 embedding 调优 | 有本地+可选 API，可继续增强 |
 | 财务 | 税务、审批、导出、预算、回款、版本与完整财务审计 | P10B/P10C 已完成报价只读、人工成本草案与毛利快照；P10J 已完成本人记录，P10K 已完成上线后项目记录；旧历史、失败尝试与完整身份审计仍未实现；禁止从报价推算 |
@@ -474,7 +474,7 @@ frontend/src/features/
 1. 阶段 4 **功能包 8** MVP=`6db1586`、P8B/P8C、**P8D MinerU 助手**（计划=`30d066f`、实现=`e1fe316`）与 **P8E Docling 助手**（计划=`73b1264`、后端=`79b346e`、助手=`e3f9cc4`）均已验收并推送；真实 CLI/模型仍需人工准备，自动部署仍须独立安全契约。
 2. 阶段 4 **P9A/P9B/P9C/P9D** 与阶段 5 **P10A/P10B/P10C/P10D/P10F/P10E/P10G/P10H/P10I/P10J/P10K** 均已实现、独立验收并文档闭环。P9C 的真实模型门仍是运行时前置：固定依赖和模型缓存就绪后，用户显式构建索引，再运行固定预检；未通过前继续关键词降级。
 3. P8C/P8D/P8E、P10K、M3-D、P11A、P11B 与 P11C 均已完成。P8E 已按顺序完成后端精确 `mineru|docling` 枚举和独立本机助手；继续保持 P8B/P8C/P8D 的策略、票据、回环和正文出域边界。
-4. P12B-A/B/C/D、P12C-A/B/C、P12D-A/B、P12E-A/B/C 与 P12F-A/B/C/D 已完成；P12F-D 冻结=`a2acdf3`、实现=`587df9a`，当前后端/前端全量基线 **986/300 passed**。删除、正文/日期/多选搜索筛选、跨项目历史或多人协作仍需另行审计冻结。
+4. P12B-A/B/C/D、P12C-A/B/C、P12D-A/B、P12E-A/B/C 与 P12F-A/B/C/D 已完成；P12F-D 冻结=`a2acdf3`、实现=`587df9a`，当前后端/前端全量基线 **986/300 passed**。下一包 P12F-E-A 已冻结为严格三文件的时间范围后端基础；前端日期控件、删除、正文/多选搜索筛选、跨项目历史或多人协作仍需另行审计冻结。
 
 资源同步后续只可由管理员配置新的签名发布方，绝不可放开浏览器 URL 或外网抓取。图片管线已冻结项目内资源引用协议，后续扩展不得放开外链或客户端路径。SSE 的多工作空间鉴权、事件游标和项目级总线不在当前范围。
 
@@ -569,8 +569,8 @@ frontend/src/features/
 - **P11C 已完成并推送**：契约=`docs/p11c-technical-editor-state-truth-contract.md`，计划=`docs/plans/2026-07-15-p11c-technical-editor-state-truth-plan.md`，前端=`1441509`。技术标 editor-state 只认服务端；旧本地键忽略保值，真实空态不补 mock，失败固定脱敏；普通与合并 PUT 使用同源 Cookie/内存 CSRF；409/M3-D 保持兼容；A 的迟到或挂起保存不污染、阻塞 B；生产演示入口已移除。
 - **P8D 已完成并推送**：契约=`docs/p8d-mineru-local-helper-contract.md`，计划=`docs/plans/2026-07-15-p8d-mineru-local-helper-plan.md`，实现=`e1fe316`。纯标准库助手只从交互 TTY 读取 P8C 单次票据，Windows 只认 `mineru.exe`，强制本地离线模型、环境白名单、临时输出和回环无代理/无重定向单次回调；真实 CLI/模型由用户人工准备。
 - **P8E 已完成并推送**：契约/计划提交=`73b1264`，P8E-A 后端=`79b346e`，P8E-B 助手=`e3f9cc4`。Docling 46、MinerU 54、后端受影响回归 37、P8C E2E 9、P8B E2E 6 passed；真实 Docling/模型仍未安装、未验收，禁止声称真实模型就绪。
-- **Grok 当前状态**：P12F-D 原任务/首轮 review=`msg_441102447c64467f8bd27a4d0b241d94`/`msg_f1f94a200185467c88f2f07ff626e896`；三轮返修 task/review=`msg_308b3e60e72b4cecaeb9853a6ee2f54f`/`msg_61426868c5454cb8b56b7a97362ef34a`、`msg_025f0d26538147b58e4949d08d459bfa`/`msg_21c4ff084afc4555a992c2fc37bb3b3e`、`msg_23a1993ce6334808b410aaf1e25faa98`/`msg_06291046a6494d508528c01378d85241`；Codex 验收=`msg_d977b2ead50b4f8292852c9b2de95b08`。新账号认证可用；Grok 仍只实现/自测、不提交推送，当前等待下一份已冻结任务。
-- 当前分支仍为 `collab/grok-code-codex-review`；P12F-D 实现=`587df9a` 已提交并推送，本文档闭环提交位于其后；全部既有基线保留。新会话第一步必须用 `git status -sb`、`git rev-parse HEAD`、`git rev-parse origin/collab/grok-code-codex-review` 重新核验，不可只信本文静态 SHA。
+- **Grok 当前状态**：P12F-D 原任务/首轮 review=`msg_441102447c64467f8bd27a4d0b241d94`/`msg_f1f94a200185467c88f2f07ff626e896`；三轮返修 task/review=`msg_308b3e60e72b4cecaeb9853a6ee2f54f`/`msg_61426868c5454cb8b56b7a97362ef34a`、`msg_025f0d26538147b58e4949d08d459bfa`/`msg_21c4ff084afc4555a992c2fc37bb3b3e`、`msg_23a1993ce6334808b410aaf1e25faa98`/`msg_06291046a6494d508528c01378d85241`；Codex 验收=`msg_d977b2ead50b4f8292852c9b2de95b08`。新账号认证可用；Grok 仍只实现/自测、不提交推送，当前等待 P12F-E-A 冻结提交后的精确下发。
+- 当前分支仍为 `collab/grok-code-codex-review`；P12F-D 实现=`587df9a`、文档闭环=`bc11edd` 已提交并推送；P12F-E-A 契约/计划随当前冻结提交落地。全部既有基线保留。新会话第一步必须用 `git status -sb`、`git rev-parse HEAD`、`git rev-parse origin/collab/grok-code-codex-review` 重新核验，不可只信本文静态 SHA。
 - 阶段 3 **已完成并推送**：M3-A 只读融合建议、M3-B 差异预览与浏览器确认、M3-C 会话内单批撤销、M3-D 服务端原子确认与最近 20 批持久恢复。
 - 阶段 4 **包 5** 已推送：`460097a` 智能建议人工确认 E2E。
 - 阶段 4 **包 6** 已推送：`1289c92` 实现响应矩阵源分页调用。
@@ -625,7 +625,7 @@ frontend/src/features/
 - 新任务分工不变：Grok 只负责限定实现与自测，未经 Codex 审查确认不得提交；Codex 负责计划、范围冻结、差异审查、独立测试、验收、中文提交、文档闭环和 GitHub 状态核验。每一包仍按“计划提交 → 实现提交 → 文档闭环提交 → 推送协作分支”执行，禁止合包。
 - GitHub 若出现连接重置，可在当前 PowerShell 进程临时配置 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY=http://127.0.0.1:7890` 与 `NO_PROXY=localhost,127.0.0.1` 后重试；不得把代理或凭据写入仓库。
 
-**换会话可直接：核验分支、HEAD/远端与工作区干净 → 读本文 §0～§3.1、§4.23、§5、§6、§11、P12F-A/B/C/D 契约/计划及路线图 → 确认 P12F-D 实现=`587df9a` 已推送且后端/前端全量 986/300 passed → 继续只读审计剩余主线并重新冻结下一包。禁止清理或重做已交付包、让 Grok commit/push、未经契约扩成搜索/删除/跨项目历史/多人协作，或由 Codex 冒充 Grok 完成主实现。**
+**换会话可直接：核验分支、HEAD/远端与工作区干净 → 读本文 §0～§3.1、§4.23、§5、§6、§11、P12F-A/B/C/D 与 P12F-E-A 契约/计划及路线图 → 确认 P12F-D 实现=`587df9a`、文档=`bc11edd` 已推送且后端/前端全量 986/300 passed → 按 P12F-E-A 当前冻结提交向 Grok 下发严格三文件后端红测实现。禁止清理或重做已交付包、让 Grok commit/push、未经契约加入前端/正文搜索/删除/跨项目历史/多人协作，或由 Codex 冒充 Grok 完成主实现。**
 ## P12D-B 完成交接（2026-07-17）
 
 当前协作分支已完成 P12D-B：Grok 任务 `msg_a8258d4b49f44678bf43fe2a2356d583`，首轮 review_request `msg_9394bad10ef34048977ecdc9c9250239`；Grok 未提交/推送，Codex 独立审查、验收、文档闭环并负责本次提交推送。三文件白名单为 API 封装、共享修订面板、修订历史 E2E。
@@ -726,3 +726,11 @@ P13-A 未修改 `deps.py`、中间件、前端、E2E、数据库或任务 schema
 Codex 独立通过后端 P12F-D/游标与 C1 回归/全量 **68/48/986 passed**，前端聚焦/history/技术真值/商务真值/checkpoint/全量 **3/37/28/18/51/300 passed**；前端全量固定 `--workers=1 --retries=0`，**300 passed（7.5m）**，后端全量 **986 passed（22m37s）**。`lint`、`build`、`py_compile`、diff-check、精确六文件、空暂存区及弱断言扫描均通过；验收回执=`msg_d977b2ead50b4f8292852c9b2de95b08`。Grok 全程未暂存、提交或推送。
 
 本包明确未实现正文全文搜索、日期范围、多来源组合筛选、自动加载、删除、命名、固定、导出、分享、跨项目历史、多人协作、数据库迁移或 SSE 扩展。下一包必须先只读审计现有生产入口与测试真值，重新编写并提交冻结契约/计划，再向 Grok 下发新的精确文件白名单；不得把本包六文件当作后续默认授权。
+
+## P12F-E-A 修订时间范围筛选后端冻结交接（2026-07-18）
+
+契约=`docs/p12f-revision-time-range-filter-contract.md`、计划=`docs/plans/2026-07-18-p12f-revision-time-range-filter-plan.md`。只读审计确认现有 `(workspace_id, project_id, created_at, id)` 索引、五列投影和 `created_at DESC,id DESC LIMIT 11` 可直接承载日期范围，因此 A 包不改模型、Schema、数据库、索引、响应体或前端。
+
+新 query 仅为严格 UTC 毫秒 `createdFrom` 包含下界和 `createdBefore` 排除上界，允许单边；任一时间边界激活后使用规范 `esrc3 {b,f,i,s,t}`，把上下界、可选来源与末条位置共同绑定。V1/V2 在无时间范围时必须完全兼容；第二页缺失、增加、改变或非法范围/来源一律 cursor-invalid，禁止从游标采用条件。独立非法时间范围固定 `editor_state_revision_time_range_invalid`，项目 404 和 P12F-D 的来源优先级保持冻结。
+
+Grok 只允许修改路由、history service 和新建后端专项测试三个文件；必须先只加测试形成真实业务红测，记录两个生产文件哈希，再实现并运行 P12F-D/B/C1 合并回归、编译、diff-check、白名单和空暂存区。前端日期控件、浏览器时区转换、正文搜索、来源多选、命名/固定/删除、跨项目历史、多人协作及 SSE 扩展均不在 A 包；Grok 不得暂存、提交或推送。
