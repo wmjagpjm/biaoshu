@@ -2062,6 +2062,24 @@ class EditorStateRevisionPageOut(BaseModel):
     next_cursor: str | None = Field(serialization_alias="nextCursor")
 
 
+class EditorStateRevisionSearch(BaseModel):
+    """
+    模块：P12F-F-A 修订可见内容搜索请求
+    用途：仅 camelCase 请求体；query 必填，其余可省/null；值以 Any 原样承接。
+    对接：POST .../editor-state-revisions/search。
+    二次开发：
+      - extra=forbid；禁止 populate_by_name（snake_case 当额外键 422）；
+      - 不得用 str/日期/枚举在路由前抢先转换；运行时判型在 service。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: Any
+    source_kind: Any = Field(default=None, alias="sourceKind")
+    created_from: Any = Field(default=None, alias="createdFrom")
+    created_before: Any = Field(default=None, alias="createdBefore")
+
+
 class EditorStateRevisionDetailOut(BaseModel):
     """
     模块：P12C-C1 修订历史详情

@@ -1,8 +1,8 @@
 """
-模块：P12C-C1/C2/P12D-A/P12E-A/P12E-B/P12F-B/P12F-D/P12F-E-A editor-state 修订历史只读、
-  游标页、来源/时间范围筛选、受限恢复、差异摘要与正文差异路由
+模块：P12C-C1/C2/P12D-A/P12E-A/P12E-B/P12F-B/P12F-D/P12F-E-A/P12F-F-A editor-state
+  修订历史只读、游标页、来源/时间范围筛选、可见内容搜索、受限恢复、差异摘要与正文差异路由
 用途：项目最近 10 条修订元数据列表、键集游标页（可选 sourceKind/createdFrom/createdBefore）、
-  单条按需详情、单条受限恢复、与当前状态差异摘要、单/双修订正文差异。
+  有界可见内容搜索、单条按需详情、单条受限恢复、与当前状态差异摘要、单/双修订正文差异。
 对接：/api/projects/{projectId}/editor-state-revisions*；
   editor_state_revision_history_service；
   editor_state_revision_restore_service；
@@ -11,20 +11,23 @@
 二次开发：
   - 复用 get_workspace_id（disabled 兼容，required 仅 bid_writer）；
   - POST 继续既有 CSRF；所有成功/业务错误 Cache-Control: no-store；
-  - 错误固定 code/message（409 另含 currentStateVersion），不反射 ID/正文/路径/SQL；
+  - 错误固定 code/message（409 另含 currentStateVersion），不反射 ID/正文/路径/SQL/关键词；
   - 未知查询参数不得改变固定排序/上限/来源全集/正文不可搜索边界；
-  - 静态 /page 必须注册在动态 /{revision_id} 之前；页大小服务端固定 10；
+  - 静态 /page 与 /search 必须注册在动态 /{revision_id} 之前；页大小服务端固定 10；
   - page 扩展可选 query 别名 sourceKind/createdFrom/createdBefore；旧列表路由完全不变；
+  - search 仅 POST body 承载关键词，list/page 五列投影不变；
   - comparison/body-diff 只读，禁止写库/锁/审计；
   - P12E-B 双修订 body-diff 两侧均经 C1 校验，禁止读取当前 editor-state；
-  - 不得把 revision ID/state version/原始快照放入成功或错误响应。
+  - 不得把 revision ID/state version/原始快照/关键词放入成功或错误响应。
 """
 
 from __future__ import annotations
 
-from typing import Annotated
+import json
+from typing import Annotated, Any, NoReturn
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_workspace_id
@@ -41,6 +44,7 @@ from app.api.schemas import (
     EditorStateRevisionPairBodyDiffOut,
     EditorStateRevisionRestore,
     EditorStateRevisionRestoreOut,
+    EditorStateRevisionSearch,
 )
 from app.core.database import get_db
 from app.services import (
@@ -65,10 +69,56 @@ from app.services.editor_state_revision_restore_service import (
 
 router = APIRouter(prefix="/projects", tags=["editor-state-revisions"])
 
+# P12F-F-A 搜索请求体外壳校验失败的固定脱敏 detail；禁止拼接任何原始输入
+_SEARCH_REQUEST_INVALID_DETAIL = {
+    "code": "editor_state_revision_search_request_invalid",
+    "message": "修订搜索请求无效",
+}
+
 
 def _no_store(response: Response) -> None:
     """用途：P12C-C1/C2 响应固定禁止缓存。"""
     response.headers["Cache-Control"] = "no-store"
+
+
+def _raise_search_request_invalid() -> NoReturn:
+    """
+    用途：search 路由专用；请求体读取/JSON/非对象/Schema 校验失败时固定脱敏 422。
+    二次开发：禁止回显 loc/input/type/url/原始 body/query/额外键值。
+    """
+    raise HTTPException(
+        status_code=422,
+        detail=dict(_SEARCH_REQUEST_INVALID_DETAIL),
+        headers={"Cache-Control": "no-store"},
+    ) from None
+
+
+async def _read_search_json_object(request: Request) -> dict[str, Any]:
+    """
+    用途：仅 search 路由读取 JSON 对象；非对象/非法 JSON 一律固定 422。
+    二次开发：禁止把解析异常信息或 body 片段写入 detail/日志。
+    """
+    try:
+        raw = await request.body()
+    except Exception:
+        _raise_search_request_invalid()
+    if not raw:
+        _raise_search_request_invalid()
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError, TypeError):
+        _raise_search_request_invalid()
+    if not isinstance(data, dict):
+        _raise_search_request_invalid()
+    return data
+
+
+def _parse_search_body(data: dict[str, Any]) -> EditorStateRevisionSearch:
+    """用途：JSON 对象 → EditorStateRevisionSearch；失败固定脱敏，不暴露 loc/input。"""
+    try:
+        return EditorStateRevisionSearch.model_validate(data)
+    except ValidationError:
+        _raise_search_request_invalid()
 
 
 def _raise_history_error(exc: EditorStateRevisionHistoryError) -> None:
@@ -187,6 +237,47 @@ def list_editor_state_revisions_page(
     return EditorStateRevisionPageOut(
         items=[_meta_out(item) for item in data["items"]],
         next_cursor=data["next_cursor"],
+    )
+
+
+@router.post(
+    "/{project_id}/editor-state-revisions/search",
+    response_model=EditorStateRevisionListOut,
+)
+async def search_editor_state_revisions(
+    project_id: str,
+    request: Request,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    workspace_id: Annotated[str, Depends(get_workspace_id)],
+) -> EditorStateRevisionListOut:
+    """
+    用途：在最新 20 条候选修订中按可见字段字面搜索；仅返回五键元数据。
+    对接：P12F-F-A；editor_state_revision_history_service.list_editor_state_revision_search。
+    二次开发：
+      - 必须静态注册在 /{revision_id} 之前；
+      - 请求体手工安全解析 + extra=forbid Schema；值由 service 判型；
+      - 外壳失败固定 422 脱敏，禁止默认 Pydantic 回显 input；
+      - 成功/业务错误 no-store；不反射 query/正文/ID；不写库。
+    """
+    _no_store(response)
+    body = _parse_search_body(await _read_search_json_object(request))
+    try:
+        data = (
+            editor_state_revision_history_service.list_editor_state_revision_search(
+                db,
+                workspace_id,
+                project_id,
+                body.query,
+                body.source_kind,
+                body.created_from,
+                body.created_before,
+            )
+        )
+    except EditorStateRevisionHistoryError as exc:
+        _raise_history_error(exc)
+    return EditorStateRevisionListOut(
+        items=[_meta_out(item) for item in data["items"]]
     )
 
 

@@ -1,17 +1,18 @@
 """
-模块：P12C-C1 / P12F-A / P12F-B / P12F-D / P12F-E-A editor-state 修订历史只读服务
-用途：默认最近 10 条修订元数据列表、键集游标页、可选 sourceKind/时间范围筛选与单条按需详情；
-  绝不加载 snapshot_json。
+模块：P12C-C1 / P12F-A / P12F-B / P12F-D / P12F-E-A / P12F-F-A editor-state 修订历史只读服务
+用途：默认最近 10 条修订元数据列表、键集游标页、可选 sourceKind/时间范围筛选、
+  有界可见内容搜索与单条按需详情；list/page 绝不加载 snapshot_json，仅 search 有界六列含快照。
 对接：api.editor_state_revisions；EditorStateRevisionRow；
   editor_state_service / editor_state_revision_service 权威常量与算法。
 二次开发：
   - 全程只读：禁止 commit/rollback/flush/refresh/锁/审计/写配额/读当前 editor-state/检查点；
-  - 项目校验只投影 Project.id；列表/页五列投影；详情六列 + revision/workspace/project 三重作用域；
+  - 项目校验只投影 Project.id；列表/页五列投影；详情/搜索六列 + workspace/project 作用域；
   - 列表上限 MAX_REVISIONS_LIST 与页大小 REVISION_PAGE_SIZE 字面量固定 10，禁止绑定写入保留 20；
+  - 搜索候选窗 LIMIT 20 固定，不补扫第 21 条；字段白名单 + 对象/字符串叶预算；
   - 游标页 LIMIT 11 前瞻、键集谓词；无时间无来源 esrc1；仅来源 esrc2；任一时间边界 esrc3；
   - esrc3 载荷 {b,f,i,s,t} 绑定显式时间/来源，禁止从游标采用筛选条件；
   - 13 键/规范 JSON/版本/来源必须委托既有权威实现，禁止第二套哈希或来源枚举；
-  - 任一损坏收敛固定 corrupt，不反射正文/ID/版本/SQL/路径/异常。
+  - 任一损坏收敛固定 corrupt，不反射正文/ID/版本/SQL/路径/关键词/异常。
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -32,6 +34,14 @@ from app.services import editor_state_revision_service, editor_state_service
 MAX_REVISIONS_LIST = 10
 # P12F-B：游标页固定每页 10；查询 LIMIT = 页大小 + 1
 REVISION_PAGE_SIZE = 10
+# P12F-F-A：搜索只扫元数据条件下最新 20 条候选（与写入保留上限对齐）
+REVISION_SEARCH_CANDIDATE_LIMIT = 20
+# P12F-F-A：单快照允许对象/字符串叶硬上限（规范化前计数）
+REVISION_SEARCH_MAX_OBJECTS = 4096
+REVISION_SEARCH_MAX_STRING_LEAVES = 8192
+# P12F-F-A：关键词规范化后 Unicode 码点闭区间
+REVISION_SEARCH_QUERY_MIN_LEN = 1
+REVISION_SEARCH_QUERY_MAX_LEN = 64
 MAX_SNAPSHOT_BYTES = editor_state_revision_service.MAX_SNAPSHOT_BYTES
 MIN_SNAPSHOT_BYTES = editor_state_revision_service.MIN_SNAPSHOT_BYTES
 REVISION_SOURCE_KINDS = editor_state_revision_service.REVISION_SOURCE_KINDS
@@ -73,6 +83,8 @@ CODE_SOURCE_INVALID = "editor_state_revision_source_invalid"
 MSG_SOURCE_INVALID = "修订来源筛选无效"
 CODE_TIME_RANGE_INVALID = "editor_state_revision_time_range_invalid"
 MSG_TIME_RANGE_INVALID = "修订时间范围筛选无效"
+CODE_SEARCH_QUERY_INVALID = "editor_state_revision_search_query_invalid"
+MSG_SEARCH_QUERY_INVALID = "修订搜索关键词无效"
 
 
 class EditorStateRevisionHistoryError(Exception):
@@ -116,6 +128,13 @@ def _time_range_invalid() -> EditorStateRevisionHistoryError:
     """用途：统一构造脱敏非法时间范围错误，禁止反射输入。"""
     return EditorStateRevisionHistoryError(
         400, CODE_TIME_RANGE_INVALID, MSG_TIME_RANGE_INVALID
+    )
+
+
+def _search_query_invalid() -> EditorStateRevisionHistoryError:
+    """用途：统一构造脱敏非法搜索关键词错误，禁止反射原值。"""
+    return EditorStateRevisionHistoryError(
+        400, CODE_SEARCH_QUERY_INVALID, MSG_SEARCH_QUERY_INVALID
     )
 
 
@@ -1066,3 +1085,247 @@ def get_editor_state_revision(
         "created_at": created,
         "snapshot": snapshot,
     }
+
+
+def _normalize_search_query(query: Any) -> str:
+    """
+    用途：严格规范化搜索关键词。
+    规则：原生 str、首尾无空白、无 C0/C1/换行/制表/NUL；NFKC 后 1..64 码点；
+      拒绝 null/布尔/数值/对象/数组；错误固定不反射。
+    """
+    if type(query) is not str:
+        raise _search_query_invalid() from None
+    if query == "" or query.strip() != query:
+        raise _search_query_invalid() from None
+    for ch in query:
+        code = ord(ch)
+        # C0（含 \\t\\n\\r）、DEL、C1
+        if code < 0x20 or code == 0x7F or (0x80 <= code <= 0x9F):
+            raise _search_query_invalid() from None
+    normalized = unicodedata.normalize("NFKC", query)
+    n = len(normalized)
+    if n < REVISION_SEARCH_QUERY_MIN_LEN or n > REVISION_SEARCH_QUERY_MAX_LEN:
+        raise _search_query_invalid() from None
+    return query
+
+
+def _fold_for_search(value: str) -> str:
+    """用途：匹配双方统一 NFKC + casefold。"""
+    return unicodedata.normalize("NFKC", value).casefold()
+
+
+def _extract_allowed_search_strings(snapshot: dict[str, Any]) -> list[str]:
+    """
+    用途：按契约白名单提取用户可见字符串；显式栈遍历 outline.children。
+    规则：
+      - 仅 type is str 的允许叶子；数组只看对象项；未知键/异型忽略；
+      - 对象/字符串叶预算在规范化前计数，超限固定 corrupt；
+      - 禁止递归全树收集、regex、HTML/Markdown 渲染。
+    """
+    out: list[str] = []
+    object_count = 0
+    string_count = 0
+
+    def _touch_object() -> None:
+        nonlocal object_count
+        object_count += 1
+        if object_count > REVISION_SEARCH_MAX_OBJECTS:
+            raise _corrupt() from None
+
+    def _add_str(value: Any) -> None:
+        nonlocal string_count
+        if type(value) is not str:
+            return
+        string_count += 1
+        if string_count > REVISION_SEARCH_MAX_STRING_LEAVES:
+            raise _corrupt() from None
+        out.append(value)
+
+    # 1) outline：单对象或对象数组；只沿 children 对象数组
+    outline = snapshot.get("outline")
+    stack: list[Any] = []
+    if isinstance(outline, dict):
+        stack.append(outline)
+    elif isinstance(outline, list):
+        for item in outline:
+            if isinstance(item, dict):
+                stack.append(item)
+    while stack:
+        node = stack.pop()
+        if not isinstance(node, dict):
+            continue
+        _touch_object()
+        _add_str(node.get("title"))
+        _add_str(node.get("description"))
+        children = node.get("children")
+        if isinstance(children, list):
+            for child in children:
+                if isinstance(child, dict):
+                    stack.append(child)
+
+    # 2) chapters：title/preview/body
+    chapters = snapshot.get("chapters")
+    if isinstance(chapters, list):
+        for chapter in chapters:
+            if not isinstance(chapter, dict):
+                continue
+            _touch_object()
+            _add_str(chapter.get("title"))
+            _add_str(chapter.get("preview"))
+            _add_str(chapter.get("body"))
+
+    # 3) 共享 parsedMarkdown
+    _add_str(snapshot.get("parsedMarkdown"))
+
+    # 4) businessQualify
+    qualify = snapshot.get("businessQualify")
+    if isinstance(qualify, list):
+        for item in qualify:
+            if not isinstance(item, dict):
+                continue
+            _touch_object()
+            _add_str(item.get("requirement"))
+            _add_str(item.get("response"))
+            _add_str(item.get("evidence"))
+
+    # 5) businessToc
+    toc = snapshot.get("businessToc")
+    if isinstance(toc, list):
+        for item in toc:
+            if not isinstance(item, dict):
+                continue
+            _touch_object()
+            _add_str(item.get("title"))
+            _add_str(item.get("category"))
+            _add_str(item.get("note"))
+
+    # 6) businessQuote.rows + notes；quote 容器本身计入对象预算
+    quote = snapshot.get("businessQuote")
+    if isinstance(quote, dict):
+        _touch_object()
+        rows = quote.get("rows")
+        if isinstance(rows, list):
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                _touch_object()
+                _add_str(row.get("name"))
+                _add_str(row.get("unit"))
+                _add_str(row.get("quantity"))
+                _add_str(row.get("unitPrice"))
+                _add_str(row.get("amount"))
+                _add_str(row.get("remark"))
+        _add_str(quote.get("notes"))
+
+    # 7) businessCommit
+    commit = snapshot.get("businessCommit")
+    if isinstance(commit, list):
+        for item in commit:
+            if not isinstance(item, dict):
+                continue
+            _touch_object()
+            _add_str(item.get("title"))
+            _add_str(item.get("body"))
+
+    return out
+
+
+def _snapshot_matches_query(snapshot: dict[str, Any], needle_folded: str) -> bool:
+    """用途：白名单字符串中是否存在连续字面子串（已 NFKC+casefold）。"""
+    for raw in _extract_allowed_search_strings(snapshot):
+        if needle_folded in _fold_for_search(raw):
+            return True
+    return False
+
+
+def list_editor_state_revision_search(
+    db: Session,
+    workspace_id: str,
+    project_id: str,
+    query: Any,
+    source_kind: Any = None,
+    created_from: Any = None,
+    created_before: Any = None,
+) -> dict[str, Any]:
+    """
+    用途：在最新 20 条元数据候选中按可见字段字面搜索；只返回五键元数据。
+    对接：POST .../editor-state-revisions/search。
+    二次开发：
+      - 顺序：项目存在 → 来源 → 时间 → 关键词；
+      - SQL 精确六列 + workspace/project + 可选来源/时间 + ORDER BY created_at DESC,id DESC LIMIT 20；
+      - 先完整校验全部候选再匹配；坏行/预算超限整次 corrupt；
+      - 禁止 OFFSET/COUNT/LIKE/JSON SQL/N+1/补扫第 21 条/写操作。
+    """
+    _require_project_id(db, workspace_id, project_id)
+
+    filter_kind = _normalize_source_kind_filter(source_kind)
+    from_dt, before_dt = _normalize_time_range_filter(created_from, created_before)
+    raw_query = _normalize_search_query(query)
+    needle = _fold_for_search(raw_query)
+
+    try:
+        stmt = (
+            select(
+                EditorStateRevisionRow.id,
+                EditorStateRevisionRow.state_version,
+                EditorStateRevisionRow.snapshot_bytes,
+                EditorStateRevisionRow.source_kind,
+                EditorStateRevisionRow.created_at,
+                EditorStateRevisionRow.snapshot_json,
+            )
+            .where(
+                EditorStateRevisionRow.workspace_id == workspace_id,
+                EditorStateRevisionRow.project_id == project_id,
+            )
+        )
+        if filter_kind is not None:
+            stmt = stmt.where(EditorStateRevisionRow.source_kind == filter_kind)
+        if from_dt is not None:
+            stmt = stmt.where(EditorStateRevisionRow.created_at >= from_dt)
+        if before_dt is not None:
+            stmt = stmt.where(EditorStateRevisionRow.created_at < before_dt)
+        stmt = stmt.order_by(
+            EditorStateRevisionRow.created_at.desc(),
+            EditorStateRevisionRow.id.desc(),
+        ).limit(REVISION_SEARCH_CANDIDATE_LIMIT)
+        result = db.execute(stmt)
+        rows = _materialize_all(result)
+    except EditorStateRevisionHistoryError:
+        raise
+    except Exception:
+        raise _corrupt() from None
+
+    # 先完整校验全部候选；任一行损坏整次失败（与关键词是否命中无关）
+    validated: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for row in rows:
+        rid, ver, nbytes, source, created = _validate_meta_fields(
+            revision_id=row.id,
+            state_version=row.state_version,
+            snapshot_bytes=row.snapshot_bytes,
+            source_kind=row.source_kind,
+            created_at=row.created_at,
+        )
+        snapshot = _validate_snapshot_payload(
+            snapshot_json=row.snapshot_json,
+            state_version=ver,
+            snapshot_bytes=nbytes,
+            source_kind=source,
+        )
+        validated.append(
+            (
+                {
+                    "revision_id": rid,
+                    "state_version": ver,
+                    "snapshot_bytes": nbytes,
+                    "source_kind": source,
+                    "created_at": created,
+                },
+                snapshot,
+            )
+        )
+
+    items: list[dict[str, Any]] = []
+    for meta, snapshot in validated:
+        if _snapshot_matches_query(snapshot, needle):
+            items.append(meta)
+    return {"items": items}
