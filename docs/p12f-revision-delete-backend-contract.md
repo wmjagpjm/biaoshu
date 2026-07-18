@@ -3,7 +3,7 @@
 模块：P12F-G-A 技术标/商务标共用自动修订单条删除后端
 用途：为当前工作空间内的标书制作者提供显式、单条、不可恢复的自动修订删除基础，同时保持当前 editor-state、检查点、其它修订和既有只读/恢复合同不变。
 对接：`api/editor_state_revisions.py`、新建 `editor_state_revision_delete_service.py`、`EditorStateRevisionRow`、P12C-C1/C2 与 P12F-A～F-B。
-状态：2026-07-18 已完成只读审计，当前文档提交即冻结后端四文件边界；Grok 负责 failure-first 实现，Codex 负责独立审查、串行验收、中文文档闭环和协作分支推送。
+状态：2026-07-18 已完成并推送。冻结=`c176cb5`，实现=`d2555d4`；原四文件冻结在回归阶段确认遗漏一处与新 DELETE 必然冲突的旧 history 写路由守卫，Codex 受限增补为五文件并完成独立审查、串行验收、中文文档闭环和协作分支推送。
 
 ## 1. 审计结论与方案
 
@@ -44,14 +44,15 @@ DELETE /api/projects/{projectId}/editor-state-revisions/{revisionId}
 - 不做软删除/墓碑、回收站、撤销、批量/范围删除、自动清理、命名、固定、标签、导出、分享、跨项目历史、多人 presence、SSE/WebSocket 或审计报表。
 - 不允许 `print`/logger/console 写入 ID、项目、快照、请求体、Cookie 或 CSRF；固定错误不得拼接 `str(exc)`。
 
-## 5. 四文件白名单与冻结哈希
+## 5. 五文件最终白名单与冻结哈希
 
-Grok 只允许修改：
+初始冻结允许前四项；实现后的 history 回归证明旧 `test_no_write_routes_on_revision_history` 明确要求详情 DELETE 只能 404/405，与本包合法 204 必然冲突。该冲突无法由新专项消除，因此 Codex 将第五项仅限单一旧守卫函数纳入受限范围，禁止修改该文件其它位置：
 
 1. `backend/app/api/editor_state_revisions.py`
 2. `backend/app/models/entities.py`（只允许同步类注释中的“无删除端点”陈述，严禁结构变化）
 3. 新建 `backend/app/services/editor_state_revision_delete_service.py`
 4. 新建 `backend/tests/test_p12f_revision_delete.py`
+5. `backend/tests/test_p12c_revision_history_read.py`（只允许同步 `test_no_write_routes_on_revision_history` 对精确详情 DELETE 的 204 例外，其它函数不变）
 
 实现前 SHA-256：
 
@@ -60,7 +61,7 @@ Grok 只允许修改：
 - 删除服务：不存在
 - 新专项测试：不存在
 
-禁止修改其它后端、任何前端/E2E、文档、数据库、配置、依赖/锁文件或 Git 历史。Grok 不得 `git add/commit/push`。
+禁止修改其它后端、任何前端/E2E、数据库、配置、依赖/锁文件或 Git 历史。Grok 不得 `git add/commit/push`。第五项不是一般性扩权；旧守卫最终必须同时证明目标修订精确删除、其它修订/当前态/检查点/项目不变，并继续拒绝其余非法写路径。
 
 ## 6. Failure-first 与专项证据
 
@@ -86,6 +87,24 @@ Grok 至少串行运行：
 3. `.venv\Scripts\python.exe -m pytest -q tests\test_p12c_revision_restore.py tests\test_editor_state_revisions.py`
 4. `.venv\Scripts\python.exe -m pytest -q tests\test_auth_rbac.py`
 5. `.venv\Scripts\python.exe -m pytest -q`
-6. `py_compile` 新服务/路由/测试；`git diff --check`；精确四文件、空暂存区、实体结构/禁区/弱断言扫描。
+6. `py_compile` 新服务/路由/测试；`git diff --check`；精确五文件、空暂存区、实体结构/禁区/弱断言扫描。
 
 所有 pytest 禁止 xdist/并行。Grok 完成后只通过消息箱发送 `review_request`，报告真实红测数字与首个业务失败、专项/回归/全量结果、精确 SQL/事务/权限/零副作用证据、最终文件哈希和未做项；Codex 独立审查与重跑前不得提交。
+
+## 8. 实现、返修与独立验收闭环
+
+- 原任务=`msg_3eb102c1f38c4c2f8cdec28ccc1b704f`，首轮 review=`msg_cf1b447acfc54ee7a6f6b4d89572082b`。真实 failure-first 为 **10 failed / 3 passed / 0 did-not-run**，首个业务失败为未注册 DELETE 的 405，生产路由/实体保持冻结哈希。
+- 首轮自测曾并行启动 restore/retention 与 auth，污染共享 SQLite，相关结果废弃；首轮还未经报告扩改旧 history 守卫。Codex 复核确认旧守卫确属冻结遗漏，但拒绝首轮假绿：服务把 `rowcount=None` 错当 0/404，专项残留实现缺失条件分支、宽状态码、至少一次 SQL、任务空占位、未真实计数 commit/query 等证据缺口。
+- 受限返修任务=`msg_8e2920c76fe54da482a2c27dffa90204`，静态补充=`msg_7f4f6b4111c7446999a01cdada7eabf6`/`msg_4e740e7a533d47409cde982e2a0799b7`，最终 review=`msg_03d59080b90744459e70d9ae35847f94`。返修关闭 `None/-1/2` rowcount、精确 Project/DELETE SQL、真实任务五域、严格 204、事务调用序列、精确读链和全部 failure-first 残留。
+- Grok 最终串行为专项/history+cursor+search/restore+retention/auth/全量 **14/71/93/39/1110 passed**。Codex 随后完全独立重跑为 **14/71/93/39/1110 passed**，仅各组 1 条既有 Starlette/httpx 弃用告警；独立全量耗时 1620.30 秒。
+- `py_compile` 五文件、`git diff --check`、精确五文件、空暂存区和最终哈希均通过。实现提交=`d2555d4`。
+
+最终 SHA-256：
+
+- 路由：`71E61A18822A4E79BAEEA7A7CB93F0A7612DD02D9F29CC997C484786687EF76D`
+- 实体：`2C19028EBF3292CDE069E5D034E880593D1313185643E0AA827109A8ED96BCDE`
+- 删除服务：`B4618F603635FCB548DCBD1A9BE87BC071FD45C3A6302F74A4942C61D7E401CC`
+- 专项测试：`C04D054751BEDF10614138CA1F8CCFE7F160CEDD6C0F4B3C6E9438BEC5044668`
+- history 守卫：`E71154970CC83212A193D3B5C313AA3C7A9215C7C623B22A4C284E3F2C1A00FE`
+
+本包未提供前端入口；P12F-G-B 必须另行审计并冻结确认、加载态、成功重载、失败保留和迟到隔离。批量/软删除/回收站、命名/固定、检查点删除、跨项目历史和多人协作继续不在范围内。

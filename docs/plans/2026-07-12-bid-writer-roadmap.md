@@ -365,7 +365,7 @@ P8D 与 P8E 本机外置解析助手均已完成并推送：P8D 计划=`30d066f`
 
 **P12E-A 单条修订正文差异预览已完成**：冻结=`5aa205c`、实现=`f9f067e`。只读 GET 返回精确六键和有界章节行差异；前端技术/商务共用按需入口、严格 parser、四意图互斥与 arrived/complete 迟到隔离。Codex 首轮审查复现第 101 个差异章仍进入 difflib，Grok 以真实 **1 failed / 1 passed** 红测返修为 **2 passed**；Codex 独立通过专项/回归/后端全量 **23/27/854**，history/checkpoint/truth/前端全量 **27/51/46/290 passed**。任意历史两两比较、删除、搜索、分页、正文自动恢复和多人协作继续不进入 A 包。
 
-**下一步**：P13-A 与 P12F-D/E-A/E-B/F-A/F-B 均已完成；P12F-G-A 单条修订删除后端已完成只读审计，当前文档提交即冻结。G-A 只允许独立删除服务、DELETE 路由、实体注释和新专项测试，先形成真实 405/能力缺失红测；前端确认/重载、多选/批量/软删除、命名/固定、检查点删除、跨项目历史、多人协作和 SSE 扩展不得合包。
+**下一步**：P13-A 与 P12F-D/E-A/E-B/F-A/F-B/G-A 均已完成；下一包只读审计并冻结 **P12F-G-B 单条修订删除前端入口**。在新的前端契约与计划提交推送前，不允许 Grok 修改代码；多选/批量/软删除、命名/固定、检查点删除、跨项目历史、多人协作和 SSE 扩展继续不得合包。
 
 **P12E-B 已完成并推送**：双修订正文差异后端基础，契约=`docs/p12e-revision-pair-body-diff-contract.md`，计划=`docs/plans/2026-07-17-p12e-revision-pair-body-diff-plan.md`，冻结=`00ef081`、实现=`5a5b08a`。只比较同 workspace/project 的两个历史修订，暂不提供前端入口；Grok 仅改四个后端文件并发送 review_request，Codex 独立验收后提交推送。专项/回归/全量 **13/23/50/867 passed**，合并专项 **86 passed**，仅 1 条既有 Starlette/httpx 弃用告警。
 
@@ -389,7 +389,7 @@ P12E-B 真实 failure-first 为 13 项红测：11 项路由缺失 404、1 项同
 
 **P12F-F-B 已完成并推送**：契约=`docs/p12f-revision-content-search-frontend-contract.md`，计划=`docs/plans/2026-07-18-p12f-revision-content-search-frontend-plan.md`，冻结=`4585388`、实现=`be2fe77`。严格三文件接入显式 POST 搜索：草稿/已应用关键词分离，输入零请求，搜索与来源/已应用时间组合，结果最多 20 且无加载更多；刷新/恢复/折叠保留，项目切换重置，四条件迟到隔离。真实红测 **3 failed / 0 passed / 0 did-not-run**；Codex 受限 E2E-only 返修关闭严格坏响应、DEL/C1/astral 码点边界和旧 `catch/finally` 与新 loading 重叠三类假绿，独立通过 **3/43/28/18/51/23/306 passed** 及 lint/build/diff/三文件白名单。最终哈希与消息链见契约第 7 节；自动搜索、片段/高亮、缓存、游标/跨项目搜索和写能力仍未实现。
 
-**P12F-G-A 已审计，当前文档冻结**：契约=`docs/p12f-revision-delete-backend-contract.md`，计划=`docs/plans/2026-07-18-p12f-revision-delete-backend-plan.md`。新增单一无 query/body 的 DELETE，成功空 204/no-store；独立服务只投影 Project.id，再以 workspace/project/revision 三谓词删除恰好一行并唯一 commit，故障全 rollback。当前 editor-state、检查点、其它修订及既有 list/page/search/detail/diff/restore 合同不变；前端入口和其它版本治理能力不在 A 包。
+**P12F-G-A 已完成并推送**：契约=`docs/p12f-revision-delete-backend-contract.md`，计划=`docs/plans/2026-07-18-p12f-revision-delete-backend-plan.md`，冻结=`c176cb5`、实现=`d2555d4`。新增单一无 query/body 的 DELETE，成功空 204；独立服务只投影 Project.id，再以 workspace/project/revision 三谓词删除恰好一行并唯一 commit，故障全 rollback。真实 failure-first 为 **10 failed / 3 passed / 0 did-not-run**；首轮实现暴露并行测试污染共享 SQLite、`rowcount=None` 误映射 404、断言假绿和旧历史只读守卫冲突，最终以严格五文件边界修正并关闭。Codex 独立串行通过专项/历史搜索回归/恢复保留回归/鉴权/后端全量 **14/71/93/39/1110 passed**，编译、diff、AST、哈希与空暂存区通过。当前 editor-state、检查点、其它修订及既有 list/page/search/detail/diff/restore 合同不变；前端入口留给 P12F-G-B，其它版本治理能力仍未实现。
 
 **P13-A 已完成并推送**：契约=`docs/p13a-task-sse-workspace-auth-contract.md`，计划=`docs/plans/2026-07-17-p13a-task-sse-workspace-auth-plan.md`，冻结=`e8dfa61`、实现=`1509aa2`。SSE 连接前短 Session 复用统一 workspace/成员/bid_writer 解析，流内每轮按 workspace/project/task 再校验；disabled、原生 EventSource、事件/回退不变。真实 failure-first **8 failed / 5 passed**；Codex 一轮 test-only 返修关闭恒真泄漏断言、secret marker 跳过和宽松三参，独立通过 **13/72/918 passed**。首次全量只因 20 分钟外层时限不足终止，40 分钟外层干净重跑为 **918 passed in 1310.97s**。
 ## P12D-B 完成状态（2026-07-17）
