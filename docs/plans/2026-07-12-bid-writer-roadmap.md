@@ -365,7 +365,7 @@ P8D 与 P8E 本机外置解析助手均已完成并推送：P8D 计划=`30d066f`
 
 **P12E-A 单条修订正文差异预览已完成**：冻结=`5aa205c`、实现=`f9f067e`。只读 GET 返回精确六键和有界章节行差异；前端技术/商务共用按需入口、严格 parser、四意图互斥与 arrived/complete 迟到隔离。Codex 首轮审查复现第 101 个差异章仍进入 difflib，Grok 以真实 **1 failed / 1 passed** 红测返修为 **2 passed**；Codex 独立通过专项/回归/后端全量 **23/27/854**，history/checkpoint/truth/前端全量 **27/51/46/290 passed**。任意历史两两比较、删除、搜索、分页、正文自动恢复和多人协作继续不进入 A 包。
 
-**下一步**：P13-A 与 P12F-D 均已完成；只读审计已选择 P12F-E-A 修订时间范围筛选后端基础。它只在既有页 GET 增加严格 UTC 包含下界/排除上界，并以 `esrc3` 绑定时间范围、可选来源和分页位置；Grok 严格三文件 failure-first，Codex 独立审查和后端全量验收。前端日期控件留给 E-B，正文搜索、来源多选、命名/固定/删除、跨项目历史、多人协作和 SSE 扩展不得合包。
+**下一步**：P13-A、P12F-D 与 P12F-E-A 均已完成。下一候选包为 P12F-E-B 前端日期控件与浏览器本地时区转换，但必须先只读审计共用修订面板、API 封装和既有 history E2E，重新冻结交互、迟到隔离与精确文件白名单后再交 Grok。正文搜索、来源多选、命名/固定/删除、跨项目历史、多人协作和 SSE 扩展不得合包。
 
 **P12E-B 已完成并推送**：双修订正文差异后端基础，契约=`docs/p12e-revision-pair-body-diff-contract.md`，计划=`docs/plans/2026-07-17-p12e-revision-pair-body-diff-plan.md`，冻结=`00ef081`、实现=`5a5b08a`。只比较同 workspace/project 的两个历史修订，暂不提供前端入口；Grok 仅改四个后端文件并发送 review_request，Codex 独立验收后提交推送。专项/回归/全量 **13/23/50/867 passed**，合并专项 **86 passed**，仅 1 条既有 Starlette/httpx 弃用告警。
 
@@ -381,7 +381,7 @@ P12E-B 真实 failure-first 为 13 项红测：11 项路由缺失 404、1 项同
 
 **P12F-D 已完成并推送**：契约=`docs/p12f-revision-source-filter-contract.md`，计划=`docs/plans/2026-07-17-p12f-revision-source-filter-plan.md`，冻结=`a2acdf3`、实现=`587df9a`。后端 page 以显式 `sourceKind` 在 workspace/project 范围内精确筛选，默认继续 `esrc1 {i,t}`，筛选页使用与来源绑定的 `esrc2 {i,s,t}`；前端共用面板增加“全部来源”与九类中文选项，刷新/恢复/折叠/项目切换和分页迟到语义均闭环。真实 failure-first 后经三轮受限返修关闭测试假绿、契约错误优先级和 SQL 精确证据；Codex 独立后端 **68/48/986**、前端 **3/37/28/18/51/300 passed**，lint/build/编译/白名单均通过。正文/日期或多来源筛选、命名/固定/删除、跨项目历史和多人协作仍未实现。
 
-**P12F-E-A 已审计冻结，待实现**：契约=`docs/p12f-revision-time-range-filter-contract.md`，计划=`docs/plans/2026-07-18-p12f-revision-time-range-filter-plan.md`。A 包只改后端路由、history service 和新专项测试：严格 `createdFrom` 包含下界、`createdBefore` 排除上界，任一边界存在时以 `esrc3 {b,f,i,s,t}` 绑定范围、可选来源和末条位置；无范围的 V1/V2 必须完全兼容。前端日期控件、时区交互、正文搜索、来源多选及任何写能力均留后续独立包。
+**P12F-E-A 已完成并推送**：契约=`docs/p12f-revision-time-range-filter-contract.md`，计划=`docs/plans/2026-07-18-p12f-revision-time-range-filter-plan.md`，冻结=`af3798a`、实现=`c66b69d`。A 包只改后端路由、history service 和新专项测试：严格 `createdFrom` 包含下界、`createdBefore` 排除上界，任一边界存在时以 `esrc3 {b,f,i,s,t}` 绑定范围、可选来源和末条位置；无范围 V1/V2 完全兼容。真实 failure-first **74 failed / 12 passed**；Codex 经一轮受限返修关闭 V3 非法时间语义与 SQL 上界假绿后，独立通过 **87/116/1073 passed**。前端日期控件、时区交互、正文搜索、来源多选及任何写能力仍留后续独立包。
 
 **P13-A 已完成并推送**：契约=`docs/p13a-task-sse-workspace-auth-contract.md`，计划=`docs/plans/2026-07-17-p13a-task-sse-workspace-auth-plan.md`，冻结=`e8dfa61`、实现=`1509aa2`。SSE 连接前短 Session 复用统一 workspace/成员/bid_writer 解析，流内每轮按 workspace/project/task 再校验；disabled、原生 EventSource、事件/回退不变。真实 failure-first **8 failed / 5 passed**；Codex 一轮 test-only 返修关闭恒真泄漏断言、secret marker 跳过和宽松三参，独立通过 **13/72/918 passed**。首次全量只因 20 分钟外层时限不足终止，40 分钟外层干净重跑为 **918 passed in 1310.97s**。
 ## P12D-B 完成状态（2026-07-17）

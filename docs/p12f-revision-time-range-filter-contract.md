@@ -3,7 +3,7 @@
 模块：P12F-E-A 修订历史时间范围筛选后端基础
 用途：在 P12F-B/D 的五列键集游标页上增加严格 UTC 时间范围条件，并把范围、可选来源与分页位置共同绑定，供后续 P12F-E-B 前端日期筛选器使用。
 对接：`editor_state_revisions` 路由、`editor_state_revision_history_service`、P12F-B/D 既有游标与来源筛选、后端新专项测试。
-状态：2026-07-18 已完成只读审计，待冻结提交后由 Grok 严格三文件 failure-first 实现；Codex 负责独立审查、全量验收、中文文档闭环和提交推送。
+状态：2026-07-18 已完成并推送。冻结=`af3798a`、实现=`c66b69d`；Grok 严格三文件 failure-first 实现，Codex 完成独立审查、返修验收、后端全量、中文文档闭环和协作分支推送。
 
 ## 1. 审计结论
 
@@ -89,3 +89,12 @@ Grok 必须先只新增新专项测试，两个生产文件不得先改；记录
 ## 7. 明确未做
 
 本包不做前端日期控件、浏览器本地时区转换、来源多选、正文/标题搜索、命名、固定、删除、导出、分享、自动加载、总数/页码、跨项目历史、多人协作、SSE 扩展、历史回填、数据库迁移或索引调整。P12F-E-B 必须在 A 包实现验收和文档闭环后重新审计、冻结与下发。
+
+## 8. 完成证据
+
+- 冻结=`af3798a`，实现=`c66b69d`；实现精确修改路由、history service 与新专项测试三文件，Grok 未暂存、提交或推送。
+- 真实 failure-first 为 **74 failed / 12 passed**。首轮实现专项 **86 passed**、受影响回归 **116 passed**；Codex 审查复现 V3 双空/相等/倒置边界仍被接受，并发现 SQL 上界断言可能被第二页 keyset 的 `< cursor` 假满足。
+- 受限返修后，编码器与解码器共同拒绝双空、`f>=b` 及 `t` 落在范围外；SQL 测试拆分首/次页并精确计数上下界与 keyset。Codex 直接复现确认五类非法语义均固定 cursor-invalid，合法 `t=f` 与 `t=b-1` 均接受。
+- Codex 独立专项/受影响回归/后端全量为 **87/116/1073 passed**；全量仅 1 条既有 Starlette/httpx 弃用告警，耗时 1697.87 秒。`py_compile`、`git diff --check`、AST 弱断言扫描、精确三文件与空暂存区均通过。
+- 最终 SHA-256：路由=`A5B6A9CE4DA528021C88E8A50E6D507B35BDE3AC26D220BA6863EDED69C789FC`，service=`89F4254D11E03E5C3E5F3D4F62CA75C8AAE22FC9FCA6CDCB93C03E3C1D8FB1AA`，专项测试=`8AB11FF9C9230BA4827F27D00CF0DF83BC9CC92C5CB0A019842F4E2A039BE358`。
+- Grok 原任务/首轮 review=`msg_561a10fe93ac42f6b6d23fad0e897682`/`msg_233591eecb8043aa9450246bedab157f`，返修 task/review=`msg_45bd09a547014e49a8951276fb162016`/`msg_1d5bb5b639454405b87c4853f57e90fd`，Codex 验收回执=`msg_0533a4bab32448b0be8d5ec2b0ba1508`。
