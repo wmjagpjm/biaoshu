@@ -378,6 +378,7 @@ def test_table_constraints_indexes_and_fk_cascade(disabled_client):
         "chapter_count",
         "created_at",
         "display_name",
+        "is_pinned",
     }
     fks = insp.get_foreign_keys("editor_state_checkpoints")
     fk_by_col = {
@@ -751,7 +752,7 @@ def test_create_exception_rolls_back(disabled_client, monkeypatch):
 
 
 def test_trim_selects_only_ids_not_snapshot_json(disabled_client):
-    """用途：淘汰路径 SQL 仅投影 id，绝不加载 snapshot_json。"""
+    """用途：淘汰路径 SQL 精确投影 id,snapshot_bytes,is_pinned，绝不加载正文/版本/名称。"""
     client = disabled_client
     pid = _create_project(client)
     for _ in range(20):
@@ -784,10 +785,12 @@ def test_trim_selects_only_ids_not_snapshot_json(disabled_client):
         assert match is not None, sql
         select_list = match.group(1).lower()
         assert "snapshot_json" not in select_list, sql
-        # 不得 SELECT * / 全行实体加载：投影应仅为 id 列
-        assert "snapshot_bytes" not in select_list, sql
+        # 不得 SELECT * / 全行实体加载；P12J-A 精确三列投影
         assert "state_version" not in select_list, sql
+        assert "display_name" not in select_list, sql
         assert re.search(r"\bid\b", select_list), sql
+        assert "snapshot_bytes" in select_list, sql
+        assert "is_pinned" in select_list, sql
 
 
 def test_create_succeeds_without_refresh_after_commit(disabled_client, monkeypatch):

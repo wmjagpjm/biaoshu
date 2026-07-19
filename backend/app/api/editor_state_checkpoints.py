@@ -1,14 +1,16 @@
 """
-模块：P12A/P12B-D1/P12G/P12H/P12I editor-state 检查点路由
+模块：P12A/P12B-D1/P12G/P12H/P12I/P12J-A editor-state 检查点路由
 用途：显式创建、有限列表、按需只读详情、锁后原子安全恢复、单条展示名称 PATCH、
-  单条 DELETE、名称/可见内容显式搜索。
+  单条 DELETE、名称/可见内容显式搜索、单条固定状态 PATCH。
 对接：/api/projects/{projectId}/editor-state-checkpoints*；
   editor_state_checkpoint_service；editor_state_checkpoint_name_service；
-  editor_state_checkpoint_delete_service；deps.get_workspace_id。
+  editor_state_checkpoint_delete_service；editor_state_checkpoint_pin_service；
+  deps.get_workspace_id。
 二次开发：
   - 复用 get_workspace_id（disabled 兼容，required 仅 bid_writer）；
   - POST/PATCH/DELETE 继续既有 CSRF；所有成功/业务错误 Cache-Control: no-store；
   - PATCH display-name：query 空、body≤1024、精确一键；成功仅回 displayName；
+  - PATCH pin：query 空、body≤1024、精确一键 isPinned 原生 bool；成功仅回 isPinned；
   - DELETE 详情：无 query、body 严格零字节；成功严格空 204；
   - POST search：query 空、body≤1024、精确一键 query；成功复用列表七键；
   - 错误固定 code/message（409 另含 currentStateVersion），不反射 ID/正文/路径/SQL。
@@ -31,6 +33,8 @@ from app.api.schemas import (
     EditorStateCheckpointDisplayNameUpdate,
     EditorStateCheckpointListOut,
     EditorStateCheckpointMetaOut,
+    EditorStateCheckpointPinOut,
+    EditorStateCheckpointPinUpdate,
     EditorStateCheckpointRestore,
     EditorStateCheckpointRestoreOut,
 )
@@ -44,11 +48,18 @@ from app.services.editor_state_checkpoint_name_service import (
     EditorStateCheckpointNameError,
     set_editor_state_checkpoint_display_name as set_display_name_svc,
 )
+from app.services.editor_state_checkpoint_pin_service import (
+    CODE_PIN_INVALID,
+    MSG_PIN_INVALID,
+    EditorStateCheckpointPinError,
+    set_editor_state_checkpoint_pin as set_pin_svc,
+)
 from app.services.editor_state_checkpoint_service import EditorStateCheckpointError
 
-# P12G / P12I：命名与搜索请求体原始字节硬上限
+# P12G / P12I / P12J-A：命名、搜索与固定请求体原始字节硬上限
 _DISPLAY_NAME_BODY_MAX_BYTES = 1024
 _SEARCH_BODY_MAX_BYTES = 1024
+_PIN_BODY_MAX_BYTES = 1024
 
 router = APIRouter(prefix="/projects", tags=["editor-state-checkpoints"])
 
@@ -68,6 +79,12 @@ _DELETE_REQUEST_INVALID_DETAIL = {
 _SEARCH_REQUEST_INVALID_DETAIL = {
     "code": "editor_state_checkpoint_search_request_invalid",
     "message": "检查点搜索请求无效",
+}
+
+# P12J-A 固定请求 query/body 外壳失败的固定脱敏 detail；禁止反射输入
+_PIN_REQUEST_INVALID_DETAIL = {
+    "code": CODE_PIN_INVALID,
+    "message": MSG_PIN_INVALID,
 }
 
 
@@ -140,6 +157,55 @@ def _raise_search_request_invalid() -> NoReturn:
         detail=dict(_SEARCH_REQUEST_INVALID_DETAIL),
         headers={"Cache-Control": "no-store"},
     ) from None
+
+
+def _raise_pin_request_invalid() -> NoReturn:
+    """
+    用途：PATCH pin 路由专用；query/体非法固定脱敏 422。
+    二次开发：禁止回显 query/body/路径/header/异常原文。
+    """
+    raise HTTPException(
+        status_code=422,
+        detail=dict(_PIN_REQUEST_INVALID_DETAIL),
+        headers={"Cache-Control": "no-store"},
+    ) from None
+
+
+def _raise_pin_error(exc: EditorStateCheckpointPinError) -> NoReturn:
+    """用途：映射固定服务层固定错误。"""
+    raise HTTPException(
+        status_code=exc.status_code,
+        detail=exc.as_detail(),
+        headers={"Cache-Control": "no-store"},
+    ) from None
+
+
+async def _read_pin_json_object(request: Request) -> dict[str, Any]:
+    """
+    用途：仅 pin 路由读取 ≤1024 字节 JSON 对象；失败固定 422。
+    二次开发：禁止把解析异常或 body 片段写入 detail/日志。
+    """
+    try:
+        raw = await request.body()
+    except Exception:
+        _raise_pin_request_invalid()
+    if not raw or len(raw) > _PIN_BODY_MAX_BYTES:
+        _raise_pin_request_invalid()
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError, TypeError):
+        _raise_pin_request_invalid()
+    if not isinstance(data, dict):
+        _raise_pin_request_invalid()
+    return data
+
+
+def _parse_pin_body(data: dict[str, Any]) -> EditorStateCheckpointPinUpdate:
+    """用途：JSON 对象 → 固定 Schema；失败固定脱敏，不暴露 loc/input。"""
+    try:
+        return EditorStateCheckpointPinUpdate.model_validate(data)
+    except ValidationError:
+        _raise_pin_request_invalid()
 
 
 async def _read_search_query_value(request: Request) -> Any:
@@ -404,6 +470,39 @@ async def patch_editor_state_checkpoint_display_name(
     except EditorStateCheckpointNameError as exc:
         _raise_name_error(exc)
     return EditorStateCheckpointDisplayNameOut(display_name=stored)
+
+
+@router.patch(
+    "/{project_id}/editor-state-checkpoints/{checkpoint_id}/pin",
+    response_model=EditorStateCheckpointPinOut,
+)
+async def patch_editor_state_checkpoint_pin(
+    project_id: str,
+    checkpoint_id: str,
+    request: Request,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    workspace_id: Annotated[str, Depends(get_workspace_id)],
+) -> EditorStateCheckpointPinOut:
+    """
+    用途：单条更新当前工作空间项目内检查点的固定状态；成功仅回 isPinned。
+    对接：P12J-A；editor_state_checkpoint_pin_service。
+    二次开发：
+      - 任意 query 或 body 外壳失败固定 422 脱敏（request_invalid）；
+      - body 原始长度 ≤1024；精确一键 isPinned 原生 bool；
+      - 成功/业务错误 no-store；不回显 ID/版本/正文/配额/输入。
+    """
+    _no_store(response)
+    if request.query_params:
+        _raise_pin_request_invalid()
+    body = _parse_pin_body(await _read_pin_json_object(request))
+    try:
+        stored = set_pin_svc(
+            db, workspace_id, project_id, checkpoint_id, body.is_pinned
+        )
+    except EditorStateCheckpointPinError as exc:
+        _raise_pin_error(exc)
+    return EditorStateCheckpointPinOut(is_pinned=stored)
 
 
 @router.post(

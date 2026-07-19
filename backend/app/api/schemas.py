@@ -2427,6 +2427,32 @@ class EditorStateCheckpointDisplayNameOut(BaseModel):
     display_name: str | None = Field(serialization_alias="displayName")
 
 
+class EditorStateCheckpointPinUpdate(BaseModel):
+    """
+    模块：P12J-A 单条检查点固定请求
+    用途：仅 camelCase isPinned；值以 Any 原样承接后由 service 校验原生 bool。
+    对接：PATCH .../editor-state-checkpoints/{checkpointId}/pin。
+    二次开发：extra=forbid；禁止 populate_by_name；snake_case/缺失/额外键 422。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    is_pinned: Any = Field(alias="isPinned")
+
+
+class EditorStateCheckpointPinOut(BaseModel):
+    """
+    模块：P12J-A 单条检查点固定响应
+    用途：成功仅回 isPinned（原生 boolean）。
+    对接：PATCH .../editor-state-checkpoints/{checkpointId}/pin。
+    二次开发：禁止回显 checkpointId/版本/正文/路径/计数/配额。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    is_pinned: bool = Field(serialization_alias="isPinned")
+
+
 class EditorStateCheckpointRestore(BaseModel):
     """
     模块：P12B-D1 检查点安全恢复请求

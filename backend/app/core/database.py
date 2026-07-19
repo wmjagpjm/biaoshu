@@ -258,6 +258,195 @@ def migrate_editor_state_checkpoints_display_name(conn) -> None:
     )
 
 
+def _sqlite_normalize_ddl(ddl: str) -> str:
+    """用途：消除 DDL 全部空白（含 tab/换行/全角空格等）后小写，供幂等判定。"""
+    # 先统一常见空白与全角空格，再去掉所有 Unicode 空白类字符
+    collapsed = (
+        str(ddl)
+        .replace("\u3000", " ")
+        .replace("\xa0", " ")
+    )
+    return "".join(ch for ch in collapsed if not ch.isspace()).lower()
+
+
+def _sqlite_default_equiv_zero(dflt_value) -> bool:
+    """用途：PRAGMA dflt_value 是否等价 0/false（含 '0'/0/false）。"""
+    if dflt_value is None:
+        return False
+    text = str(dflt_value).strip().lower()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in ("'", '"'):
+        text = text[1:-1].strip().lower()
+    return text in ("0", "false", "0.0")
+
+
+def _editor_state_checkpoints_is_pinned_final(
+    cols,
+    ddl: str,
+) -> bool:
+    """
+    用途：判断 is_pinned 是否已达最终态：
+      列存在、类型 BOOLEAN、notnull=1、default 等价 0/false、DDL 等价 0/1 CHECK。
+    任一不完整返回 False，调用方须重建。
+    """
+    pin_row = None
+    for r in cols:
+        if r is not None and len(r) > 1 and r[1] == "is_pinned":
+            pin_row = r
+            break
+    if pin_row is None:
+        return False
+    col_type = str(pin_row[2] or "").strip().upper()
+    notnull = int(pin_row[3] or 0)
+    dflt = pin_row[4] if len(pin_row) > 4 else None
+    if "BOOLEAN" not in col_type:
+        return False
+    if notnull != 1:
+        return False
+    if not _sqlite_default_equiv_zero(dflt):
+        return False
+    if "is_pinnedin(0,1)" not in _sqlite_normalize_ddl(ddl):
+        return False
+    return True
+
+
+def migrate_editor_state_checkpoints_is_pinned(conn) -> None:
+    """
+    用途：P12J-A 幂等加 is_pinned BOOLEAN NOT NULL DEFAULT 0，并附 0/1 CHECK。
+    对接：ensure_schema_columns；仅 SQLite 生效；须在检查点 display_name 迁移之后。
+    二次开发：
+      - 表不存在 no-op；列已达最终态（BOOLEAN + notnull + default0 + 0/1 CHECK）才 no-op；
+      - SQLite 禁止 ADD COLUMN 附 CHECK，故用临时表重建；
+      - 存量无列时 is_pinned 固定 0；已有列时仅保留原始 0/1，NULL/其它归零；
+      - 完整保留十一列、三个既有数值 CHECK、外键与四个索引；
+      - 失败必须抛出阻止启动并由外层 begin 回滚。
+    """
+    dialect_name = getattr(getattr(conn, "dialect", None), "name", None)
+    if dialect_name != "sqlite":
+        return
+
+    row = conn.exec_driver_sql(
+        "SELECT sql FROM sqlite_master "
+        "WHERE type='table' AND name='editor_state_checkpoints'"
+    ).fetchone()
+    if row is None or not row[0]:
+        return
+
+    ddl = row[0]
+    cols = conn.exec_driver_sql(
+        "PRAGMA table_info(editor_state_checkpoints)"
+    ).fetchall()
+    existing = {r[1] for r in cols if r is not None and len(r) > 1}
+    # 最终态齐全才幂等 no-op；可空/无 DEFAULT/类型或 CHECK 不完整均重建
+    if _editor_state_checkpoints_is_pinned_final(cols, ddl):
+        return
+
+    # 触发真实事务（与修订 is_pinned 迁移同策略）
+    conn.exec_driver_sql(
+        "UPDATE editor_state_checkpoints SET id = id WHERE 0"
+    )
+
+    has_display_name = "display_name" in existing
+    has_is_pinned = "is_pinned" in existing
+
+    # DROP 前捕获用户索引 DDL（sql 非空），重建后原样恢复，不新增未有索引
+    index_ddls = [
+        r[0]
+        for r in conn.exec_driver_sql(
+            "SELECT sql FROM sqlite_master "
+            "WHERE type='index' AND tbl_name='editor_state_checkpoints' "
+            "AND sql IS NOT NULL"
+        ).fetchall()
+        if r is not None and r[0]
+    ]
+
+    conn.exec_driver_sql(
+        """
+        CREATE TABLE editor_state_checkpoints__p12ja_mig (
+            id VARCHAR(64) PRIMARY KEY,
+            workspace_id VARCHAR(64) NOT NULL
+                REFERENCES workspaces(id) ON DELETE CASCADE,
+            project_id VARCHAR(64) NOT NULL
+                REFERENCES projects(id) ON DELETE CASCADE,
+            snapshot_json TEXT NOT NULL,
+            state_version VARCHAR(64) NOT NULL,
+            snapshot_bytes INTEGER NOT NULL,
+            outline_node_count INTEGER NOT NULL,
+            chapter_count INTEGER NOT NULL,
+            display_name VARCHAR(160),
+            is_pinned BOOLEAN NOT NULL DEFAULT 0,
+            created_at DATETIME NOT NULL,
+            CHECK (snapshot_bytes >= 1 AND snapshot_bytes <= 2097152),
+            CHECK (outline_node_count >= 0),
+            CHECK (chapter_count >= 0),
+            CHECK (is_pinned IN (0, 1))
+        )
+        """
+    )
+    before = conn.exec_driver_sql(
+        "SELECT COUNT(*) FROM editor_state_checkpoints"
+    ).fetchone()[0]
+
+    if has_display_name and has_is_pinned:
+        select_sql = """
+            INSERT INTO editor_state_checkpoints__p12ja_mig (
+                id, workspace_id, project_id, snapshot_json,
+                state_version, snapshot_bytes, outline_node_count,
+                chapter_count, display_name, is_pinned, created_at
+            )
+            SELECT
+                id, workspace_id, project_id, snapshot_json,
+                state_version, snapshot_bytes, outline_node_count,
+                chapter_count, display_name,
+                CASE WHEN is_pinned IN (0, 1) THEN is_pinned ELSE 0 END,
+                created_at
+            FROM editor_state_checkpoints
+        """
+    elif has_display_name:
+        select_sql = """
+            INSERT INTO editor_state_checkpoints__p12ja_mig (
+                id, workspace_id, project_id, snapshot_json,
+                state_version, snapshot_bytes, outline_node_count,
+                chapter_count, display_name, is_pinned, created_at
+            )
+            SELECT
+                id, workspace_id, project_id, snapshot_json,
+                state_version, snapshot_bytes, outline_node_count,
+                chapter_count, display_name, 0, created_at
+            FROM editor_state_checkpoints
+        """
+    else:
+        select_sql = """
+            INSERT INTO editor_state_checkpoints__p12ja_mig (
+                id, workspace_id, project_id, snapshot_json,
+                state_version, snapshot_bytes, outline_node_count,
+                chapter_count, display_name, is_pinned, created_at
+            )
+            SELECT
+                id, workspace_id, project_id, snapshot_json,
+                state_version, snapshot_bytes, outline_node_count,
+                chapter_count, NULL, 0, created_at
+            FROM editor_state_checkpoints
+        """
+    conn.exec_driver_sql(select_sql)
+
+    after = conn.exec_driver_sql(
+        "SELECT COUNT(*) FROM editor_state_checkpoints__p12ja_mig"
+    ).fetchone()[0]
+    if before != after:
+        raise RuntimeError(
+            "editor_state_checkpoints is_pinned 迁移行数核对失败，已中止（调用方须回滚）"
+        )
+
+    conn.exec_driver_sql("DROP TABLE editor_state_checkpoints")
+    conn.exec_driver_sql(
+        "ALTER TABLE editor_state_checkpoints__p12ja_mig "
+        "RENAME TO editor_state_checkpoints"
+    )
+    # 原样恢复 DROP 前用户索引；生产 create_all 库通常已有四索引，迁移 no-op 不经此路径
+    for ddl_sql in index_ddls:
+        conn.exec_driver_sql(ddl_sql)
+
+
 def migrate_editor_state_revisions_is_pinned(conn) -> None:
     """
     用途：P12F-J-A 幂等加 is_pinned BOOLEAN NOT NULL DEFAULT 0，并附 0/1 CHECK。
@@ -504,3 +693,5 @@ def ensure_schema_columns(target_engine=None) -> None:
         migrate_editor_state_revisions_is_pinned(conn)
         # P12G：检查点表幂等加 display_name；失败阻止启动
         migrate_editor_state_checkpoints_display_name(conn)
+        # P12J-A：检查点 display_name 后幂等加 is_pinned + CHECK；失败阻止启动
+        migrate_editor_state_checkpoints_is_pinned(conn)

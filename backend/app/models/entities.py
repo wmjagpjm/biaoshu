@@ -1427,16 +1427,18 @@ class ContentFuseApplicationBatchRow(Base):
 
 class EditorStateCheckpointRow(Base):
     """
-    模块：P12A/P12G editor-state 手动检查点只读库
+    模块：P12A/P12G/P12J-A editor-state 手动检查点只读库
     用途：保存用户显式创建的完整编辑态规范快照（每项目最近 20 条）。
     对接：editor_state_checkpoint_service；
       editor_state_checkpoint_name_service（仅 display_name）；
+      editor_state_checkpoint_pin_service（仅 is_pinned）；
       /api/projects/{id}/editor-state-checkpoints*。
     二次开发：
       - 快照仅服务端从 get_editor_state 抽取 13 键生成，禁止客户端投稿
-      - 列表不得投影 snapshot_json；display_name 不进快照/恢复/裁剪/排序
-      - 创建与安全检查点初始 display_name=NULL；禁止客户端投稿名称
-      - 禁止修改旧表；仅 create_all 建新表 + 幂等加列
+      - 列表不得投影 snapshot_json；display_name/is_pinned 不进快照/恢复/排序
+      - 创建与安全检查点初始 display_name=NULL、is_pinned=false；禁止客户端投稿
+      - is_pinned 仅保护自动裁剪，不阻止显式 DELETE
+      - 禁止修改旧表；仅 create_all 建新表 + 幂等迁移
     """
 
     __tablename__ = "editor_state_checkpoints"
@@ -1452,6 +1454,10 @@ class EditorStateCheckpointRow(Base):
         CheckConstraint(
             "chapter_count >= 0",
             name="ck_editor_state_checkpoints_chapter_count",
+        ),
+        CheckConstraint(
+            "is_pinned IN (0, 1)",
+            name="ck_editor_state_checkpoints_is_pinned",
         ),
         Index(
             "ix_escp_workspace_project_created_id",
@@ -1484,6 +1490,11 @@ class EditorStateCheckpointRow(Base):
     chapter_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # P12G：可选展示名称；不进快照/恢复/排序/裁剪；创建默认 NULL
     display_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    # P12J-A：服务端固定状态；存量/新增默认 false；客户端不得投稿
+    # server_default 保证裸 INSERT 省略该列时 SQLite 仍写入 0
+    is_pinned: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

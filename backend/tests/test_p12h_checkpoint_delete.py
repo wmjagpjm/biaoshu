@@ -1620,6 +1620,7 @@ def test_delete_ast_and_source_guards():
         "outline_node_count",
         "chapter_count",
         "display_name",
+        "is_pinned",
         "created_at",
     ]
 

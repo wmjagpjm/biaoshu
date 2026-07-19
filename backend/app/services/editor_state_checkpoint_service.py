@@ -1,13 +1,16 @@
 """
-模块：P12A/P12B-D1/P12C-B-D3/P12I editor-state 检查点服务
+模块：P12A/P12B-D1/P12C-B-D3/P12I/P12J-A editor-state 检查点服务
 用途：手动创建/列表/详情；锁后 CAS 的原子安全恢复与修订账本接入；
-  以及当前项目最多 20 条候选内的名称/可见内容显式只读搜索。
+  当前项目最多 20 条候选内的名称/可见内容显式只读搜索；
+  以及固定行 + 本轮安全检查点保护的裁剪。
 对接：api.editor_state_checkpoints；editor_state_service（共享全状态版本算法与写回原语）；
-  editor_state_revision_service.record_editor_state_transition；EditorStateCheckpointRow。
+  editor_state_revision_service.record_editor_state_transition；EditorStateCheckpointRow；
+  editor_state_checkpoint_pin_service（复用固定上限常量）。
 二次开发：
-  - 禁止接受客户端 snapshot/版本/计数/名称；
+  - 禁止接受客户端 snapshot/版本/计数/名称/is_pinned；
   - 创建与裁剪同事务；恢复与安全检查点/写回/修订/裁剪同事务；失败必须 rollback；
   - 列表 SQL 只投影元数据列，绝不 select snapshot_json；
+  - 裁剪 SQL 仅投影 id/snapshot_bytes/原始 is_pinned；先全验再删；
   - 搜索 SQL 投影八列（含 snapshot_json）且 LIMIT 20；先完整重验再匹配；全程零写；
   - 13 键/规范 JSON/stateVersion/ORM 映射必须委托 editor_state_service，禁止第二套算法；
   - 禁止调用会自行 commit 的 create_editor_state_checkpoint 或 upsert_editor_state 做嵌套恢复；
@@ -22,7 +25,7 @@ import secrets
 import unicodedata
 from typing import Any
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import Integer, delete, select, type_coerce, update
 from sqlalchemy.orm import Session
 
 from app.models.entities import (
@@ -37,6 +40,9 @@ from app.services.project_service import ProjectNotFoundError
 MAX_CHECKPOINTS_PER_PROJECT = 20
 MAX_SNAPSHOT_BYTES = 2 * 1024 * 1024  # 2 MiB
 MIN_SNAPSHOT_BYTES = 1
+# P12J-A：项目级固定上限（条数/合计字节）
+MAX_PINNED_CHECKPOINTS_PER_PROJECT = 5
+MAX_PINNED_BYTES_PER_PROJECT = 10 * 1024 * 1024  # 10 MiB
 
 # 与 editor_state_service 共享精确 13 键（薄兼容常量，禁止本地另起一套）
 SNAPSHOT_KEYS: tuple[str, ...] = editor_state_service.CANONICAL_STATE_KEYS
@@ -256,6 +262,7 @@ def _insert_checkpoint_row(
     """
     用途：插入检查点行（供测试可 patch，模拟插入中途失败）。
     对接：create_editor_state_checkpoint。
+    二次开发：新建手动/安全检查点显式 is_pinned=false。
     """
     row = EditorStateCheckpointRow(
         id=checkpoint_id,
@@ -266,11 +273,32 @@ def _insert_checkpoint_row(
         snapshot_bytes=snapshot_bytes,
         outline_node_count=outline_node_count,
         chapter_count=chapter_count,
+        is_pinned=False,
         created_at=utc_now(),
     )
     db.add(row)
     db.flush()
     return row
+
+
+def _validate_trim_snapshot_bytes(value: Any) -> int:
+    """用途：裁剪前严格校验 snapshot_bytes（原生整数、1..2MiB）。"""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise _corrupt() from None
+    if value < MIN_SNAPSHOT_BYTES or value > MAX_SNAPSHOT_BYTES:
+        raise _corrupt() from None
+    return value
+
+
+def _validate_trim_is_pinned(value: Any) -> bool:
+    """
+    用途：裁剪前严格校验 is_pinned；仅接受 bool 或 SQLite 0/1 整型。
+    """
+    if isinstance(value, bool):
+        return value
+    if type(value) is int and value in (0, 1):
+        return value == 1
+    raise _corrupt() from None
 
 
 def _trim_checkpoints(
@@ -281,16 +309,25 @@ def _trim_checkpoints(
     protect_id: str | None = None,
 ) -> None:
     """
-    用途：同事务内仅保留本项目最近 20 条（created_at DESC, id DESC）。
+    用途：同事务内保护性裁剪本项目检查点：
+      固定行永远保留；可选 protect_id（恢复前安全检查点）无条件保留；
+      其余非固定按 created_at DESC,id DESC 补足到最多 20 条。
     二次开发：
-      - 只 SELECT id，禁止加载 snapshot_json 正文；
-      - DELETE 必须带 workspace_id/project_id/id 范围约束；
-      - 禁止跨项目/跨空间删除；
-      - protect_id（恢复前安全检查点）绝不可因并列时间戳/随机 ID 被本轮裁掉。
+      - SELECT 仅 id/snapshot_bytes/原始 is_pinned，禁止加载 snapshot_json/版本/名称；
+      - 必须先完整物化并校验全部元数据，再校验固定集合 ≤5/10MiB；
+      - 若传入 protect_id 则必须存在于候选，否则 corrupt；
+      - DELETE 必须带 workspace_id/project_id/id 范围约束；禁止跨项目/跨空间删除。
     """
-    keep_ids = list(
+    # type_coerce(Integer)：绕过 Boolean result processor，返回原始 0/1/非法整型
+    rows = list(
         db.execute(
-            select(EditorStateCheckpointRow.id)
+            select(
+                EditorStateCheckpointRow.id,
+                EditorStateCheckpointRow.snapshot_bytes,
+                type_coerce(EditorStateCheckpointRow.is_pinned, Integer).label(
+                    "is_pinned"
+                ),
+            )
             .where(
                 EditorStateCheckpointRow.workspace_id == workspace_id,
                 EditorStateCheckpointRow.project_id == project_id,
@@ -299,18 +336,58 @@ def _trim_checkpoints(
                 EditorStateCheckpointRow.created_at.desc(),
                 EditorStateCheckpointRow.id.desc(),
             )
-        )
-        .scalars()
-        .all()
+        ).all()
     )
-    if not keep_ids:
+    # 空集：仅无 protect_id 时可 return；带 protect_id 时缺失固定 corrupt
+    if not rows:
+        if protect_id is not None:
+            raise _corrupt() from None
         return
-    if protect_id and protect_id in keep_ids:
-        others = [cid for cid in keep_ids if cid != protect_id]
-        retain = {protect_id, *others[: MAX_CHECKPOINTS_PER_PROJECT - 1]}
-    else:
-        retain = set(keep_ids[:MAX_CHECKPOINTS_PER_PROJECT])
-    drop_ids = [cid for cid in keep_ids if cid not in retain]
+
+    # 先完整校验全部元数据，再决定删除集合；任一行非法则整事务回滚
+    validated: list[tuple[str, int, bool]] = []
+    pinned_count = 0
+    pinned_bytes = 0
+    id_set: set[str] = set()
+    for row in rows:
+        nbytes = _validate_trim_snapshot_bytes(row.snapshot_bytes)
+        pinned = _validate_trim_is_pinned(row.is_pinned)
+        cid = str(row.id)
+        validated.append((cid, nbytes, pinned))
+        id_set.add(cid)
+        if pinned:
+            pinned_count += 1
+            pinned_bytes += nbytes
+
+    if (
+        pinned_count > MAX_PINNED_CHECKPOINTS_PER_PROJECT
+        or pinned_bytes > MAX_PINNED_BYTES_PER_PROJECT
+    ):
+        raise _corrupt() from None
+
+    # 固定行永远进入保留集合
+    keep_ids: set[str] = set()
+    for cid, _nbytes, pinned in validated:
+        if pinned:
+            keep_ids.add(cid)
+
+    # 恢复前安全检查点：无论固定状态都必须保留；缺失固定 corrupt
+    if protect_id is not None:
+        if protect_id not in id_set:
+            raise _corrupt() from None
+        keep_ids.add(protect_id)
+
+    # 在固定集合与可选 protect_id 之外，普通非固定按稳定倒序补足到 20
+    for cid, _nbytes, pinned in validated:
+        if cid in keep_ids:
+            continue
+        if pinned:
+            continue
+        if len(keep_ids) >= MAX_CHECKPOINTS_PER_PROJECT:
+            break
+        keep_ids.add(cid)
+
+    drop_ids = [cid for cid, _n, _p in validated if cid not in keep_ids]
     if not drop_ids:
         return
     db.execute(
