@@ -1034,6 +1034,22 @@ Codex 独立串行通过后端 P12I/五文件检查点回归/全量 **18/123/123
 
 固定/保护裁剪、排序、分页/游标、片段/高亮/评分、自动搜索/缓存、批量、跨项目检查点/搜索、完整时间线、跨客户端互斥、多人协作、presence、SSE/WebSocket 不在 P12I。
 
+## P12J-A 检查点固定与保护裁剪后端基础（已冻结待实现）
+
+契约=`docs/p12j-checkpoint-pinning-backend-contract.md`，计划=`docs/plans/2026-07-19-p12j-checkpoint-pinning-backend-plan.md`。本包严格九文件，只做后端列/迁移/PATCH/配额/裁剪；P12J-B 响应与前端不在本包。
+
+冻结后的联调验收项：
+
+1. 新库及旧 SQLite 表最终都有 `is_pinned BOOLEAN NOT NULL DEFAULT 0` 与 0/1 CHECK；旧行归零，已有有效 0/1 保留，迁移中途失败完整回滚且不残留临时表。
+2. `PATCH /api/projects/{projectId}/editor-state-checkpoints/{checkpointId}/pin` 无 query，原始 body ≤1024 字节且精确 `{isPinned:boolean}`；成功/错误 no-store、固定脱敏，required `bid_writer`/CSRF 与 disabled 兼容均不回退。
+3. 每项目固定上限 5 条/10 MiB；锁后原始 Integer 投影完整校验，候选第 21 行、非法固定值/字节、execute/flush/commit 均固定失败并零写。
+4. 手动创建保留全部固定行和新检查点；恢复同时保留全部固定行与本轮安全检查点；并列时间戳/不利 ID 不得淘汰安全点，旁路项目/空间不受影响。
+5. 显式 P12H DELETE 仍允许删除固定行；取消固定不立即裁剪，后续创建/恢复才按普通时间顺序处理。
+6. create/list/search 继续七键、detail 八键且无 `isPinned`；前端没有新按钮/标签，排序、搜索、命名、恢复、修订历史合同不变。
+7. pytest 逐条串行，禁止 xdist/并发分组，且本后端包不运行或修改 Playwright；最终须通过新专项、受影响回归、后端全量、py_compile、diff-check、九文件/哈希/空暂存门。
+
+实现尚未开始，不得把冻结项写成已通过。Grok 完成后只发送 `review_request`；Codex 独立验收和中文提交推送后再更新本节结果。
+
 ## P13-A 任务 SSE 工作空间鉴权（已完成）
 
 冻结=`e8dfa61`，实现=`1509aa2`。required 模式继续由认证中间件负责无会话 401；SSE 路由连接前短 Session 复用统一 `get_workspace_id`，因此 finance/hr/bidder 固定 `role_forbidden`，非成员显式头固定 `workspace_forbidden`，无头原生 EventSource 使用会话 `activeWorkspaceId`。disabled 仍支持默认空间与合法显式头。
