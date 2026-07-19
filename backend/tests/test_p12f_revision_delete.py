@@ -1657,6 +1657,7 @@ def test_delete_ast_and_source_guards():
         "snapshot_bytes",
         "source_kind",
         "display_name",
+        "is_pinned",
         "created_at",
     ]
 

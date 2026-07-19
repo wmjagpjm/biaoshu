@@ -1,17 +1,18 @@
 """
-模块：P12C-C1/C2/P12D-A/P12E-A/P12E-B/P12F-B/P12F-D/P12F-E-A/P12F-F-A/P12F-G-A/P12F-H
+模块：P12C-C1/C2/P12D-A/P12E-A/P12E-B/P12F-B/P12F-D/P12F-E-A/P12F-F-A/P12F-G-A/P12F-H/P12F-J-A
   editor-state 修订历史只读、游标页、来源/时间范围筛选、可见内容搜索、受限恢复、
-  差异摘要与正文差异、单条物理删除、单条展示命名路由
+  差异摘要与正文差异、单条物理删除、单条展示命名、单条固定状态路由
 用途：项目最近 10 条修订元数据列表、键集游标页（可选 sourceKind/createdFrom/createdBefore）、
   有界可见内容搜索、单条按需详情、单条受限恢复、与当前状态差异摘要、单/双修订正文差异、
-  单条自动修订物理删除、单条展示名称 PATCH。
+  单条自动修订物理删除、单条展示名称 PATCH、单条固定状态 PATCH。
 对接：/api/projects/{projectId}/editor-state-revisions*；
   editor_state_revision_history_service；
   editor_state_revision_restore_service；
   editor_state_revision_comparison_service；
   editor_state_revision_body_diff_service；
   editor_state_revision_delete_service；
-  editor_state_revision_name_service；deps.get_workspace_id。
+  editor_state_revision_name_service；
+  editor_state_revision_pin_service；deps.get_workspace_id。
 二次开发：
   - 复用 get_workspace_id（disabled 兼容，required 仅 bid_writer）；
   - POST/DELETE/PATCH 继续既有 CSRF；所有成功/业务错误 Cache-Control: no-store；
@@ -19,11 +20,12 @@
   - 未知查询参数不得改变固定排序/上限/来源全集/正文不可搜索边界；
   - 静态 /page 与 /search 必须注册在动态 /{revision_id} 之前；页大小服务端固定 10；
   - page 扩展可选 query 别名 sourceKind/createdFrom/createdBefore；旧列表路由完全不变；
-  - search 仅 POST body 承载关键词；list/page/search/detail 六键含 displayName；
+  - search 仅 POST body 承载关键词；list/page/search/detail 六键含 displayName（无 isPinned）；
   - comparison/body-diff 只读，禁止写库/锁/审计；
   - P12E-B 双修订 body-diff 两侧均经 C1 校验，禁止读取当前 editor-state；
   - DELETE 必须无 query 且 body 严格零长度；成功固定空 204；
   - PATCH display-name：query 空、body≤1024、精确一键；成功仅回 displayName；
+  - PATCH pin：query 空、body≤1024、精确一键 isPinned 原生 bool；成功仅回 isPinned；
   - 不得把 revision ID/state version/原始快照/关键词/名称放入错误响应。
 """
 
@@ -50,6 +52,8 @@ from app.api.schemas import (
     EditorStateRevisionMetaOut,
     EditorStateRevisionPageOut,
     EditorStateRevisionPairBodyDiffOut,
+    EditorStateRevisionPinOut,
+    EditorStateRevisionPinUpdate,
     EditorStateRevisionRestore,
     EditorStateRevisionRestoreOut,
     EditorStateRevisionSearch,
@@ -81,12 +85,20 @@ from app.services.editor_state_revision_name_service import (
     EditorStateRevisionNameError,
     set_editor_state_revision_display_name as set_display_name_svc,
 )
+from app.services.editor_state_revision_pin_service import (
+    CODE_PIN_INVALID,
+    MSG_PIN_INVALID,
+    EditorStateRevisionPinError,
+    set_editor_state_revision_pin as set_pin_svc,
+)
 from app.services.editor_state_revision_restore_service import (
     EditorStateRevisionRestoreError,
 )
 
 # P12F-H：命名请求体原始字节硬上限
 _DISPLAY_NAME_BODY_MAX_BYTES = 1024
+# P12F-J-A：固定请求体原始字节硬上限
+_PIN_BODY_MAX_BYTES = 1024
 
 router = APIRouter(prefix="/projects", tags=["editor-state-revisions"])
 
@@ -106,6 +118,12 @@ _DELETE_REQUEST_INVALID_DETAIL = {
 _NAME_REQUEST_INVALID_DETAIL = {
     "code": CODE_NAME_INVALID,
     "message": MSG_NAME_INVALID,
+}
+
+# P12F-J-A 固定请求 query/body 外壳失败的固定脱敏 detail；禁止反射输入
+_PIN_REQUEST_INVALID_DETAIL = {
+    "code": CODE_PIN_INVALID,
+    "message": MSG_PIN_INVALID,
 }
 
 
@@ -154,6 +172,55 @@ def _raise_name_error(exc: EditorStateRevisionNameError) -> NoReturn:
         detail=exc.as_detail(),
         headers={"Cache-Control": "no-store"},
     ) from None
+
+
+def _raise_pin_request_invalid() -> NoReturn:
+    """
+    用途：PATCH pin 路由专用；query/体非法固定脱敏 422。
+    二次开发：禁止回显 query/body/路径/header/异常原文。
+    """
+    raise HTTPException(
+        status_code=422,
+        detail=dict(_PIN_REQUEST_INVALID_DETAIL),
+        headers={"Cache-Control": "no-store"},
+    ) from None
+
+
+def _raise_pin_error(exc: EditorStateRevisionPinError) -> NoReturn:
+    """用途：映射固定服务层固定错误。"""
+    raise HTTPException(
+        status_code=exc.status_code,
+        detail=exc.as_detail(),
+        headers={"Cache-Control": "no-store"},
+    ) from None
+
+
+async def _read_pin_json_object(request: Request) -> dict[str, Any]:
+    """
+    用途：仅 pin 路由读取 ≤1024 字节 JSON 对象；失败固定 422。
+    二次开发：禁止把解析异常或 body 片段写入 detail/日志。
+    """
+    try:
+        raw = await request.body()
+    except Exception:
+        _raise_pin_request_invalid()
+    if not raw or len(raw) > _PIN_BODY_MAX_BYTES:
+        _raise_pin_request_invalid()
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError, TypeError):
+        _raise_pin_request_invalid()
+    if not isinstance(data, dict):
+        _raise_pin_request_invalid()
+    return data
+
+
+def _parse_pin_body(data: dict[str, Any]) -> EditorStateRevisionPinUpdate:
+    """用途：JSON 对象 → 固定 Schema；失败固定脱敏，不暴露 loc/input。"""
+    try:
+        return EditorStateRevisionPinUpdate.model_validate(data)
+    except ValidationError:
+        _raise_pin_request_invalid()
 
 
 async def _read_display_name_json_object(request: Request) -> dict[str, Any]:
@@ -416,6 +483,39 @@ def get_editor_state_revision(
         display_name=data["display_name"],
         snapshot=data["snapshot"],
     )
+
+
+@router.patch(
+    "/{project_id}/editor-state-revisions/{revision_id}/pin",
+    response_model=EditorStateRevisionPinOut,
+)
+async def patch_editor_state_revision_pin(
+    project_id: str,
+    revision_id: str,
+    request: Request,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    workspace_id: Annotated[str, Depends(get_workspace_id)],
+) -> EditorStateRevisionPinOut:
+    """
+    用途：单条更新当前工作空间项目内自动修订的固定状态；成功仅回 isPinned。
+    对接：P12F-J-A；editor_state_revision_pin_service。
+    二次开发：
+      - 任意 query 或 body 外壳失败固定 422 脱敏；
+      - body 原始长度 ≤1024；精确一键 isPinned 原生 bool；
+      - 超限 409 零写；成功/业务错误 no-store；不回显 ID/版本/正文/输入。
+    """
+    _no_store(response)
+    if request.query_params:
+        _raise_pin_request_invalid()
+    body = _parse_pin_body(await _read_pin_json_object(request))
+    try:
+        stored = set_pin_svc(
+            db, workspace_id, project_id, revision_id, body.is_pinned
+        )
+    except EditorStateRevisionPinError as exc:
+        _raise_pin_error(exc)
+    return EditorStateRevisionPinOut(is_pinned=stored)
 
 
 @router.patch(

@@ -1490,15 +1490,17 @@ class EditorStateCheckpointRow(Base):
 
 class EditorStateRevisionRow(Base):
     """
-    模块：P12C-A editor-state 有限自动修订账本
-    用途：与手动/安全检查点独立的最近自动修订快照（每项目最近 10 条）。
+    模块：P12C-A / P12F-J-A editor-state 有限自动修订账本
+    用途：与手动/安全检查点独立的最近自动修订快照（每项目最近 20 条/20 MiB）。
     对接：editor_state_revision_service.record_editor_state_transition；
-      单条物理删除见 editor_state_revision_delete_service。
+      单条物理删除见 editor_state_revision_delete_service；
+      单条固定见 editor_state_revision_pin_service。
     二次开发：
-      - 禁止客户端投稿 snapshot/source；写入仅经 transition 记账
+      - 禁止客户端投稿 snapshot/source/is_pinned；写入仅经 transition/pin 服务
       - 不得复用 editor_state_checkpoints 的 20 条裁剪域
       - 列表/最新/裁剪不得投影 snapshot_json；浏览/恢复见 history/restore；
-        单条物理删除仅限独立 delete 服务，无批量/软删除/本表外级联
+        单条物理删除仅限独立 delete 服务，无批量/软删除/本表外级联；
+      - is_pinned 仅保护自动裁剪，不阻止显式 DELETE
     """
 
     __tablename__ = "editor_state_revisions"
@@ -1515,6 +1517,10 @@ class EditorStateRevisionRow(Base):
             "'revision_restore'"
             ")",
             name="ck_editor_state_revisions_source_kind",
+        ),
+        CheckConstraint(
+            "is_pinned IN (0, 1)",
+            name="ck_editor_state_revisions_is_pinned",
         ),
         Index(
             "ix_esr_workspace_project_created_id",
@@ -1547,6 +1553,11 @@ class EditorStateRevisionRow(Base):
     source_kind: Mapped[str] = mapped_column(String(64), nullable=False)
     # P12F-H：可选展示名称；新修订默认 null；ORM 长度 160 仅存储上界，不替代服务端码点校验
     display_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    # P12F-J-A：服务端固定状态；存量/新增默认 false；客户端不得投稿
+    # server_default 保证裸 INSERT 省略该列时 SQLite 仍写入 0
+    is_pinned: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

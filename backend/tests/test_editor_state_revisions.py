@@ -12,6 +12,7 @@ import json
 import re
 import secrets
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -252,8 +253,28 @@ def test_table_columns_constraints_indexes_and_fk_cascade(disabled_client):
         "snapshot_bytes",
         "source_kind",
         "display_name",
+        "is_pinned",
         "created_at",
     }
+    # P12F-J-A：is_pinned 必须 NOT NULL，DDL 含 0/1 CHECK（存量/新增默认 false）
+    col_meta = {
+        c["name"]: c for c in insp.get_columns("editor_state_revisions")
+    }
+    pin_col = col_meta["is_pinned"]
+    assert pin_col.get("nullable") is False
+    with engine.connect() as conn:
+        ddl = conn.execute(
+            text(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type='table' AND name='editor_state_revisions'"
+            )
+        ).scalar_one()
+    assert isinstance(ddl, str) and "is_pinned" in ddl
+    assert re.search(
+        r"is_pinned\s+IN\s*\(\s*0\s*,\s*1\s*\)",
+        ddl,
+        flags=re.IGNORECASE,
+    ), ddl
     fks = insp.get_foreign_keys("editor_state_revisions")
     fk_by_col = {
         tuple(f["constrained_columns"]): f for f in fks if f.get("constrained_columns")
@@ -349,6 +370,9 @@ def test_first_transition_writes_before_and_after(disabled_client):
         assert r.source_kind == _SOURCE_OK
         assert r.workspace_id == _WS
         assert r.project_id == pid
+        # P12F-J-A：transition 新增行默认不固定
+        assert hasattr(r, "is_pinned")
+        assert r.is_pinned is False
 
 
 def test_same_version_first_transition_writes_one(disabled_client):
@@ -1184,6 +1208,214 @@ def test_checkpoints_untouched(disabled_client):
         assert row.state_version == cp_ver
     finally:
         cp_row.close()
+
+
+def test_trim_protects_pinned_old_rows_and_keeps_quota(disabled_client, monkeypatch):
+    """
+    用途：P12F-J-A 保护性裁剪——固定旧行永不被自动裁剪；
+      非固定按最新前缀补足，总条数仍 ≤20；禁止跳过大非固定保留更旧小行。
+    """
+    pid = _create_project(disabled_client, name="固定保护裁剪")
+    prev = _variant("pin0")
+    for i in range(1, 8):
+        nxt = _variant(f"pin{i}")
+        _record(pid, prev, nxt)[1].close()
+        prev = nxt
+    rows = _db_rev_rows(pid)
+    # 首写 2 + 6 = 8
+    assert len(rows) == 8
+    # 最旧两行固定；中间大行非固定；最新小行非固定
+    oldest = rows[-1]
+    second_oldest = rows[-2]
+    mid = rows[3]
+    newest = rows[0]
+    db = SessionLocal()
+    try:
+        for rid, nbytes, pinned in (
+            (oldest.id, 100, True),
+            (second_oldest.id, 100, True),
+            (mid.id, 500, False),
+            (newest.id, 100, False),
+        ):
+            row = db.get(EditorStateRevisionRow, rid)
+            assert row is not None
+            row.snapshot_bytes = nbytes
+            assert hasattr(row, "is_pinned")
+            row.is_pinned = pinned
+        # 其余非固定小字节
+        for r in rows:
+            if r.id in {oldest.id, second_oldest.id, mid.id, newest.id}:
+                continue
+            row = db.get(EditorStateRevisionRow, r.id)
+            assert row is not None
+            row.snapshot_bytes = 100
+            row.is_pinned = False
+        db.commit()
+    finally:
+        db.close()
+
+    # 条数上限压到 4：应保留 2 固定 + 最新 2 非固定；中间大行及其更旧非固定删除
+    monkeypatch.setattr(
+        editor_state_revision_service, "MAX_REVISIONS_PER_PROJECT", 4
+    )
+    monkeypatch.setattr(
+        editor_state_revision_service,
+        "MAX_REVISION_BYTES_PER_PROJECT",
+        20 * 1024 * 1024,
+    )
+
+    db = SessionLocal()
+    try:
+        editor_state_revision_service._trim_revisions(db, _WS, pid)
+        db.commit()
+    finally:
+        db.close()
+
+    kept = _db_rev_rows(pid)
+    kept_ids = {r.id for r in kept}
+    assert oldest.id in kept_ids
+    assert second_oldest.id in kept_ids
+    assert newest.id in kept_ids
+    # 最新前缀第二名（rows[1]）应保留；mid 大行应被删
+    assert rows[1].id in kept_ids
+    assert mid.id not in kept_ids
+    assert len(kept) == 4
+    for r in kept:
+        if r.id in {oldest.id, second_oldest.id}:
+            assert r.is_pinned is True
+        else:
+            assert r.is_pinned is False
+
+
+def test_trim_select_projects_is_pinned_not_snapshot_json():
+    """用途：裁剪 SELECT 必须投影 is_pinned 且永不加载 snapshot_json。"""
+    service_path = (
+        Path(__file__).resolve().parents[1]
+        / "app"
+        / "services"
+        / "editor_state_revision_service.py"
+    )
+    text_src = service_path.read_text(encoding="utf-8")
+    m = re.search(
+        r"def _trim_revisions\(.*?\n(?P<body>.*?)(?=\ndef |\Z)",
+        text_src,
+        flags=re.S,
+    )
+    assert m is not None
+    body = m.group("body")
+    assert "is_pinned" in body
+    code_only = re.sub(r'""".*?"""', "", body, flags=re.S)
+    code_only = re.sub(r"#.*", "", code_only)
+    assert "snapshot_json" not in code_only
+    assert "EditorStateRevisionRow.is_pinned" in code_only
+
+
+def _raw_is_pinned_map(project_id: str) -> dict[str, int]:
+    """用途：按 id 读取原始 is_pinned 整型，绕过 Boolean result processor。"""
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            text(
+                "SELECT id, is_pinned FROM editor_state_revisions "
+                "WHERE project_id = :pid ORDER BY id"
+            ),
+            {"pid": project_id},
+        ).fetchall()
+        return {str(r[0]): int(r[1]) for r in rows}
+    finally:
+        db.close()
+
+
+def _set_corrupt_is_pinned_sql(revision_id: str, value: int = 2) -> None:
+    """
+    用途：仅独立连接临时开启 PRAGMA ignore_check_constraints 写入非法 is_pinned，
+      写入后立即恢复 OFF，避免污染后续 CHECK。
+    二次开发：必须用 engine.connect 保持同一连接；Session.commit 后连接会关闭，
+      无法在 finally 中安全恢复 PRAGMA。
+    """
+    with engine.connect() as conn:
+        conn.execute(text("PRAGMA ignore_check_constraints = ON"))
+        try:
+            conn.execute(
+                text(
+                    "UPDATE editor_state_revisions SET is_pinned = :v WHERE id = :id"
+                ),
+                {"v": value, "id": revision_id},
+            )
+            conn.commit()
+        finally:
+            # 无论成功与否都必须在同一连接恢复；PRAGMA 为连接级
+            conn.execute(text("PRAGMA ignore_check_constraints = OFF"))
+            off = conn.execute(
+                text("PRAGMA ignore_check_constraints")
+            ).scalar()
+            assert int(off) == 0, f"PRAGMA 必须恢复 OFF，实际={off!r}"
+
+
+def test_invalid_is_pinned_fails_before_any_delete(disabled_client, monkeypatch):
+    """
+    用途：真实 SQLite 坏 is_pinned=2 时裁剪必须整次失败；
+      固定 EditorStateRevisionError；所有修订 ID/原始 is_pinned/其它域不变；
+      证明完整校验在 DELETE 前（Boolean result processor 不得把 2 吃成 True）。
+    """
+    pid = _create_project(disabled_client, name="坏固定元数据零删")
+    other = _create_project(disabled_client, name="坏固定旁路")
+    _record(other, _variant("bp0"), _variant("bp1"))[1].close()
+    assert _db_rev_count(other) == 2
+
+    prev = _variant("bp0")
+    for i in range(1, 5):
+        nxt = _variant(f"bp{i}")
+        _record(pid, prev, nxt)[1].close()
+        prev = nxt
+    assert _db_rev_count(pid) == 5
+    rows = _db_rev_rows(pid)
+    victim = rows[-1].id
+    sibling = rows[0].id
+
+    # 仅临时绕过 CHECK 写入非法 2，随后立即 OFF
+    _set_corrupt_is_pinned_sql(victim, 2)
+    assert _raw_is_pinned_map(pid)[victim] == 2
+
+    baseline_pid = _rev_meta_seq(pid)
+    baseline_other = _rev_meta_seq(other)
+    baseline_pins = _raw_is_pinned_map(pid)
+    baseline_pins_other = _raw_is_pinned_map(other)
+    assert baseline_pins[victim] == 2
+    assert all(v in (0, 1) or rid == victim for rid, v in baseline_pins.items())
+
+    # 压低条数上限，使合法路径本会删除；非法固定元数据必须抢先失败
+    monkeypatch.setattr(
+        editor_state_revision_service,
+        "MAX_REVISIONS_PER_PROJECT",
+        2,
+    )
+
+    captured: list[str] = []
+
+    def _capture(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("DELETE"):
+            captured.append(statement)
+
+    event.listen(engine, "before_cursor_execute", _capture)
+    db = SessionLocal()
+    try:
+        with pytest.raises(EditorStateRevisionError) as ei:
+            editor_state_revision_service._trim_revisions(db, _WS, pid)
+        assert ei.value.code == CODE_REVISION_INVALID
+        assert ei.value.message == MSG_REVISION_INVALID
+        db.rollback()
+    finally:
+        event.remove(engine, "before_cursor_execute", _capture)
+        db.close()
+
+    assert captured == [], f"坏 is_pinned 前不得 DELETE: {captured}"
+    assert _rev_meta_seq(pid) == baseline_pid
+    assert _rev_meta_seq(other) == baseline_other
+    assert _raw_is_pinned_map(pid) == baseline_pins
+    assert _raw_is_pinned_map(other) == baseline_pins_other
+    assert _raw_is_pinned_map(pid)[victim] == 2
+    assert _raw_is_pinned_map(pid)[sibling] in (0, 1)
 
 
 def test_error_messages_do_not_leak_sensitive(disabled_client):

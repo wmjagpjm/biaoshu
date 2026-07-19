@@ -225,6 +225,148 @@ def migrate_editor_state_revisions_display_name(conn) -> None:
     )
 
 
+def migrate_editor_state_revisions_is_pinned(conn) -> None:
+    """
+    用途：P12F-J-A 幂等加 is_pinned BOOLEAN NOT NULL DEFAULT 0，并附 0/1 CHECK。
+    对接：ensure_schema_columns；仅 SQLite 生效；须在 display_name 迁移之后。
+    二次开发：
+      - 表不存在 no-op；列已存在且 DDL 含 is_pinned IN (0,1) 则 no-op；
+      - SQLite 禁止 ADD COLUMN 附 CHECK，故用临时表重建；
+      - 存量行 is_pinned 固定 0（已有列时保留原值）；失败必须抛出阻止启动并回滚。
+    """
+    dialect_name = getattr(getattr(conn, "dialect", None), "name", None)
+    if dialect_name != "sqlite":
+        return
+
+    row = conn.exec_driver_sql(
+        "SELECT sql FROM sqlite_master "
+        "WHERE type='table' AND name='editor_state_revisions'"
+    ).fetchone()
+    if row is None or not row[0]:
+        return
+
+    ddl = row[0]
+    cols = conn.exec_driver_sql("PRAGMA table_info(editor_state_revisions)").fetchall()
+    existing = {r[1] for r in cols if r is not None and len(r) > 1}
+    normalized = ddl.replace(" ", "").lower()
+    # 已具备列 + 0/1 CHECK → 幂等 no-op
+    if "is_pinned" in existing and "is_pinnedin(0,1)" in normalized:
+        return
+
+    # 触发真实事务（与九来源迁移同策略）
+    conn.exec_driver_sql(
+        "UPDATE editor_state_revisions SET id = id WHERE 0"
+    )
+
+    has_display_name = "display_name" in existing
+    has_is_pinned = "is_pinned" in existing
+
+    conn.exec_driver_sql(
+        """
+        CREATE TABLE editor_state_revisions__p12fja_mig (
+            id VARCHAR(64) PRIMARY KEY,
+            workspace_id VARCHAR(64) NOT NULL
+                REFERENCES workspaces(id) ON DELETE CASCADE,
+            project_id VARCHAR(64) NOT NULL
+                REFERENCES projects(id) ON DELETE CASCADE,
+            snapshot_json TEXT NOT NULL,
+            state_version VARCHAR(64) NOT NULL,
+            snapshot_bytes INTEGER NOT NULL,
+            source_kind VARCHAR(64) NOT NULL,
+            display_name VARCHAR(160),
+            is_pinned BOOLEAN NOT NULL DEFAULT 0,
+            created_at DATETIME NOT NULL,
+            CHECK (snapshot_bytes >= 1 AND snapshot_bytes <= 2097152),
+            CHECK (
+                source_kind IN (
+                    'browser_put','task','revise','callback',
+                    'local_parser','content_fuse_apply',
+                    'content_fuse_consume','checkpoint_restore',
+                    'revision_restore'
+                )
+            ),
+            CHECK (is_pinned IN (0, 1))
+        )
+        """
+    )
+    before = conn.exec_driver_sql(
+        "SELECT COUNT(*) FROM editor_state_revisions"
+    ).fetchone()[0]
+
+    if has_display_name and has_is_pinned:
+        select_sql = """
+            INSERT INTO editor_state_revisions__p12fja_mig (
+                id, workspace_id, project_id, snapshot_json,
+                state_version, snapshot_bytes, source_kind,
+                display_name, is_pinned, created_at
+            )
+            SELECT
+                id, workspace_id, project_id, snapshot_json,
+                state_version, snapshot_bytes, source_kind,
+                display_name,
+                CASE WHEN is_pinned IN (0, 1) THEN is_pinned ELSE 0 END,
+                created_at
+            FROM editor_state_revisions
+        """
+    elif has_display_name:
+        select_sql = """
+            INSERT INTO editor_state_revisions__p12fja_mig (
+                id, workspace_id, project_id, snapshot_json,
+                state_version, snapshot_bytes, source_kind,
+                display_name, is_pinned, created_at
+            )
+            SELECT
+                id, workspace_id, project_id, snapshot_json,
+                state_version, snapshot_bytes, source_kind,
+                display_name, 0, created_at
+            FROM editor_state_revisions
+        """
+    else:
+        select_sql = """
+            INSERT INTO editor_state_revisions__p12fja_mig (
+                id, workspace_id, project_id, snapshot_json,
+                state_version, snapshot_bytes, source_kind,
+                display_name, is_pinned, created_at
+            )
+            SELECT
+                id, workspace_id, project_id, snapshot_json,
+                state_version, snapshot_bytes, source_kind,
+                NULL, 0, created_at
+            FROM editor_state_revisions
+        """
+    conn.exec_driver_sql(select_sql)
+
+    after = conn.exec_driver_sql(
+        "SELECT COUNT(*) FROM editor_state_revisions__p12fja_mig"
+    ).fetchone()[0]
+    if before != after:
+        raise RuntimeError(
+            "editor_state_revisions is_pinned 迁移行数核对失败，已中止（调用方须回滚）"
+        )
+
+    conn.exec_driver_sql("DROP TABLE editor_state_revisions")
+    conn.exec_driver_sql(
+        "ALTER TABLE editor_state_revisions__p12fja_mig "
+        "RENAME TO editor_state_revisions"
+    )
+    conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_editor_state_revisions_workspace_id "
+        "ON editor_state_revisions(workspace_id)"
+    )
+    conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_editor_state_revisions_project_id "
+        "ON editor_state_revisions(project_id)"
+    )
+    conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_editor_state_revisions_created_at "
+        "ON editor_state_revisions(created_at)"
+    )
+    conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_esr_workspace_project_created_id "
+        "ON editor_state_revisions(workspace_id, project_id, created_at, id)"
+    )
+
+
 def ensure_schema_columns(target_engine=None) -> None:
     """
     用途：SQLite 个人版轻量加列（create_all 不会改已有表）。
@@ -325,3 +467,5 @@ def ensure_schema_columns(target_engine=None) -> None:
         migrate_editor_state_revisions_revision_restore_source(conn)
         # P12F-H：九来源迁移成功后幂等加 display_name；失败阻止启动
         migrate_editor_state_revisions_display_name(conn)
+        # P12F-J-A：display_name 后幂等加 is_pinned + CHECK；失败阻止启动
+        migrate_editor_state_revisions_is_pinned(conn)
