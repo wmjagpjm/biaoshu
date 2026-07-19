@@ -1,8 +1,11 @@
 # P12F-J-B 修订固定状态七键响应与前端入口契约
 
-模块：P12F-J-B editor-state 修订固定状态读取、严格前端解析与技术/商务共用操作入口  
-用途：在 P12F-J-A 已交付的服务端固定/取消固定与保护性裁剪之上，让历史列表、游标页、搜索和详情统一返回 `isPinned`，并让用户在共享修订面板中原位固定或取消固定。  
-对接：既有 history service、`EditorStateRevisionMetaOut`、`PATCH .../pin`、共用 `editorStateRevisionApi`/`EditorStateRevisionPanel` 与 history E2E。  
+模块：P12F-J-B editor-state 修订固定状态读取、严格前端解析与技术/商务共用操作入口
+
+用途：在 P12F-J-A 已交付的服务端固定/取消固定与保护性裁剪之上，让历史列表、游标页、搜索和详情统一返回 `isPinned`，并让用户在共享修订面板中原位固定或取消固定。
+
+对接：既有 history service、`EditorStateRevisionMetaOut`、`PATCH .../pin`、共用 `editorStateRevisionApi`/`EditorStateRevisionPanel` 与 history E2E。
+
 二次开发：Grok 只能在十四文件白名单内先写真实 failure-first 再实现和自测；不得暂存、提交或推送；Codex 负责独立审查、独立验收、中文文档、提交和协作分支推送。
 
 状态：2026-07-19 已完成只读审计并冻结；基线为 P12F-J-A 实现 `a7021c4`、文档闭环 `f030f89`。本文件冻结提交产生后才能下发 Grok。
