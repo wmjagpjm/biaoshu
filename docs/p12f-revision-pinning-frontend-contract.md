@@ -8,7 +8,7 @@
 
 二次开发：Grok 只能在十四文件白名单内先写真实 failure-first 再实现和自测；不得暂存、提交或推送；Codex 负责独立审查、独立验收、中文文档、提交和协作分支推送。
 
-状态：2026-07-19 已完成只读审计并冻结；基线为 P12F-J-A 实现 `a7021c4`、文档闭环 `f030f89`。本文件冻结提交产生后才能下发 Grok。
+状态：2026-07-19 已完成实现、独立审查与串行验收；冻结=`f019a4b`，实现=`5ef7abd`，Codex 验收回执=`msg_8399a348aa1543e2b4b61cbdd25b4ac9`。
 
 ## 1. 选择理由与严格边界
 
@@ -85,7 +85,7 @@ cd C:\Users\Administrator\biaoshu\backend
 cd C:\Users\Administrator\biaoshu\frontend
 npx playwright test e2e/editor-state-revision-history.spec.ts --grep "P12F-J-B" --workers=1 --retries=0
 npx playwright test e2e/editor-state-revision-history.spec.ts --workers=1 --retries=0
-npx playwright test e2e/editor-state-checkpoint.spec.ts --workers=1 --retries=0
+npx playwright test e2e/editor-state-checkpoint-restore.spec.ts --workers=1 --retries=0
 npm run test:e2e:technical-editor-state-truth -- --workers=1 --retries=0
 npm run test:e2e:business-editor-state-truth -- --workers=1 --retries=0
 npm run lint
@@ -98,3 +98,10 @@ npm run test:e2e -- --workers=1 --retries=0
 ## 8. 明确未做
 
 不做固定排序或分组、批量/全选、固定数/容量进度、乐观 UI、轮询/自动重试、检查点命名、收藏/标签、名称排序、搜索高亮/片段/评分/游标、跨项目时间线、导出/分享、审计扩展、多人协作、SSE/WebSocket、PostgreSQL/Alembic、表/索引/依赖变更。
+
+## 9. 最终交付证据
+
+1. 实现严格保持十四文件白名单；最终 `git diff --check`、空暂存区、Python 编译、前端 lint 与构建均通过。history service 恰有四处原始整数 `type_coerce(..., Integer).label("is_pinned")` 投影，未出现直接 Boolean 投影、写事务或范围外文件。
+2. Codex 独立串行验收：后端八文件专项 **297 passed**，后端全量 **1170 passed / 1 warning**；P12F-J-B 定向 E2E **6 passed**，history 全量 **61 passed**，checkpoint restore **51 passed**，技术/商务 truth **28/18 passed**。整仓前端全量沿用上一包已验收 **318 passed** 基线，按用户停止重复测试的要求未再重复扫描不受影响套件。
+3. Grok 首轮把后端与 Playwright 并发运行，违反串行门，因此该轮结果全部作废；后续实现保留在工作区，但 Grok 额度/进程中断后未形成 `review_request`。Codex 仅在十四文件内修正刷新互斥、Hooks 依赖及四处 E2E 确定性问题，再独立完成全部有效验收；未把无回执冒充已回执。
+4. 最终 SHA-256：路由=`AA6B2E82AD47126C4CEBFFF5351B3C394B81DCBF3D49D24B20D782CE9981F147`，Schema=`65A5E879E0201E9FAF22F16A5B2914219BDE3FF386C8106FB4BADA338CBD5BE5`，history service=`5C126E7B18D081231AABF9C4C7A04672DE5472F2632C015667A70F08C101B438`，前端 API=`AB194540B8E0EE564218C9E3820BDBEDEF43E97D477650F806C2F09EE686B279`，面板=`283386B7EAE16DF9643C95D0C8CD255FA80FCD47EED189746DE0C62CD95A104F`，history E2E=`6FCB317644AEC24C38532CAD4338BCD4B7DA4AD0A2AB9CDE332D70744FED3A50`。
