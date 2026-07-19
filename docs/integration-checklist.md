@@ -1069,6 +1069,21 @@ Grok 初始任务/review=`msg_b78f8a9474cd470bbd1507aa141ba6c4`/`msg_b86ca88d69b
 
 Codex 独立串行通过后端受影响集/全量 **120/1261 passed**，前端 P12J-B/checkpoint/history/技术/商务 **6/82/61/28/18 passed**；py_compile、lint、build、diff-check、严格十一文件、空暂存区、最终哈希与静态门均通过。Grok 返修自测的 history 首轮曾有一次既有双击确认元素 detached：**1 failed / 44 passed / 16 did not run**；未改代码重跑和 Codex 独立首轮均 **61 passed**，记为非阻断稳定性风险。整仓前端沿用 **318 passed** 基线，未冒充本包重跑。
 
+## P12K 检查点固定优先默认列表（已冻结待实现）
+
+契约=`docs/p12k-checkpoint-pinned-first-list-contract.md`，计划=`docs/plans/2026-07-19-p12k-checkpoint-pinned-first-list-plan.md`，冻结基线=`90cfd58`；严格两文件。
+
+冻结后的联调验收项：
+
+1. 默认 GET 列表精确 `is_pinned DESC,created_at DESC,id DESC`；固定组优先，组内时间/ID 稳定倒序，仍最多 20 条八键元数据且 SQL 不读正文。
+2. PATCH 固定/取消后，下一次默认 GET 分别上移/回归时间位置；PATCH 不自动 GET，P12J-B 当前列表仍原位更新，前端零修改。
+3. search 继续最新 20 条 `created_at DESC,id DESC`；旧固定第 21 条即使命中也不进入候选，多项结果不改为固定优先。
+4. 原始非法 `is_pinned=2` 仍固定 corrupt/no-store/五域零写；其它项目/空间不参与列表或排序。
+5. 表/迁移/模型/Schema/API/pin service/配额/裁剪/create/detail/search/restore/name/delete/修订/前端/依赖全部冻结。
+6. pytest 逐条串行；最终通过 P12K 专项、六文件受影响集、后端全量、py_compile、diff-check、精确两文件、空暂存区、最终哈希和 list/search 独立 AST/SQL 门。本包不运行 Playwright，沿用 checkpoint **82** 与整仓 **318 passed** 基线。
+
+实现尚未开始。Grok 只负责两文件测试先行、实现和自测并发送 `review_request`；Codex 负责独立审查、验收、中文文档、提交与推送。
+
 ## P13-A 任务 SSE 工作空间鉴权（已完成）
 
 冻结=`e8dfa61`，实现=`1509aa2`。required 模式继续由认证中间件负责无会话 401；SSE 路由连接前短 Session 复用统一 `get_workspace_id`，因此 finance/hr/bidder 固定 `role_forbidden`，非成员显式头固定 `workspace_forbidden`，无头原生 EventSource 使用会话 `activeWorkspaceId`。disabled 仍支持默认空间与合法显式头。
