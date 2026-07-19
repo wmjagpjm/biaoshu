@@ -85,13 +85,13 @@ const PAGE_CURSOR_V3_LEN_257 = PAGE_CURSOR_V3_LEN_256 + "A";
 const PAGE_CURSOR_BAD_SHAPE = "not_a_valid_cursor_value";
 /** P12F-E-B 时间范围无效固定中文 */
 const MSG_TIME_RANGE_INVALID = "时间范围无效，请检查开始和结束时间";
-/** P12F-F-B 搜索关键词校验失败固定中文 */
+/** P12F-F-B / P12F-I 搜索关键词校验失败固定中文 */
 const MSG_SEARCH_QUERY_INVALID =
   "搜索关键词需为 1 至 64 个字符，且不能含首尾空白或控制字符";
-/** P12F-F-B 搜索空结果固定中文 */
-const MSG_SEARCH_EMPTY = "未找到匹配修订";
-/** P12F-F-B 搜索失败固定中文 */
-const MSG_SEARCH_FAIL = "修订内容搜索失败，请稍后重试";
+/** P12F-I 名称或内容联合搜索空结果固定中文 */
+const MSG_SEARCH_EMPTY = "没有匹配名称或内容的修订";
+/** P12F-I 名称或内容联合搜索失败固定中文 */
+const MSG_SEARCH_FAIL = "修订名称或内容搜索失败，请稍后重试";
 const MSG_RESTORE_OK = "已恢复到所选修订";
 const MSG_RESTORE_BLOCKED =
   "当前无法恢复，请先处理版本冲突或重新载入";
@@ -978,13 +978,20 @@ function buildDefaultSearchPayload(
   createdBefore: string | null,
 ): { items: RevisionMeta[] } {
   const allRaw = state.revisions[projectId] || [];
+  const needle = query.normalize("NFKC").toLocaleLowerCase();
   const filtered = allRaw.filter((it) => {
     if (sourceKind != null && it.sourceKind !== sourceKind) return false;
     if (!matchesCreatedAtRange(it.createdAt, createdFrom, createdBefore)) {
       return false;
     }
     const detail = state.details[it.revisionId];
-    return probeSnapshotContainsQuery(detail?.snapshot, query);
+    const contentHit = probeSnapshotContainsQuery(detail?.snapshot, query);
+    // P12F-I：名称与内容联合；null 名称只走内容；同修订只 append 一次（filter 自然去重）
+    const nameRaw = it.displayName;
+    const nameHit =
+      typeof nameRaw === "string" &&
+      nameRaw.normalize("NFKC").toLocaleLowerCase().includes(needle);
+    return nameHit || contentHit;
   });
   return { items: filtered.slice(0, 20) };
 }
@@ -3913,7 +3920,7 @@ test.describe("P12C-C3 技术标修订历史", () => {
       page.getByTestId("editor-state-revision-list-error"),
     ).toContainText(MSG_LIST_FAIL);
 
-    // 无创建/删除；禁止错误命名「搜索修订」（P12F-F-B 合法入口为「内容搜索」+「搜索」）
+    // 无创建/删除；禁止错误命名「搜索修订」（P12F-I 合法入口为「名称或内容搜索」+「搜索」）
     await expect(
       page.getByTestId("editor-state-revision-create"),
     ).toHaveCount(0);
@@ -9544,7 +9551,9 @@ test.describe("P12F-F-B 技术标显式搜索", () => {
     await expect(searchInput).toBeVisible();
     await expect(searchApply).toBeVisible();
     await expect(searchClear).toBeVisible();
-    await expect(page.getByText("内容搜索", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText("名称或内容搜索", { exact: true }),
+    ).toBeVisible();
 
     // 输入零请求
     const pageBeforeType = state.pageLog.length;
@@ -12958,5 +12967,401 @@ test.describe("P12F-H 终态静态自检", () => {
     const noLineComments = noBlockComments.replace(/^\s*\/\/.*$/gm, "");
     const allHits = noLineComments.match(guardRe);
     expect(allHits === null ? 0 : allHits.length).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P12F-I 修订名称与可见内容联合搜索前端
+// failure-first：列表成功加载后，精确标签“名称或内容搜索”不存在形成真实红测。
+// ---------------------------------------------------------------------------
+
+/** P12F-I 联合搜索活动态固定中文 */
+const MSG_SEARCH_ACTIVE_P12FI = "当前为名称或内容搜索结果";
+/** P12F-I 联合搜索标签固定中文 */
+const LABEL_SEARCH_P12FI = "名称或内容搜索";
+
+test.describe("P12F-I 技术标名称或内容联合搜索", () => {
+  test("P12F-I 技术标：联合标签、名称唯一命中 displayName 文本安全、精确 POST 四键、活动/失败/空态、零泄漏", async ({
+    page,
+  }) => {
+    const state = createProbeState("tech");
+    const NAME_ONLY = "P12FI_TECH_NAME_ONLY";
+    const NAME_HTML = "<img src=x onerror=window.__p12fi_xss=1>";
+    const EMPTY_Q = "NO_MATCH_P12FI_TOKEN";
+    const COMBO_Q = "P12FI_COMBO_Q";
+    const seeded = seedRevisions(
+      state,
+      TECH_A,
+      4,
+      ["task", "revise", "task", "callback"],
+    );
+    // 名称唯一命中：不 stamp 内容标记
+    seeded[0].displayName = NAME_ONLY;
+    if (state.details[seeded[0].revisionId]) {
+      state.details[seeded[0].revisionId].displayName = NAME_ONLY;
+    }
+    // HTML marker 名称：仅文本渲染
+    seeded[1].displayName = NAME_HTML;
+    if (state.details[seeded[1].revisionId]) {
+      state.details[seeded[1].revisionId].displayName = NAME_HTML;
+    }
+    // 第三条：来源 task + 内容标记，供组合筛选
+    stampSearchableMarker(state, seeded[2].revisionId, COMBO_Q, "tech");
+    seeded[2].displayName = `name-${COMBO_Q}`;
+    if (state.details[seeded[2].revisionId]) {
+      state.details[seeded[2].revisionId].displayName = `name-${COMBO_Q}`;
+    }
+
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+
+    await openWorkspace(page, "tech", TECH_A);
+    expect(state.searchLog.length).toBe(0);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(1);
+    await expect(page.getByTestId("editor-state-revision-item-0")).toBeVisible();
+    expect(state.searchLog.length).toBe(0);
+
+    // failure-first 首个业务失败：列表已加载后联合标签不存在
+    await expect(
+      page.getByText(LABEL_SEARCH_P12FI, { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-search-input"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-revision-search-apply"),
+    ).toBeVisible();
+
+    const searchInput = page.getByTestId("editor-state-revision-search-input");
+    const searchApply = page.getByTestId("editor-state-revision-search-apply");
+    const searchClear = page.getByTestId("editor-state-revision-search-clear");
+
+    // 名称唯一命中：精确一次 POST，body 仅 query；结果展示 displayName
+    const pageBeforeName = state.pageLog.length;
+    await searchInput.fill(NAME_ONLY);
+    await searchApply.click();
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(
+            state,
+            TECH_A,
+            NAME_ONLY,
+            null,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    expect(state.searchLog.length).toBe(1);
+    expect(state.pageLog.length).toBe(pageBeforeName);
+    const nameHit = state.searchLog[0];
+    expect(nameHit.method).toBe("POST");
+    expect(nameHit.path).toBe(
+      `/api/projects/${TECH_A}/editor-state-revisions/search`,
+    );
+    expect(nameHit.queryKeys).toEqual([]);
+    expect(nameHit.search).toBe("");
+    expect(nameHit.bodyKeys).toEqual(["query"]);
+    expect(nameHit.body).toEqual({ query: NAME_ONLY });
+    expect(nameHit.postData).toBe(JSON.stringify({ query: NAME_ONLY }));
+
+    await expect(
+      page.getByTestId("editor-state-revision-search-active"),
+    ).toHaveText(MSG_SEARCH_ACTIVE_P12FI);
+    await expect(page.getByTestId("editor-state-revision-item-0")).toBeVisible();
+    await expect(page.getByTestId("editor-state-revision-item-1")).toHaveCount(
+      0,
+    );
+    await expect(
+      page.getByTestId("editor-state-revision-display-name-0"),
+    ).toHaveText(NAME_ONLY);
+
+    // HTML 名称作文本；零脚本执行
+    await searchClear.click();
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(2);
+    await searchInput.fill(NAME_HTML);
+    const searchBeforeHtml = state.searchLog.length;
+    await searchApply.click();
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(
+            state,
+            TECH_A,
+            NAME_HTML,
+            null,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    expect(state.searchLog.length).toBe(searchBeforeHtml + 1);
+    await expect(
+      page.getByTestId("editor-state-revision-display-name-0"),
+    ).toHaveText(NAME_HTML);
+    const imgCount = await page
+      .getByTestId("editor-state-revision-display-name-0")
+      .locator("img")
+      .count();
+    expect(imgCount).toBe(0);
+    const xss = await page.evaluate(() => {
+      return (window as unknown as { __p12fi_xss?: number }).__p12fi_xss ?? 0;
+    });
+    expect(xss).toBe(0);
+
+    // 空态
+    await searchInput.fill(EMPTY_Q);
+    await searchApply.click();
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(
+            state,
+            TECH_A,
+            EMPTY_Q,
+            null,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect(page.getByTestId("editor-state-revision-empty")).toHaveText(
+      MSG_SEARCH_EMPTY,
+    );
+    await expect(
+      page.getByTestId("editor-state-revision-search-active"),
+    ).toHaveText(MSG_SEARCH_ACTIVE_P12FI);
+
+    // 失败固定文案；来源+时间组合 body 四键
+    await searchClear.click();
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(3);
+    const filter = page.getByTestId("editor-state-revision-source-filter");
+    await filter.selectOption({ label: "任务写入" });
+    await expect
+      .poll(() => pageHitCountForSource(state, TECH_A, "task"), {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    // 不强制时间；组合至少 sourceKind
+    state.searchModeByProject[TECH_A] = { kind: "http_error", status: 500 };
+    await searchInput.fill(COMBO_Q);
+    const pageBeforeFail = state.pageLog.length;
+    await searchApply.click();
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(
+            state,
+            TECH_A,
+            COMBO_Q,
+            "task",
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    expect(state.pageLog.length).toBe(pageBeforeFail);
+    const failHit = state.searchLog[state.searchLog.length - 1];
+    expect(failHit.bodyKeys).toEqual(["query", "sourceKind"]);
+    expect(failHit.body).toEqual({ query: COMBO_Q, sourceKind: "task" });
+    // HTTP 失败走 list-error 固定联合搜索失败文案（校验失败才用 search-error）
+    await expect(
+      page.getByTestId("editor-state-revision-list-error"),
+    ).toHaveText(MSG_SEARCH_FAIL);
+    const failErr = await page
+      .getByTestId("editor-state-revision-list-error")
+      .innerText();
+    expect(failErr).not.toContain(COMBO_Q);
+    expect(failErr).not.toContain(NAME_ONLY);
+    expect(failErr).not.toContain(NAME_HTML);
+
+    // 成功组合：sourceKind 保留；失败后同词零重发，用刷新重试仍 search POST
+    state.searchModeByProject[TECH_A] = { kind: "ok" };
+    const okBefore = searchHitCountForFilter(
+      state,
+      TECH_A,
+      COMBO_Q,
+      "task",
+      null,
+      null,
+    );
+    const pageBeforeOk = state.pageLog.length;
+    await page.getByTestId("editor-state-revision-refresh").click();
+    await expect
+      .poll(
+        () =>
+          searchHitCountForFilter(
+            state,
+            TECH_A,
+            COMBO_Q,
+            "task",
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(okBefore + 1);
+    expect(state.pageLog.length).toBe(pageBeforeOk);
+    await expect(
+      page.getByTestId("editor-state-revision-search-active"),
+    ).toHaveText(MSG_SEARCH_ACTIVE_P12FI);
+    await expect(page.getByTestId("editor-state-revision-item-0")).toBeVisible();
+
+    // 零 editor-state/restore/checkpoint 旁路；关键词/名称不进 URL/存储/Cookie/console
+    expect(state.restoreLog.length).toBe(0);
+    expect(state.checkpointCreateLog.length).toBe(0);
+    // 展开后的 editor-state GET 允许，但搜索阶段不得新增 restore/checkpoint
+    const url = page.url();
+    expect(url).not.toContain(NAME_ONLY);
+    expect(url).not.toContain(COMBO_Q);
+    expect(url).not.toContain(encodeURIComponent(NAME_HTML));
+    const ls = await page.evaluate(() => JSON.stringify(localStorage));
+    const ss = await page.evaluate(() => JSON.stringify(sessionStorage));
+    const cookies = await page.context().cookies();
+    const cookieBlob = cookies.map((c) => `${c.name}=${c.value}`).join(";");
+    expect(ls).not.toContain(NAME_ONLY);
+    expect(ls).not.toContain(COMBO_Q);
+    expect(ss).not.toContain(NAME_ONLY);
+    expect(ss).not.toContain(COMBO_Q);
+    expect(cookieBlob).not.toContain(NAME_ONLY);
+    expect(cookieBlob).not.toContain(COMBO_Q);
+    const consoleBlob = guards.consoleLogs.join("\n");
+    expect(consoleBlob).not.toContain(NAME_ONLY);
+    expect(consoleBlob).not.toContain(COMBO_Q);
+    expect(consoleBlob).not.toContain(NAME_HTML);
+    expect(state.externalHits).toEqual([]);
+    expect(state.forbiddenHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+    await assertNoIdLeak(page, state, guards.consoleLogs);
+  });
+});
+
+test.describe("P12F-I 商务标共用入口", () => {
+  test("P12F-I 商务标：共享联合标签与名称命中；精确 search POST；零旁路", async ({
+    page,
+  }) => {
+    const state = createProbeState("biz");
+    const NAME_ONLY = "P12FI_BIZ_NAME_ONLY";
+    const seeded = seedRevisions(state, BIZ_A, 2, ["callback", "task"]);
+    seeded[0].displayName = NAME_ONLY;
+    if (state.details[seeded[0].revisionId]) {
+      state.details[seeded[0].revisionId].displayName = NAME_ONLY;
+    }
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+
+    await openWorkspace(page, "biz", BIZ_A);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageCompleteCount(state, BIZ_A), { timeout: 10_000 })
+      .toBe(1);
+    await expect(page.getByTestId("editor-state-revision-item-0")).toBeVisible();
+
+    await expect(
+      page.getByText(LABEL_SEARCH_P12FI, { exact: true }),
+    ).toBeVisible();
+
+    const searchInput = page.getByTestId("editor-state-revision-search-input");
+    const searchApply = page.getByTestId("editor-state-revision-search-apply");
+    const pageBefore = state.pageLog.length;
+    const editorBefore = state.editorGetLog.length;
+    const restoreBefore = state.restoreLog.length;
+    const cpBefore = state.checkpointCreateLog.length;
+
+    await searchInput.fill(NAME_ONLY);
+    await searchApply.click();
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(
+            state,
+            BIZ_A,
+            NAME_ONLY,
+            null,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    expect(state.searchLog.length).toBe(1);
+    expect(state.pageLog.length).toBe(pageBefore);
+    expect(state.editorGetLog.length).toBe(editorBefore);
+    expect(state.restoreLog.length).toBe(restoreBefore);
+    expect(state.checkpointCreateLog.length).toBe(cpBefore);
+    expect(state.searchLog[0].body).toEqual({ query: NAME_ONLY });
+    await expect(
+      page.getByTestId("editor-state-revision-search-active"),
+    ).toHaveText(MSG_SEARCH_ACTIVE_P12FI);
+    await expect(
+      page.getByTestId("editor-state-revision-display-name-0"),
+    ).toHaveText(NAME_ONLY);
+
+    expect(state.externalHits).toEqual([]);
+    expect(state.forbiddenHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+    await assertNoIdLeak(page, state, guards.consoleLogs);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P12F-I 终态静态自检（仅扫描上列用例源码；本 describe 不计入扫描范围）
+// ---------------------------------------------------------------------------
+test.describe("P12F-I 终态静态自检", () => {
+  test("P12F-I marker 后禁止项精确零命中", () => {
+    const selfPath = fileURLToPath(import.meta.url);
+    const sourcePath = path.resolve(selfPath);
+    expect(sourcePath.endsWith("editor-state-revision-history.spec.ts")).toBe(
+      true,
+    );
+    const full = fs.readFileSync(sourcePath, "utf8");
+    const beginMark = "// P12F-I 修订名称与可见内容联合搜索前端";
+    const endMark = "// P12F-I 终态静态自检";
+    const begin = full.indexOf(beginMark);
+    const end = full.indexOf(endMark);
+    expect(begin).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(begin);
+    const block = full.slice(begin, end);
+
+    const count = (re: RegExp): number => {
+      const flags = re.flags.includes("g") ? re.flags : `${re.flags}g`;
+      const matched = block.match(new RegExp(re.source, flags));
+      if (matched === null) return 0;
+      return matched.length;
+    };
+
+    expect(count(/\|\|\s*\[\]/)).toBe(0);
+    expect(count(/\|\|\s*"\{\}"/)).toBe(0);
+    expect(count(/\|\|\s*'\{\}'/)).toBe(0);
+    expect(count(/Math\.min\s*\(/)).toBe(0);
+    expect(count(/toBeTruthy\s*\(/)).toBe(0);
+    expect(count(/toBeFalsy\s*\(/)).toBe(0);
+    expect(count(/toBeDefined\s*\(/)).toBe(0);
+    expect(count(/toBeUndefined\s*\(/)).toBe(0);
+    expect(count(/\.or\s*\(/)).toBe(0);
+    expect(count(/waitForTimeout\s*\(/)).toBe(0);
+    expect(count(/force\s*:\s*true/)).toBe(0);
+    expect(count(/test\.skip\s*[.(]/)).toBe(0);
+    expect(count(/test\.fixme\s*[.(]/)).toBe(0);
+    expect(count(/\)\[0\]\?/)).toBe(0);
+    expect(count(/>=\s*1/)).toBe(0);
+    // 客户端过滤 / route fallback 禁区
+    expect(count(/route\.fallback/)).toBe(0);
+    expect(count(/continue\(\)/)).toBe(0);
+    expect(count(/filter\s*\(\s*\(.*displayName/)).toBe(0);
   });
 });

@@ -1,8 +1,8 @@
 /**
- * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B / P12F-F-B / P12F-G-B / P12F-H
+ * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B / P12F-F-B / P12F-G-B / P12F-H / P12F-I
  *       双工作区共用修订历史折叠面板
  * 用途：默认折叠零请求；展开游标页；可选来源筛选；本地时间范围草稿显式应用/清除；
- *       显式可见内容搜索 POST；手动加载更多至最多 20 条；按需摘要；按需与当前对比；按需正文差异；
+ *       显式名称或内容联合搜索 POST；手动加载更多至最多 20 条；按需摘要；按需与当前对比；按需正文差异；
  *       内存双侧选择与双修订正文差异；内联二次确认后 restore；内联二次确认后单条 DELETE；
  *       内联命名保存/覆盖/清除（成功原位更新，失败保值）。
  * 对接：editorStateRevisionApi（含 page/search/comparison/body-diff/pair/delete/display-name）；
@@ -17,6 +17,7 @@
  *   - 无创建/批量删除/自动搜索/自动分页/预取；双修订选择仅内存；游标仅内存 + 规定 API 查询
  *   - 搜索态无加载更多；关键词仅输入控件值 + React 内存 + 一次 POST body
  *   - 删除/命名不依赖 editor-state expected version；不得仅因 props.disabled 永久隐藏
+ *   - P12F-I 仅改联合搜索固定文案；不改 API/parser/状态机
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -87,13 +88,13 @@ const MSG_NAME_CLEARED = "修订名称已清除";
 const MSG_NAME_FAIL = "保存修订名称失败，当前名称已保留";
 /** P12F-E-B 时间范围无效固定中文 */
 const MSG_TIME_RANGE_INVALID = "时间范围无效，请检查开始和结束时间";
-/** P12F-F-B 搜索关键词校验失败固定中文 */
+/** P12F-F-B / P12F-I 搜索关键词校验失败固定中文 */
 const MSG_SEARCH_QUERY_INVALID =
   "搜索关键词需为 1 至 64 个字符，且不能含首尾空白或控制字符";
-/** P12F-F-B 搜索空结果固定中文 */
-const MSG_SEARCH_EMPTY = "未找到匹配修订";
-/** P12F-F-B 搜索失败固定中文 */
-const MSG_SEARCH_FAIL = "修订内容搜索失败，请稍后重试";
+/** P12F-I 名称或内容联合搜索空结果固定中文 */
+const MSG_SEARCH_EMPTY = "没有匹配名称或内容的修订";
+/** P12F-I 名称或内容联合搜索失败固定中文 */
+const MSG_SEARCH_FAIL = "修订名称或内容搜索失败，请稍后重试";
 /** 普通 page 空态固定中文 */
 const MSG_LIST_EMPTY = "暂无修订记录";
 
@@ -2053,7 +2054,7 @@ export function EditorStateRevisionPanel({
                 color: "var(--text-muted, #4b5563)",
               }}
             >
-              内容搜索
+              名称或内容搜索
             </label>
             <input
               id="editor-state-revision-search-input"
@@ -2125,7 +2126,7 @@ export function EditorStateRevisionPanel({
                 fontSize: 13,
               }}
             >
-              当前为内容搜索结果
+              当前为名称或内容搜索结果
             </p>
           ) : null}
           {statusMessage ? (

@@ -1,7 +1,8 @@
 """
-模块：P12C-C1 / P12F-A / P12F-B / P12F-D / P12F-E-A / P12F-F-A editor-state 修订历史只读服务
+模块：P12C-C1 / P12F-A / P12F-B / P12F-D / P12F-E-A / P12F-F-A / P12F-I
+  editor-state 修订历史只读服务
 用途：默认最近 10 条修订元数据列表、键集游标页、可选 sourceKind/时间范围筛选、
-  有界可见内容搜索与单条按需详情；list/page 六列且绝不读 snapshot_json；
+  有界名称与可见内容联合搜索与单条按需详情；list/page 六列且绝不读 snapshot_json；
   detail/search 七列含 snapshot_json，其中 search 候选有界。
 对接：api.editor_state_revisions；EditorStateRevisionRow；
   editor_state_service / editor_state_revision_service 权威常量与算法。
@@ -10,7 +11,7 @@
   - 项目校验只投影 Project.id；列表/页六列投影且绝不读 snapshot_json；
     详情/搜索七列含 snapshot_json（search 候选有界）+ workspace/project 作用域；
   - 列表上限 MAX_REVISIONS_LIST 与页大小 REVISION_PAGE_SIZE 字面量固定 10，禁止绑定写入保留 20；
-  - 搜索候选窗 LIMIT 20 固定，不补扫第 21 条；字段白名单 + 对象/字符串叶预算；
+  - 搜索候选窗 LIMIT 20 固定，不补扫第 21 条；先完整校验再名称/内容联合匹配；
   - 游标页 LIMIT 11 前瞻、键集谓词；无时间无来源 esrc1；仅来源 esrc2；任一时间边界 esrc3；
   - esrc3 载荷 {b,f,i,s,t} 绑定显式时间/来源，禁止从游标采用筛选条件；
   - 13 键/规范 JSON/版本/来源必须委托既有权威实现，禁止第二套哈希或来源枚举；
@@ -1300,6 +1301,18 @@ def _snapshot_matches_query(snapshot: dict[str, Any], needle_folded: str) -> boo
     return False
 
 
+def _display_name_matches_query(
+    display_name: str | None, needle_folded: str
+) -> bool:
+    """
+    用途：已通过校验的非 null display_name 与同一 needle 做连续包含。
+    规则：null 不命中；折叠规则与 query/快照共用 _fold_for_search。
+    """
+    if display_name is None:
+        return False
+    return needle_folded in _fold_for_search(display_name)
+
+
 def list_editor_state_revision_search(
     db: Session,
     workspace_id: str,
@@ -1310,13 +1323,14 @@ def list_editor_state_revision_search(
     created_before: Any = None,
 ) -> dict[str, Any]:
     """
-    用途：在最新 20 条元数据候选中按可见字段字面搜索；只返回六键元数据。
+    用途：在最新 20 条元数据候选中做名称与可见内容联合搜索；只返回六键元数据。
     对接：POST .../editor-state-revisions/search。
     二次开发：
       - 顺序：项目存在 → 来源 → 时间 → 关键词；
       - SQL 七列（含 display_name + snapshot）+ workspace/project + 可选来源/时间；
       - 先完整校验全部候选再匹配；坏行/预算超限整次 corrupt；
-      - 禁止 OFFSET/COUNT/LIKE/JSON SQL/N+1/补扫第 21 条/写操作；名称不参与匹配。
+      - 匹配条件显式为 name_match or snapshot_match；双命中只 append 一次；
+      - 禁止 OFFSET/COUNT/LIKE/JSON SQL/N+1/补扫第 21 条/写操作/名称短路校验。
     """
     _require_project_id(db, workspace_id, project_id)
 
@@ -1358,7 +1372,7 @@ def list_editor_state_revision_search(
     except Exception:
         raise _corrupt() from None
 
-    # 先完整校验全部候选；任一行损坏整次失败（与关键词是否命中无关）
+    # 先完整校验全部候选；任一行损坏整次失败（与名称/内容是否命中无关）
     validated: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for row in rows:
         rid, ver, nbytes, source, created, dname = _validate_meta_fields(
@@ -1391,6 +1405,9 @@ def list_editor_state_revision_search(
 
     items: list[dict[str, Any]] = []
     for meta, snapshot in validated:
-        if _snapshot_matches_query(snapshot, needle):
+        # 两侧均先求值：禁止 name_match 短路跳过快照提取预算校验
+        name_match = _display_name_matches_query(meta["display_name"], needle)
+        snapshot_match = _snapshot_matches_query(snapshot, needle)
+        if name_match or snapshot_match:
             items.append(meta)
     return {"items": items}

@@ -1,13 +1,15 @@
 """
-模块：P12F-F-A 修订可见内容搜索后端专项测试
+模块：P12F-F-A / P12F-I 修订可见内容与名称联合搜索后端专项测试
 用途：验收 POST .../editor-state-revisions/search 的关键词规范、字段白名单、
-  有界 20 候选窗、六列 SQL、来源/时间复用、损坏/权限/五域零写与 GET 兼容。
+  有界 20 候选窗、七列 SQL、来源/时间复用、损坏/权限/五域零写与 GET 兼容；
+  以及 P12F-I 合法 display_name 与可见内容联合匹配、去重、先验后搜与 20/21 边界。
 对接：POST /api/projects/{projectId}/editor-state-revisions/search；
   editor_state_revision_history_service；api.editor_state_revisions；schemas。
 二次开发：
   - 禁止 mock SQLite、宽泛状态码、固定 sleep、反射关键词/正文假绿；
-  - 红测必须证明路由/Schema/服务尚不存在，而非收集/导入/语法/环境失败；
-  - 字段白名单以“允许标记命中、禁止标记零命中”成对证明，不得只断言响应无正文。
+  - 红测必须证明业务语义缺失（名称唯一命中期望 1 实际 0），而非收集/导入/语法/环境失败；
+  - 字段白名单以“允许标记命中、禁止标记零命中”成对证明，不得只断言响应无正文；
+  - P12F-I 禁止恒真 OR、宽状态、`>=1`、truthy、条件断言、空集合来源与只扫源码冒充运行时。
 """
 
 from __future__ import annotations
@@ -2414,3 +2416,530 @@ def test_search_route_exists_exact_success(disabled_client):
     body = _assert_search_ok(res)
     assert [it["revisionId"] for it in body["items"]] == [row["id"]]
     assert set(body["items"][0].keys()) == _META_KEYS
+
+
+# ---------- P12F-I 名称与可见内容联合搜索 ----------
+
+
+def _set_display_name(revision_id: str, value: object) -> None:
+    """用途：绕过命名服务，直接写入库内 display_name 供联合搜索夹具。"""
+    _raw_sql_update_revision(revision_id, display_name=value)
+
+
+def _plain_state(tag: str) -> dict:
+    """用途：章节标题不含特殊搜索标记，仅供名称唯一命中夹具。"""
+    return _state_with_version(
+        chapters=[
+            {
+                "id": f"ch_{tag}",
+                "title": f"普通章节{tag}",
+                "preview": f"普通预览{tag}",
+                "body": f"普通正文{tag}",
+            }
+        ],
+        parsedMarkdown=f"普通md-{tag}",
+    )
+
+
+def test_p12fi_name_only_hit_returns_exact_single_meta(disabled_client):
+    """
+    用途：合法非空 display_name 是唯一命中字段时精确返回该行。
+    failure-first：实现前期望 1、实际 0 的真实业务失败。
+    """
+    client = disabled_client
+    pid = _create_project(client, name="P12FI名称唯一命中")
+    name_only = "P12FI_NAME_ONLY_HIT_α"
+    content_marker = "P12FI_CONTENT_OTHER_β"
+    row_name = _seed_state(
+        pid,
+        _plain_state("n1"),
+        created_at=datetime(2026, 7, 18, 10, 0, 0, tzinfo=timezone.utc),
+        revision_id="esr_" + "a" * 32,
+    )
+    _set_display_name(row_name["id"], name_only)
+    row_content = _seed_state(
+        pid,
+        _state_with_version(
+            chapters=[
+                {
+                    "id": "c",
+                    "title": content_marker,
+                    "preview": "p",
+                    "body": "b",
+                }
+            ]
+        ),
+        created_at=datetime(2026, 7, 18, 11, 0, 0, tzinfo=timezone.utc),
+        revision_id="esr_" + "b" * 32,
+    )
+    # 第三条 null 名称且无内容标记
+    _seed_state(
+        pid,
+        _plain_state("n3"),
+        created_at=datetime(2026, 7, 18, 12, 0, 0, tzinfo=timezone.utc),
+        revision_id="esr_" + "c" * 32,
+    )
+
+    before = _domain_snapshot(pid)
+    res = _search(client, pid, {"query": name_only})
+    body = _assert_search_ok(res)
+    ids = [it["revisionId"] for it in body["items"]]
+    assert ids == [row_name["id"]], (
+        f"名称唯一命中必须恰好 1 条且为名称行: 期望 {[row_name['id']]} 实际 {ids}"
+    )
+    assert len(body["items"]) == 1
+    item = body["items"][0]
+    assert set(item.keys()) == _META_KEYS
+    assert item["displayName"] == name_only
+    assert item["stateVersion"] == row_name["state_version"]
+    assert item["sourceKind"] == "task"
+    assert row_content["id"] not in ids
+    # 成功路径允许结果 displayName 合法文本；禁止片段/分数/匹配字段扩展
+    assert "matchedFields" not in body
+    assert "snippet" not in body
+    assert "score" not in body
+    assert "query" not in body
+    assert _domain_snapshot(pid) == before
+
+
+def test_p12fi_name_content_union_dedup_and_desc_order(disabled_client):
+    """
+    用途：名称+内容双命中同一修订只返一次；多行分别命中时严格 created_at DESC,id DESC。
+    """
+    client = disabled_client
+    pid = _create_project(client, name="P12FI并集去重")
+    shared = "P12FI_UNION_SHARED"
+    base = datetime(2026, 7, 18, 8, 0, 0, tzinfo=timezone.utc)
+
+    # r0 最旧：仅内容命中
+    r0 = _seed_state(
+        pid,
+        _state_with_version(
+            chapters=[
+                {"id": "c", "title": f"t-{shared}", "preview": "p", "body": "b"}
+            ]
+        ),
+        created_at=base + timedelta(seconds=0),
+        revision_id="esr_" + "d0" + "0" * 30,
+    )
+    # r1：名称+内容双命中
+    r1 = _seed_state(
+        pid,
+        _state_with_version(
+            chapters=[
+                {"id": "c", "title": f"body-{shared}", "preview": "p", "body": "b"}
+            ]
+        ),
+        created_at=base + timedelta(seconds=1),
+        revision_id="esr_" + "d1" + "0" * 30,
+    )
+    _set_display_name(r1["id"], f"name-{shared}")
+    # r2 最新：仅名称命中
+    r2 = _seed_state(
+        pid,
+        _plain_state("u2"),
+        created_at=base + timedelta(seconds=2),
+        revision_id="esr_" + "d2" + "0" * 30,
+    )
+    _set_display_name(r2["id"], f"only-{shared}")
+    # 干扰：名称与内容均不命中
+    r3 = _seed_state(
+        pid,
+        _plain_state("u3"),
+        created_at=base + timedelta(seconds=3),
+        revision_id="esr_" + "d3" + "0" * 30,
+    )
+    _set_display_name(r3["id"], "NOMATCH_NAME_P12FI")
+
+    body = _assert_search_ok(_search(client, pid, {"query": shared}))
+    ids = [it["revisionId"] for it in body["items"]]
+    # 候选倒序：r2(name), r1(both once), r0(content)；r3 不入选
+    assert ids == [r2["id"], r1["id"], r0["id"]]
+    assert len(ids) == len(set(ids))
+    assert r3["id"] not in ids
+    # 六键与 displayName
+    by_id = {it["revisionId"]: it for it in body["items"]}
+    assert by_id[r2["id"]]["displayName"] == f"only-{shared}"
+    assert by_id[r1["id"]]["displayName"] == f"name-{shared}"
+    assert by_id[r0["id"]]["displayName"] is None
+    for it in body["items"]:
+        assert set(it.keys()) == _META_KEYS
+
+
+def test_p12fi_null_and_nonmatch_name_keep_content_and_nfkc(disabled_client):
+    """
+    用途：null/非命中名称不改变内容匹配；名称侧 NFKC+casefold 连续字面子串。
+    """
+    client = disabled_client
+    pid = _create_project(client, name="P12FI空名与Unicode")
+    content_hit = "P12FI_CONTENT_KEEP"
+    # null 名称 + 内容命中
+    r_null = _seed_state(
+        pid,
+        _state_with_version(
+            chapters=[
+                {
+                    "id": "c",
+                    "title": content_hit,
+                    "preview": "p",
+                    "body": "b",
+                }
+            ]
+        ),
+        created_at=datetime(2026, 7, 18, 9, 0, 0, tzinfo=timezone.utc),
+        revision_id="esr_" + "e0" + "0" * 30,
+    )
+    # 非命中名称 + 内容命中
+    r_nm = _seed_state(
+        pid,
+        _state_with_version(
+            chapters=[
+                {
+                    "id": "c",
+                    "title": f"x-{content_hit}",
+                    "preview": "p",
+                    "body": "b",
+                }
+            ]
+        ),
+        created_at=datetime(2026, 7, 18, 9, 1, 0, tzinfo=timezone.utc),
+        revision_id="esr_" + "e1" + "0" * 30,
+    )
+    _set_display_name(r_nm["id"], "OtherNameNoHit")
+
+    body_c = _assert_search_ok(_search(client, pid, {"query": content_hit}))
+    assert [it["revisionId"] for it in body_c["items"]] == [r_nm["id"], r_null["id"]]
+
+    # 名称 Unicode：库内已是 NFKC 规范的 "CafeＡ" 风格 → 用 cafea 命中
+    # 注意：库内 display_name 必须等于 NFKC(自身)；全角 Ａ 的 NFKC 是半角 A
+    name_fw = unicodedata.normalize("NFKC", "CafeＡ")
+    assert name_fw == "CafeA"
+    r_uni = _seed_state(
+        pid,
+        _plain_state("uni"),
+        created_at=datetime(2026, 7, 18, 9, 2, 0, tzinfo=timezone.utc),
+        revision_id="esr_" + "e2" + "0" * 30,
+    )
+    _set_display_name(r_uni["id"], name_fw)
+    body_u = _assert_search_ok(_search(client, pid, {"query": "cafea"}))
+    assert [it["revisionId"] for it in body_u["items"]] == [r_uni["id"]]
+    assert body_u["items"][0]["displayName"] == name_fw
+
+    # 大小写：HelloName 用 helloname 命中
+    r_case = _seed_state(
+        pid,
+        _plain_state("case"),
+        created_at=datetime(2026, 7, 18, 9, 3, 0, tzinfo=timezone.utc),
+        revision_id="esr_" + "e3" + "0" * 30,
+    )
+    _set_display_name(r_case["id"], "HelloName")
+    body_case = _assert_search_ok(_search(client, pid, {"query": "helloname"}))
+    assert [it["revisionId"] for it in body_case["items"]] == [r_case["id"]]
+
+
+def test_p12fi_name_candidate_window_20_skips_21st(disabled_client):
+    """用途：固定只扫最新 20 条；第 21 条即使名称命中也不返回、不补扫。"""
+    client = disabled_client
+    pid = _create_project(client, name="P12FI名称窗20-21")
+    base = datetime(2026, 7, 1, 0, 0, 0, tzinfo=timezone.utc)
+    mark20 = "WIN20_NAME_P12FI"
+    mark21 = "WIN21_NAME_P12FI"
+    # i=0 最旧 ... i=20 最新
+    for i in range(21):
+        row = _seed_state(
+            pid,
+            _plain_state(f"w{i:02d}"),
+            created_at=base + timedelta(seconds=i),
+            revision_id=f"esr_{i:032x}",
+        )
+        if i == 1:
+            # 从新往旧第 20 条
+            _set_display_name(row["id"], mark20)
+        elif i == 0:
+            _set_display_name(row["id"], mark21)
+
+    ordered = _db_rev_rows(pid)
+    assert len(ordered) == 21
+    assert ordered[19]["id"] == f"esr_{1:032x}"
+    assert ordered[20]["id"] == f"esr_{0:032x}"
+
+    hit20 = _assert_search_ok(_search(client, pid, {"query": mark20}))
+    assert [it["revisionId"] for it in hit20["items"]] == [ordered[19]["id"]]
+    assert hit20["items"][0]["displayName"] == mark20
+
+    miss21 = _assert_search_ok(_search(client, pid, {"query": mark21}))
+    assert miss21["items"] == []
+    assert "nextCursor" not in hit20
+    assert "total" not in hit20
+
+
+def test_p12fi_name_would_hit_but_corrupt_or_budget_still_whole_fail(disabled_client):
+    """
+    用途：名称已可命中时，坏 snapshot/meta/display_name 或提取预算超限仍整次 corrupt；
+      证明先完整验证全部候选、后联合匹配，不得名称短路。
+    """
+    client = disabled_client
+    needle = "P12FI_CORRUPT_NAME"
+
+    # 1) 坏 state_version：名称本可命中
+    pid1 = _create_project(client, name="P12FI坏版本")
+    r1 = _seed_state(pid1, _plain_state("cv"), revision_id="esr_" + "f1" + "0" * 30)
+    _set_display_name(r1["id"], needle)
+    _raw_sql_update_revision(r1["id"], state_version="not_a_valid_esv")
+    res1 = _search(client, pid1, {"query": needle})
+    _assert_fixed_error(
+        res1,
+        500,
+        _CODE_CORRUPT,
+        message=_MSG_CORRUPT,
+        forbid_parts=[r1["id"], needle, "not_a_valid_esv"],
+    )
+    assert "items" not in res1.json()
+
+    # 2) 坏 snapshot_json
+    pid2 = _create_project(client, name="P12FI坏JSON")
+    r2 = _seed_state(pid2, _plain_state("cj"), revision_id="esr_" + "f2" + "0" * 30)
+    _set_display_name(r2["id"], needle)
+    _raw_sql_update_revision(r2["id"], ignore_check=True, snapshot_json="{not-json")
+    res2 = _search(client, pid2, {"query": needle})
+    _assert_fixed_error(
+        res2,
+        500,
+        _CODE_CORRUPT,
+        message=_MSG_CORRUPT,
+        forbid_parts=[r2["id"], needle],
+    )
+
+    # 3) 坏 display_name（空串）在候选中：整次 corrupt，即使其它行名称可命中
+    pid3 = _create_project(client, name="P12FI坏名称")
+    good = _seed_state(
+        pid3,
+        _plain_state("good"),
+        created_at=datetime(2026, 7, 18, 10, 0, 0, tzinfo=timezone.utc),
+        revision_id="esr_" + "f3" + "0" * 30,
+    )
+    _set_display_name(good["id"], needle)
+    bad = _seed_state(
+        pid3,
+        _plain_state("bad"),
+        created_at=datetime(2026, 7, 18, 11, 0, 0, tzinfo=timezone.utc),
+        revision_id="esr_" + "f4" + "0" * 30,
+    )
+    _set_display_name(bad["id"], "")
+    res3 = _search(client, pid3, {"query": needle})
+    _assert_fixed_error(
+        res3,
+        500,
+        _CODE_CORRUPT,
+        message=_MSG_CORRUPT,
+        forbid_parts=[good["id"], bad["id"], needle],
+    )
+
+    # 4) 对象预算 4097：名称本可命中仍 corrupt（中和商务容器，仅 chapters 计对象）
+    pid4 = _create_project(client, name="P12FI预算")
+    _budget_neutral = {
+        "businessQualify": [],
+        "businessToc": [],
+        "businessQuote": None,
+        "businessCommit": [],
+        "parsedMarkdown": None,
+        "outline": None,
+    }
+    chapters_bad = [{"id": f"oid{i}"} for i in range(4097)]
+    st_budget = _state_with_version(chapters=chapters_bad, **_budget_neutral)
+    r4 = _seed_state(pid4, st_budget, revision_id="esr_" + "f5" + "0" * 30)
+    _set_display_name(r4["id"], needle)
+    res4 = _search(client, pid4, {"query": needle})
+    _assert_fixed_error(
+        res4,
+        500,
+        _CODE_CORRUPT,
+        message=_MSG_CORRUPT,
+        forbid_parts=[r4["id"], needle],
+    )
+
+
+def test_p12fi_combo_isolation_sql_six_keys_zero_write(disabled_client):
+    """
+    用途：来源/时间/空间组合隔离、六键响应、关键词不回显错误、五域零写、
+      七列投影与 LIMIT 20 运行时证据。
+    """
+    client = disabled_client
+    _ensure_workspace(_WS_OTHER)
+    pid = _create_project(client, name="P12FI组合隔离")
+    marker = "P12FI_COMBO_MARK"
+    base = datetime(2026, 7, 10, 12, 0, 0, tzinfo=timezone.utc)
+
+    r_task = _seed_state(
+        pid,
+        _plain_state("ct"),
+        source_kind="task",
+        created_at=base + timedelta(days=0),
+        revision_id="esr_" + "c1" + "0" * 30,
+    )
+    _set_display_name(r_task["id"], f"{marker}_task")
+    r_rev = _seed_state(
+        pid,
+        _plain_state("cr"),
+        source_kind="revise",
+        created_at=base + timedelta(days=5),
+        revision_id="esr_" + "c2" + "0" * 30,
+    )
+    _set_display_name(r_rev["id"], f"{marker}_revise")
+    r_old = _seed_state(
+        pid,
+        _plain_state("co"),
+        source_kind="task",
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        revision_id="esr_" + "c3" + "0" * 30,
+    )
+    _set_display_name(r_old["id"], f"{marker}_old")
+
+    # 他空间同名
+    db = SessionLocal()
+    try:
+        other_pid = "proj_other_p12fi_" + secrets.token_hex(4)
+        db.add(
+            Project(
+                id=other_pid,
+                workspace_id=_WS_OTHER,
+                name="其他项目I",
+                kind="technical",
+                status="draft",
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+    r_other = _seed_state(
+        other_pid,
+        _plain_state("ox"),
+        workspace_id=_WS_OTHER,
+        revision_id="esr_" + "c4" + "0" * 30,
+    )
+    _set_display_name(r_other["id"], f"{marker}_other")
+
+    _seed_synthetic_task(pid, tag="p12fi")
+    cp = client.post(f"/api/projects/{pid}/editor-state-checkpoints", json={})
+    assert cp.status_code == 201, cp.text
+    before = _domain_snapshot(pid)
+    assert before["tasks"], "基线须含合成任务"
+
+    # 仅来源 task + 时间窗
+    body = _assert_search_ok(
+        _search(
+            client,
+            pid,
+            {
+                "query": marker,
+                "sourceKind": "task",
+                "createdFrom": "2026-07-01T00:00:00.000Z",
+                "createdBefore": "2026-08-01T00:00:00.000Z",
+            },
+        )
+    )
+    assert [it["revisionId"] for it in body["items"]] == [r_task["id"]]
+    assert body["items"][0]["displayName"] == f"{marker}_task"
+    assert set(body["items"][0].keys()) == _META_KEYS
+    assert r_rev["id"] not in [it["revisionId"] for it in body["items"]]
+    assert r_old["id"] not in [it["revisionId"] for it in body["items"]]
+    assert r_other["id"] not in [it["revisionId"] for it in body["items"]]
+
+    # 跨空间不得泄漏
+    cross = _search(
+        client,
+        pid,
+        {"query": marker},
+        headers={"X-Workspace-Id": _WS_OTHER},
+    )
+    _assert_fixed_error(
+        cross,
+        404,
+        _CODE_PROJECT_NOT_FOUND,
+        message=_MSG_PROJECT_NOT_FOUND,
+        forbid_parts=[r_task["id"], r_other["id"], marker, pid, other_pid],
+    )
+
+    # 坏关键词错误不回显
+    bad_q = _search(client, pid, {"query": "  " + marker})
+    _assert_query_invalid(bad_q, forbid_parts=[marker, "  " + marker])
+
+    # SQL 七列 + LIMIT 20 运行时证据
+    captured: list[tuple[str, object]] = []
+
+    def _capture(conn, cursor, statement, parameters, context, executemany):
+        low = statement.lower()
+        if "editor_state_revisions" in low:
+            captured.append((statement, parameters))
+
+    event.listen(engine, "before_cursor_execute", _capture)
+    try:
+        res_sql = _search(
+            client,
+            pid,
+            {
+                "query": marker,
+                "sourceKind": "task",
+                "createdFrom": "2026-07-01T00:00:00.000Z",
+                "createdBefore": "2026-08-01T00:00:00.000Z",
+            },
+        )
+        assert res_sql.status_code == 200, res_sql.text
+    finally:
+        event.remove(engine, "before_cursor_execute", _capture)
+
+    rev_selects = [
+        (s, p)
+        for s, p in captured
+        if "editor_state_revisions" in s.lower()
+        and s.lstrip().upper().startswith("SELECT")
+    ]
+    assert len(rev_selects) == 1, f"revision SELECT 次数: {len(rev_selects)}"
+    sql, params = rev_selects[0]
+    compact = " ".join(sql.split())
+    low = compact.lower()
+    match = re.search(r"(?is)\bSELECT\b(.*?)\bFROM\b", compact)
+    assert match is not None
+    raw_parts = [p.strip() for p in match.group(1).split(",")]
+    normalized: list[str] = []
+    for part in raw_parts:
+        col = part.lower()
+        if " as " in col:
+            col = col.split(" as ", 1)[0].strip()
+        if "." in col:
+            col = col.rsplit(".", 1)[-1].strip()
+        col = col.strip('`"[]')
+        normalized.append(col)
+    assert normalized == [
+        "id",
+        "state_version",
+        "snapshot_bytes",
+        "source_kind",
+        "created_at",
+        "display_name",
+        "snapshot_json",
+    ], normalized
+    assert re.search(r"\blike\b", low) is None
+    assert "json_extract" not in low
+    assert "count(" not in low
+    assert re.search(r"order\s+by\s+.*created_at\s+desc.*,\s*.*id\s+desc", low)
+    vals = list(params.values()) if isinstance(params, dict) else list(params)
+    if re.search(r"\blimit\s+20\b", low):
+        pass
+    elif re.search(r"\blimit\s+\?", low):
+        if re.search(r"\boffset\s+\?", low):
+            assert vals[-2:] == [20, 0] or vals[-1] == 20
+        else:
+            assert vals[-1] == 20
+    else:
+        raise AssertionError(f"未发现 LIMIT 20: {compact}")
+
+    assert _domain_snapshot(pid) == before
+    # 错误路径零写
+    _assert_fixed_error(
+        _search(client, pid, {"query": marker, "sourceKind": "BAD"}),
+        400,
+        _CODE_SOURCE_INVALID,
+        message=_MSG_SOURCE_INVALID,
+    )
+    assert _domain_snapshot(pid) == before
