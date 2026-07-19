@@ -7,7 +7,7 @@
 
 # 标书制作者能力补全与角色化演进路线图
 
-> **状态**：阶段 0/1/2 已完成；阶段 3 M3-A=`5d37dba`、M3-B=`e2e5d04`、M3-C 计划=`c63310f`/实现=`b8ff605`、M3-D 计划=`d326c7d`/后端=`6a5f61f`/前端=`b89a387` 均已完成；阶段 4 **包 5** 已推送（`460097a`）；**包 6** 已推送（`1289c92`）；**包 7** 已推送（`2c7b3e0`）；**包 8/P8B/P8C/P8D/P8E** 均已完成（调度=`6db1586`，P8B 计划=`f662674`/后端=`0994cc8`/前端=`80d2579`，P8C 计划=`cabe99d`/后端=`af39ff8`/前端=`1cf5576`，P8D 计划=`30d066f`/助手=`e1fe316`，P8E 计划=`73b1264`/后端=`79b346e`/助手=`e3f9cc4`；两种真实 CLI/模型均需人工准备）；包 9A、P9C-R1 与 P9D 已完成。阶段 5 已完成 P10A 至 P10K；P10K 计划=`2e53007`、后端=`1eaa75e`、前端=`dbf301c`。P11A/P11B/P11C 三个真实数据收口包均已完成。P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/B、P12E-A/B/C、P12F-A/B/C/D/E-A/E-B/F-A/F-B/G-A/G-B 已完成；P12F-G-A 冻结=`c176cb5`/实现=`d2555d4`，P12F-G-B 冻结=`89b5728`/实现=`bb7c4f4`，当前后端/前端全量基线为 **1110/310 passed**。
+> **状态**：阶段 0–5 已按下文拆包持续交付；P11A/B/C 真实数据收口、P12A 至 P12F-J-B 版本治理链及 P13-A 均已完成。P12F-J-B 冻结=`f019a4b`、实现=`5ef7abd`、文档闭环=`dfb6b1e`；有效后端全量为 **1170 passed**，整仓前端沿用上一包已验收 **318 passed** 基线。当前 P12G 手动检查点展示名称已完成只读审计，契约与实施计划待本次中文提交冻结后交 Grok。
 > **当前分支**：`collab/grok-code-codex-review`
 > **协作方式**：Grok 负责限定范围的实现与测试；Codex 负责范围、审查、验收和提交授权。
 
@@ -365,7 +365,7 @@ P8D 与 P8E 本机外置解析助手均已完成并推送：P8D 计划=`30d066f`
 
 **P12E-A 单条修订正文差异预览已完成**：冻结=`5aa205c`、实现=`f9f067e`。只读 GET 返回精确六键和有界章节行差异；前端技术/商务共用按需入口、严格 parser、四意图互斥与 arrived/complete 迟到隔离。Codex 首轮审查复现第 101 个差异章仍进入 difflib，Grok 以真实 **1 failed / 1 passed** 红测返修为 **2 passed**；Codex 独立通过专项/回归/后端全量 **23/27/854**，history/checkpoint/truth/前端全量 **27/51/46/290 passed**。任意历史两两比较、删除、搜索、分页、正文自动恢复和多人协作继续不进入 A 包。
 
-**下一步**：P13-A 与 P12F-D/E-A/E-B/F-A/F-B/G-A/G-B/H/I/J-A/J-B 均已完成。P12F-J-B 冻结=`f019a4b`、实现=`5ef7abd`，严格十四文件；Codex 独立串行通过后端 **297/1170 passed**、前端 **6/61/51/28/18 passed** 及 lint/build/py_compile/静态门。下一包必须重新只读审计价值、依赖和测试成本后单独冻结；固定排序、批量固定、检查点命名、跨项目历史和多人协作继续另包。
+**下一步**：P13-A 与 P12F-D/E-A/E-B/F-A/F-B/G-A/G-B/H/I/J-A/J-B 均已完成。只读审计已从固定排序、批量固定、检查点命名、跨项目历史和多人协作中选择最小独立的 P12G 手动检查点展示名称；契约/计划见本文后部。先提交推送冻结文档，再由 Grok 严格十二文件 failure-first 实现，Codex 只做受限审查、独立串行验收和提交。其它候选继续另包。
 
 **P12E-B 已完成并推送**：双修订正文差异后端基础，契约=`docs/p12e-revision-pair-body-diff-contract.md`，计划=`docs/plans/2026-07-17-p12e-revision-pair-body-diff-plan.md`，冻结=`00ef081`、实现=`5a5b08a`。只比较同 workspace/project 的两个历史修订，暂不提供前端入口；Grok 仅改四个后端文件并发送 review_request，Codex 独立验收后提交推送。专项/回归/全量 **13/23/50/867 passed**，合并专项 **86 passed**，仅 1 条既有 Starlette/httpx 弃用告警。
 
@@ -400,6 +400,8 @@ P12E-B 真实 failure-first 为 13 项红测：11 项路由缺失 404、1 项同
 **P12F-J-A 已完成**：契约=`docs/p12f-revision-pinning-backend-contract.md`，计划=`docs/plans/2026-07-19-p12f-revision-pinning-backend-plan.md`，冻结=`2f03b8c`，实现=`a7021c4`，Grok review=`msg_88f4752ef1cf4a929c6b194df00d9398`，Codex ack=`msg_c630805296ac48d6941809bbca957b7f`。最终独立结果 **16/96/1/1165 passed**；SQLite 非法 `is_pinned=2` 通过原始整数投影被固定 500/裁剪整次回滚，迁移中途 DROP 回滚、execute/flush/commit 零写均有真实证据。前端、七键历史响应、固定按钮与 E2E 留给 P12F-J-B。
 
 **P12F-J-B 已完成**：契约=`docs/p12f-revision-pinning-frontend-contract.md`、计划=`docs/plans/2026-07-19-p12f-revision-pinning-frontend-plan.md`，冻结=`f019a4b`，实现=`5ef7abd`，Codex ack=`msg_8399a348aa1543e2b4b61cbdd25b4ac9`。严格十四文件把 list/page/search 扩为七键、detail 扩为八键，四类 SQL 以原始 Integer 投影拒绝坏固定值；前端严格解析、精确一键 PATCH、固定/取消入口、全局单飞、全操作互斥、成功原位更新、失败保值与 A→B 迟到隔离全部交付。Codex 独立串行通过后端 **297/1170 passed**、前端 **6/61/51/28/18 passed**，lint/build/py_compile/diff/哈希/静态门通过。排序、游标、候选上限、P12F-J-A 配额/裁剪不变；固定排序、批量、检查点命名、跨项目历史和多人协作继续另包。
+
+**P12G 已冻结待实现**：契约=`docs/p12g-checkpoint-display-name-contract.md`，计划=`docs/plans/2026-07-19-p12g-checkpoint-display-name-plan.md`；本次文档提交即冻结。该包以严格十二文件为手动/安全检查点增加 nullable 展示名称、独立三重作用域单列 PATCH、create/list/detail 七/七/八键元数据，以及技术标/商务标共用面板原位保存/覆盖/清除。创建请求仍精确 `{}`，安全检查点初始名称固定 null；名称不进入快照、恢复、排序、20 条裁剪或自动修订。检查点搜索/固定/删除/下载、跨项目历史和多人协作继续另包。
 
 **P13-A 已完成并推送**：契约=`docs/p13a-task-sse-workspace-auth-contract.md`，计划=`docs/plans/2026-07-17-p13a-task-sse-workspace-auth-plan.md`，冻结=`e8dfa61`、实现=`1509aa2`。SSE 连接前短 Session 复用统一 workspace/成员/bid_writer 解析，流内每轮按 workspace/project/task 再校验；disabled、原生 EventSource、事件/回退不变。真实 failure-first **8 failed / 5 passed**；Codex 一轮 test-only 返修关闭恒真泄漏断言、secret marker 跳过和宽松三参，独立通过 **13/72/918 passed**。首次全量只因 20 分钟外层时限不足终止，40 分钟外层干净重跑为 **918 passed in 1310.97s**。
 ## P12D-B 完成状态（2026-07-17）
