@@ -7,7 +7,7 @@
 
 # 标书制作者能力补全与角色化演进路线图
 
-> **状态**：阶段 0–5 已按下文拆包持续交付；P11A/B/C 真实数据收口、P12A 至 P12G 版本治理链及 P13-A 均已完成。P12G 冻结=`9696ec1`、实现=`077e7d4`、闭环=`7a5345f`；有效后端全量为 **1203 passed**，整仓前端沿用已验收 **318 passed** 基线。只读审计已选择下一最小包 P12H 单条检查点删除，契约/计划待本次中文提交冻结后交 Grok。
+> **状态**：阶段 0–5 已按下文拆包持续交付；P11A/B/C 真实数据收口、P12A 至 P12H 版本治理链及 P13-A 均已完成。P12H 冻结=`b81546e`、实现=`1ff8839`；有效后端全量为 **1217 passed**，整仓前端沿用已验收 **318 passed** 基线，本包受影响前端套件为 **9/68/61/28/18 passed**。下一主线先做只读差距审计并重新冻结，不自动把检查点固定、搜索、跨项目历史或多人协作混成一包。
 > **当前分支**：`collab/grok-code-codex-review`
 > **协作方式**：Grok 负责限定范围的实现与测试；Codex 负责范围、审查、验收和提交授权。
 
@@ -365,7 +365,7 @@ P8D 与 P8E 本机外置解析助手均已完成并推送：P8D 计划=`30d066f`
 
 **P12E-A 单条修订正文差异预览已完成**：冻结=`5aa205c`、实现=`f9f067e`。只读 GET 返回精确六键和有界章节行差异；前端技术/商务共用按需入口、严格 parser、四意图互斥与 arrived/complete 迟到隔离。Codex 首轮审查复现第 101 个差异章仍进入 difflib，Grok 以真实 **1 failed / 1 passed** 红测返修为 **2 passed**；Codex 独立通过专项/回归/后端全量 **23/27/854**，history/checkpoint/truth/前端全量 **27/51/46/290 passed**。任意历史两两比较、删除、搜索、分页、正文自动恢复和多人协作继续不进入 A 包。
 
-**下一步**：P13-A、P12F-D/E-A/E-B/F-A/F-B/G-A/G-B/H/I/J-A/J-B 与 P12G 均已完成。只读审计确认检查点单条删除不需要迁移且无其它表外键引用，用户价值高于只有 20 条数据上的搜索；固定会改变裁剪规则，跨项目历史/多人协作边界更大。因此先冻结并交付 P12H 严格七文件，Grok 负责 failure-first 实现，Codex 负责审查、独立串行验收与提交；不得沿用 P12G 十二文件扩围。
+**下一步**：P12H 已闭环。继续从未实现主线中只读比较检查点固定与保护裁剪、检查点名称/内容搜索、跨项目版本浏览、完整时间线和多人协作；优先选择不破坏现有 20 条裁剪与权限边界的最小高价值包。任何下一包必须重新写契约/计划、限定文件、先测后实现，由 Grok 落地、Codex 独立验收后再提交。
 
 **P12E-B 已完成并推送**：双修订正文差异后端基础，契约=`docs/p12e-revision-pair-body-diff-contract.md`，计划=`docs/plans/2026-07-17-p12e-revision-pair-body-diff-plan.md`，冻结=`00ef081`、实现=`5a5b08a`。只比较同 workspace/project 的两个历史修订，暂不提供前端入口；Grok 仅改四个后端文件并发送 review_request，Codex 独立验收后提交推送。专项/回归/全量 **13/23/50/867 passed**，合并专项 **86 passed**，仅 1 条既有 Starlette/httpx 弃用告警。
 
@@ -403,7 +403,7 @@ P12E-B 真实 failure-first 为 13 项红测：11 项路由缺失 404、1 项同
 
 **P12G 已完成并推送**：契约=`docs/p12g-checkpoint-display-name-contract.md`，计划=`docs/plans/2026-07-19-p12g-checkpoint-display-name-plan.md`，冻结=`9696ec1`，实现=`077e7d4`，Codex ack=`msg_cd2908a39cc1438186b0f41d13062443`。严格十二文件为手动/安全检查点增加 nullable 展示名称、独立三重作用域单列 PATCH、create/list/detail 七/七/八键元数据，以及技术标/商务标共用面板原位保存/覆盖/清除。Codex 首轮审查关闭 `.get()` 缺键掩盖、伪单飞和 A→B 假重叠测试；独立串行通过后端 **62/47/1203 passed**、前端 **8/59/61/28/18 passed**，lint/build/py_compile/diff/白名单/哈希门通过。创建请求仍精确 `{}`，安全检查点初始名称固定 null；名称不进入快照、恢复、排序、20 条裁剪或自动修订。检查点搜索/固定/删除/下载、跨项目历史和多人协作继续另包。
 
-**P12H 已冻结待实现**：契约=`docs/p12h-checkpoint-delete-contract.md`，计划=`docs/plans/2026-07-19-p12h-checkpoint-delete-plan.md`；本次中文文档提交即冻结。严格七文件新增无 query/body 的单条检查点 DELETE、独立 Project.id+三谓词删除服务、后端专项与既有 405 守卫机械修订，以及技术/商务共用面板的内联确认、真同步单飞、成功原位移除、失败保值和 A→B 双 hold 隔离。不改模型、迁移、Schema、核心恢复服务、页面/hook 或修订历史；批量/软删除、回收站、固定保护裁剪、搜索、跨项目历史和多人协作继续另包。
+**P12H 已完成并推送**：契约=`docs/p12h-checkpoint-delete-contract.md`，计划=`docs/plans/2026-07-19-p12h-checkpoint-delete-plan.md`，冻结=`b81546e`，实现=`1ff8839`，Codex ack=`msg_c7168985bed9415ab1fc44420474d857`。严格七文件交付无 query/body 的单条检查点 DELETE、独立 Project.id+三谓词删除服务、技术/商务共用内联确认、真同步单飞、失败保值和 A→B 双 hold 隔离。首轮 Grok 因 402 中断且缺正式 failure-first 回执，Codex 不补造计数；随后以真实前端 **8/1** 和代码审查下发两文件返修，关闭空体弱 OR、假 disabled、泄漏门和恢复→删除互斥漏洞。Codex 独立通过后端 **43/80/1217**、前端 **9/68/61/28/18 passed**，lint/build/py_compile/diff/哈希门通过。模型、迁移、Schema、核心恢复服务、页面/hook 与修订历史均未扩围。
 
 **P13-A 已完成并推送**：契约=`docs/p13a-task-sse-workspace-auth-contract.md`，计划=`docs/plans/2026-07-17-p13a-task-sse-workspace-auth-plan.md`，冻结=`e8dfa61`、实现=`1509aa2`。SSE 连接前短 Session 复用统一 workspace/成员/bid_writer 解析，流内每轮按 workspace/project/task 再校验；disabled、原生 EventSource、事件/回退不变。真实 failure-first **8 failed / 5 passed**；Codex 一轮 test-only 返修关闭恒真泄漏断言、secret marker 跳过和宽松三参，独立通过 **13/72/918 passed**。首次全量只因 20 分钟外层时限不足终止，40 分钟外层干净重跑为 **918 passed in 1310.97s**。
 ## P12D-B 完成状态（2026-07-17）
