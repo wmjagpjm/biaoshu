@@ -7,7 +7,7 @@
 
 # 标书制作者能力补全与角色化演进路线图
 
-> **状态**：阶段 0–5 已按下文拆包持续交付；P11A/B/C、P12A 至 P12J-B 版本治理链及 P13-A 均已完成。P12J-B 冻结=`65fe259`、实现=`7d1d5c9`；有效后端全量为 **1261 passed**，整仓前端沿用已验收 **318 passed** 基线。下一包 P12K 已在 `90cfd58` 上冻结为严格两文件，只做默认检查点列表固定优先排序。
+> **状态**：阶段 0–5 已按下文拆包持续交付；P11A/B/C、P12A 至 P12J-B 版本治理链及 P13-A 均已完成。P12J-B 冻结=`65fe259`、实现=`7d1d5c9`；有效后端全量为 **1261 passed**，整仓前端沿用已验收 **318 passed** 基线。下一包 P12K 代码审计基线=`90cfd58`、契约冻结=`fe0fa08`，严格两文件只做默认检查点列表固定优先排序。
 > **当前分支**：`collab/grok-code-codex-review`
 > **协作方式**：Grok 负责限定范围的实现与测试；Codex 负责范围、审查、验收和提交授权。
 
@@ -411,7 +411,7 @@ P12E-B 真实 failure-first 为 13 项红测：11 项路由缺失 404、1 项同
 
 **P12J-B 已完成并推送**：契约=`docs/p12j-checkpoint-pinning-frontend-contract.md`，计划=`docs/plans/2026-07-19-p12j-checkpoint-pinning-frontend-plan.md`，代码哈希基线=`262683e`、冻结=`65fe259`、口径澄清=`1471c31`、实现=`7d1d5c9`。严格十一文件把 create/list/search 七键、detail 八键升级为含 `isPinned` 的八/九键，后端三处原始 Integer 投影拒绝非法固定值；共用 checkpoint API/面板交付严格 parser、一键 PATCH、badge、全局单飞、全部操作互斥、active search 原位更新和 A→B success/catch/finally 隔离。真实 failure-first **6 failed**；Codex 独立串行通过后端 **120/1261 passed**、前端 **6/82/61/28/18 passed** 及 lint/build/py_compile/diff/哈希门。Grok 曾遇到一次既有 history 双击元素 detached，未改代码与 Codex 独立复验均 **61 passed**，作为非阻断稳定性风险保留。表/迁移/pin service/配额/裁剪、页面/hook/共享请求层及其它主线保持冻结。
 
-**P12K 已冻结待实现**：契约=`docs/p12k-checkpoint-pinned-first-list-contract.md`，计划=`docs/plans/2026-07-19-p12k-checkpoint-pinned-first-list-plan.md`，冻结基线=`90cfd58`。严格两文件只把默认 GET 列表改为 `is_pinned DESC,created_at DESC,id DESC`；search 继续最新 20 条 `created_at DESC,id DESC`，前端当前列表仍只原位更新、下一次默认 GET 才重排。表/迁移/Schema/API/pin service/配额/裁剪/前端和其它主线全部冻结。
+**P12K 已冻结待实现**：契约=`docs/p12k-checkpoint-pinned-first-list-contract.md`，计划=`docs/plans/2026-07-19-p12k-checkpoint-pinned-first-list-plan.md`，代码审计基线=`90cfd58`、契约冻结=`fe0fa08`。严格两文件只把默认 GET 列表改为 `is_pinned DESC,created_at DESC,id DESC`；search 继续最新 20 条 `created_at DESC,id DESC`，前端当前列表仍只原位更新、下一次默认 GET 才重排。表/迁移/Schema/API/pin service/配额/裁剪/前端和其它主线全部冻结。
 
 **P13-A 已完成并推送**：契约=`docs/p13a-task-sse-workspace-auth-contract.md`，计划=`docs/plans/2026-07-17-p13a-task-sse-workspace-auth-plan.md`，冻结=`e8dfa61`、实现=`1509aa2`。SSE 连接前短 Session 复用统一 workspace/成员/bid_writer 解析，流内每轮按 workspace/project/task 再校验；disabled、原生 EventSource、事件/回退不变。真实 failure-first **8 failed / 5 passed**；Codex 一轮 test-only 返修关闭恒真泄漏断言、secret marker 跳过和宽松三参，独立通过 **13/72/918 passed**。首次全量只因 20 分钟外层时限不足终止，40 分钟外层干净重跑为 **918 passed in 1310.97s**。
 ## P12D-B 完成状态（2026-07-17）

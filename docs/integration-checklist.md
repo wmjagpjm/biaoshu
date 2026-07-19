@@ -1071,7 +1071,7 @@ Codex 独立串行通过后端受影响集/全量 **120/1261 passed**，前端 P
 
 ## P12K 检查点固定优先默认列表（已冻结待实现）
 
-契约=`docs/p12k-checkpoint-pinned-first-list-contract.md`，计划=`docs/plans/2026-07-19-p12k-checkpoint-pinned-first-list-plan.md`，冻结基线=`90cfd58`；严格两文件。
+契约=`docs/p12k-checkpoint-pinned-first-list-contract.md`，计划=`docs/plans/2026-07-19-p12k-checkpoint-pinned-first-list-plan.md`，代码审计基线=`90cfd58`、契约冻结=`fe0fa08`；严格两文件。
 
 冻结后的联调验收项：
 
