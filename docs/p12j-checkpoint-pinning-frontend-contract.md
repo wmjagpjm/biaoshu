@@ -8,7 +8,7 @@
 
 二次开发：Grok 只能在十一文件白名单内先写真实 failure-first 再实现和自测；不得暂存、提交或推送；Codex 负责独立规划、受限审查、独立验收、中文文档、提交和协作分支推送。
 
-状态：2026-07-19 已完成只读审计并冻结待实现；十一份白名单代码的哈希基线=`262683e`，契约冻结提交=`65fe259`。实现启动时以协作分支最新上游 HEAD 为准，不得把代码哈希基线误作当前 HEAD。
+状态：2026-07-19 已完成实现、Codex 独立验收并推送；十一份白名单代码的哈希基线=`262683e`，契约冻结提交=`65fe259`，启动口径澄清=`1471c31`，实现提交=`7d1d5c9`。
 
 ## 1. 选择理由与严格边界
 
@@ -96,6 +96,28 @@ npm run build
 
 Grok 只发送一个内容完整的 `review_request`：真实 failure-first 和生产哈希、逐条串行命令/结果、十一文件/最终哈希/空暂存区、三处原始投影和坏值零写、八/九键、严格 parser、一键 PATCH、技术/商务、active search、全互斥、A→B 双 gate、泄漏门与明确未做项。额度或进程中断只发送 `status`，禁止补造测试数字或完成结论。
 
-## 9. 明确未做
+## 9. 实施、审查与独立验收闭环
+
+1. Grok 实现任务=`msg_b78f8a9474cd470bbd1507aa141ba6c4`，首轮审查请求=`msg_b86ca88d69b74be89c556aa83d8fa7ed`；首轮真实 failure-first 为 **6 failed**，且五个生产文件哈希保持冻结。Codex 初审发现另一行同拍竞争、旧 A catch/finally、active search 多结果顺序与既有 history 抖动记录不足，受限返修任务=`msg_0912b706fd844359a335f046eae1f1fc`，只允许修改 checkpoint E2E。
+2. 返修后的 E2E 已证明：同步双击与另一行同拍只产生一个 PATCH；旧 A success 及独立的旧 A HTTP error/catch/finally 均不污染或解锁 B；active search 保留两个命中项的数量、顺序、名称、关键词及非目标状态。返修回执写本地消息箱时因另一个桥接会话占用而失败，Codex 已审计隐藏进程完整日志并通过协作消息箱发送验收确认=`msg_98239bfc61c743d1b7b44d7fec15a975`，未要求用户介入。
+3. Codex 独立串行验收：后端五文件受影响集 **120 passed**，后端全量 **1261 passed**；P12J-B 定向 **6 passed**，checkpoint E2E **82 passed**，revision-history **61 passed**，技术/商务 truth **28/18 passed**；`py_compile`、lint、build、diff-check、严格十一文件、空暂存区、最终哈希与静态门均通过。后端仅保留既有 Starlette 弃用告警，build 仅保留既有大 chunk 提示。
+4. Grok 返修自测时 revision-history 首轮曾在既有 `editor-state-revision-history.spec.ts:3657` 双击确认用例出现元素 detached：**1 failed / 44 passed / 16 did not run**；未改代码即重跑 **61 passed**。Codex 独立首轮同套件亦为 **61 passed**，故不阻断 P12J-B，但作为既有 E2E 稳定性风险保留，后续若复现必须单独冻结修复，禁止改写历史事实。
+5. 最终十一文件 SHA-256：
+
+| 文件 | 最终 SHA-256 |
+|---|---|
+| `backend/app/api/schemas.py` | `8ECBFC2B679329CB4A23E58F7FB1CE919C4BF1E22EFE55FEF1797AFB6508D9DF` |
+| `backend/app/api/editor_state_checkpoints.py` | `7889D3A7D80D871862B37CFAE358016CD288976756EACE7158B690D23B016AF3` |
+| `backend/app/services/editor_state_checkpoint_service.py` | `20A0FBACFE20DF4D6FE0157B2DF6F41436EDAC5B298F6D2174803E7A66CF4DC3` |
+| `frontend/src/features/editor-state-checkpoints/editorStateCheckpointApi.ts` | `B52F4F9EF50E5B3DB9414CAC3B9780A5FF1433EB965D7D4D188D39FB6DB5992D` |
+| `frontend/src/features/editor-state-checkpoints/EditorStateCheckpointPanel.tsx` | `CAA78A98C8113C333FF9D559F84FB2270B933D4F224C997F5897BEA5D4083401` |
+| `frontend/e2e/editor-state-checkpoint-restore.spec.ts` | `627ADAC0FD76A1971716608DDAD83B739E9B819D4053BFF2B48B45D90CE987DB` |
+| `backend/tests/test_editor_state_checkpoints.py` | `77153C24BD061AD977EB939229CE4D40ECF836F7C38FB6F29693291D5FD9EFE0` |
+| `backend/tests/test_p12g_checkpoint_display_name.py` | `F41A6D42F140B0ED3C2ED05362A703C3285A0A04E1BCD713C4C84D2FB1CD3038` |
+| `backend/tests/test_p12h_checkpoint_delete.py` | `88BF0CAE405C576BE63F62415336E4FACFBBB5F73319DF240B1A66E0FD36A2D9` |
+| `backend/tests/test_p12i_checkpoint_search.py` | `4790DBB9C620B73DAC7CE32E7E0AACDC78EA8666F8D4A2B99BEEEAF6E9B4ACB5` |
+| `backend/tests/test_p12j_checkpoint_pin.py` | `B2A4F72259BB1EB04455D87A4F03B683747168ED6B3CD21D41771CDDE89FB369` |
+
+## 10. 明确未做
 
 不做固定排序/分组、批量/全选、固定数/容量进度、乐观 UI、轮询/自动重试、配额预查询、撤销、标签/备注、分页/游标、搜索片段/评分/高亮/缓存、跨项目时间线、导出/分享、审计扩展、多人协作、presence、SSE/WebSocket、PostgreSQL/Alembic、表/索引/依赖变更。
