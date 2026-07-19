@@ -1050,6 +1050,23 @@ Codex 独立串行通过后端 P12I/五文件检查点回归/全量 **18/123/123
 
 Grok 初始 failure-first **16 failed / 3 passed**；首轮专项/受影响回归/全量 **19/140/1254 passed**。Codex 审查下发返修 task=`msg_f9bc9783042748b9bad6125c529081c1`，先得到 **2 failed / 0 passed**，修后专项/回归 **23/140 passed**；关闭不完整迁移 no-op、空候选 `protect_id` 和真实 5+15 边界缺口。Codex 最终独立串行通过专项/受影响回归/后端全量 **23/140/1258 passed**，全量 **1454.53 秒**，仅 1 条既有弃用告警；py_compile、diff-check、精确九文件、空暂存区、最终哈希与安全静态门均通过。本包未运行 Playwright，前端沿用 **318 passed** 基线。
 
+## P12J-B 检查点固定状态八/九键响应与前端入口（已冻结待实现）
+
+契约=`docs/p12j-checkpoint-pinning-frontend-contract.md`，计划=`docs/plans/2026-07-19-p12j-checkpoint-pinning-frontend-plan.md`，冻结基线=`262683e`；严格十一文件。
+
+冻结后的联调验收项：
+
+1. create/list/search 元数据精确八键，detail 精确九键；`isPinned` 为原生 boolean，create 与安全检查点初始 false，缺失/额外/数字/字符串/null 均拒绝。
+2. list/detail/search 三处原始 Integer 投影；原始 `is_pinned=2` 在 list、detail、search 未命中候选均固定 corrupt、no-store、零写；list 无正文，搜索候选/匹配/顺序不变。
+3. 前端 pin URL 无 query，body/响应精确 `{isPinned:boolean}` 且响应等于目标；Cookie/CSRF 由共享请求层处理，零重试、零旁路。
+4. 技术/商务共用“固定/取消固定”和“已固定”；全局同步单飞，在途时 list/search/create/restore/name/delete/toggle 与所有确认/取消真实 disabled。
+5. 成功只原位更新目标固定状态，active search 的关键词/结果/顺序和名称不变，零重载；失败全部保值并固定中文。
+6. mounted/session/generation/project/checkpoint 五重围栏；旧 A success/catch/finally 不污染或解锁 B，新 B 在 A 完成前必须真实 arrived 且保持 gate。
+7. checkpointId/stateVersion/snapshot/名称/关键词/原始错误/CSRF 不进入新增 DOM、URL、存储、Cookie、console、剪贴板、下载或外网。
+8. pytest 与 Playwright 全部逐条串行；最终通过后端受影响集/全量、P12J-B 定向/checkpoint/history/技术/商务、lint/build/py_compile、十一文件/哈希/空暂存区。整仓前端沿用 318 基线，不重复冒充本包结果。
+
+实现尚未开始。Grok 只负责十一文件实现/自测并发送 `review_request`；Codex 负责独立审查、验收、中文文档、提交和推送。
+
 ## P13-A 任务 SSE 工作空间鉴权（已完成）
 
 冻结=`e8dfa61`，实现=`1509aa2`。required 模式继续由认证中间件负责无会话 401；SSE 路由连接前短 Session 复用统一 `get_workspace_id`，因此 finance/hr/bidder 固定 `role_forbidden`，非成员显式头固定 `workspace_forbidden`，无头原生 EventSource 使用会话 `activeWorkspaceId`。disabled 仍支持默认空间与合法显式头。
