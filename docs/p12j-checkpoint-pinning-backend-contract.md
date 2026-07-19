@@ -8,7 +8,7 @@
 
 二次开发：Grok 只能在九文件白名单内先写真实 failure-first 再实现和自测；不得暂存、提交或推送；Codex 负责独立规划、受限审查、独立验收、中文文档、提交和协作分支推送。
 
-状态：2026-07-19 已完成只读审计并冻结待实现；当前文档提交即为冻结基线。
+状态：2026-07-19 已完成、独立验收并推送。冻结=`9f304da`，实现=`8edebd4`；P12J-B 响应与前端入口仍未实现。
 
 ## 1. 选择理由与严格边界
 
@@ -104,3 +104,24 @@ Grok 完成后只通过消息箱发送一个 `review_request`，必须包含：
 ## 9. 明确未做
 
 不做 `isPinned` 的 create/list/search/detail 响应扩展、前端固定按钮/标签/状态水合、技术/商务 UI、固定排序/分组、批量固定、配额展示、乐观更新、自动重试、检查点分页/游标、片段/高亮/评分/缓存、跨项目检查点、完整版本时间线、多人协作、presence、SSE/WebSocket、Alembic/PostgreSQL、后台清理或新索引。
+
+## 10. 实施与验收闭环（2026-07-19）
+
+1. Grok 在冻结提交 `9f304da` 上先得到真实 failure-first **16 failed / 3 passed**，首个合法业务失败为 `/pin` 返回 404，六个生产文件哈希保持冻结；首轮完成后专项 **19 passed**、受影响回归 **140 passed**、当时后端全量 **1254 passed**。
+2. Codex 独立审查发现三类实质缺口：已有列但可空/无默认值会被迁移误判为最终态；空候选携带 `protect_id` 会静默返回；测试缺少真实 5 固定+15 普通边界并保留宽状态/条件分支。返修任务=`msg_f9bc9783042748b9bad6125c529081c1`，Grok 先得到 **2 failed / 0 passed**，修后专项 **23 passed**、受影响回归 **140 passed**；原任务/review=`msg_e349fbe9fb7148d986fc9e2d9558225a`/`msg_80ce5845baf14fdfbe5fe86caf379305`，返修 review=`msg_3a93a06c7c9b4343813b7069273afd30`。
+3. Codex 仅将专项中最后一个宽泛源码二选一断言收紧为两个必备条件，未改 Grok 的生产实现；随后严格串行独立通过专项/受影响回归/后端全量 **23/140/1258 passed**。全量耗时 **1454.53 秒**，仅 1 条既有 Starlette/httpx 弃用告警；本后端包没有运行或修改 Playwright，整仓前端沿用已验收 **318 passed** 基线且不冒充本包重跑结果。
+4. `py_compile`、`git diff --check`、精确九文件、空暂存区、原始 Integer 三列投影、三谓词 UPDATE/DELETE、迁移 DROP 前后真实故障回滚、5 条/10 MiB、20/21 行、5 固定+新建+14 普通、5 固定+安全点+14 其它、required/disabled/CSRF/越权/脱敏/五域零副作用均通过。Grok 全程未暂存、提交或推送；实现由 Codex 以 `8edebd4 功能：完成P12J-A检查点固定后端基础` 提交并推送，验收确认=`msg_6e53fde20dd14ddd94a0ca03192531c6`。
+
+最终九文件 SHA-256：
+
+| 文件 | 最终 SHA-256 |
+|---|---|
+| `backend/app/api/editor_state_checkpoints.py` | `004D93AD0B6AECB1F35BD9A50F6C7FA4547AD83BA7320C3B29B817F195F0D3BC` |
+| `backend/app/api/schemas.py` | `B88C85BA8E99FFC68BB5FEC736E8613F687D3B1257D844DFF1205D18D39D31E9` |
+| `backend/app/core/database.py` | `F9060BC0784E3B6D3FFFC6E4201D0D02402FFCD6D7B2C744331A9585CFCBED78` |
+| `backend/app/models/entities.py` | `695251AEF5742517C95565A1EA018E9581B7A035FB70A6D2F6B2880E00F27728` |
+| `backend/app/services/editor_state_checkpoint_pin_service.py` | `B580BF5B6D2B9666F37BF0136F6301DE9D099DFD0A12D669B074B57B0ED91C3F` |
+| `backend/app/services/editor_state_checkpoint_service.py` | `45126F09A2E8C28FF6938118A94BDBBCD07AF27DB774F919BDCDB9957390BA59` |
+| `backend/tests/test_editor_state_checkpoints.py` | `A8536393D2D664E8D4A4F465C513EC7E2CAF2E90990E17B79A21BDAC77210B85` |
+| `backend/tests/test_p12h_checkpoint_delete.py` | `721932631233E3583197363770B96D6BB0AABCF5AC004F753A3A0B970431D87C` |
+| `backend/tests/test_p12j_checkpoint_pin.py` | `B00FAB634706AAD7BD345DBF6C2A58D6F2176E816DC3609D0DF4C3DDC678EB91` |
