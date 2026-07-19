@@ -3,9 +3,9 @@
 模块：P12F-J-A editor-state 自动修订固定状态与配额保护后端基础
 用途：在不改变现有历史列表/分页/搜索六键响应和前端行为的前提下，为单条自动修订增加受限固定状态，并让自动裁剪永远保护已固定修订。
 对接：`EditorStateRevisionRow`、`editor_state_revision_service._trim_revisions`、既有 `editor_state_revisions` 路由与 required bid_writer/CSRF 门。
-二次开发：Grok 只能在八文件白名单内先写真实 failure-first 再实现和自测；不得暂存、提交或推送；Codex 负责独立审查、独立验收、中文文档、提交和协作分支推送。
+二次开发：Grok 只能在九文件白名单内先写真实 failure-first 再实现和自测；不得暂存、提交或推送；Codex 负责独立审查、独立验收、中文文档、提交和协作分支推送。
 
-状态：2026-07-19 已完成只读审计，冻结基线=`66a5540`；尚未实现。
+状态：2026-07-19 冻结提交=`2f03b8c`；Grok 首轮实现已完成，Codex 静态审查中。后端全量首跑仅剩旧删除测试字段清单未同步，现冻结一行机械测试扩展。
 
 ## 1. 选择理由与严格边界
 
@@ -38,7 +38,7 @@
 - 项目/空间不存在优先固定 `project_not_found`/404；目标修订不存在或跨项目固定 `editor_state_revision_not_found`/404；固定容量超限固定 `editor_state_revision_pin_limit`/409；数据库/flush/commit 失败固定 `editor_state_revision_pin_failed`/500。
 - required 模式继续复用既有会话、当前 workspace、`bid_writer` 与 CSRF 门；disabled 保持本机测试兼容。不得新增角色、Token、Cookie、审计或外网请求。
 
-## 5. 八文件白名单与冻结哈希
+## 5. 九文件白名单与冻结哈希
 
 | 文件 | 冻结 SHA-256 | 允许变化 |
 |---|---|---|
@@ -50,6 +50,7 @@
 | `backend/app/api/editor_state_revisions.py` | `69B2F75363F51D70006C066501AC8DD30D8ED9B8211798F5D818FEAD8E548D0E` | 新 PATCH 路由与固定脱敏解析 |
 | `backend/tests/test_editor_state_revisions.py` | `58B8B8F2428C5E3AFF0FC27DE1218F7634B4681703C0E77DC183FE49E0D01936` | 精确列集合与裁剪基线的机械/新增证据 |
 | `backend/tests/test_p12f_revision_pin.py` | 新文件，不存在 | 真实 ASGI/SQLite 固定、上限、锁、回滚和安全门 |
+| `backend/tests/test_p12f_revision_delete.py` | `E1CE8CBA925022EC6202146879557DC570DE87FB73ADE78A68705BAC7CD1529E` | 仅在 `test_delete_ast_and_source_guards` 的 `ann_fields` 精确清单中，于 `display_name` 后加入 `is_pinned`；禁止改其它字符 |
 
 禁止修改前端、历史 API 六键 parser/response、其它服务、迁移以外的数据库结构、依赖/锁文件、其它测试、Git 历史或文档（文档由 Codex 后续闭环）。
 
@@ -63,7 +64,7 @@ Grok 与 Codex 均逐条串行；pytest 禁止 xdist/并发分组：
 2. `python -m pytest -q tests/test_editor_state_revisions.py tests/test_p12c_revision_restore.py --tb=line`
 3. 后端全量 `python -m pytest -q --tb=line`
 4. `python -m py_compile app/models/entities.py app/core/database.py app/services/editor_state_revision_service.py app/services/editor_state_revision_pin_service.py app/api/schemas.py app/api/editor_state_revisions.py tests/test_p12f_revision_pin.py`
-5. `git diff --check`、精确八文件、空暂存区、最终 SHA-256、SQL/AST/错误脱敏/零写/无正文投影扫描。
+5. `git diff --check`、精确九文件、空暂存区、最终 SHA-256、SQL/AST/错误脱敏/零写/无正文投影扫描。
 
 ## 7. 明确未做
 
