@@ -1013,6 +1013,23 @@ Codex 独立串行通过后端 P12H/受影响回归/全量 **43/80/1217 passed**
 
 批量/软删除、撤销/回收站、自动清理、审计、固定/置顶与保护裁剪、搜索/排序、跨项目检查点、跨客户端互斥、多人协作、presence、SSE/WebSocket 不在本包。
 
+## P12I 检查点名称与可见内容显式搜索（已审计待冻结）
+
+契约=`docs/p12i-checkpoint-search-contract.md`，计划=`docs/plans/2026-07-19-p12i-checkpoint-search-plan.md`；本次中文文档提交即冻结。严格六文件且不改模型、数据库、Schema、命名/删除服务、核心 editor-state/修订服务、页面/hook、共享请求层或其它 E2E。
+
+联调必须逐项确认：
+
+1. 唯一 POST search 无 query，body 精确 `{query}`；非法外壳 422、非法关键词 400、项目 404、损坏候选 500，均固定中文/no-store/不反射。
+2. 后端八列投影、workspace/project、倒序、LIMIT 20；先完整重验全部候选名称与规范快照，再按 NFKC+casefold 匹配名称或可见内容；不扫第 21 条、不写库。
+3. 成功顶层精确 `{items}`，每项仍七键元数据，零 snapshot/片段/评分/ID 扩展；双命中去重且顺序不变。
+4. 技术标/商务标共用显式输入；编辑零请求，按钮/Enter 一次 POST，同值零重发，清除一次 GET，不做自动搜索或客户端快照过滤。
+5. active search 下刷新/创建/恢复只重发同一 POST；命名成功原位更新、删除成功原位移除，保持 P12G/P12H 既有合同。
+6. 搜索与 list/create/restore/name/delete/toggle/确认态真实互斥和 disabled；同任务双触发真单飞，A→B 迟到 success/catch/finally 不污染或解锁 B。
+7. 失败保留结果/输入可重试；关键词、名称、ID、版本、快照、原始错误与 CSRF 不进入 URL、存储、Cookie、console、异常、剪贴板、下载或外网。
+8. pytest 禁止 xdist/并发分组；Playwright 全部 `--workers=1 --retries=0` 逐条串行，禁止同时启动后端与前端测试。
+
+固定/保护裁剪、排序、分页/游标、片段/高亮/评分、自动搜索/缓存、批量、跨项目检查点/搜索、完整时间线、跨客户端互斥、多人协作、presence、SSE/WebSocket 不在 P12I。
+
 ## P13-A 任务 SSE 工作空间鉴权（已完成）
 
 冻结=`e8dfa61`，实现=`1509aa2`。required 模式继续由认证中间件负责无会话 401；SSE 路由连接前短 Session 复用统一 `get_workspace_id`，因此 finance/hr/bidder 固定 `role_forbidden`，非成员显式头固定 `workspace_forbidden`，无头原生 EventSource 使用会话 `activeWorkspaceId`。disabled 仍支持默认空间与合法显式头。
