@@ -5,9 +5,9 @@
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
 > **协作分支功能基线**：P12F-J-A 冻结=`2f03b8c`、实现=`a7021c4`；P12F-I 冻结=`060191e`、实现=`008e443`；P12F-H 冻结=`0660145`、范围修订=`0db935b`/`aca68b6`、实现=`b4338ba`；P12F-G-B 冻结=`89b5728`、实现=`bb7c4f4`；P12F-G-A 冻结=`c176cb5`、实现=`d2555d4`；P12F-F-B 冻结=`4585388`、实现=`be2fe77`；P12F-F-A 冻结=`b2eed7c`、实现=`e6516e8`；P12F-E-B 冻结=`a31e50e`、实现=`f9127ec`；P12F-E-A 冻结=`af3798a`、实现=`c66b69d`；P12F-D 冻结=`a2acdf3`、实现=`587df9a`；P13-A 冻结=`e8dfa61`、实现=`1509aa2`；P12F-C 冻结=`bb1ae3e`、实现=`fe99f5a`；P12F-B 冻结=`4ddd896`、实现=`c84a94d`；P12F-A 冻结=`e713fb3`、实现=`24f4cf2`；P12E-A 冻结=`5aa205c`、实现=`f9f067e`；P12E-B 冻结=`00ef081`、实现=`5a5b08a`；P12E-C 冻结=`8b40bf4`、实现=`b6a4375`；其余既有功能基线见本文 §11。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
-> **最新增量基线**：P12J-A 已交付检查点固定列/迁移、5 条/10 MiB 配额、单条 PATCH 与固定/安全双保护裁剪；冻结=`9f304da`、实现=`8edebd4`。P12J-B 已在文档闭环 HEAD=`262683e` 上完成只读审计并冻结为严格十一文件。
+> **最新增量基线**：P12J-A 已交付检查点固定列/迁移、5 条/10 MiB 配额、单条 PATCH 与固定/安全双保护裁剪；冻结=`9f304da`、实现=`8edebd4`。P12J-B 已以文档闭环 `262683e` 的十一份白名单代码哈希完成只读审计，契约冻结提交=`65fe259`。
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **本地状态**：只允许分支 `collab/grok-code-codex-review`；P12J-A 文档闭环=`262683e` 已推送。P12J-B 冻结提交后须核验 HEAD、上游、远端一致且工作区干净，再下发 Grok。
+> **本地状态**：只允许分支 `collab/grok-code-codex-review`；P12J-A 文档闭环=`262683e`、P12J-B 契约冻结=`65fe259` 均已推送。实现启动前须核验当前 HEAD、上游、远端一致且工作区干净，再下发 Grok；不得把 `262683e` 误作实现启动 HEAD。
 > **验收基线**：P12J-A Codex 独立后端专项/受影响回归/全量 **23/140/1258 passed**；本包不改前端，整仓前端沿用已验收 **318 passed** 基线且未冒充重跑结果。仅保留既有 pytest 弃用警告。**所有 pytest 与 Playwright E2E 共用 SQLite 重置库，pytest 禁止 xdist/并发分组，Playwright 必须显式 `--workers=1 --retries=0` 逐条串行运行。**
 
 ---
