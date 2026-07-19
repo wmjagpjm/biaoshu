@@ -1013,9 +1013,9 @@ Codex 独立串行通过后端 P12H/受影响回归/全量 **43/80/1217 passed**
 
 批量/软删除、撤销/回收站、自动清理、审计、固定/置顶与保护裁剪、搜索/排序、跨项目检查点、跨客户端互斥、多人协作、presence、SSE/WebSocket 不在本包。
 
-## P12I 检查点名称与可见内容显式搜索（已审计待冻结）
+## P12I 检查点名称与可见内容显式搜索（已完成并推送）
 
-契约=`docs/p12i-checkpoint-search-contract.md`，计划=`docs/plans/2026-07-19-p12i-checkpoint-search-plan.md`；本次中文文档提交即冻结。严格六文件且不改模型、数据库、Schema、命名/删除服务、核心 editor-state/修订服务、页面/hook、共享请求层或其它 E2E。
+契约=`docs/p12i-checkpoint-search-contract.md`，计划=`docs/plans/2026-07-19-p12i-checkpoint-search-plan.md`；冻结=`86cc1a3`、实现=`8c41bbc`。严格六文件且未改模型、数据库、Schema、命名/删除服务、核心 editor-state/修订服务、页面/hook、共享请求层或其它 E2E。
 
 联调必须逐项确认：
 
@@ -1027,6 +1027,10 @@ Codex 独立串行通过后端 P12H/受影响回归/全量 **43/80/1217 passed**
 6. 搜索与 list/create/restore/name/delete/toggle/确认态真实互斥和 disabled；同任务双触发真单飞，A→B 迟到 success/catch/finally 不污染或解锁 B。
 7. 失败保留结果/输入可重试；关键词、名称、ID、版本、快照、原始错误与 CSRF 不进入 URL、存储、Cookie、console、异常、剪贴板、下载或外网。
 8. pytest 禁止 xdist/并发分组；Playwright 全部 `--workers=1 --retries=0` 逐条串行，禁止同时启动后端与前端测试。
+
+联调门已全部通过。Grok 首轮 review=`msg_58a1a28887534e02bd4497bb12dec3da`；Codex 审查发现两项生产缺陷和多项反假绿缺口，受限返修 task/review=`msg_69b8bb73702945b3a4f0b3ebd26c942a`/`msg_2a430c560a4d415d881a4fd58911ad9d`。两项真实返修红测先为 **2 failed**，修复后 **2 passed**；Grok 全程未暂存、提交或推送。
+
+Codex 独立串行通过后端 P12I/五文件检查点回归/全量 **18/123/1235 passed**，前端 P12I/checkpoint/history/技术 truth/商务 truth **8/76/61/28/18 passed**；lint、build、py_compile、diff-check、严格六文件、空暂存区与最终哈希均通过。验收回执=`msg_608e5dda4d59453b83ab068ce9879fbf`；整仓前端沿用已验收 **318 passed** 基线，本包未重复运行不受影响套件。
 
 固定/保护裁剪、排序、分页/游标、片段/高亮/评分、自动搜索/缓存、批量、跨项目检查点/搜索、完整时间线、跨客户端互斥、多人协作、presence、SSE/WebSocket 不在 P12I。
 
