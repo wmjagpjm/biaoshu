@@ -155,3 +155,28 @@ npm run build
 ## 10. 明确未做
 
 不做创建时命名、自动名称、名称唯一性、名称搜索/排序/筛选、检查点固定/删除/下载/分享、批量命名、标签/备注、恢复复制名称、跨项目检查点、完整时间线、自动检查点历史、多人协作、审批/审计扩展、SSE/WebSocket、PostgreSQL/Alembic、索引/依赖变更，也不修改 P12F 修订名称/固定能力。
+
+## 11. 实际交付与验收（2026-07-19）
+
+1. 冻结提交=`9696ec1`，实现提交=`077e7d4`。Grok 原任务=`msg_a30143a9cd0743e5bc20589ccd941759`，首轮 review_request=`msg_1b3e0ffcfc164586a641c4c70669f058`；Codex 首轮审查后下发四文件受限返修=`msg_ef6e51ac93f849a9bf58d4699519da48`，最终 review_request=`msg_f472fcf56377451a8c92c5dbc7b69031`，验收回执=`msg_cd2908a39cc1438186b0f41d13062443`。Grok 全程未暂存、未提交、未推送。
+2. 初始后端 failure-first 为 **37 failed / 25 passed**，首个真实业务失败是新 PATCH 返回 404；生产六文件哈希仍等于冻结值。首轮实现虽通过自测，但 Codex 审查发现元数据用 `.get()` 掩盖缺键、前端同步 ref 并非真实单飞、A→B 测试未让 B 在释放 A 前真正进入在途，以及宽计数/强制点击可能假绿。
+3. 返修先形成后端守卫 **1 failed**（精确命中 `.get("display_name")`）和前端 **1 failed / 4 passed / 3 did-not-run**（同一任务双击实际发出 2 次 PATCH）。最终改为 `data["display_name"]` 精确索引、独立 flight token/active ref、render 同步 project/items ref，以及 A/B 双 hold 的 success/failure 围栏；同一 `page.evaluate` 内双 DOM click 证明精确一次 PATCH，P12G 块不再使用 `force:true` 或宽计数。
+4. Codex 独立串行通过：后端聚焦 **62 passed**、恢复回归 **47 passed**、后端全量 **1203 passed**；前端 P12G **8 passed**、检查点全套 **59 passed**、修订历史 **61 passed**、技术真相 **28 passed**、商务真相 **18 passed**。`npm run lint`、`npm run build`、八个后端文件 `py_compile`、`git diff --check`、严格十二文件、空暂存区和最终哈希门均通过。后端全量只有 1 条既有 Starlette/httpx 弃用警告；构建只有既有大 chunk 提示。
+5. 整仓前端全量沿用上一包已独立验收的 **318 passed** 基线。本包已完整运行全部受影响的检查点、历史和技术/商务真相套件，因此按用户“避免无止境重复测试”的要求没有重复扫描不受影响套件；此项不是声称本包产生新的 318 全量结果。
+
+最终严格十二文件 SHA-256：
+
+| 文件 | 最终 SHA-256 |
+|---|---|
+| `backend/app/models/entities.py` | `13D6122DA3C42839472920ED0FB010698AA397CF8BA5F8121748A04120E130BC` |
+| `backend/app/core/database.py` | `70F7D0A911A74AB9D682CEEA9A6CCF8946AB596B8F29CDA9F452BBF23229A2BC` |
+| `backend/app/api/schemas.py` | `28C324C479F32ED80755DB41853475B55D5090FB6C95251A0F9E50AFC3076230` |
+| `backend/app/api/editor_state_checkpoints.py` | `566CB28D34E702C981706062D5D24202E48F5E3D6D2B9212E7F379DB953B394A` |
+| `backend/app/services/editor_state_checkpoint_service.py` | `4908CF3B154350B433453E1DB9265E7897E0DEA16CBE3302C38FFAE8E1CA048C` |
+| `backend/app/services/editor_state_checkpoint_name_service.py` | `3CC9738C994E9CC41D81C34129157D740AFDD9C7A612FFB4FDBC91E2514F99A1` |
+| `backend/tests/test_editor_state_checkpoints.py` | `2CE45AFEFF4B2B3C4F75FB0DB3E7CB84C07080A4152EFA5658939FB17BF2B9C2` |
+| `backend/tests/test_p12g_checkpoint_display_name.py` | `86A6B3FCEBA7B94D84BE656A18BC933C62B0189935C9CF03A1386377FB7139CC` |
+| `frontend/src/features/editor-state-checkpoints/editorStateCheckpointApi.ts` | `E1716BE70CC4962564747D1B486DB36BB0C2EB026E7C934846A79FE8B42C7C06` |
+| `frontend/src/features/editor-state-checkpoints/EditorStateCheckpointPanel.tsx` | `C2C5B2849035AF83B85C53FB53A09EF501B3B2D58FFCF2E61552060942883E60` |
+| `frontend/e2e/editor-state-checkpoint-restore.spec.ts` | `AE321AC7D5EFF800B9D239BBF44444A42A1DB981B44C90DC6A7A7184B3E0BC9B` |
+| `frontend/e2e/editor-state-revision-history.spec.ts` | `D5C47A8A81667458A4A86C7A98B189B8D9038FC7769B490E6A1F05F90E21AC84` |
