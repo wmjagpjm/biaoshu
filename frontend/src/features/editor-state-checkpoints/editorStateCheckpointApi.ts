@@ -1,8 +1,9 @@
-﻿/**
- * 模块：P12B-D2 editor-state 检查点 API 封装
- * 用途：仅封装元数据 list、空对象 create、带 expected 的 restore；严格校验响应 shape。
- * 对接：GET|POST /api/projects/{id}/editor-state-checkpoints*；apiFetch。
- * 二次开发：禁止请求详情 snapshot；禁止本地生成版本/ID；禁止持久化 checkpoint 正文。
+/**
+ * 模块：P12B-D2 / P12G editor-state 检查点 API 封装
+ * 用途：仅封装元数据 list、空对象 create、带 expected 的 restore、单条 display-name PATCH；严格校验响应 shape。
+ * 对接：GET|POST|PATCH /api/projects/{id}/editor-state-checkpoints*；apiFetch。
+ * 二次开发：禁止请求详情 snapshot；禁止本地生成版本/ID；禁止持久化 checkpoint 正文；
+ *   名称不得进入 URL/存储/Cookie/console/外网。
  */
 
 import { apiFetch } from "../../shared/lib/api";
@@ -13,7 +14,7 @@ const STATE_VERSION_RE = /^esv_[0-9a-f]{32}$/;
 /** 服务端 checkpointId 精确格式 */
 const CHECKPOINT_ID_RE = /^escp_[0-9a-f]{32}$/;
 
-/** metadata 精确六键（契约 §5 / D2 严格 shape） */
+/** metadata 精确七键（P12G 含 displayName） */
 const META_KEYS = [
   "checkpointId",
   "stateVersion",
@@ -21,6 +22,7 @@ const META_KEYS = [
   "outlineNodeCount",
   "chapterCount",
   "createdAt",
+  "displayName",
 ] as const;
 
 /** restore 成功响应精确四键 */
@@ -34,8 +36,14 @@ const RESTORE_KEYS = [
 /** list 顶层精确仅 items */
 const LIST_TOP_KEYS = ["items"] as const;
 
+/** 命名成功响应精确一键 */
+const DISPLAY_NAME_OUT_KEYS = ["displayName"] as const;
+
 /** 列表契约上限 */
 const MAX_LIST_ITEMS = 20;
+
+/** 展示名称 Unicode 码点上限 */
+const DISPLAY_NAME_MAX_CODEPOINTS = 40;
 
 /**
  * 固定内部错误码：create POST 成功体 metadata 非对象，或 stateVersion 缺失/空白/非法。
@@ -104,8 +112,85 @@ function hasExactKeys(
 }
 
 /**
+ * 用途：拒绝 C0/C1、换行/制表/NUL、U+2028/U+2029 与双向控制字符。
+ */
+function isForbiddenDisplayNameChar(ch: string): boolean {
+  const code = ch.codePointAt(0) ?? 0;
+  if (code < 0x20 || code === 0x7f || (code >= 0x80 && code <= 0x9f)) {
+    return true;
+  }
+  if (
+    ch === "\u2028" ||
+    ch === "\u2029" ||
+    ch === "\u061c" ||
+    ch === "\u200e" ||
+    ch === "\u200f" ||
+    ch === "\u202a" ||
+    ch === "\u202b" ||
+    ch === "\u202c" ||
+    ch === "\u202d" ||
+    ch === "\u202e" ||
+    ch === "\u2066" ||
+    ch === "\u2067" ||
+    ch === "\u2068" ||
+    ch === "\u2069"
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * 用途：严格解析/校验 displayName 字段（响应与本地可判定保存值）。
+ * 规则：null 合法；string 须 NFKC 后等于自身、首尾无空白、1..40 码点、无控制/双向字符。
+ */
+export function parseDisplayNameValue(value: unknown): string | null {
+  if (value === null) return null;
+  if (typeof value !== "string") {
+    throw new Error("checkpoint_display_name_invalid");
+  }
+  if (value === "" || value.trim() !== value) {
+    throw new Error("checkpoint_display_name_invalid");
+  }
+  for (const ch of value) {
+    if (isForbiddenDisplayNameChar(ch)) {
+      throw new Error("checkpoint_display_name_invalid");
+    }
+  }
+  const normalized = value.normalize("NFKC");
+  if (normalized !== value) {
+    throw new Error("checkpoint_display_name_invalid");
+  }
+  const n = [...value].length;
+  if (n < 1 || n > DISPLAY_NAME_MAX_CODEPOINTS) {
+    throw new Error("checkpoint_display_name_invalid");
+  }
+  return value;
+}
+
+/**
+ * 用途：前端保存前可判定合法非空名称；非法返回 null（调用方零请求）。
+ * 规则：trim 后非空；NFKC；1..40；无控制/双向；规范化后仍首尾无空白。
+ */
+export function normalizeDisplayNameForSave(raw: string): string | null {
+  if (typeof raw !== "string") return null;
+  if (raw === "" || raw.trim() !== raw) return null;
+  for (const ch of raw) {
+    if (isForbiddenDisplayNameChar(ch)) return null;
+  }
+  const normalized = raw.normalize("NFKC");
+  if (normalized === "" || normalized.trim() !== normalized) return null;
+  for (const ch of normalized) {
+    if (isForbiddenDisplayNameChar(ch)) return null;
+  }
+  const n = [...normalized].length;
+  if (n < 1 || n > DISPLAY_NAME_MAX_CODEPOINTS) return null;
+  return normalized;
+}
+
+/**
  * 模块：检查点元数据（无 snapshot）
- * 用途：列表与创建响应共用字段。
+ * 用途：列表与创建响应共用字段；精确七键含 displayName。
  */
 export type EditorStateCheckpointMeta = {
   checkpointId: string;
@@ -114,6 +199,7 @@ export type EditorStateCheckpointMeta = {
   outlineNodeCount: number;
   chapterCount: number;
   createdAt: string;
+  displayName: string | null;
 };
 
 /**
@@ -128,11 +214,11 @@ export type EditorStateCheckpointRestoreResult = {
 };
 
 /**
- * 用途：严格解析检查点元数据；精确六键，任一字段非法抛错。
+ * 用途：严格解析检查点元数据；精确七键，任一字段非法抛错。
  * 二次开发：
  *   - metadata 非对象，或 stateVersion 缺失/空白/非法 → 专用 CheckpointCreateStateVersionError
  *     （须先于 hasExactKeys，避免缺键被普通 shape 错误吞掉；供 create Hook 全量阻断）
- *   - 其余 shape（额外字段/非法 id/计数等）→ 普通 Error，create 仅 failed 不阻断
+ *   - 其余 shape（额外字段/非法 id/计数/名称等）→ 普通 Error，create 仅 failed 不阻断
  *   - 错误固定脱敏（不把响应原文外泄）
  */
 export function parseCheckpointMeta(raw: unknown): EditorStateCheckpointMeta {
@@ -169,6 +255,12 @@ export function parseCheckpointMeta(raw: unknown): EditorStateCheckpointMeta {
   if (typeof o.createdAt !== "string" || !o.createdAt.trim()) {
     throw new Error("checkpoint_meta_invalid");
   }
+  let displayName: string | null;
+  try {
+    displayName = parseDisplayNameValue(o.displayName);
+  } catch {
+    throw new Error("checkpoint_meta_invalid");
+  }
   return {
     checkpointId: o.checkpointId as string,
     stateVersion: sv,
@@ -176,6 +268,7 @@ export function parseCheckpointMeta(raw: unknown): EditorStateCheckpointMeta {
     outlineNodeCount: o.outlineNodeCount,
     chapterCount: o.chapterCount,
     createdAt: o.createdAt,
+    displayName,
   };
 }
 
@@ -285,6 +378,69 @@ export async function restoreEditorStateCheckpoint(
     },
   );
   return parseRestoreResult(raw);
+}
+
+/**
+ * 用途：严格解析命名成功响应；精确一键 displayName；必须等于请求规范值。
+ */
+function parseDisplayNameResponse(
+  raw: unknown,
+  expected: string | null,
+): string | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("checkpoint_display_name_invalid");
+  }
+  const o = raw as Record<string, unknown>;
+  if (!hasExactKeys(o, DISPLAY_NAME_OUT_KEYS)) {
+    throw new Error("checkpoint_display_name_invalid");
+  }
+  const parsed = parseDisplayNameValue(o.displayName);
+  if (parsed !== expected) {
+    throw new Error("checkpoint_display_name_invalid");
+  }
+  return parsed;
+}
+
+/**
+ * 用途：PATCH 单条检查点展示名称；精确 body {displayName}；成功回规范值。
+ * 对接：PATCH /projects/{projectId}/editor-state-checkpoints/{checkpointId}/display-name
+ * 约束：
+ *   - 非法 checkpointId 或名称（非 null 且非合法字符串）在发请求前固定抛出
+ *   - 禁止 query/retry/轮询/额外 header
+ *   - 响应精确一键且等于请求规范值
+ */
+export async function setEditorStateCheckpointDisplayName(
+  projectId: string,
+  checkpointId: string,
+  displayName: string | null,
+): Promise<string | null> {
+  if (!isValidCheckpointId(checkpointId)) {
+    throw new Error("checkpoint_id_invalid");
+  }
+  let normalized: string | null;
+  if (displayName === null) {
+    normalized = null;
+  } else if (typeof displayName === "string") {
+    try {
+      const via = normalizeDisplayNameForSave(displayName);
+      if (via === null) {
+        throw new Error("checkpoint_display_name_invalid");
+      }
+      normalized = via;
+    } catch {
+      throw new Error("checkpoint_display_name_invalid");
+    }
+  } else {
+    throw new Error("checkpoint_display_name_invalid");
+  }
+  const raw = await apiFetch<unknown>(
+    `/projects/${encodeURIComponent(projectId)}/editor-state-checkpoints/${encodeURIComponent(checkpointId)}/display-name`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ displayName: normalized }),
+    },
+  );
+  return parseDisplayNameResponse(raw, normalized);
 }
 
 /**

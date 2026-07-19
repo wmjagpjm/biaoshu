@@ -1901,6 +1901,7 @@ async function installRoutes(page: Page, state: ProbeState) {
           outlineNodeCount: 0,
           chapterCount: 0,
           createdAt: new Date().toISOString(),
+          displayName: null,
         }, 201);
         return;
       }

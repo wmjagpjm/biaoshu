@@ -1,10 +1,12 @@
 /**
- * 模块：P12B-D2 双工作区共用检查点折叠面板
- * 用途：展开后 list 元数据；保存服务器当前版本；内联二次确认后 restore。
+ * 模块：P12B-D2 / P12G 双工作区共用检查点折叠面板
+ * 用途：展开后 list 元数据；保存服务器当前版本；内联二次确认后 restore；
+ *       内联命名保存/覆盖/清除（成功原位更新，失败保值）。
  * 对接：editorStateCheckpointApi；技术/商务 hook 的 create/restore 回调。
  * 二次开发：
  *   - 不渲染 checkpointId/stateVersion；不请求详情 snapshot
- *   - 项目切换/折叠/卸载用会话代次隔离迟到结果
+ *   - 项目切换/折叠/卸载用会话代次隔离迟到 list/create/restore/name
+ *   - 名称与 list/create/restore/toggle/其它行名称互斥；await 前同步 ref 单飞
  *   - 固定中文脱敏；禁止 console/存储/URL/Cookie/剪贴板/下载/轮询/外网
  */
 
@@ -13,6 +15,8 @@ import {
   formatCheckpointBytes,
   formatCheckpointTime,
   listEditorStateCheckpoints,
+  normalizeDisplayNameForSave,
+  setEditorStateCheckpointDisplayName,
   type EditorStateCheckpointMeta,
 } from "./editorStateCheckpointApi";
 
@@ -29,6 +33,11 @@ const MSG_RESTORE_FAIL = "恢复检查点失败，本地内容已保留";
 const MSG_RESTORE_RELOAD_FAIL =
   "恢复已完成，但刷新失败，请重新载入远端内容";
 const MSG_RESTORE_BLOCKED = "当前无法恢复，请先处理版本冲突或重新载入";
+/** P12G 命名固定中文 */
+const MSG_NAME_SAVING = "保存名称中…";
+const MSG_NAME_OK = "已保存检查点名称";
+const MSG_NAME_CLEARED = "已清除检查点名称";
+const MSG_NAME_FAIL = "保存检查点名称失败，请稍后重试";
 
 /** 创建回调结果 */
 export type CheckpointCreateOutcome =
@@ -76,12 +85,39 @@ export function EditorStateCheckpointPanel({
   const [restoreBusy, setRestoreBusy] = useState(false);
   /** 进入确认态的检查点 id（仅内存，不渲染） */
   const [pendingRestoreId, setPendingRestoreId] = useState<string | null>(null);
+  /** P12G：进入内联命名的检查点 id（仅内存） */
+  const [pendingNameId, setPendingNameId] = useState<string | null>(null);
+  /** P12G：命名输入草稿（仅内存） */
+  const [nameDraft, setNameDraft] = useState("");
+  /** P12G：命名 PATCH 在途 */
+  const [nameBusy, setNameBusy] = useState(false);
 
   /**
-   * 项目会话代次：projectId 变化或折叠时递增，隔离迟到 list/create/restore。
+   * 项目会话代次：projectId 变化或折叠时递增，隔离迟到 list/create/restore/name。
    */
   const sessionRef = useRef(0);
   const mountedRef = useRef(true);
+  const projectIdRef = useRef(projectId);
+  /** P12G 命名请求代次：项目切换/折叠/另一行命名递增 */
+  const nameGenRef = useRef(0);
+  /**
+   * P12G 在途命名 checkpointId 同步镜像（仅内存）；
+   * 进入编辑态即写入，不能单独充当 PATCH 在途门。
+   */
+  const pendingNameIdRef = useRef<string | null>(null);
+  /**
+   * P12G 真同步在途 token：save/clear 在任何 await 前原子占用；
+   * catch/finally 仅清理同一 token，旧 A 永远不能清掉 B 新 token。
+   */
+  const nameFlightTokenRef = useRef(0);
+  const nameFlightActiveRef = useRef<number | null>(null);
+  /** 列表项同步镜像，供清除路径读取当前 displayName */
+  const itemsRef = useRef<ListItem[]>([]);
+
+  // C. 项目围栏：render 同步镜像，关闭 commit→effect 之间的旧请求污染窗口
+  projectIdRef.current = projectId;
+  // 列表项同步镜像（render 同步，避免 effect 滞后）
+  itemsRef.current = items;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -90,9 +126,13 @@ export function EditorStateCheckpointPanel({
     };
   }, []);
 
-  // 项目切换：重置面板，作废在途
+  // 项目切换：重置面板，作废在途（含命名 flight token）
   useEffect(() => {
     sessionRef.current += 1;
+    nameGenRef.current += 1;
+    nameFlightTokenRef.current += 1;
+    nameFlightActiveRef.current = null;
+    pendingNameIdRef.current = null;
     setExpanded(false);
     setItems([]);
     setListError(null);
@@ -102,6 +142,9 @@ export function EditorStateCheckpointPanel({
     setCreateBusy(false);
     setRestoreBusy(false);
     setPendingRestoreId(null);
+    setPendingNameId(null);
+    setNameDraft("");
+    setNameBusy(false);
   }, [projectId]);
 
   const loadList = useCallback(
@@ -128,34 +171,69 @@ export function EditorStateCheckpointPanel({
 
   const handleToggle = useCallback(() => {
     if (expanded) {
-      // 折叠：递增会话，丢弃迟到 list/create/restore 对 UI 的写入
+      // 折叠：递增会话，丢弃迟到 list/create/restore/name 对 UI 的写入
       sessionRef.current += 1;
+      nameGenRef.current += 1;
+      nameFlightTokenRef.current += 1;
+      nameFlightActiveRef.current = null;
+      pendingNameIdRef.current = null;
       setExpanded(false);
       setPendingRestoreId(null);
+      setPendingNameId(null);
+      setNameDraft("");
+      setNameBusy(false);
       setListLoading(false);
       setCreateBusy(false);
       setRestoreBusy(false);
       return;
     }
+    // 展开时若命名在途则拒绝（互斥）
+    if (nameBusy || pendingNameId != null) return;
     const session = sessionRef.current;
     setExpanded(true);
     setStatusMessage(null);
     setStatusTone(null);
     setPendingRestoreId(null);
     void loadList(session);
-  }, [expanded, loadList]);
+  }, [expanded, loadList, nameBusy, pendingNameId]);
 
   const handleRefresh = useCallback(() => {
-    if (!expanded || listLoading || createBusy || restoreBusy) return;
+    if (
+      !expanded ||
+      listLoading ||
+      createBusy ||
+      restoreBusy ||
+      nameBusy ||
+      pendingNameId != null
+    ) {
+      return;
+    }
     const session = sessionRef.current;
     setStatusMessage(null);
     setStatusTone(null);
     setPendingRestoreId(null);
     void loadList(session);
-  }, [expanded, listLoading, createBusy, restoreBusy, loadList]);
+  }, [
+    expanded,
+    listLoading,
+    createBusy,
+    restoreBusy,
+    nameBusy,
+    pendingNameId,
+    loadList,
+  ]);
 
   const handleCreate = useCallback(async () => {
-    if (disabled || createBusy || restoreBusy || !expanded) return;
+    if (
+      disabled ||
+      createBusy ||
+      restoreBusy ||
+      nameBusy ||
+      pendingNameId != null ||
+      !expanded
+    ) {
+      return;
+    }
     const session = sessionRef.current;
     setCreateBusy(true);
     setStatusMessage(null);
@@ -194,6 +272,8 @@ export function EditorStateCheckpointPanel({
     disabled,
     createBusy,
     restoreBusy,
+    nameBusy,
+    pendingNameId,
     expanded,
     createCheckpoint,
     loadList,
@@ -201,12 +281,20 @@ export function EditorStateCheckpointPanel({
 
   const handleRestoreClick = useCallback(
     (checkpointId: string) => {
-      if (disabled || createBusy || restoreBusy) return;
+      if (
+        disabled ||
+        createBusy ||
+        restoreBusy ||
+        nameBusy ||
+        pendingNameId != null
+      ) {
+        return;
+      }
       setPendingRestoreId(checkpointId);
       setStatusMessage(null);
       setStatusTone(null);
     },
-    [disabled, createBusy, restoreBusy],
+    [disabled, createBusy, restoreBusy, nameBusy, pendingNameId],
   );
 
   const handleConfirmRestore = useCallback(async () => {
@@ -214,6 +302,8 @@ export function EditorStateCheckpointPanel({
       disabled ||
       createBusy ||
       restoreBusy ||
+      nameBusy ||
+      pendingNameId != null ||
       !pendingRestoreId ||
       !expanded
     ) {
@@ -264,6 +354,8 @@ export function EditorStateCheckpointPanel({
     disabled,
     createBusy,
     restoreBusy,
+    nameBusy,
+    pendingNameId,
     pendingRestoreId,
     expanded,
     restoreCheckpoint,
@@ -275,7 +367,243 @@ export function EditorStateCheckpointPanel({
     setPendingRestoreId(null);
   }, [restoreBusy]);
 
-  const actionsDisabled = disabled || createBusy || restoreBusy || listLoading;
+  /**
+   * 用途：进入内联命名；清除恢复意图；输入零请求。
+   */
+  const handleNameClick = useCallback(
+    (checkpointId: string, currentName: string | null) => {
+      if (
+        !expanded ||
+        listLoading ||
+        createBusy ||
+        restoreBusy ||
+        nameBusy ||
+        pendingRestoreId != null
+      ) {
+        return;
+      }
+      nameGenRef.current += 1;
+      pendingNameIdRef.current = checkpointId;
+      setPendingNameId(checkpointId);
+      setNameDraft(currentName ?? "");
+      setNameBusy(false);
+      setPendingRestoreId(null);
+      setStatusMessage(null);
+      setStatusTone(null);
+    },
+    [
+      expanded,
+      listLoading,
+      createBusy,
+      restoreBusy,
+      nameBusy,
+      pendingRestoreId,
+    ],
+  );
+
+  const handleNameCancel = useCallback(() => {
+    if (nameBusy) return;
+    nameGenRef.current += 1;
+    pendingNameIdRef.current = null;
+    setPendingNameId(null);
+    setNameDraft("");
+  }, [nameBusy]);
+
+  /**
+   * 用途：保存合法非空名称；非法零请求；success/catch/finally 含 checkpointId + flight token 围栏。
+   */
+  const handleNameSave = useCallback(async () => {
+    if (
+      !expanded ||
+      !projectId ||
+      !pendingNameId ||
+      nameBusy ||
+      listLoading ||
+      createBusy ||
+      restoreBusy
+    ) {
+      return;
+    }
+    // B. 真同步单飞：await 前原子检查并占用独立 flight token（nameBusy 不能挡同事件循环双击）
+    if (nameFlightActiveRef.current != null) {
+      return;
+    }
+    const normalized = normalizeDisplayNameForSave(nameDraft);
+    if (normalized === null) {
+      // 前端可判定非法：零 PATCH
+      return;
+    }
+    const session = sessionRef.current;
+    const myGen = ++nameGenRef.current;
+    const myFlight = ++nameFlightTokenRef.current;
+    nameFlightActiveRef.current = myFlight;
+    const checkpointId = pendingNameId;
+    const projectAtStart = projectId;
+    // 在途期间显式绑定本轮 checkpointId
+    pendingNameIdRef.current = checkpointId;
+    setNameBusy(true);
+    setStatusMessage(MSG_NAME_SAVING);
+    setStatusTone(null);
+    const stillCurrent = () =>
+      mountedRef.current &&
+      session === sessionRef.current &&
+      myGen === nameGenRef.current &&
+      myFlight === nameFlightTokenRef.current &&
+      nameFlightActiveRef.current === myFlight &&
+      projectIdRef.current === projectAtStart &&
+      pendingNameIdRef.current === checkpointId;
+    const releaseOwnFlight = () => {
+      // 仅清理同一 token：旧 A 永远不能清掉 B 新 token
+      if (nameFlightActiveRef.current === myFlight) {
+        nameFlightActiveRef.current = null;
+      }
+    };
+    try {
+      const saved = await setEditorStateCheckpointDisplayName(
+        projectAtStart,
+        checkpointId,
+        normalized,
+      );
+      if (!stillCurrent()) return;
+      // 成功：先清 busy 再收口 pending
+      setNameBusy(false);
+      releaseOwnFlight();
+      setItems((prev) =>
+        prev.map((it) =>
+          it.checkpointId === checkpointId
+            ? { ...it, displayName: saved }
+            : it,
+        ),
+      );
+      pendingNameIdRef.current = null;
+      setPendingNameId(null);
+      setNameDraft("");
+      setStatusMessage(MSG_NAME_OK);
+      setStatusTone("ok");
+    } catch {
+      if (!stillCurrent()) return;
+      setStatusMessage(MSG_NAME_FAIL);
+      setStatusTone("err");
+      // 失败保值：保留原 displayName 与草稿
+    } finally {
+      if (stillCurrent()) {
+        setNameBusy(false);
+        releaseOwnFlight();
+      } else {
+        // 代次已作废时仍仅释放本 token（若尚未被项目切换清掉）
+        releaseOwnFlight();
+      }
+    }
+  }, [
+    expanded,
+    projectId,
+    pendingNameId,
+    nameBusy,
+    listLoading,
+    createBusy,
+    restoreBusy,
+    nameDraft,
+  ]);
+
+  /**
+   * 用途：清除已有名称（仅已有名称可用）；发送 null。
+   */
+  const handleNameClear = useCallback(async () => {
+    if (
+      !expanded ||
+      !projectId ||
+      !pendingNameId ||
+      nameBusy ||
+      listLoading ||
+      createBusy ||
+      restoreBusy
+    ) {
+      return;
+    }
+    // B. 真同步单飞
+    if (nameFlightActiveRef.current != null) {
+      return;
+    }
+    const existing = itemsRef.current.find(
+      (it) => it.checkpointId === pendingNameId,
+    );
+    if (!existing || existing.displayName == null) {
+      return;
+    }
+    const session = sessionRef.current;
+    const myGen = ++nameGenRef.current;
+    const myFlight = ++nameFlightTokenRef.current;
+    nameFlightActiveRef.current = myFlight;
+    const checkpointId = pendingNameId;
+    const projectAtStart = projectId;
+    pendingNameIdRef.current = checkpointId;
+    setNameBusy(true);
+    setStatusMessage(MSG_NAME_SAVING);
+    setStatusTone(null);
+    const stillCurrent = () =>
+      mountedRef.current &&
+      session === sessionRef.current &&
+      myGen === nameGenRef.current &&
+      myFlight === nameFlightTokenRef.current &&
+      nameFlightActiveRef.current === myFlight &&
+      projectIdRef.current === projectAtStart &&
+      pendingNameIdRef.current === checkpointId;
+    const releaseOwnFlight = () => {
+      if (nameFlightActiveRef.current === myFlight) {
+        nameFlightActiveRef.current = null;
+      }
+    };
+    try {
+      const saved = await setEditorStateCheckpointDisplayName(
+        projectAtStart,
+        checkpointId,
+        null,
+      );
+      if (!stillCurrent()) return;
+      setNameBusy(false);
+      releaseOwnFlight();
+      setItems((prev) =>
+        prev.map((it) =>
+          it.checkpointId === checkpointId
+            ? { ...it, displayName: saved }
+            : it,
+        ),
+      );
+      pendingNameIdRef.current = null;
+      setPendingNameId(null);
+      setNameDraft("");
+      setStatusMessage(MSG_NAME_CLEARED);
+      setStatusTone("ok");
+    } catch {
+      if (!stillCurrent()) return;
+      setStatusMessage(MSG_NAME_FAIL);
+      setStatusTone("err");
+    } finally {
+      if (stillCurrent()) {
+        setNameBusy(false);
+        releaseOwnFlight();
+      } else {
+        releaseOwnFlight();
+      }
+    }
+  }, [
+    expanded,
+    projectId,
+    pendingNameId,
+    nameBusy,
+    listLoading,
+    createBusy,
+    restoreBusy,
+  ]);
+
+  const nameUiLocked = pendingNameId != null || nameBusy;
+  const actionsDisabled =
+    disabled ||
+    createBusy ||
+    restoreBusy ||
+    listLoading ||
+    nameBusy ||
+    pendingNameId != null;
 
   return (
     <div
@@ -301,6 +629,7 @@ export function EditorStateCheckpointPanel({
           className="btn btn-ghost btn-sm"
           data-testid="editor-state-checkpoint-toggle"
           aria-expanded={expanded}
+          disabled={nameUiLocked && expanded}
           onClick={handleToggle}
         >
           {expanded ? "收起版本检查点" : "版本检查点"}
@@ -387,6 +716,7 @@ export function EditorStateCheckpointPanel({
           >
             {items.map((item, index) => {
               const confirming = pendingRestoreId === item.checkpointId;
+              const naming = pendingNameId === item.checkpointId;
               return (
                 <li
                   key={item.checkpointId}
@@ -415,8 +745,71 @@ export function EditorStateCheckpointPanel({
                     </span>
                     <span>章节 {item.chapterCount}</span>
                     <span>{formatCheckpointBytes(item.snapshotBytes)}</span>
+                    {item.displayName != null ? (
+                      <span
+                        data-testid={`editor-state-checkpoint-display-name-${index}`}
+                        style={{ fontWeight: 600 }}
+                      >
+                        {item.displayName}
+                      </span>
+                    ) : null}
                   </div>
-                  {confirming ? (
+                  {naming ? (
+                    <div
+                      data-testid={`editor-state-checkpoint-name-wrap-${index}`}
+                      style={{ marginTop: 8 }}
+                    >
+                      <input
+                        type="text"
+                        data-testid={`editor-state-checkpoint-name-input-${index}`}
+                        value={nameDraft}
+                        disabled={nameBusy}
+                        maxLength={80}
+                        onChange={(e) => setNameDraft(e.target.value)}
+                        style={{
+                          width: "100%",
+                          maxWidth: 320,
+                          boxSizing: "border-box",
+                          marginBottom: 8,
+                        }}
+                      />
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-sm"
+                          data-testid={`editor-state-checkpoint-name-save-${index}`}
+                          disabled={nameBusy || listLoading}
+                          onClick={() => {
+                            void handleNameSave();
+                          }}
+                        >
+                          {nameBusy ? MSG_NAME_SAVING : "保存"}
+                        </button>
+                        {item.displayName != null ? (
+                          <button
+                            type="button"
+                            className="btn btn-soft btn-sm"
+                            data-testid={`editor-state-checkpoint-name-clear-${index}`}
+                            disabled={nameBusy || listLoading}
+                            onClick={() => {
+                              void handleNameClear();
+                            }}
+                          >
+                            清除
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          data-testid={`editor-state-checkpoint-name-cancel-${index}`}
+                          disabled={nameBusy}
+                          onClick={handleNameCancel}
+                        >
+                          取消
+                        </button>
+                      </div>
+                    </div>
+                  ) : confirming ? (
                     <div
                       data-testid={`editor-state-checkpoint-confirm-${index}`}
                       style={{ marginTop: 8 }}
@@ -454,7 +847,14 @@ export function EditorStateCheckpointPanel({
                       </div>
                     </div>
                   ) : (
-                    <div style={{ marginTop: 8 }}>
+                    <div
+                      style={{
+                        marginTop: 8,
+                        display: "flex",
+                        gap: 8,
+                        flexWrap: "wrap",
+                      }}
+                    >
                       <button
                         type="button"
                         className="btn btn-soft btn-sm"
@@ -463,6 +863,17 @@ export function EditorStateCheckpointPanel({
                         onClick={() => handleRestoreClick(item.checkpointId)}
                       >
                         恢复
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        data-testid={`editor-state-checkpoint-name-${index}`}
+                        disabled={actionsDisabled}
+                        onClick={() =>
+                          handleNameClick(item.checkpointId, item.displayName)
+                        }
+                      >
+                        {item.displayName != null ? "重命名" : "命名"}
                       </button>
                     </div>
                   )}

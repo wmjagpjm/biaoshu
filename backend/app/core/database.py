@@ -225,6 +225,39 @@ def migrate_editor_state_revisions_display_name(conn) -> None:
     )
 
 
+def migrate_editor_state_checkpoints_display_name(conn) -> None:
+    """
+    用途：P12G 幂等为检查点表加 nullable display_name 列。
+    对接：ensure_schema_columns；仅 SQLite 生效。
+    二次开发：
+      - 表不存在时 no-op（create_all 按新 ORM 建列）；
+      - 列已存在立即 no-op；
+      - 加列失败必须抛出让外层 begin 回滚并阻止启动；禁止吞异常后继续。
+    """
+    dialect_name = getattr(getattr(conn, "dialect", None), "name", None)
+    if dialect_name != "sqlite":
+        return
+
+    row = conn.exec_driver_sql(
+        "SELECT name FROM sqlite_master "
+        "WHERE type='table' AND name='editor_state_checkpoints'"
+    ).fetchone()
+    if row is None:
+        return
+
+    cols = conn.exec_driver_sql(
+        "PRAGMA table_info(editor_state_checkpoints)"
+    ).fetchall()
+    existing = {r[1] for r in cols if r is not None and len(r) > 1}
+    if "display_name" in existing:
+        return
+
+    # 单行字面量：便于验收扫描 ADD COLUMN display_name
+    conn.exec_driver_sql(
+        "ALTER TABLE editor_state_checkpoints ADD COLUMN display_name VARCHAR(160)"
+    )
+
+
 def migrate_editor_state_revisions_is_pinned(conn) -> None:
     """
     用途：P12F-J-A 幂等加 is_pinned BOOLEAN NOT NULL DEFAULT 0，并附 0/1 CHECK。
@@ -469,3 +502,5 @@ def ensure_schema_columns(target_engine=None) -> None:
         migrate_editor_state_revisions_display_name(conn)
         # P12F-J-A：display_name 后幂等加 is_pinned + CHECK；失败阻止启动
         migrate_editor_state_revisions_is_pinned(conn)
+        # P12G：检查点表幂等加 display_name；失败阻止启动
+        migrate_editor_state_checkpoints_display_name(conn)

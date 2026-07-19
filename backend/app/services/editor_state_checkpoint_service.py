@@ -198,7 +198,7 @@ def _require_project(
 
 
 def _meta_from_row(row: EditorStateCheckpointRow) -> dict[str, Any]:
-    """用途：ORM 行 → API 元数据字典。"""
+    """用途：ORM 行 → API 元数据字典（七键含 display_name）。"""
     return {
         "checkpoint_id": row.id,
         "state_version": row.state_version,
@@ -206,6 +206,7 @@ def _meta_from_row(row: EditorStateCheckpointRow) -> dict[str, Any]:
         "outline_node_count": int(row.outline_node_count),
         "chapter_count": int(row.chapter_count),
         "created_at": row.created_at,
+        "display_name": row.display_name,
     }
 
 
@@ -339,7 +340,8 @@ def create_editor_state_checkpoint(
             outline_node_count=outline_node_count,
             chapter_count=chapter_count,
         )
-        # 提交前构造元数据，避免 commit 成功后 refresh 失败导致假失败/重复创建
+        # 提交前构造元数据，避免 commit 成功后 refresh 失败导致假失败/重复创建；
+        # 名称固定初始 null（不接受客户端投稿，列默认 NULL）
         meta = {
             "checkpoint_id": checkpoint_id,
             "state_version": state_version,
@@ -347,6 +349,7 @@ def create_editor_state_checkpoint(
             "outline_node_count": outline_node_count,
             "chapter_count": chapter_count,
             "created_at": row.created_at,
+            "display_name": None,
         }
         _trim_checkpoints(db, workspace_id, project_id)
         db.commit()
@@ -377,6 +380,7 @@ def list_editor_state_checkpoints(
             EditorStateCheckpointRow.outline_node_count,
             EditorStateCheckpointRow.chapter_count,
             EditorStateCheckpointRow.created_at,
+            EditorStateCheckpointRow.display_name,
         )
         .where(
             EditorStateCheckpointRow.workspace_id == workspace_id,
@@ -398,6 +402,7 @@ def list_editor_state_checkpoints(
                 "outline_node_count": int(row.outline_node_count),
                 "chapter_count": int(row.chapter_count),
                 "created_at": row.created_at,
+                "display_name": row.display_name,
             }
         )
     return {"items": items}

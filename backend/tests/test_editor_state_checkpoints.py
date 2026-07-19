@@ -50,6 +50,7 @@ _META_KEYS = frozenset(
         "outlineNodeCount",
         "chapterCount",
         "createdAt",
+        "displayName",
     }
 )
 _DETAIL_KEYS = _META_KEYS | frozenset({"snapshot"})
@@ -376,6 +377,7 @@ def test_table_constraints_indexes_and_fk_cascade(disabled_client):
         "outline_node_count",
         "chapter_count",
         "created_at",
+        "display_name",
     }
     fks = insp.get_foreign_keys("editor_state_checkpoints")
     fk_by_col = {
@@ -474,12 +476,14 @@ def test_create_empty_project_authoritative_empty_snapshot(disabled_client):
     assert body["outlineNodeCount"] == 0
     assert body["chapterCount"] == 0
     assert type(body["snapshotBytes"]) is int and body["snapshotBytes"] >= 1
+    assert body["displayName"] is None
 
     detail = client.get(_url(pid, body["checkpointId"]))
     assert detail.status_code == 200, detail.text
     _assert_no_store(detail)
     dbody = detail.json()
     assert set(dbody.keys()) == _DETAIL_KEYS
+    assert dbody["displayName"] is None
     snap = dbody["snapshot"]
     assert set(snap.keys()) == _SNAPSHOT_KEYS
     for bad in _FORBIDDEN_SNAPSHOT_KEYS:
