@@ -5,7 +5,7 @@
 对接：`EditorStateRevisionRow`、`editor_state_revision_service._trim_revisions`、既有 `editor_state_revisions` 路由与 required bid_writer/CSRF 门。
 二次开发：Grok 只能在九文件白名单内先写真实 failure-first 再实现和自测；不得暂存、提交或推送；Codex 负责独立审查、独立验收、中文文档、提交和协作分支推送。
 
-状态：2026-07-19 冻结提交=`2f03b8c`；Grok 首轮实现已完成，Codex 静态审查中。后端全量首跑仅剩旧删除测试字段清单未同步，现冻结一行机械测试扩展。
+状态：2026-07-19 已完成实现、独立验收并推送；冻结文档=`2f03b8c`，实现提交=`a7021c4`，Grok review_request=`msg_88f4752ef1cf4a929c6b194df00d9398`，Codex 验收回执=`msg_c630805296ac48d6941809bbca957b7f`。
 
 ## 1. 选择理由与严格边界
 

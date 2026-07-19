@@ -365,7 +365,7 @@ P8D 与 P8E 本机外置解析助手均已完成并推送：P8D 计划=`30d066f`
 
 **P12E-A 单条修订正文差异预览已完成**：冻结=`5aa205c`、实现=`f9f067e`。只读 GET 返回精确六键和有界章节行差异；前端技术/商务共用按需入口、严格 parser、四意图互斥与 arrived/complete 迟到隔离。Codex 首轮审查复现第 101 个差异章仍进入 difflib，Grok 以真实 **1 failed / 1 passed** 红测返修为 **2 passed**；Codex 独立通过专项/回归/后端全量 **23/27/854**，history/checkpoint/truth/前端全量 **27/51/46/290 passed**。任意历史两两比较、删除、搜索、分页、正文自动恢复和多人协作继续不进入 A 包。
 
-**下一步**：P13-A 与 P12F-D/E-A/E-B/F-A/F-B/G-A/G-B/H/I 均已完成。**P12F-J-A 修订固定与裁剪保护后端基础** 已冻结并进入实现审查：冻结=`2f03b8c`，首轮实现后仅余旧删除测试字段清单的一行机械同步；冻结边界由八文件最小扩为九文件。完成 Grok 单行修复、全量复跑和 Codex 独立验收后再闭环；不改历史六键响应、前端或 J-B 元数据/UI。固定排序、批量固定、检查点命名、跨项目历史和多人协作继续另包。
+**下一步**：P13-A 与 P12F-D/E-A/E-B/F-A/F-B/G-A/G-B/H/I/J-A 均已完成。P12F-J-A 冻结=`2f03b8c`、实现=`a7021c4`，最终九文件；Grok/Codex 独立后端串行 **16/96/1/1165 passed**，坏值原始投影、迁移失败回滚、execute/flush/commit 零写、py_compile、diff-check 和边界门均通过。下一包为 **P12F-J-B**：只扩展七键 `isPinned` 元数据、API/parser、技术/商务固定入口与串行 E2E；固定排序、批量固定、检查点命名、跨项目历史和多人协作继续另包。
 
 **P12E-B 已完成并推送**：双修订正文差异后端基础，契约=`docs/p12e-revision-pair-body-diff-contract.md`，计划=`docs/plans/2026-07-17-p12e-revision-pair-body-diff-plan.md`，冻结=`00ef081`、实现=`5a5b08a`。只比较同 workspace/project 的两个历史修订，暂不提供前端入口；Grok 仅改四个后端文件并发送 review_request，Codex 独立验收后提交推送。专项/回归/全量 **13/23/50/867 passed**，合并专项 **86 passed**，仅 1 条既有 Starlette/httpx 弃用告警。
 
@@ -397,7 +397,7 @@ P12E-B 真实 failure-first 为 13 项红测：11 项路由缺失 404、1 项同
 
 **P12F-I 已完成并推送**：契约=`docs/p12f-revision-display-name-search-contract.md`，计划=`docs/plans/2026-07-18-p12f-revision-display-name-search-plan.md`，冻结=`060191e`，实现=`008e443`。严格四文件复用既有 POST/search SQL 七列与六键响应；后端完整验证全部候选后，以同一 NFKC+casefold 规则联合匹配非空名称和既有可见字段，同一行只返回一次且保持倒序。前端只修正“名称或内容搜索”入口/活动/失败/空态文案并补技术/商务 E2E；路由、Schema、API、数据库、索引、候选 20 与所有写能力保持冻结。Codex 独立通过后端 **29/247/1146 passed**、前端 **3/55/51/28/18/318 passed** 以及 lint/build/py_compile/diff/四文件/哈希门；验收回执=`msg_d954063f489248babb027b9bb335f666`。下一主线必须重新只读审计并单独冻结，固定/置顶及裁剪保护不得直接沿用本包边界。
 
-**P12F-J-A 实现审查中**：契约=`docs/p12f-revision-pinning-backend-contract.md`，计划=`docs/plans/2026-07-19-p12f-revision-pinning-backend-plan.md`，冻结=`2f03b8c`。真实 failure-first **15 failed / 71 passed**；定向固定专项 **14 passed**、修订账本与恢复 **95 passed**；首轮全量 **2 failed / 1160 passed**，修复裸 INSERT 服务端默认后仅剩旧删除测试 AST 字段清单未含 `is_pinned`。已冻结第九文件单行机械修订，生产边界仍只新增 `is_pinned`、SQLite 幂等迁移、5 条/10 MiB 固定上限、项目锁后单条 pin PATCH 与保护性自动裁剪；显式删除固定行仍允许，list/page/search/detail 继续六键，前端和 J-B 七键/UI 不进入本包。
+**P12F-J-A 已完成**：契约=`docs/p12f-revision-pinning-backend-contract.md`，计划=`docs/plans/2026-07-19-p12f-revision-pinning-backend-plan.md`，冻结=`2f03b8c`，实现=`a7021c4`，Grok review=`msg_88f4752ef1cf4a929c6b194df00d9398`，Codex ack=`msg_c630805296ac48d6941809bbca957b7f`。最终独立结果 **16/96/1/1165 passed**；SQLite 非法 `is_pinned=2` 通过原始整数投影被固定 500/裁剪整次回滚，迁移中途 DROP 回滚、execute/flush/commit 零写均有真实证据。前端、七键历史响应、固定按钮与 E2E 留给 P12F-J-B。
 
 **P13-A 已完成并推送**：契约=`docs/p13a-task-sse-workspace-auth-contract.md`，计划=`docs/plans/2026-07-17-p13a-task-sse-workspace-auth-plan.md`，冻结=`e8dfa61`、实现=`1509aa2`。SSE 连接前短 Session 复用统一 workspace/成员/bid_writer 解析，流内每轮按 workspace/project/task 再校验；disabled、原生 EventSource、事件/回退不变。真实 failure-first **8 failed / 5 passed**；Codex 一轮 test-only 返修关闭恒真泄漏断言、secret marker 跳过和宽松三参，独立通过 **13/72/918 passed**。首次全量只因 20 分钟外层时限不足终止，40 分钟外层干净重跑为 **918 passed in 1310.97s**。
 ## P12D-B 完成状态（2026-07-17）
