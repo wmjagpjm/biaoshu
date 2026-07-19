@@ -1,23 +1,23 @@
 /**
- * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B / P12F-F-B / P12F-G-B / P12F-H / P12F-I
+ * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B / P12F-F-B / P12F-G-B / P12F-H / P12F-I / P12F-J-B
  *       双工作区共用修订历史折叠面板
  * 用途：默认折叠零请求；展开游标页；可选来源筛选；本地时间范围草稿显式应用/清除；
  *       显式名称或内容联合搜索 POST；手动加载更多至最多 20 条；按需摘要；按需与当前对比；按需正文差异；
  *       内存双侧选择与双修订正文差异；内联二次确认后 restore；内联二次确认后单条 DELETE；
- *       内联命名保存/覆盖/清除（成功原位更新，失败保值）。
- * 对接：editorStateRevisionApi（含 page/search/comparison/body-diff/pair/delete/display-name）；
+ *       内联命名保存/覆盖/清除、单条固定/取消固定（均成功原位更新，失败保值）。
+ * 对接：editorStateRevisionApi（含 page/search/comparison/body-diff/pair/delete/display-name/pin）；
  *       技术/商务 hook 的 restoreRevision 回调。
  * 二次开发：
  *   - 不渲染 revisionId/stateVersion/cursor/UTC query/snapshot 正文/内部字段键/字段值/op 原值/关键词到固定文案
  *   - 名称仅 React 文本；禁止 HTML 注入 / URL / 存储 / Cookie / console 泄漏
- *   - 项目切换/折叠/卸载用会话代次隔离迟到 page/search/load-more/detail/comparison/body-diff/pair/restore/delete/name
+ *   - 项目切换/折叠/卸载用会话代次隔离迟到 page/search/load-more/detail/comparison/body-diff/pair/restore/delete/name/pin
  *   - 摘要、比较、正文差异、双修订差异、恢复确认、删除确认、命名同一时刻只保留一个当前意图；交叉作废
  *   - 时间/搜索草稿与已应用值分离；来源/刷新/恢复/删除/加载更多只读已应用范围
  *   - 固定中文脱敏；禁止 console/存储/URL/Cookie/剪贴板/下载/轮询/外网
  *   - 无创建/批量删除/自动搜索/自动分页/预取；双修订选择仅内存；游标仅内存 + 规定 API 查询
  *   - 搜索态无加载更多；关键词仅输入控件值 + React 内存 + 一次 POST body
  *   - 删除/命名不依赖 editor-state expected version；不得仅因 props.disabled 永久隐藏
- *   - P12F-I 仅改联合搜索固定文案；不改 API/parser/状态机
+ *   - P12F-I 仅改联合搜索固定文案；P12F-J-B 固定状态仅原位更新，不重载历史或 editor-state
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -40,6 +40,7 @@ import {
   REVISION_SOURCE_LABELS,
   searchEditorStateRevisions,
   setEditorStateRevisionDisplayName,
+  setEditorStateRevisionPin,
   type BodyDiffOp,
   type EditorStateRevisionBodyDiff,
   type EditorStateRevisionComparison,
@@ -86,6 +87,14 @@ const MSG_NAME_OK = "修订名称已保存";
 const MSG_NAME_CLEARED = "修订名称已清除";
 /** P12F-H 命名失败固定中文 */
 const MSG_NAME_FAIL = "保存修订名称失败，当前名称已保留";
+/** P12F-J-B 固定在途固定中文 */
+const MSG_PIN_SAVING = "保存固定状态中…";
+/** P12F-J-B 固定成功固定中文 */
+const MSG_PIN_OK = "修订已固定";
+/** P12F-J-B 取消固定成功固定中文 */
+const MSG_PIN_UNPIN_OK = "已取消固定";
+/** P12F-J-B 固定失败固定中文 */
+const MSG_PIN_FAIL = "保存修订固定状态失败，当前状态已保留";
 /** P12F-E-B 时间范围无效固定中文 */
 const MSG_TIME_RANGE_INVALID = "时间范围无效，请检查开始和结束时间";
 /** P12F-F-B / P12F-I 搜索关键词校验失败固定中文 */
@@ -267,6 +276,8 @@ export function EditorStateRevisionPanel({
   const [nameDraft, setNameDraft] = useState("");
   /** P12F-H：命名 PATCH 在途 */
   const [nameBusy, setNameBusy] = useState(false);
+  /** P12F-J-B：固定 PATCH 在途 */
+  const [pinBusy, setPinBusy] = useState(false);
   /** 当前展开摘要的修订 id（仅内存） */
   const [summaryRevisionId, setSummaryRevisionId] = useState<string | null>(
     null,
@@ -340,8 +351,24 @@ export function EditorStateRevisionPanel({
    * 旧 A finally 不得解锁 B 新一轮命名。
    */
   const pendingNameIdRef = useRef<string | null>(null);
+  /**
+   * P12F-J-B 固定请求代次：项目切换/折叠/卸载递增；
+   * 旧 pin 的 success/catch/finally 不得写新项目忙碌/文案/列表/解锁。
+   */
+  const pinGenRef = useRef(0);
+  /**
+   * P12F-J-B 在途固定 revisionId 同步镜像（仅内存）；
+   * success/catch/finally 必须核对 pinRevisionIdRef.current === revisionId。
+   */
+  const pinRevisionIdRef = useRef<string | null>(null);
+  /**
+   * P12F-J-B 在途固定发起时的项目 ID；与 projectIdRef 交叉核对。
+   */
+  const pinProjectIdRef = useRef<string | null>(null);
   /** 同步在途门：连续点击/双击不得产生第二个在途请求 */
   const loadMoreInFlightRef = useRef(false);
+  /** P12F-J-B 全局单飞：await 前同步关门 */
+  const pinInFlightRef = useRef(false);
   /** items 同步镜像，供 load-more 合并校验（避免闭包过期） */
   const itemsRef = useRef<ListItem[]>([]);
   /** nextCursor 同步镜像 */
@@ -430,6 +457,10 @@ export function EditorStateRevisionPanel({
     loadMoreGenRef.current += 1;
     deleteGenRef.current += 1;
     nameGenRef.current += 1;
+    pinGenRef.current += 1;
+    pinInFlightRef.current = false;
+    pinRevisionIdRef.current = null;
+    pinProjectIdRef.current = null;
     loadMoreInFlightRef.current = false;
     setExpanded(false);
     setItems([]);
@@ -469,6 +500,7 @@ export function EditorStateRevisionPanel({
     pendingNameIdRef.current = null;
     setPendingNameId(null);
     setNameDraft("");
+    setPinBusy(false);
     setSummaryRevisionId(null);
     setSummary(null);
     setComparisonRevisionId(null);
@@ -927,8 +959,10 @@ export function EditorStateRevisionPanel({
   ]);
 
   const handleToggle = useCallback(() => {
-    // 删除确认/在途期间折叠真实 disabled，避免伪装取消不可撤销请求
+    // 删除/命名/固定确认或在途期间折叠真实 disabled
     if (pendingDeleteId != null || deleteBusy) return;
+    if (pendingNameId != null || nameBusy) return;
+    if (pinBusy || pinInFlightRef.current) return;
     if (expanded) {
       sessionRef.current += 1;
       detailGenRef.current += 1;
@@ -937,6 +971,11 @@ export function EditorStateRevisionPanel({
       pairBodyDiffGenRef.current += 1;
       loadMoreGenRef.current += 1;
       deleteGenRef.current += 1;
+      nameGenRef.current += 1;
+      pinGenRef.current += 1;
+      pinInFlightRef.current = false;
+      pinRevisionIdRef.current = null;
+      pinProjectIdRef.current = null;
       loadMoreInFlightRef.current = false;
       setExpanded(false);
       setListLoading(false);
@@ -951,6 +990,11 @@ export function EditorStateRevisionPanel({
       setPendingRestoreId(null);
       setDeleteBusy(false);
       setPendingDeleteId(null);
+      setNameBusy(false);
+      pendingNameIdRef.current = null;
+      setPendingNameId(null);
+      setNameDraft("");
+      setPinBusy(false);
       clearSummaryState();
       clearComparisonState();
       clearBodyDiffState();
@@ -973,6 +1017,9 @@ export function EditorStateRevisionPanel({
     expanded,
     pendingDeleteId,
     deleteBusy,
+    pendingNameId,
+    nameBusy,
+    pinBusy,
     loadList,
     clearSummaryState,
     clearComparisonState,
@@ -1811,18 +1858,131 @@ export function EditorStateRevisionPanel({
     deleteBusy,
   ]);
 
+  /**
+   * 用途：单击固定/取消固定；全局单飞；成功仅原位更新 isPinned。
+   * 约束：await 前同步关门；success/catch/finally 核对 mounted/session/gen/project/revision。
+   */
+  const handlePinClick = useCallback(
+    async (revisionId: string, currentlyPinned: boolean) => {
+      if (
+        !expanded ||
+        !projectId ||
+        listLoading ||
+        loadMoreLoading ||
+        restoreBusy ||
+        deleteBusy ||
+        nameBusy ||
+        pinBusy ||
+        pinInFlightRef.current ||
+        pendingDeleteId != null ||
+        pendingNameId != null
+      ) {
+        return;
+      }
+      // 同步单飞：await 前关门，双击/另一行只产生一次 PATCH
+      pinInFlightRef.current = true;
+      const session = sessionRef.current;
+      const myGen = ++pinGenRef.current;
+      const projectAtStart = projectId;
+      const desired = !currentlyPinned;
+      pinRevisionIdRef.current = revisionId;
+      pinProjectIdRef.current = projectAtStart;
+      // 开始固定：作废其它行操作意图与在途 load-more
+      invalidateDetail();
+      invalidateComparison();
+      invalidateBodyDiff();
+      invalidatePairBodyDiff();
+      loadMoreGenRef.current += 1;
+      loadMoreInFlightRef.current = false;
+      setLoadMoreLoading(false);
+      setLoadMoreError(null);
+      clearSummaryState();
+      clearComparisonState();
+      clearBodyDiffState();
+      clearPairBodyDiffState();
+      setPendingRestoreId(null);
+      setPendingDeleteId(null);
+      nameGenRef.current += 1;
+      pendingNameIdRef.current = null;
+      setPendingNameId(null);
+      setNameDraft("");
+      setNameBusy(false);
+      setPinBusy(true);
+      setStatusMessage(MSG_PIN_SAVING);
+      setStatusTone(null);
+      const stillCurrent = () =>
+        mountedRef.current &&
+        session === sessionRef.current &&
+        myGen === pinGenRef.current &&
+        projectIdRef.current === projectAtStart &&
+        pinProjectIdRef.current === projectAtStart &&
+        pinRevisionIdRef.current === revisionId;
+      try {
+        const saved = await setEditorStateRevisionPin(
+          projectAtStart,
+          revisionId,
+          desired,
+        );
+        if (!stillCurrent()) return;
+        // 成功：仅原位替换目标 isPinned；零 page/search/detail 重载
+        setItems((prev) =>
+          prev.map((it) =>
+            it.revisionId === revisionId ? { ...it, isPinned: saved } : it,
+          ),
+        );
+        setStatusMessage(desired ? MSG_PIN_OK : MSG_PIN_UNPIN_OK);
+        setStatusTone("ok");
+      } catch {
+        if (!stillCurrent()) return;
+        // 失败保值：不清 items
+        setStatusMessage(MSG_PIN_FAIL);
+        setStatusTone("err");
+      } finally {
+        if (stillCurrent()) {
+          setPinBusy(false);
+          pinInFlightRef.current = false;
+          pinRevisionIdRef.current = null;
+          pinProjectIdRef.current = null;
+        }
+      }
+    },
+    [
+      expanded,
+      projectId,
+      listLoading,
+      loadMoreLoading,
+      restoreBusy,
+      deleteBusy,
+      nameBusy,
+      pinBusy,
+      pendingDeleteId,
+      pendingNameId,
+      invalidateDetail,
+      invalidateComparison,
+      invalidateBodyDiff,
+      invalidatePairBodyDiff,
+      clearSummaryState,
+      clearComparisonState,
+      clearBodyDiffState,
+      clearPairBodyDiffState,
+    ],
+  );
+
   // 删除确认或在途：除确认删除/取消规则外全局锁定
   const deleteUiLocked = pendingDeleteId != null || deleteBusy;
   // 命名确认或在途：除输入/保存/清除/取消外全局锁定
   const nameUiLocked = pendingNameId != null || nameBusy;
-  /** 删除或命名意图互斥锁 */
-  const exclusiveUiLocked = deleteUiLocked || nameUiLocked;
-  // 恢复：全状态阻断 / 首屏加载 / 加载更多/删除/命名在途时禁用
+  // 固定在途：全局锁定
+  const pinUiLocked = pinBusy;
+  /** 删除/命名/固定意图互斥锁 */
+  const exclusiveUiLocked = deleteUiLocked || nameUiLocked || pinUiLocked;
+  // 恢复：全状态阻断 / 首屏加载 / 加载更多/删除/命名/固定在途时禁用
   const restoreDisabled =
     disabled ||
     restoreBusy ||
     deleteBusy ||
     nameBusy ||
+    pinBusy ||
     listLoading ||
     loadMoreLoading ||
     exclusiveUiLocked;
@@ -1849,22 +2009,34 @@ export function EditorStateRevisionPanel({
   /** 列表/加载更多/恢复/删除/命名在途或确认：来源、时间、搜索均真实 disabled */
   const filterControlsDisabled =
     listLoading || loadMoreLoading || restoreBusy || exclusiveUiLocked;
-  /** 删除按钮：不依赖 props.disabled；受列表/加载更多/恢复/删除/命名阻断 */
+  /** 删除按钮：不依赖 props.disabled；受列表/加载更多/恢复/删除/命名/固定阻断 */
   const deleteDisabled =
     listLoading ||
     loadMoreLoading ||
     restoreBusy ||
     deleteBusy ||
     nameBusy ||
+    pinBusy ||
     nameUiLocked;
-  /** 命名按钮：列表/加载更多/恢复/删除/命名阻断 */
+  /** 命名按钮：列表/加载更多/恢复/删除/命名/固定阻断 */
   const nameDisabled =
     listLoading ||
     loadMoreLoading ||
     restoreBusy ||
     deleteBusy ||
     nameBusy ||
+    pinBusy ||
     deleteUiLocked;
+  /** 固定按钮：列表/加载更多/恢复/删除/命名/固定阻断 */
+  const pinDisabled =
+    listLoading ||
+    loadMoreLoading ||
+    restoreBusy ||
+    deleteBusy ||
+    nameBusy ||
+    pinBusy ||
+    deleteUiLocked ||
+    nameUiLocked;
   /** 应用时间：至少一个草稿非空且不在途 */
   const timeApplyDisabled =
     filterControlsDisabled ||
@@ -1912,6 +2084,7 @@ export function EditorStateRevisionPanel({
                 deleteBusy ||
                 nameBusy ||
                 loadMoreLoading ||
+                exclusiveUiLocked ||
                 pendingDeleteId != null ||
                 pendingNameId != null
               }
@@ -2409,6 +2582,13 @@ export function EditorStateRevisionPanel({
                         {item.displayName}
                       </span>
                     ) : null}
+                    {item.isPinned ? (
+                      <span
+                        data-testid={`editor-state-revision-pinned-badge-${index}`}
+                      >
+                        已固定
+                      </span>
+                    ) : null}
                   </div>
                   {showingSummary ? (
                     <div
@@ -2794,6 +2974,17 @@ export function EditorStateRevisionPanel({
                         }
                       >
                         命名
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        data-testid={`editor-state-revision-pin-${index}`}
+                        disabled={pinDisabled}
+                        onClick={() => {
+                          void handlePinClick(item.revisionId, item.isPinned);
+                        }}
+                      >
+                        {item.isPinned ? "取消固定" : "固定"}
                       </button>
                       <button
                         type="button"

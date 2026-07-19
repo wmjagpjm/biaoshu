@@ -1,15 +1,15 @@
 """
-模块：P12C-C1 / P12F-A / P12F-B / P12F-D / P12F-E-A / P12F-F-A / P12F-I
+模块：P12C-C1 / P12F-A / P12F-B / P12F-D / P12F-E-A / P12F-F-A / P12F-I / P12F-J-B
   editor-state 修订历史只读服务
 用途：默认最近 10 条修订元数据列表、键集游标页、可选 sourceKind/时间范围筛选、
-  有界名称与可见内容联合搜索与单条按需详情；list/page 六列且绝不读 snapshot_json；
-  detail/search 七列含 snapshot_json，其中 search 候选有界。
+  有界名称与可见内容联合搜索与单条按需详情；list/page 七列（含 display_name/原始 is_pinned）且绝不读 snapshot_json；
+  detail/search 八列含 snapshot_json + 原始 is_pinned，其中 search 候选有界。
 对接：api.editor_state_revisions；EditorStateRevisionRow；
   editor_state_service / editor_state_revision_service 权威常量与算法。
 二次开发：
   - 全程只读：禁止 commit/rollback/flush/refresh/锁/审计/写配额/读当前 editor-state/检查点；
-  - 项目校验只投影 Project.id；列表/页六列投影且绝不读 snapshot_json；
-    详情/搜索七列含 snapshot_json（search 候选有界）+ workspace/project 作用域；
+  - 项目校验只投影 Project.id；列表/页七列投影（含原始 is_pinned）且绝不读 snapshot_json；
+    详情/搜索八列含 snapshot_json + 原始 is_pinned（search 候选有界）+ workspace/project 作用域；
   - 列表上限 MAX_REVISIONS_LIST 与页大小 REVISION_PAGE_SIZE 字面量固定 10，禁止绑定写入保留 20；
   - 搜索候选窗 LIMIT 20 固定，不补扫第 21 条；先完整校验再名称/内容联合匹配；
   - 游标页 LIMIT 11 前瞻、键集谓词；无时间无来源 esrc1；仅来源 esrc2；任一时间边界 esrc3；
@@ -27,7 +27,7 @@ import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import Integer, and_, or_, select, type_coerce
 from sqlalchemy.orm import Session
 
 from app.models.entities import EditorStateRevisionRow, Project
@@ -709,6 +709,16 @@ def _validate_stored_display_name(value: Any) -> str | None:
     return value
 
 
+def _validate_is_pinned_raw(value: Any) -> bool:
+    """
+    用途：严格校验 type_coerce 后的原始 is_pinned。
+    规则：仅原生 int 且恰为 0/1；拒绝 bool/其它类型/非法整数（含 2）。
+    """
+    if type(value) is int and value in (0, 1):
+        return value == 1
+    raise _corrupt() from None
+
+
 def _validate_meta_fields(
     *,
     revision_id: Any,
@@ -717,10 +727,12 @@ def _validate_meta_fields(
     source_kind: Any,
     created_at: Any,
     display_name: Any = None,
-) -> tuple[str, str, int, str, datetime, str | None]:
+    is_pinned: Any = None,
+) -> tuple[str, str, int, str, datetime, str | None, bool]:
     """
     用途：严格校验列表/详情共用元数据；任一异常固定 corrupt。
-    规则：esr_ ID、esv_ 版本、1..2MiB 字节、固定来源枚举、datetime 时间、可选 displayName。
+    规则：esr_ ID、esv_ 版本、1..2MiB 字节、固定来源枚举、datetime 时间、
+      可选 displayName、原始 int is_pinned 0/1。
     """
     try:
         if not isinstance(revision_id, str) or not REVISION_ID_PATTERN.fullmatch(
@@ -744,6 +756,7 @@ def _validate_meta_fields(
         if not isinstance(created_at, datetime):
             raise _corrupt() from None
         name = _validate_stored_display_name(display_name)
+        pinned = _validate_is_pinned_raw(is_pinned)
         return (
             revision_id,
             state_version,
@@ -751,6 +764,7 @@ def _validate_meta_fields(
             source_kind,
             created_at,
             name,
+            pinned,
         )
     except EditorStateRevisionHistoryError:
         raise
@@ -819,7 +833,8 @@ def list_editor_state_revisions(
     project_id: str,
 ) -> dict[str, Any]:
     """
-    用途：固定最近 10 条元数据列表；SQL 显式六列投影（含 display_name），绝不含 snapshot_json。
+    用途：固定最近 10 条元数据列表；SQL 显式七列投影（含 display_name/原始 is_pinned），
+      绝不含 snapshot_json。
     对接：GET /api/projects/{projectId}/editor-state-revisions。
     """
     _require_project_id(db, workspace_id, project_id)
@@ -832,6 +847,9 @@ def list_editor_state_revisions(
                 EditorStateRevisionRow.source_kind,
                 EditorStateRevisionRow.created_at,
                 EditorStateRevisionRow.display_name,
+                type_coerce(EditorStateRevisionRow.is_pinned, Integer).label(
+                    "is_pinned"
+                ),
             )
             .where(
                 EditorStateRevisionRow.workspace_id == workspace_id,
@@ -851,13 +869,14 @@ def list_editor_state_revisions(
 
     items: list[dict[str, Any]] = []
     for row in rows:
-        rid, ver, nbytes, source, created, dname = _validate_meta_fields(
+        rid, ver, nbytes, source, created, dname, pinned = _validate_meta_fields(
             revision_id=row.id,
             state_version=row.state_version,
             snapshot_bytes=row.snapshot_bytes,
             source_kind=row.source_kind,
             created_at=row.created_at,
             display_name=row.display_name,
+            is_pinned=row.is_pinned,
         )
         items.append(
             {
@@ -867,6 +886,7 @@ def list_editor_state_revisions(
                 "source_kind": source,
                 "created_at": created,
                 "display_name": dname,
+                "is_pinned": pinned,
             }
         )
     return {"items": items}
@@ -1007,6 +1027,9 @@ def list_editor_state_revisions_page(
                 EditorStateRevisionRow.source_kind,
                 EditorStateRevisionRow.created_at,
                 EditorStateRevisionRow.display_name,
+                type_coerce(EditorStateRevisionRow.is_pinned, Integer).label(
+                    "is_pinned"
+                ),
             )
             .where(
                 EditorStateRevisionRow.workspace_id == workspace_id,
@@ -1043,13 +1066,14 @@ def list_editor_state_revisions_page(
     # 完整校验含 lookahead 的全部行；任一损坏整页固定 corrupt
     validated: list[dict[str, Any]] = []
     for row in rows:
-        rid, ver, nbytes, source, created, dname = _validate_meta_fields(
+        rid, ver, nbytes, source, created, dname, pinned = _validate_meta_fields(
             revision_id=row.id,
             state_version=row.state_version,
             snapshot_bytes=row.snapshot_bytes,
             source_kind=row.source_kind,
             created_at=row.created_at,
             display_name=row.display_name,
+            is_pinned=row.is_pinned,
         )
         validated.append(
             {
@@ -1059,6 +1083,7 @@ def list_editor_state_revisions_page(
                 "source_kind": source,
                 "created_at": created,
                 "display_name": dname,
+                "is_pinned": pinned,
             }
         )
 
@@ -1108,6 +1133,9 @@ def get_editor_state_revision(
                 EditorStateRevisionRow.source_kind,
                 EditorStateRevisionRow.created_at,
                 EditorStateRevisionRow.display_name,
+                type_coerce(EditorStateRevisionRow.is_pinned, Integer).label(
+                    "is_pinned"
+                ),
                 EditorStateRevisionRow.snapshot_json,
             ).where(
                 EditorStateRevisionRow.id == revision_id,
@@ -1125,13 +1153,14 @@ def get_editor_state_revision(
             404, CODE_REVISION_NOT_FOUND, MSG_REVISION_NOT_FOUND
         )
 
-    rid, ver, nbytes, source, created, dname = _validate_meta_fields(
+    rid, ver, nbytes, source, created, dname, pinned = _validate_meta_fields(
         revision_id=row.id,
         state_version=row.state_version,
         snapshot_bytes=row.snapshot_bytes,
         source_kind=row.source_kind,
         created_at=row.created_at,
         display_name=row.display_name,
+        is_pinned=row.is_pinned,
     )
     snapshot = _validate_snapshot_payload(
         snapshot_json=row.snapshot_json,
@@ -1146,6 +1175,7 @@ def get_editor_state_revision(
         "source_kind": source,
         "created_at": created,
         "display_name": dname,
+        "is_pinned": pinned,
         "snapshot": snapshot,
     }
 
@@ -1323,11 +1353,11 @@ def list_editor_state_revision_search(
     created_before: Any = None,
 ) -> dict[str, Any]:
     """
-    用途：在最新 20 条元数据候选中做名称与可见内容联合搜索；只返回六键元数据。
+    用途：在最新 20 条元数据候选中做名称与可见内容联合搜索；只返回七键元数据。
     对接：POST .../editor-state-revisions/search。
     二次开发：
       - 顺序：项目存在 → 来源 → 时间 → 关键词；
-      - SQL 七列（含 display_name + snapshot）+ workspace/project + 可选来源/时间；
+      - SQL 八列（含 display_name + 原始 is_pinned + snapshot）+ workspace/project + 可选来源/时间；
       - 先完整校验全部候选再匹配；坏行/预算超限整次 corrupt；
       - 匹配条件显式为 name_match or snapshot_match；双命中只 append 一次；
       - 禁止 OFFSET/COUNT/LIKE/JSON SQL/N+1/补扫第 21 条/写操作/名称短路校验。
@@ -1348,6 +1378,9 @@ def list_editor_state_revision_search(
                 EditorStateRevisionRow.source_kind,
                 EditorStateRevisionRow.created_at,
                 EditorStateRevisionRow.display_name,
+                type_coerce(EditorStateRevisionRow.is_pinned, Integer).label(
+                    "is_pinned"
+                ),
                 EditorStateRevisionRow.snapshot_json,
             )
             .where(
@@ -1375,13 +1408,14 @@ def list_editor_state_revision_search(
     # 先完整校验全部候选；任一行损坏整次失败（与名称/内容是否命中无关）
     validated: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for row in rows:
-        rid, ver, nbytes, source, created, dname = _validate_meta_fields(
+        rid, ver, nbytes, source, created, dname, pinned = _validate_meta_fields(
             revision_id=row.id,
             state_version=row.state_version,
             snapshot_bytes=row.snapshot_bytes,
             source_kind=row.source_kind,
             created_at=row.created_at,
             display_name=row.display_name,
+            is_pinned=row.is_pinned,
         )
         snapshot = _validate_snapshot_payload(
             snapshot_json=row.snapshot_json,
@@ -1398,6 +1432,7 @@ def list_editor_state_revision_search(
                     "source_kind": source,
                     "created_at": created,
                     "display_name": dname,
+                    "is_pinned": pinned,
                 },
                 snapshot,
             )

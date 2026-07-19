@@ -2020,8 +2020,8 @@ class ContentFuseApplicationConsumeOut(BaseModel):
 
 class EditorStateRevisionMetaOut(BaseModel):
     """
-    模块：P12C-C1 / P12F-H 修订历史元数据
-    用途：列表项字段，不含 snapshot 正文；精确六键含可选 displayName。
+    模块：P12C-C1 / P12F-H / P12F-J-B 修订历史元数据
+    用途：列表项字段，不含 snapshot 正文；精确七键含可选 displayName 与 isPinned。
     对接：GET /api/projects/{projectId}/editor-state-revisions。
     二次开发：禁止附加 projectId/正文/路径/用户/任务字段。
     """
@@ -2034,6 +2034,7 @@ class EditorStateRevisionMetaOut(BaseModel):
     source_kind: str = Field(serialization_alias="sourceKind")
     created_at: datetime = Field(serialization_alias="createdAt")
     display_name: str | None = Field(serialization_alias="displayName")
+    is_pinned: bool = Field(serialization_alias="isPinned")
 
 
 class EditorStateRevisionListOut(BaseModel):
@@ -2083,8 +2084,8 @@ class EditorStateRevisionSearch(BaseModel):
 
 class EditorStateRevisionDetailOut(BaseModel):
     """
-    模块：P12C-C1 / P12F-H 修订历史详情
-    用途：六键元数据 + 已校验的规范 snapshot 对象。
+    模块：P12C-C1 / P12F-H / P12F-J-B 修订历史详情
+    用途：七键元数据 + 已校验的规范 snapshot 对象。
     对接：GET .../editor-state-revisions/{revisionId}。
     二次开发：snapshot 必须服务端重验键集/字节/版本后返回。
     """
@@ -2097,6 +2098,7 @@ class EditorStateRevisionDetailOut(BaseModel):
     source_kind: str = Field(serialization_alias="sourceKind")
     created_at: datetime = Field(serialization_alias="createdAt")
     display_name: str | None = Field(serialization_alias="displayName")
+    is_pinned: bool = Field(serialization_alias="isPinned")
     snapshot: dict[str, Any]
 
 

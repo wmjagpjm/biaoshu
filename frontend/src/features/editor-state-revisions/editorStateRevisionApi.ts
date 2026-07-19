@@ -1,10 +1,10 @@
 /**
- * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B / P12F-F-B / P12F-G-B / P12F-H
- *       editor-state 修订历史、对比、正文差异、游标页、可见内容搜索、单条删除与单条命名 API 封装
+ * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B / P12F-F-B / P12F-G-B / P12F-H / P12F-J-B
+ *       editor-state 修订历史、对比、正文差异、游标页、可见内容搜索、单条删除/命名/固定 API 封装
  * 用途：严格校验 list/page/detail/restore/comparison/body-diff/pair-body-diff/search 响应 shape；详情仅在 API 栈内解析并压缩为有界摘要；
- *       单条 DELETE 无 query/body，成功依赖 204 空体；单条 PATCH display-name 精确一键 body/响应。
+ *       单条 DELETE 无 query/body，成功依赖 204 空体；单条 PATCH display-name/pin 精确一键 body/响应。
  * 对接：GET|POST|DELETE|PATCH /api/projects/{id}/editor-state-revisions*；page 游标分页（可选 sourceKind/createdFrom/createdBefore）；
- *       search POST body（query+可选来源/时间）；comparison/body-diff/pair 只读 GET；delete 无 body；display-name PATCH；apiFetch。
+ *       search POST body（query+可选来源/时间）；comparison/body-diff/pair 只读 GET；delete 无 body；display-name/pin PATCH；apiFetch。
  * 二次开发：
  *   - 禁止把原始 snapshot 返回给 React；禁止本地生成 revisionId/version/cursor
  *   - 禁止把响应原文、路径、后端 detail、字段值/键名/游标/时间/关键词/名称字面量拼进错误文案
@@ -15,7 +15,8 @@
  *   - 时间 query 仅精确 24 字符 UTC 毫秒；顺序 sourceKind→createdFrom→createdBefore→cursor
  *   - search body 顺序 query→sourceKind→createdFrom→createdBefore；禁止 URL query/cursor
  *   - delete 仅 method DELETE；禁止 query/body/retry/读取响应 JSON
- *   - meta 精确六键含 displayName；命名 PATCH 禁止 query/retry/额外 header；响应精确一键
+ *   - meta 精确七键含 displayName/isPinned；detail 精确八键；命名/固定 PATCH 禁止 query/retry/额外 header；响应精确一键
+ *   - pin 响应 isPinned 必须等于请求目标；拒绝缺失/额外/非原生布尔/相反布尔
  */
 
 import { apiFetch } from "../../shared/lib/api";
@@ -59,7 +60,7 @@ export const REVISION_SOURCE_LABELS: Record<RevisionSourceKind, string> = {
   revision_restore: "修订恢复",
 };
 
-/** 列表项精确六键（P12F-H 含 displayName） */
+/** 列表项精确七键（P12F-H displayName + P12F-J-B isPinned） */
 const META_KEYS = [
   "revisionId",
   "stateVersion",
@@ -67,9 +68,10 @@ const META_KEYS = [
   "sourceKind",
   "createdAt",
   "displayName",
+  "isPinned",
 ] as const;
 
-/** 详情精确七键（六键元数据 + snapshot） */
+/** 详情精确八键（七键元数据 + snapshot） */
 const DETAIL_KEYS = [
   "revisionId",
   "stateVersion",
@@ -77,11 +79,15 @@ const DETAIL_KEYS = [
   "sourceKind",
   "createdAt",
   "displayName",
+  "isPinned",
   "snapshot",
 ] as const;
 
 /** 命名成功响应精确一键 */
 const DISPLAY_NAME_OUT_KEYS = ["displayName"] as const;
+
+/** 固定成功响应精确一键 */
+const PIN_OUT_KEYS = ["isPinned"] as const;
 
 /** 展示名称 Unicode 码点上限（与后端契约对齐） */
 const DISPLAY_NAME_MAX_CODEPOINTS = 40;
@@ -308,6 +314,8 @@ export type EditorStateRevisionMeta = {
   createdAt: string;
   /** 可选展示名称；null 表示未命名 */
   displayName: string | null;
+  /** 是否固定；原生 boolean */
+  isPinned: boolean;
 };
 
 /**
@@ -501,7 +509,7 @@ export function normalizeDisplayNameForSave(raw: string): string | null {
 }
 
 /**
- * 用途：严格解析列表元数据；精确六键，任一字段非法抛固定错误。
+ * 用途：严格解析列表元数据；精确七键，任一字段非法抛固定错误。
  */
 export function parseRevisionMeta(raw: unknown): EditorStateRevisionMeta {
   if (!raw || typeof raw !== "object") {
@@ -535,6 +543,10 @@ export function parseRevisionMeta(raw: unknown): EditorStateRevisionMeta {
   } catch {
     throw new Error("revision_meta_invalid");
   }
+  // 仅原生 boolean；拒绝 0/1/字符串/null
+  if (typeof o.isPinned !== "boolean") {
+    throw new Error("revision_meta_invalid");
+  }
   return {
     revisionId: o.revisionId,
     stateVersion: o.stateVersion,
@@ -542,6 +554,7 @@ export function parseRevisionMeta(raw: unknown): EditorStateRevisionMeta {
     sourceKind: o.sourceKind as RevisionSourceKind,
     createdAt: o.createdAt,
     displayName,
+    isPinned: o.isPinned,
   };
 }
 
@@ -648,15 +661,17 @@ export function parseRevisionDetail(
     sourceKind: o.sourceKind,
     createdAt: o.createdAt,
     displayName: o.displayName,
+    isPinned: o.isPinned,
   });
-  // 六项元数据必须与当前列表项逐值一致
+  // 七项元数据必须与当前列表项逐值一致
   if (
     meta.revisionId !== expectedMeta.revisionId ||
     meta.stateVersion !== expectedMeta.stateVersion ||
     meta.snapshotBytes !== expectedMeta.snapshotBytes ||
     meta.sourceKind !== expectedMeta.sourceKind ||
     meta.createdAt !== expectedMeta.createdAt ||
-    meta.displayName !== expectedMeta.displayName
+    meta.displayName !== expectedMeta.displayName ||
+    meta.isPinned !== expectedMeta.isPinned
   ) {
     throw new Error("revision_detail_meta_mismatch");
   }
@@ -1273,6 +1288,55 @@ export async function setEditorStateRevisionDisplayName(
     },
   );
   return parseDisplayNameResponse(raw, normalized);
+}
+
+/**
+ * 用途：严格解析固定成功响应；精确一键 isPinned；必须等于请求目标。
+ */
+function parsePinResponse(raw: unknown, expected: boolean): boolean {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("revision_pin_invalid");
+  }
+  const o = raw as Record<string, unknown>;
+  if (!hasExactKeys(o, PIN_OUT_KEYS)) {
+    throw new Error("revision_pin_invalid");
+  }
+  if (typeof o.isPinned !== "boolean") {
+    throw new Error("revision_pin_invalid");
+  }
+  if (o.isPinned !== expected) {
+    throw new Error("revision_pin_invalid");
+  }
+  return o.isPinned;
+}
+
+/**
+ * 用途：PATCH 单条修订固定状态；精确 body {isPinned}；成功回目标布尔。
+ * 对接：PATCH /projects/{projectId}/editor-state-revisions/{revisionId}/pin
+ * 约束：
+ *   - 非法 revisionId 或非原生 bool 在发请求前固定抛出
+ *   - 禁止 query/retry/轮询/额外 header
+ *   - 响应精确一键且等于请求目标
+ */
+export async function setEditorStateRevisionPin(
+  projectId: string,
+  revisionId: string,
+  isPinned: boolean,
+): Promise<boolean> {
+  if (!isValidRevisionId(revisionId)) {
+    throw new Error("revision_id_invalid");
+  }
+  if (typeof isPinned !== "boolean") {
+    throw new Error("revision_pin_invalid");
+  }
+  const raw = await apiFetch<unknown>(
+    `/projects/${encodeURIComponent(projectId)}/editor-state-revisions/${encodeURIComponent(revisionId)}/pin`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ isPinned }),
+    },
+  );
+  return parsePinResponse(raw, isPinned);
 }
 
 /**

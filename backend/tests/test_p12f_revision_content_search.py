@@ -47,7 +47,15 @@ _SECRET = "SECRET_P12FFA_BODY_MUST_NOT_LEAK"
 _SECRET_EXTRA = "SECRET_P12FFA_EXTRA_KEY_MUST_NOT_LEAK"
 _PATH_MARKER = "/api/projects/leaked/editor-state-revisions/search"
 _META_KEYS = frozenset(
-    {"revisionId", "stateVersion", "snapshotBytes", "sourceKind", "createdAt", "displayName"}
+    {
+        "revisionId",
+        "stateVersion",
+        "snapshotBytes",
+        "sourceKind",
+        "createdAt",
+        "displayName",
+        "isPinned",
+    }
 )
 _SEARCH_TOP = frozenset({"items"})
 _LIST_TOP = frozenset({"items"})
@@ -889,6 +897,7 @@ def _assert_search_shape(body: dict, *, max_items: int = 20) -> None:
         assert _STATE_VERSION_RE.fullmatch(item["stateVersion"])
         assert isinstance(item["snapshotBytes"], int)
         assert item["sourceKind"] in _NINE_SOURCES
+        assert type(item["isPinned"]) is bool
         assert "snapshot" not in item
         assert "nextCursor" not in item
         assert "matchedFields" not in item
@@ -1701,7 +1710,7 @@ def test_search_sql_six_columns_limit_20_no_forbidden_constructs(disabled_client
     # 反假绿：必须恰好一次 revision SELECT，禁止 N+1
     assert len(rev_selects) == 1, f"revision SELECT 次数异常: {len(rev_selects)} {rev_selects}"
 
-    # P12F-H：搜索候选 SQL 七列（元数据六键对应五原列 + display_name + snapshot_json）
+    # P12F-J-B：搜索候选 SQL 八列（七键元数据对应列 + snapshot_json；is_pinned 经 type_coerce）
     _SEARCH_COLS = (
         "id",
         "state_version",
@@ -1709,6 +1718,7 @@ def test_search_sql_six_columns_limit_20_no_forbidden_constructs(disabled_client
         "source_kind",
         "created_at",
         "display_name",
+        "is_pinned",
         "snapshot_json",
     )
 
@@ -2917,6 +2927,7 @@ def test_p12fi_combo_isolation_sql_six_keys_zero_write(disabled_client):
         "source_kind",
         "created_at",
         "display_name",
+        "is_pinned",
         "snapshot_json",
     ], normalized
     assert re.search(r"\blike\b", low) is None
@@ -2943,3 +2954,68 @@ def test_p12fi_combo_isolation_sql_six_keys_zero_write(disabled_client):
         message=_MSG_SOURCE_INVALID,
     )
     assert _domain_snapshot(pid) == before
+
+
+def _raw_is_pinned_map(project_id: str) -> dict[str, int]:
+    """用途：按 id 读取原始 is_pinned 整型。"""
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            text(
+                "SELECT id, is_pinned FROM editor_state_revisions "
+                "WHERE project_id = :pid ORDER BY id"
+            ),
+            {"pid": project_id},
+        ).fetchall()
+        return {str(r[0]): int(r[1]) for r in rows}
+    finally:
+        db.close()
+
+
+def _set_corrupt_is_pinned_sql(revision_id: str, value: int = 2) -> None:
+    """用途：独立连接写入非法 is_pinned=2。"""
+    with engine.connect() as conn:
+        conn.execute(text("PRAGMA ignore_check_constraints = ON"))
+        try:
+            conn.execute(
+                text(
+                    "UPDATE editor_state_revisions SET is_pinned = :v WHERE id = :id"
+                ),
+                {"v": value, "id": revision_id},
+            )
+            conn.commit()
+        finally:
+            conn.execute(text("PRAGMA ignore_check_constraints = OFF"))
+            off = conn.execute(text("PRAGMA ignore_check_constraints")).scalar()
+            assert int(off) == 0
+
+
+def test_search_corrupt_is_pinned_candidate_fixed_500_zero_write(disabled_client):
+    """
+    用途：候选窗内未命中正文的修订 is_pinned=2 仍须整次 search corrupt；零写。
+    """
+    client = disabled_client
+    pid = _create_project(client, name="搜索坏固定候选")
+    # 两条：一条命中关键词，一条不命中但损坏固定值
+    hit_row = _seed_state(
+        pid, _variant("hit_body_marker_xyz"), source_kind="task"
+    )
+    miss_row = _seed_state(
+        pid, _variant("miss_only_no_match"), source_kind="task"
+    )
+    # 破坏未命中候选（仍在最新 20 内）
+    _set_corrupt_is_pinned_sql(miss_row["id"], 2)
+    assert _raw_is_pinned_map(pid)[miss_row["id"]] == 2
+    pins_before = _raw_is_pinned_map(pid)
+    domain_before = _domain_snapshot(pid)
+
+    res = _search(client, pid, {"query": "hit_body_marker_xyz"})
+    assert res.status_code == 500, res.text
+    body = res.json()
+    assert body["detail"]["code"] == "editor_state_revision_corrupt"
+    assert body["detail"]["message"] == "修订记录数据损坏，无法读取"
+    assert "items" not in res.text
+    assert hit_row["id"] not in res.text
+    assert miss_row["id"] not in res.text
+    assert _raw_is_pinned_map(pid) == pins_before
+    assert _domain_snapshot(pid) == domain_before

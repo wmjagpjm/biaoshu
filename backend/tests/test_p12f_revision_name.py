@@ -54,7 +54,7 @@ _INJECT_COMMIT = "p12fh_injected_commit_failure"
 
 _REVISION_ID_RE = re.compile(r"^esr_[0-9a-f]{32}$")
 _STATE_VERSION_RE = re.compile(r"^esv_[0-9a-f]{32}$")
-_META_KEYS_SIX = frozenset(
+_META_KEYS_SEVEN = frozenset(
     {
         "revisionId",
         "stateVersion",
@@ -62,6 +62,7 @@ _META_KEYS_SIX = frozenset(
         "sourceKind",
         "createdAt",
         "displayName",
+        "isPinned",
     }
 )
 
@@ -293,8 +294,8 @@ def _assert_success_name(res, expected: str | None) -> None:
     assert _SECRET not in blob
 
 
-def _assert_meta_six(item: dict, *, forbid_echo: str | None = None) -> None:
-    assert set(item.keys()) == _META_KEYS_SIX, item.keys()
+def _assert_meta_seven(item: dict, *, forbid_echo: str | None = None) -> None:
+    assert set(item.keys()) == _META_KEYS_SEVEN, item.keys()
     assert _REVISION_ID_RE.match(item["revisionId"])
     assert _STATE_VERSION_RE.match(item["stateVersion"])
     assert type(item["snapshotBytes"]) is int and item["snapshotBytes"] > 0
@@ -308,6 +309,7 @@ def _assert_meta_six(item: dict, *, forbid_echo: str | None = None) -> None:
         assert dn == dn.strip()
         assert 1 <= len(dn) <= 40
         assert "\n" not in dn and "\t" not in dn and "\x00" not in dn
+    assert type(item["isPinned"]) is bool
     if forbid_echo:
         assert forbid_echo not in json.dumps(item, ensure_ascii=False)
 
@@ -1529,27 +1531,29 @@ def test_execute_flush_commit_failures_rollback(disabled_client):
 # ---------- 读取六键 / corrupt / 搜索集合 ----------
 
 
-def test_list_page_search_detail_six_keys_and_null_default(disabled_client):
+def test_list_page_search_detail_seven_keys_and_null_default(disabled_client):
     client = disabled_client
-    pid = _create_project(client, name="六键读取")
+    pid = _create_project(client, name="七键读取")
     rows = _seed_revisions(pid, ["k0", "k1", "k2"])
     rid0 = rows[0]["id"]
 
-    # 新修订默认 null
+    # 新修订默认 displayName=null、isPinned=false
     res_list = client.get(_list_url(pid))
     assert res_list.status_code == 200, res_list.text
     items = res_list.json()["items"]
     assert len(items) == 3
     for it in items:
-        _assert_meta_six(it)
+        _assert_meta_seven(it)
         assert it["displayName"] is None
+        assert it["isPinned"] is False
 
     res_page = client.get(_page_url(pid))
     assert res_page.status_code == 200, res_page.text
     page_body = res_page.json()
     assert set(page_body.keys()) == {"items", "nextCursor"}
     for it in page_body["items"]:
-        _assert_meta_six(it)
+        _assert_meta_seven(it)
+        assert it["isPinned"] is False
 
     # 搜索命中集合按既有正文匹配，不依赖 displayName
     res_search = client.post(
@@ -1560,28 +1564,33 @@ def test_list_page_search_detail_six_keys_and_null_default(disabled_client):
     sbody = res_search.json()
     assert "items" in sbody
     for it in sbody["items"]:
-        _assert_meta_six(it)
+        _assert_meta_seven(it)
+        assert it["isPinned"] is False
 
     res_detail = client.get(_detail_url(pid, rid0))
     assert res_detail.status_code == 200, res_detail.text
     d = res_detail.json()
     assert "displayName" in d
-    meta_only = {k: d[k] for k in _META_KEYS_SIX}
-    _assert_meta_six(meta_only)
+    assert "isPinned" in d
+    meta_only = {k: d[k] for k in _META_KEYS_SEVEN}
+    _assert_meta_seven(meta_only)
     assert d["displayName"] is None
+    assert d["isPinned"] is False
 
-    # 保存名称后六键回显
+    # 保存名称后七键回显；固定状态不变
     res_set = _patch_name(client, pid, rid0, "展示名")
     _assert_success_name(res_set, "展示名")
     res_list2 = client.get(_list_url(pid))
     assert res_list2.status_code == 200, res_list2.text
     hit = next(i for i in res_list2.json()["items"] if i["revisionId"] == rid0)
-    _assert_meta_six(hit)
+    _assert_meta_seven(hit)
     assert hit["displayName"] == "展示名"
+    assert hit["isPinned"] is False
 
     res_detail2 = client.get(_detail_url(pid, rid0))
     assert res_detail2.status_code == 200, res_detail2.text
     assert res_detail2.json()["displayName"] == "展示名"
+    assert res_detail2.json()["isPinned"] is False
 
 
 def test_corrupt_display_name_fixed_corrupt_on_read(disabled_client):
@@ -1649,7 +1658,7 @@ def test_restore_does_not_copy_display_name(disabled_client):
     restore_items = [i for i in items if i["sourceKind"] == "revision_restore"]
     assert len(restore_items) == 1
     restore_item = restore_items[0]
-    _assert_meta_six(restore_item)
+    _assert_meta_seven(restore_item)
     assert restore_item["displayName"] is None
     # 源修订名称保留且不被复制到新行；ID 不同
     src = next(i for i in items if i["revisionId"] == rid)

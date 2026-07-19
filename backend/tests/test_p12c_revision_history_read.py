@@ -46,7 +46,15 @@ _ROLE_PASSWORDS = {
     "bidder": "TestPass-P12CC1-Bidder-0001!",
 }
 _META_KEYS = frozenset(
-    {"revisionId", "stateVersion", "snapshotBytes", "sourceKind", "createdAt", "displayName"}
+    {
+        "revisionId",
+        "stateVersion",
+        "snapshotBytes",
+        "sourceKind",
+        "createdAt",
+        "displayName",
+        "isPinned",
+    }
 )
 _DETAIL_KEYS = _META_KEYS | frozenset({"snapshot"})
 _LIST_TOP = frozenset({"items"})
@@ -613,6 +621,8 @@ def test_multi_source_list_shape_order_and_max_ten(disabled_client):
         assert 1 <= item["snapshotBytes"] <= _MAX_BYTES
         assert item["sourceKind"] in _ALL_SOURCES
         assert type(item["createdAt"]) is str and item["createdAt"]
+        assert type(item["isPinned"]) is bool
+        assert item["isPinned"] is False
         listed_ids.append(item["revisionId"])
         assert "snapshot" not in item
 
@@ -1401,3 +1411,92 @@ def test_unknown_query_params_do_not_filter_or_search_body(disabled_client):
     # 不得因 search 命中正文而改变集合
     ids = {i["revisionId"] for i in tampered.json()["items"]}
     assert ids == {i["revisionId"] for i in baseline["items"]}
+
+
+def _raw_is_pinned_map(project_id: str) -> dict[str, int]:
+    """用途：按 id 读取原始 is_pinned 整型，绕过 Boolean result processor。"""
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            text(
+                "SELECT id, is_pinned FROM editor_state_revisions "
+                "WHERE project_id = :pid ORDER BY id"
+            ),
+            {"pid": project_id},
+        ).fetchall()
+        return {str(r[0]): int(r[1]) for r in rows}
+    finally:
+        db.close()
+
+
+def _set_corrupt_is_pinned_sql(revision_id: str, value: int = 2) -> None:
+    """用途：独立连接临时忽略 CHECK 写入非法 is_pinned=2。"""
+    with engine.connect() as conn:
+        conn.execute(text("PRAGMA ignore_check_constraints = ON"))
+        try:
+            conn.execute(
+                text(
+                    "UPDATE editor_state_revisions SET is_pinned = :v WHERE id = :id"
+                ),
+                {"v": value, "id": revision_id},
+            )
+            conn.commit()
+        finally:
+            conn.execute(text("PRAGMA ignore_check_constraints = OFF"))
+            off = conn.execute(text("PRAGMA ignore_check_constraints")).scalar()
+            assert int(off) == 0, f"PRAGMA 必须恢复 OFF，实际={off!r}"
+
+
+def test_list_detail_corrupt_is_pinned_fixed_500_zero_write(disabled_client):
+    """
+    用途：真实 SQLite 原始 is_pinned=2 时 list/detail 固定 corrupt；
+      不得泄漏 ID/原始值；零写（is_pinned 与其它域不变）。
+    """
+    client = disabled_client
+    pid = _create_project(client, name="坏固定读取")
+    _put_state(client, pid, tag="c0")
+    _put_state(client, pid, tag="c1")
+    rows = _db_rev_rows(pid)
+    assert len(rows) >= 2
+    victim = rows[0]["id"]
+    sibling = rows[1]["id"]
+    _set_corrupt_is_pinned_sql(victim, 2)
+    assert _raw_is_pinned_map(pid)[victim] == 2
+    before_pins = _raw_is_pinned_map(pid)
+    before_rows = _db_rev_rows(pid)
+
+    list_res = client.get(_url(pid))
+    assert list_res.status_code == 500, list_res.text
+    assert list_res.json()["detail"]["code"] == "editor_state_revision_corrupt"
+    assert list_res.json()["detail"]["message"] == "修订记录数据损坏，无法读取"
+    assert victim not in list_res.text
+    assert "isPinned" not in list_res.text or list_res.json().get("detail")
+    assert "2" not in json.dumps(list_res.json()["detail"], ensure_ascii=False)
+    assert _SECRET not in list_res.text
+
+    detail_res = client.get(_url(pid, victim))
+    assert detail_res.status_code == 500, detail_res.text
+    assert detail_res.json()["detail"]["code"] == "editor_state_revision_corrupt"
+    assert victim not in detail_res.text
+    assert sibling not in detail_res.text
+
+    assert _raw_is_pinned_map(pid) == before_pins
+    assert _raw_is_pinned_map(pid)[victim] == 2
+    after_rows = _db_rev_rows(pid)
+    assert after_rows == before_rows
+
+
+def test_history_service_projects_is_pinned_via_type_coerce_integer():
+    """用途：静态门——四类读取均须 type_coerce(is_pinned, Integer).label。"""
+    src = _SERVICE_PATH.read_text(encoding="utf-8")
+    count_coerce = src.count("type_coerce(EditorStateRevisionRow.is_pinned, Integer)")
+    # 允许多行 .label(\n  "is_pinned"\n)
+    count_label = len(
+        re.findall(r'\.label\(\s*["\']is_pinned["\']\s*\)', src)
+    )
+    assert count_coerce == 4, f"type_coerce 次数={count_coerce}"
+    assert count_label == 4, f"label is_pinned 次数={count_label}"
+    assert "is_(True)" not in src
+    # 全部 is_pinned 列引用必须且仅出现在 type_coerce(...Integer) 内
+    all_refs = re.findall(r"EditorStateRevisionRow\.is_pinned", src)
+    assert len(all_refs) == count_coerce, f"is_pinned 引用次数异常: {len(all_refs)}"

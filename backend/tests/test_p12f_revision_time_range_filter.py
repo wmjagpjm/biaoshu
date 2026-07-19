@@ -44,7 +44,15 @@ _WS_OTHER = "ws_other_p12fea"
 _SECRET = "SECRET_P12FEA_BODY_MUST_NOT_LEAK"
 _PATH_MARKER = "/api/projects/leaked/editor-state-revisions/page"
 _META_KEYS = frozenset(
-    {"revisionId", "stateVersion", "snapshotBytes", "sourceKind", "createdAt", "displayName"}
+    {
+        "revisionId",
+        "stateVersion",
+        "snapshotBytes",
+        "sourceKind",
+        "createdAt",
+        "displayName",
+        "isPinned",
+    }
 )
 _PAGE_TOP = frozenset({"items", "nextCursor"})
 _LIST_TOP = frozenset({"items"})
@@ -2087,7 +2095,7 @@ def test_time_range_sql_five_columns_predicates_limit_11(disabled_client):
     assert "func.count" not in svc_src
     assert "COUNT(*)" not in svc_src.upper()
 
-    # P12F-H：page 元数据六键对应 SQL 六列（原五列 + display_name）
+    # P12F-J-B：page 元数据七键对应 SQL 七列（+ display_name + is_pinned）
     _SIX_COLS = (
         "id",
         "state_version",
@@ -2095,6 +2103,7 @@ def test_time_range_sql_five_columns_predicates_limit_11(disabled_client):
         "source_kind",
         "created_at",
         "display_name",
+        "is_pinned",
     )
 
     def _param_list(parameters: object) -> list[object]:
@@ -2169,7 +2178,7 @@ def test_time_range_sql_five_columns_predicates_limit_11(disabled_client):
         assert match is not None
         select_list = match.group(1).strip()
         raw_parts = [p.strip() for p in select_list.split(",")]
-        assert len(raw_parts) == 6, (raw_parts, compact)
+        assert len(raw_parts) == 7, (raw_parts, compact)
         normalized_cols: list[str] = []
         for part in raw_parts:
             col = part.lower()

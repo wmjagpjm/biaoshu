@@ -51,7 +51,7 @@ _INJECT_COMMIT = "p12fja_injected_commit_failure"
 
 _REVISION_ID_RE = re.compile(r"^esr_[0-9a-f]{32}$")
 _STATE_VERSION_RE = re.compile(r"^esv_[0-9a-f]{32}$")
-_META_KEYS_SIX = frozenset(
+_META_KEYS_SEVEN = frozenset(
     {
         "revisionId",
         "stateVersion",
@@ -59,6 +59,7 @@ _META_KEYS_SIX = frozenset(
         "sourceKind",
         "createdAt",
         "displayName",
+        "isPinned",
     }
 )
 
@@ -302,9 +303,8 @@ def _assert_success_pin(res, expected: bool) -> None:
     assert _SECRET not in blob
 
 
-def _assert_meta_six(item: dict) -> None:
-    assert set(item.keys()) == _META_KEYS_SIX, item.keys()
-    assert "isPinned" not in item
+def _assert_meta_seven(item: dict, *, is_pinned: bool | None = None) -> None:
+    assert set(item.keys()) == _META_KEYS_SEVEN, item.keys()
     assert _REVISION_ID_RE.match(item["revisionId"])
     assert _STATE_VERSION_RE.match(item["stateVersion"])
     assert type(item["snapshotBytes"]) is int and item["snapshotBytes"] > 0
@@ -312,6 +312,9 @@ def _assert_meta_six(item: dict) -> None:
     assert type(item["createdAt"]) is str and item["createdAt"]
     dn = item["displayName"]
     assert dn is None or type(dn) is str
+    assert type(item["isPinned"]) is bool
+    if is_pinned is not None:
+        assert item["isPinned"] is is_pinned
 
 
 def _bootstrap(role: str = auth_service.ROLE_BID_WRITER):
@@ -1090,35 +1093,40 @@ def test_patch_required_roles_csrf(required_client):
     _assert_success_pin(res_ok, True)
 
 
-def test_list_page_search_detail_still_six_keys(disabled_client):
-    """用途：list/page/search/detail 精确六键，绝不含 isPinned。"""
+def test_list_page_search_detail_seven_keys_after_pin(disabled_client):
+    """用途：pin 后 list/page/search/detail 精确七键；目标 isPinned=true，其它 false。"""
     client = disabled_client
-    pid = _create_project(client, name="六键不变")
+    pid = _create_project(client, name="七键固定读取")
     rows = _seed_revisions(pid, ["s0", "s1"])
     rid = rows[0]["id"]
+    other = rows[1]["id"]
     _assert_success_pin(_patch_pin(client, pid, rid, True), True)
 
     lst = client.get(_list_url(pid))
     assert lst.status_code == 200, lst.text
-    for item in lst.json()["items"]:
-        _assert_meta_six(item)
+    by_id = {it["revisionId"]: it for it in lst.json()["items"]}
+    _assert_meta_seven(by_id[rid], is_pinned=True)
+    _assert_meta_seven(by_id[other], is_pinned=False)
 
     page = client.get(_page_url(pid))
     assert page.status_code == 200, page.text
-    for item in page.json()["items"]:
-        _assert_meta_six(item)
+    by_id = {it["revisionId"]: it for it in page.json()["items"]}
+    _assert_meta_seven(by_id[rid], is_pinned=True)
+    _assert_meta_seven(by_id[other], is_pinned=False)
 
     search = client.post(_search_url(pid), json={"query": "章节"})
     assert search.status_code == 200, search.text
     for item in search.json()["items"]:
-        _assert_meta_six(item)
+        want = item["revisionId"] == rid
+        _assert_meta_seven(item, is_pinned=want)
 
     detail = client.get(_detail_url(pid, rid))
     assert detail.status_code == 200, detail.text
     body = detail.json()
-    assert "isPinned" not in body
-    for k in _META_KEYS_SIX:
-        assert k in body
+    meta_only = {k: body[k] for k in _META_KEYS_SEVEN}
+    _assert_meta_seven(meta_only, is_pinned=True)
+    assert "snapshot" in body
+    assert set(body.keys()) == _META_KEYS_SEVEN | {"snapshot"}
 
 
 def _raw_is_pinned_map(project_id: str) -> dict[str, int]:
@@ -1158,6 +1166,37 @@ def _set_corrupt_is_pinned_sql(revision_id: str, value: int = 2) -> None:
             conn.execute(text("PRAGMA ignore_check_constraints = OFF"))
             off = conn.execute(text("PRAGMA ignore_check_constraints")).scalar()
             assert int(off) == 0, f"PRAGMA 必须恢复 OFF，实际={off!r}"
+
+
+def test_read_paths_corrupt_is_pinned_fixed_500_zero_write(disabled_client):
+    """
+    用途：list/page/search/detail 在原始 is_pinned=2 时固定 corrupt；
+      读路径零写；与 pin 写路径损坏语义一致。
+    """
+    client = disabled_client
+    pid = _create_project(client, name="读取坏固定")
+    rows = _seed_revisions(pid, ["r0", "r1", "r2"])
+    victim = rows[0]["id"]
+    _set_corrupt_is_pinned_sql(victim, 2)
+    assert _raw_is_pinned_map(pid)[victim] == 2
+    pins_before = _raw_is_pinned_map(pid)
+    domain_before = _domain_snapshot(pid)
+
+    for label, res in (
+        ("list", client.get(_list_url(pid))),
+        ("page", client.get(_page_url(pid))),
+        ("search", client.post(_search_url(pid), json={"query": "章节"})),
+        ("detail", client.get(_detail_url(pid, victim))),
+    ):
+        assert res.status_code == 500, f"{label}: {res.text}"
+        detail = res.json()["detail"]
+        assert detail["code"] == "editor_state_revision_corrupt"
+        assert detail["message"] == "修订记录数据损坏，无法读取"
+        assert victim not in res.text
+        assert "items" not in res.text or label == "detail"
+
+    assert _raw_is_pinned_map(pid) == pins_before
+    assert _domain_snapshot(pid) == domain_before
 
 
 def test_corrupt_is_pinned_meta_fixed_500_zero_write(disabled_client):

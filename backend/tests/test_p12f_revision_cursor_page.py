@@ -41,7 +41,15 @@ _WS_OTHER = "ws_other_p12fb"
 _SECRET = "SECRET_P12FB_BODY_MUST_NOT_LEAK"
 _PATH_MARKER = "/api/projects/leaked/editor-state-revisions/page"
 _META_KEYS = frozenset(
-    {"revisionId", "stateVersion", "snapshotBytes", "sourceKind", "createdAt", "displayName"}
+    {
+        "revisionId",
+        "stateVersion",
+        "snapshotBytes",
+        "sourceKind",
+        "createdAt",
+        "displayName",
+        "isPinned",
+    }
 )
 _PAGE_TOP = frozenset({"items", "nextCursor"})
 _LIST_TOP = frozenset({"items"})
@@ -489,6 +497,7 @@ def _assert_page_shape(body: dict, *, max_items: int = 10) -> None:
     for item in body["items"]:
         assert set(item.keys()) == _META_KEYS
         assert _REVISION_ID_RE.fullmatch(item["revisionId"])
+        assert type(item["isPinned"]) is bool
         assert "snapshot" not in item
     nc = body["nextCursor"]
     assert nc is None or (isinstance(nc, str) and nc != "")
@@ -1287,3 +1296,67 @@ def test_static_page_route_registered_before_dynamic_revision_id():
     assert page_pos != -1, "缺少静态 /page 路由"
     assert dyn_pos != -1, "缺少动态 revision 路由"
     assert page_pos < dyn_pos, "静态 /page 必须注册在动态 {revision_id} 之前"
+
+
+def _raw_is_pinned_map(project_id: str) -> dict[str, int]:
+    """用途：按 id 读取原始 is_pinned 整型。"""
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            text(
+                "SELECT id, is_pinned FROM editor_state_revisions "
+                "WHERE project_id = :pid ORDER BY id"
+            ),
+            {"pid": project_id},
+        ).fetchall()
+        return {str(r[0]): int(r[1]) for r in rows}
+    finally:
+        db.close()
+
+
+def _set_corrupt_is_pinned_sql(revision_id: str, value: int = 2) -> None:
+    """用途：独立连接写入非法 is_pinned 原始值。"""
+    with engine.connect() as conn:
+        conn.execute(text("PRAGMA ignore_check_constraints = ON"))
+        try:
+            conn.execute(
+                text(
+                    "UPDATE editor_state_revisions SET is_pinned = :v WHERE id = :id"
+                ),
+                {"v": value, "id": revision_id},
+            )
+            conn.commit()
+        finally:
+            conn.execute(text("PRAGMA ignore_check_constraints = OFF"))
+            off = conn.execute(text("PRAGMA ignore_check_constraints")).scalar()
+            assert int(off) == 0
+
+
+def test_page_lookahead_corrupt_is_pinned_fixed_500_zero_write(disabled_client):
+    """
+    用途：第 11 条 lookahead 原始 is_pinned=2 时整页 corrupt；零写。
+    """
+    client = disabled_client
+    pid = _create_project(client, name="lookahead坏固定")
+    rows = _seed_n_revisions(pid, 11, tag_prefix="lp_")
+    assert len(rows) == 11
+    # 排序后第 11 条（index 10）为 lookahead
+    ordered = _db_rev_rows(pid)
+    assert len(ordered) == 11
+    victim = ordered[10]["id"]
+    _set_corrupt_is_pinned_sql(victim, 2)
+    assert _raw_is_pinned_map(pid)[victim] == 2
+    pins_before = _raw_is_pinned_map(pid)
+    revs_before = _db_rev_rows(pid)
+
+    res = client.get(_page_url(pid))
+    assert res.status_code == 500, res.text
+    body = res.json()
+    assert body["detail"]["code"] == "editor_state_revision_corrupt"
+    assert body["detail"]["message"] == "修订记录数据损坏，无法读取"
+    assert "items" not in res.text
+    assert "nextCursor" not in res.text
+    assert victim not in res.text
+    assert _raw_is_pinned_map(pid) == pins_before
+    assert _raw_is_pinned_map(pid)[victim] == 2
+    assert _db_rev_rows(pid) == revs_before

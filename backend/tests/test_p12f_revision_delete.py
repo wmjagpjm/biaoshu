@@ -52,7 +52,15 @@ _INJECT_COMMIT = "p12fga_injected_commit_failure"
 _REVISION_ID_RE = re.compile(r"^esr_[0-9a-f]{32}$")
 _STATE_VERSION_RE = re.compile(r"^esv_[0-9a-f]{32}$")
 _META_KEYS = frozenset(
-    {"revisionId", "stateVersion", "snapshotBytes", "sourceKind", "createdAt", "displayName"}
+    {
+        "revisionId",
+        "stateVersion",
+        "snapshotBytes",
+        "sourceKind",
+        "createdAt",
+        "displayName",
+        "isPinned",
+    }
 )
 
 _CODE_REQUEST_INVALID = "editor_state_revision_delete_request_invalid"

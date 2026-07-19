@@ -1,5 +1,5 @@
 """
-模块：P12C-C1/C2/P12D-A/P12E-A/P12E-B/P12F-B/P12F-D/P12F-E-A/P12F-F-A/P12F-G-A/P12F-H/P12F-J-A
+模块：P12C-C1/C2/P12D-A/P12E-A/P12E-B/P12F-B/P12F-D/P12F-E-A/P12F-F-A/P12F-G-A/P12F-H/P12F-J-A/P12F-J-B
   editor-state 修订历史只读、游标页、来源/时间范围筛选、可见内容搜索、受限恢复、
   差异摘要与正文差异、单条物理删除、单条展示命名、单条固定状态路由
 用途：项目最近 10 条修订元数据列表、键集游标页（可选 sourceKind/createdFrom/createdBefore）、
@@ -20,7 +20,7 @@
   - 未知查询参数不得改变固定排序/上限/来源全集/正文不可搜索边界；
   - 静态 /page 与 /search 必须注册在动态 /{revision_id} 之前；页大小服务端固定 10；
   - page 扩展可选 query 别名 sourceKind/createdFrom/createdBefore；旧列表路由完全不变；
-  - search 仅 POST body 承载关键词；list/page/search/detail 六键含 displayName（无 isPinned）；
+  - search 仅 POST body 承载关键词；list/page/search 七键含 displayName/isPinned；detail 八键含 snapshot；
   - comparison/body-diff 只读，禁止写库/锁/审计；
   - P12E-B 双修订 body-diff 两侧均经 C1 校验，禁止读取当前 editor-state；
   - DELETE 必须无 query 且 body 严格零长度；成功固定空 204；
@@ -331,7 +331,7 @@ def _raise_body_diff_error(exc: EditorStateRevisionBodyDiffError) -> None:
 
 
 def _meta_out(data: dict) -> EditorStateRevisionMetaOut:
-    """用途：service 元数据 dict → 六键响应模型。"""
+    """用途：service 元数据 dict → 七键响应模型。"""
     return EditorStateRevisionMetaOut(
         revision_id=data["revision_id"],
         state_version=data["state_version"],
@@ -339,6 +339,7 @@ def _meta_out(data: dict) -> EditorStateRevisionMetaOut:
         source_kind=data["source_kind"],
         created_at=data["created_at"],
         display_name=data["display_name"],
+        is_pinned=data["is_pinned"],
     )
 
 
@@ -481,6 +482,7 @@ def get_editor_state_revision(
         source_kind=data["source_kind"],
         created_at=data["created_at"],
         display_name=data["display_name"],
+        is_pinned=data["is_pinned"],
         snapshot=data["snapshot"],
     )
 
