@@ -52,7 +52,7 @@ _INJECT_COMMIT = "p12g_injected_commit_failure"
 
 _CHECKPOINT_ID_RE = re.compile(r"^escp_[0-9a-f]{32}$")
 _STATE_VERSION_RE = re.compile(r"^esv_[0-9a-f]{32}$")
-_META_KEYS_SEVEN = frozenset(
+_META_KEYS_EIGHT = frozenset(
     {
         "checkpointId",
         "stateVersion",
@@ -61,9 +61,10 @@ _META_KEYS_SEVEN = frozenset(
         "chapterCount",
         "createdAt",
         "displayName",
+        "isPinned",
     }
 )
-_DETAIL_KEYS_EIGHT = _META_KEYS_SEVEN | frozenset({"snapshot"})
+_DETAIL_KEYS_NINE = _META_KEYS_EIGHT | frozenset({"snapshot"})
 _RESTORE_KEYS = frozenset(
     {
         "restoredCheckpointId",
@@ -291,8 +292,10 @@ def _assert_success_name(res, expected: str | None) -> None:
     assert _SECRET not in blob
 
 
-def _assert_meta_seven(item: dict, *, forbid_echo: str | None = None) -> None:
-    assert set(item.keys()) == _META_KEYS_SEVEN, item.keys()
+def _assert_meta_eight(
+    item: dict, *, is_pinned: bool = False, forbid_echo: str | None = None
+) -> None:
+    assert set(item.keys()) == _META_KEYS_EIGHT, item.keys()
     assert _CHECKPOINT_ID_RE.match(item["checkpointId"])
     assert _STATE_VERSION_RE.match(item["stateVersion"])
     assert type(item["snapshotBytes"]) is int and item["snapshotBytes"] > 0
@@ -307,6 +310,8 @@ def _assert_meta_seven(item: dict, *, forbid_echo: str | None = None) -> None:
         assert dn == dn.strip()
         assert 1 <= len(dn) <= 40
         assert "\n" not in dn and "\t" not in dn and "\x00" not in dn
+    assert type(item["isPinned"]) is bool
+    assert item["isPinned"] is is_pinned
     if forbid_echo:
         assert forbid_echo not in json.dumps(item, ensure_ascii=False)
 
@@ -1542,32 +1547,34 @@ def test_execute_flush_commit_failures_rollback(disabled_client):
 # ---------- 读取七/八键 / 恢复不变量 ----------
 
 
-def test_create_list_detail_seven_eight_keys_and_null_default(disabled_client):
+def test_create_list_detail_eight_nine_keys_and_null_default(disabled_client):
     client = disabled_client
-    pid = _create_project(client, name="七键读取")
-    # create 初始 null
+    pid = _create_project(client, name="八键读取")
+    # create 初始 null 名 + isPinned=false
     res_create = client.post(_list_url(pid), json={})
     assert res_create.status_code == 201, res_create.text
     created = res_create.json()
-    _assert_meta_seven(created)
+    _assert_meta_eight(created, is_pinned=False)
     assert created["displayName"] is None
+    assert created["isPinned"] is False
 
     res_list = client.get(_list_url(pid))
     assert res_list.status_code == 200, res_list.text
     items = res_list.json()["items"]
     assert len(items) >= 1
     for it in items:
-        _assert_meta_seven(it)
+        _assert_meta_eight(it, is_pinned=False)
         assert it["displayName"] is None
 
     cid = created["checkpointId"]
     res_detail = client.get(_detail_url(pid, cid))
     assert res_detail.status_code == 200, res_detail.text
     d = res_detail.json()
-    assert set(d.keys()) == _DETAIL_KEYS_EIGHT
-    meta_only = {k: d[k] for k in _META_KEYS_SEVEN}
-    _assert_meta_seven(meta_only)
+    assert set(d.keys()) == _DETAIL_KEYS_NINE
+    meta_only = {k: d[k] for k in _META_KEYS_EIGHT}
+    _assert_meta_eight(meta_only, is_pinned=False)
     assert d["displayName"] is None
+    assert d["isPinned"] is False
     assert "snapshot" in d and isinstance(d["snapshot"], dict)
 
     res_set = _patch_name(client, pid, cid, "展示名")
@@ -1575,13 +1582,15 @@ def test_create_list_detail_seven_eight_keys_and_null_default(disabled_client):
     res_list2 = client.get(_list_url(pid))
     assert res_list2.status_code == 200, res_list2.text
     hit = next(i for i in res_list2.json()["items"] if i["checkpointId"] == cid)
-    _assert_meta_seven(hit)
+    _assert_meta_eight(hit, is_pinned=False)
     assert hit["displayName"] == "展示名"
+    assert hit["isPinned"] is False
 
     res_detail2 = client.get(_detail_url(pid, cid))
     assert res_detail2.status_code == 200, res_detail2.text
     assert res_detail2.json()["displayName"] == "展示名"
-    assert set(res_detail2.json().keys()) == _DETAIL_KEYS_EIGHT
+    assert res_detail2.json()["isPinned"] is False
+    assert set(res_detail2.json().keys()) == _DETAIL_KEYS_NINE
 
 
 def test_restore_does_not_copy_display_name(disabled_client):
@@ -1611,10 +1620,12 @@ def test_restore_does_not_copy_display_name(disabled_client):
     assert res_list.status_code == 200, res_list.text
     items = res_list.json()["items"]
     safety = next(i for i in items if i["checkpointId"] == safety_id)
-    _assert_meta_seven(safety)
+    _assert_meta_eight(safety, is_pinned=False)
     assert safety["displayName"] is None
+    assert safety["isPinned"] is False
     src = next(i for i in items if i["checkpointId"] == cid)
     assert src["displayName"] == "源名称"
+    assert src["isPinned"] is False
 
 
 def test_list_sql_no_snapshot_projection(disabled_client):

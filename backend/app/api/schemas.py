@@ -2352,10 +2352,10 @@ class EditorStateCheckpointCreate(BaseModel):
 
 class EditorStateCheckpointMetaOut(BaseModel):
     """
-    模块：P12A/P12G 检查点元数据
-    用途：创建响应与列表项共用字段，不含 snapshot 正文；精确七键含可选 displayName。
+    模块：P12A/P12G/P12J-B 检查点元数据
+    用途：创建响应与列表项共用字段，不含 snapshot 正文；精确八键含 displayName/isPinned。
     对接：POST/GET .../editor-state-checkpoints。
-    二次开发：禁止附加 projectId/正文/路径/用户字段；displayName 不进快照/恢复。
+    二次开发：禁止附加 projectId/正文/路径/用户字段；displayName/isPinned 不进快照/恢复。
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -2367,6 +2367,7 @@ class EditorStateCheckpointMetaOut(BaseModel):
     chapter_count: int = Field(serialization_alias="chapterCount")
     created_at: datetime = Field(serialization_alias="createdAt")
     display_name: str | None = Field(serialization_alias="displayName")
+    is_pinned: bool = Field(serialization_alias="isPinned")
 
 
 class EditorStateCheckpointListOut(BaseModel):
@@ -2383,10 +2384,10 @@ class EditorStateCheckpointListOut(BaseModel):
 
 class EditorStateCheckpointDetailOut(BaseModel):
     """
-    模块：P12A/P12G 检查点详情
-    用途：七键元数据 + 已校验的规范 snapshot 对象。
+    模块：P12A/P12G/P12J-B 检查点详情
+    用途：八键元数据 + 已校验的规范 snapshot 对象（精确九键）。
     对接：GET .../editor-state-checkpoints/{checkpointId}。
-    二次开发：snapshot 必须服务端重验键集/字节/版本后返回；名称不参与快照校验。
+    二次开发：snapshot 必须服务端重验键集/字节/版本后返回；名称/固定不参与快照校验。
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -2398,6 +2399,7 @@ class EditorStateCheckpointDetailOut(BaseModel):
     chapter_count: int = Field(serialization_alias="chapterCount")
     created_at: datetime = Field(serialization_alias="createdAt")
     display_name: str | None = Field(serialization_alias="displayName")
+    is_pinned: bool = Field(serialization_alias="isPinned")
     snapshot: dict[str, Any]
 
 

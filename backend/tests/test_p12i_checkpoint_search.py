@@ -55,6 +55,7 @@ _META_KEYS = frozenset(
         "chapterCount",
         "createdAt",
         "displayName",
+        "isPinned",
     }
 )
 _SEARCH_TOP = frozenset({"items"})
@@ -525,6 +526,7 @@ def _assert_search_ok(res) -> dict:
         assert type(item["chapterCount"]) is int
         assert isinstance(item["createdAt"], str) and item["createdAt"]
         assert item["displayName"] is None or isinstance(item["displayName"], str)
+        assert type(item["isPinned"]) is bool
         assert "snapshot" not in item
         assert _SECRET not in json.dumps(item, ensure_ascii=False)
     assert "snippet" not in body
@@ -873,6 +875,58 @@ def test_corrupt_candidate_fails_whole_search(disabled_client):
     assert _domain_snapshot(pid) == before
 
 
+def test_search_corrupt_is_pinned_non_hit_candidate_fixed_500_zero_write(
+    disabled_client,
+):
+    """
+    用途：未命中候选 is_pinned=2 仍整次 corrupt；禁止跳过未命中行校验；五域零写。
+    """
+    client = disabled_client
+    pid = _create_project(client, name="P12I坏固定未命中")
+    good = _seed_checkpoint(
+        pid,
+        _state_with_version(
+            chapters=[
+                {
+                    "id": "c",
+                    "title": "P12I_PIN_GOOD",
+                    "preview": "p",
+                    "body": "b",
+                }
+            ]
+        ),
+        created_at=datetime(2026, 7, 18, 10, 0, 0, tzinfo=timezone.utc),
+        display_name="好名称命中固定",
+    )
+    bad = _seed_checkpoint(
+        pid,
+        _plain_state("bad_pin"),
+        created_at=datetime(2026, 7, 18, 11, 0, 0, tzinfo=timezone.utc),
+        display_name="未命中也要先校验固定",
+    )
+    # 绕过 CHECK 写原始非法 is_pinned=2
+    with engine.connect() as conn:
+        conn.execute(text("PRAGMA ignore_check_constraints = ON"))
+        try:
+            conn.execute(
+                text(
+                    "UPDATE editor_state_checkpoints SET is_pinned = 2 WHERE id = :id"
+                ),
+                {"id": bad["id"]},
+            )
+            conn.commit()
+        finally:
+            conn.execute(text("PRAGMA ignore_check_constraints = OFF"))
+    before = _domain_snapshot(pid)
+    # 关键词只命中 good 名称，但 bad 未命中候选也必须先校验
+    res = _search(client, pid, {"query": "好名称命中固定"})
+    _assert_fixed_error(res, 500, _CODE_CORRUPT, message=_MSG_CORRUPT)
+    assert bad["id"] not in res.text
+    assert good["id"] not in res.text
+    assert _SECRET not in res.text
+    assert _domain_snapshot(pid) == before
+
+
 def test_object_budget_exceed_corrupt(disabled_client):
     client = disabled_client
     pid = _create_project(client, name="P12I对象预算")
@@ -1080,7 +1134,7 @@ def test_cross_workspace_project_no_leak(disabled_client):
     _assert_fixed_error(res, 404, _CODE_PROJECT)
 
 
-# 八列投影顺序与生产 select(...) 完全一致；禁止“列名出现即可”
+# 九列投影顺序与生产 select(...) 完全一致（含原始 is_pinned）；禁止“列名出现即可”
 _SEARCH_SQL_COLS = (
     "id",
     "state_version",
@@ -1090,6 +1144,7 @@ _SEARCH_SQL_COLS = (
     "created_at",
     "display_name",
     "snapshot_json",
+    "is_pinned",
 )
 
 
@@ -1128,7 +1183,7 @@ def _param_list(params: object) -> list:
     return [params]
 
 
-def test_search_sql_eight_columns_limit_20(disabled_client):
+def test_search_sql_nine_columns_limit_20(disabled_client):
     client = disabled_client
     pid = _create_project(client, name="P12ISQL")
     for i in range(3):

@@ -51,6 +51,7 @@ _META_KEYS = frozenset(
         "chapterCount",
         "createdAt",
         "displayName",
+        "isPinned",
     }
 )
 _DETAIL_KEYS = _META_KEYS | frozenset({"snapshot"})
@@ -478,6 +479,8 @@ def test_create_empty_project_authoritative_empty_snapshot(disabled_client):
     assert body["chapterCount"] == 0
     assert type(body["snapshotBytes"]) is int and body["snapshotBytes"] >= 1
     assert body["displayName"] is None
+    assert type(body["isPinned"]) is bool
+    assert body["isPinned"] is False
 
     detail = client.get(_url(pid, body["checkpointId"]))
     assert detail.status_code == 200, detail.text
@@ -485,6 +488,8 @@ def test_create_empty_project_authoritative_empty_snapshot(disabled_client):
     dbody = detail.json()
     assert set(dbody.keys()) == _DETAIL_KEYS
     assert dbody["displayName"] is None
+    assert type(dbody["isPinned"]) is bool
+    assert dbody["isPinned"] is False
     snap = dbody["snapshot"]
     assert set(snap.keys()) == _SNAPSHOT_KEYS
     for bad in _FORBIDDEN_SNAPSHOT_KEYS:
@@ -598,6 +603,8 @@ def test_list_metadata_only_and_sql_excludes_snapshot_json(disabled_client):
     item = payload["items"][0]
     assert set(item.keys()) == _META_KEYS
     assert item["checkpointId"] == created["checkpointId"]
+    assert type(item["isPinned"]) is bool
+    assert item["isPinned"] is False
     assert "snapshot" not in item
     blob = json.dumps(payload, ensure_ascii=False)
     assert "架构正文" not in blob

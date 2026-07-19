@@ -270,8 +270,9 @@ def _meta_out(data: dict) -> EditorStateCheckpointMetaOut:
         outline_node_count=data["outline_node_count"],
         chapter_count=data["chapter_count"],
         created_at=data["created_at"],
-        # 精确键：服务漏键必须 KeyError 暴露，禁止 .get 伪装合法 null
+        # 精确键：服务漏键必须 KeyError 暴露，禁止 .get 伪装合法 null/false
         display_name=data["display_name"],
+        is_pinned=data["is_pinned"],
     )
 
 
@@ -342,7 +343,7 @@ async def search_editor_state_checkpoints(
     workspace_id: Annotated[str, Depends(get_workspace_id)],
 ) -> EditorStateCheckpointListOut:
     """
-    用途：在最近 20 条检查点候选中按名称或可见内容显式搜索；仅返回七键元数据。
+    用途：在最近 20 条检查点候选中按名称或可见内容显式搜索；仅返回八键元数据。
     对接：P12I；editor_state_checkpoint_service.search_editor_state_checkpoints。
     二次开发：
       - 必须静态注册在 /{checkpoint_id} 之前；
@@ -394,8 +395,9 @@ def get_editor_state_checkpoint(
         outline_node_count=data["outline_node_count"],
         chapter_count=data["chapter_count"],
         created_at=data["created_at"],
-        # 精确键：服务漏键必须 KeyError 暴露，禁止 .get 伪装合法 null
+        # 精确键：服务漏键必须 KeyError 暴露，禁止 .get 伪装合法 null/false
         display_name=data["display_name"],
+        is_pinned=data["is_pinned"],
         snapshot=data["snapshot"],
     )
 

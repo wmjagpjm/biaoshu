@@ -56,12 +56,14 @@ _META_KEYS = frozenset(
         "checkpointId",
         "stateVersion",
         "snapshotBytes",
-        "sourceKind",
+        "outlineNodeCount",
+        "chapterCount",
         "createdAt",
         "displayName",
         "isPinned",
     }
 )
+_DETAIL_KEYS = _META_KEYS | frozenset({"snapshot"})
 
 _CODE_REQUEST_INVALID = "editor_state_checkpoint_delete_request_invalid"
 _MSG_REQUEST_INVALID = "检查点删除请求无效"
@@ -1566,9 +1568,13 @@ def test_delete_read_chain_list_detail_restore_name(disabled_client):
 
     lst = client.get(_list_url(pid))
     assert lst.status_code == 200, lst.text
-    list_ids = [i["checkpointId"] for i in lst.json()["items"]]
+    list_items = lst.json()["items"]
+    list_ids = [i["checkpointId"] for i in list_items]
     assert list_ids == expected_ids
     assert target["id"] not in list_ids
+    for it in list_items:
+        assert set(it.keys()) == _META_KEYS, it.keys()
+        assert type(it["isPinned"]) is bool
 
     d = client.get(_detail_url(pid, target["id"]))
     # 详情/恢复/命名沿用既有服务 code；message 文案属既有合同，本包不改
@@ -1590,6 +1596,50 @@ def test_delete_read_chain_list_detail_restore_name(disabled_client):
     ok_detail = client.get(_detail_url(pid, keep))
     assert ok_detail.status_code == 200, ok_detail.text
     assert ok_detail.json()["checkpointId"] == keep
+    assert set(ok_detail.json().keys()) == _DETAIL_KEYS
+    assert type(ok_detail.json()["isPinned"]) is bool
+
+
+def test_delete_pinned_row_compatible_and_eight_keys(disabled_client):
+    """用途：固定行可被显式 DELETE；删除后 list 仍精确八键。"""
+    client = disabled_client
+    pid = _create_project(client, name="删除固定行")
+    rows = _seed_five_domain(pid, ["pin0", "pin1"])
+    target = rows[0]
+    keep = rows[1]
+    # 直接 SQL 固定目标（不依赖读取 isPinned 路径）
+    db = SessionLocal()
+    try:
+        db.execute(
+            text(
+                "UPDATE editor_state_checkpoints SET is_pinned = 1 WHERE id = :id"
+            ),
+            {"id": target["id"]},
+        )
+        db.commit()
+    finally:
+        db.close()
+    before = {
+        "revisions": _db_rev_rows(pid),
+        "editor_state": _db_editor_state_row(pid),
+        "project": _db_project_row(pid),
+        "tasks": _db_task_rows(pid),
+    }
+    res = _delete(client, pid, target["id"])
+    _assert_success_204(res)
+    remaining = [r["id"] for r in _db_cp_primary_rows(pid)]
+    assert remaining == [keep["id"]]
+    assert _db_rev_rows(pid) == before["revisions"]
+    assert _db_editor_state_row(pid) == before["editor_state"]
+    assert _db_project_row(pid) == before["project"]
+    assert _db_task_rows(pid) == before["tasks"]
+    lst = client.get(_list_url(pid))
+    assert lst.status_code == 200, lst.text
+    items = lst.json()["items"]
+    assert [i["checkpointId"] for i in items] == [keep["id"]]
+    assert set(items[0].keys()) == _META_KEYS
+    assert type(items[0]["isPinned"]) is bool
+    assert items[0]["isPinned"] is False
 
 
 # ---------- AST / 反假绿 ----------

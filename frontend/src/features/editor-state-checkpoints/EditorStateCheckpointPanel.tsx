@@ -1,16 +1,17 @@
 /**
- * 模块：P12B-D2 / P12G / P12H / P12I 双工作区共用检查点折叠面板
+ * 模块：P12B-D2 / P12G / P12H / P12I / P12J-B 双工作区共用检查点折叠面板
  * 用途：展开后 list 元数据；保存服务器当前版本；内联二次确认后 restore；
  *       内联命名保存/覆盖/清除（成功原位更新，失败保值）；
  *       内联二次确认后单条 DELETE（成功原位移除，失败保值可重试）；
- *       显式名称/内容搜索（输入零请求；按钮/Enter 才 POST；同值零重发）。
+ *       显式名称/内容搜索（输入零请求；按钮/Enter 才 POST；同值零重发）；
+ *       单条固定/取消固定（成功原位更新 isPinned，失败保值）。
  * 对接：editorStateCheckpointApi；技术/商务 hook 的 create/restore 回调。
  * 二次开发：
  *   - 不渲染 checkpointId/stateVersion；不请求详情 snapshot
- *   - 项目切换/折叠/卸载用会话代次隔离迟到 list/search/create/restore/name/delete
- *   - 搜索/名称/删除与 list/create/restore/toggle/其它行意图互斥；await 前同步 ref 单飞
- *   - 删除不依赖 props.disabled；成功零 list/editor-state 重载
- *   - active search 下刷新/创建/恢复重发同一 POST；清除恰好一次 GET
+ *   - 项目切换/折叠/卸载用会话代次隔离迟到 list/search/create/restore/name/delete/pin
+ *   - 搜索/名称/删除/固定与 list/create/restore/toggle/其它行意图互斥；await 前同步 ref 单飞
+ *   - 删除/固定不依赖 props.disabled；成功零 list/editor-state 重载
+ *   - active search 下刷新/创建/恢复重发同一 POST；清除恰好一次 GET；固定仅原位
  *   - 固定中文脱敏；禁止 console/存储/URL/Cookie/剪贴板/下载/轮询/外网
  */
 
@@ -24,6 +25,7 @@ import {
   normalizeDisplayNameForSave,
   searchEditorStateCheckpoints,
   setEditorStateCheckpointDisplayName,
+  setEditorStateCheckpointPin,
   type EditorStateCheckpointMeta,
 } from "./editorStateCheckpointApi";
 
@@ -60,6 +62,11 @@ const MSG_SEARCH_EMPTY = "没有匹配名称或内容的检查点";
 const MSG_SEARCH_FAIL = "检查点名称或内容搜索失败，请稍后重试";
 const MSG_SEARCH_ACTIVE = "当前为名称或内容搜索结果";
 const LABEL_SEARCH = "名称或内容搜索";
+/** P12J-B 固定固定中文 */
+const MSG_PIN_SAVING = "保存固定状态中…";
+const MSG_PIN_OK = "检查点已固定";
+const MSG_PIN_UNPIN_OK = "已取消固定";
+const MSG_PIN_FAIL = "保存检查点固定状态失败，当前状态已保留";
 
 /** 创建回调结果 */
 export type CheckpointCreateOutcome =
@@ -123,9 +130,11 @@ export function EditorStateCheckpointPanel({
   const [appliedSearch, setAppliedSearch] = useState<string | null>(null);
   /** P12I：关键词本地校验错误 */
   const [searchError, setSearchError] = useState<string | null>(null);
+  /** P12J-B：固定 PATCH 在途 */
+  const [pinBusy, setPinBusy] = useState(false);
 
   /**
-   * 项目会话代次：projectId 变化或折叠时递增，隔离迟到 list/search/create/restore/name/delete。
+   * 项目会话代次：projectId 变化或折叠时递增，隔离迟到 list/search/create/restore/name/delete/pin。
    */
   const sessionRef = useRef(0);
   const mountedRef = useRef(true);
@@ -164,6 +173,21 @@ export function EditorStateCheckpointPanel({
    */
   const deleteFlightTokenRef = useRef(0);
   const deleteFlightActiveRef = useRef<number | null>(null);
+  /**
+   * P12J-B 固定请求代次：项目切换/折叠/卸载递增；
+   * success/catch/finally 同时核对 mounted/session/gen/project/checkpoint。
+   */
+  const pinGenRef = useRef(0);
+  /** P12J-B 全局单飞：await 前同步关门 */
+  const pinInFlightRef = useRef(false);
+  /**
+   * P12J-B 在途固定 checkpointId 同步镜像（仅内存）；
+   */
+  const pinCheckpointIdRef = useRef<string | null>(null);
+  /**
+   * P12J-B 在途固定发起时的项目 ID；与 projectIdRef 交叉核对。
+   */
+  const pinProjectIdRef = useRef<string | null>(null);
   /** 列表项同步镜像，供清除路径读取当前 displayName */
   const itemsRef = useRef<ListItem[]>([]);
 
@@ -180,7 +204,7 @@ export function EditorStateCheckpointPanel({
     };
   }, []);
 
-  // 项目切换：重置面板，作废在途（含搜索/命名/删除 flight token）
+  // 项目切换：重置面板，作废在途（含搜索/命名/删除/固定 flight token）
   useEffect(() => {
     sessionRef.current += 1;
     searchFlightTokenRef.current += 1;
@@ -193,6 +217,10 @@ export function EditorStateCheckpointPanel({
     deleteFlightTokenRef.current += 1;
     deleteFlightActiveRef.current = null;
     pendingDeleteIdRef.current = null;
+    pinGenRef.current += 1;
+    pinInFlightRef.current = false;
+    pinCheckpointIdRef.current = null;
+    pinProjectIdRef.current = null;
     setExpanded(false);
     setItems([]);
     setListError(null);
@@ -207,6 +235,7 @@ export function EditorStateCheckpointPanel({
     setNameBusy(false);
     setPendingDeleteId(null);
     setDeleteBusy(false);
+    setPinBusy(false);
     setSearchDraft("");
     setAppliedSearch(null);
     appliedSearchRef.current = null;
@@ -314,7 +343,7 @@ export function EditorStateCheckpointPanel({
 
   const handleToggle = useCallback(() => {
     if (expanded) {
-      // 折叠：递增会话，丢弃迟到 list/search/create/restore/name/delete 对 UI 的写入
+      // 折叠：递增会话，丢弃迟到 list/search/create/restore/name/delete/pin 对 UI 的写入
       sessionRef.current += 1;
       searchFlightTokenRef.current += 1;
       searchFlightActiveRef.current = null;
@@ -326,6 +355,10 @@ export function EditorStateCheckpointPanel({
       deleteFlightTokenRef.current += 1;
       deleteFlightActiveRef.current = null;
       pendingDeleteIdRef.current = null;
+      pinGenRef.current += 1;
+      pinInFlightRef.current = false;
+      pinCheckpointIdRef.current = null;
+      pinProjectIdRef.current = null;
       setExpanded(false);
       setPendingRestoreId(null);
       setPendingNameId(null);
@@ -333,6 +366,7 @@ export function EditorStateCheckpointPanel({
       setNameBusy(false);
       setPendingDeleteId(null);
       setDeleteBusy(false);
+      setPinBusy(false);
       setListLoading(false);
       setCreateBusy(false);
       setRestoreBusy(false);
@@ -342,12 +376,14 @@ export function EditorStateCheckpointPanel({
       setSearchError(null);
       return;
     }
-    // 展开时若命名/删除/搜索在途则拒绝（互斥）
+    // 展开时若命名/删除/搜索/固定在途则拒绝（互斥）
     if (
       nameBusy ||
       pendingNameId != null ||
       deleteBusy ||
       pendingDeleteId != null ||
+      pinBusy ||
+      pinInFlightRef.current ||
       searchFlightActiveRef.current != null
     ) {
       return;
@@ -358,7 +394,15 @@ export function EditorStateCheckpointPanel({
     setStatusTone(null);
     setPendingRestoreId(null);
     void loadList(session);
-  }, [expanded, loadList, nameBusy, pendingNameId, deleteBusy, pendingDeleteId]);
+  }, [
+    expanded,
+    loadList,
+    nameBusy,
+    pendingNameId,
+    deleteBusy,
+    pendingDeleteId,
+    pinBusy,
+  ]);
 
   const handleRefresh = useCallback(() => {
     if (
@@ -370,6 +414,8 @@ export function EditorStateCheckpointPanel({
       pendingNameId != null ||
       deleteBusy ||
       pendingDeleteId != null ||
+      pinBusy ||
+      pinInFlightRef.current ||
       searchFlightActiveRef.current != null
     ) {
       return;
@@ -397,6 +443,7 @@ export function EditorStateCheckpointPanel({
     pendingNameId,
     deleteBusy,
     pendingDeleteId,
+    pinBusy,
     loadList,
     tryBeginSearchFlight,
   ]);
@@ -423,7 +470,9 @@ export function EditorStateCheckpointPanel({
       pendingNameId != null ||
       deleteBusy ||
       pendingDeleteId != null ||
-      pendingRestoreId != null
+      pendingRestoreId != null ||
+      pinBusy ||
+      pinInFlightRef.current
     ) {
       return;
     }
@@ -467,6 +516,7 @@ export function EditorStateCheckpointPanel({
     deleteBusy,
     pendingDeleteId,
     pendingRestoreId,
+    pinBusy,
     searchDraft,
     listError,
     loadList,
@@ -487,6 +537,8 @@ export function EditorStateCheckpointPanel({
       deleteBusy ||
       pendingDeleteId != null ||
       pendingRestoreId != null ||
+      pinBusy ||
+      pinInFlightRef.current ||
       searchFlightActiveRef.current != null
     ) {
       return;
@@ -519,6 +571,7 @@ export function EditorStateCheckpointPanel({
     deleteBusy,
     pendingDeleteId,
     pendingRestoreId,
+    pinBusy,
     searchDraft,
     loadList,
   ]);
@@ -548,6 +601,8 @@ export function EditorStateCheckpointPanel({
       pendingNameId != null ||
       deleteBusy ||
       pendingDeleteId != null ||
+      pinBusy ||
+      pinInFlightRef.current ||
       searchFlightActiveRef.current != null ||
       !expanded
     ) {
@@ -595,6 +650,7 @@ export function EditorStateCheckpointPanel({
     pendingNameId,
     deleteBusy,
     pendingDeleteId,
+    pinBusy,
     expanded,
     createCheckpoint,
     reloadVisibleList,
@@ -610,6 +666,8 @@ export function EditorStateCheckpointPanel({
         pendingNameId != null ||
         deleteBusy ||
         pendingDeleteId != null ||
+        pinBusy ||
+        pinInFlightRef.current ||
         listLoading ||
         searchFlightActiveRef.current != null
       ) {
@@ -627,6 +685,7 @@ export function EditorStateCheckpointPanel({
       pendingNameId,
       deleteBusy,
       pendingDeleteId,
+      pinBusy,
       listLoading,
     ],
   );
@@ -640,6 +699,8 @@ export function EditorStateCheckpointPanel({
       pendingNameId != null ||
       deleteBusy ||
       pendingDeleteId != null ||
+      pinBusy ||
+      pinInFlightRef.current ||
       searchFlightActiveRef.current != null ||
       !pendingRestoreId ||
       !expanded
@@ -694,6 +755,7 @@ export function EditorStateCheckpointPanel({
     pendingNameId,
     deleteBusy,
     pendingDeleteId,
+    pinBusy,
     pendingRestoreId,
     expanded,
     restoreCheckpoint,
@@ -701,9 +763,9 @@ export function EditorStateCheckpointPanel({
   ]);
 
   const handleCancelRestore = useCallback(() => {
-    if (restoreBusy || deleteBusy) return;
+    if (restoreBusy || deleteBusy || pinBusy) return;
     setPendingRestoreId(null);
-  }, [restoreBusy, deleteBusy]);
+  }, [restoreBusy, deleteBusy, pinBusy]);
 
   /**
    * 用途：进入内联命名；清除恢复/删除意图；输入零请求。
@@ -719,6 +781,8 @@ export function EditorStateCheckpointPanel({
         pendingRestoreId != null ||
         deleteBusy ||
         pendingDeleteId != null ||
+        pinBusy ||
+        pinInFlightRef.current ||
         searchFlightActiveRef.current != null
       ) {
         return;
@@ -743,16 +807,17 @@ export function EditorStateCheckpointPanel({
       pendingRestoreId,
       deleteBusy,
       pendingDeleteId,
+      pinBusy,
     ],
   );
 
   const handleNameCancel = useCallback(() => {
-    if (nameBusy) return;
+    if (nameBusy || pinBusy) return;
     nameGenRef.current += 1;
     pendingNameIdRef.current = null;
     setPendingNameId(null);
     setNameDraft("");
-  }, [nameBusy]);
+  }, [nameBusy, pinBusy]);
 
   /**
    * 用途：保存合法非空名称；非法零请求；success/catch/finally 含 checkpointId + flight token 围栏。
@@ -767,7 +832,9 @@ export function EditorStateCheckpointPanel({
       createBusy ||
       restoreBusy ||
       deleteBusy ||
-      pendingDeleteId != null
+      pendingDeleteId != null ||
+      pinBusy ||
+      pinInFlightRef.current
     ) {
       return;
     }
@@ -851,6 +918,7 @@ export function EditorStateCheckpointPanel({
     restoreBusy,
     deleteBusy,
     pendingDeleteId,
+    pinBusy,
     nameDraft,
   ]);
 
@@ -867,7 +935,9 @@ export function EditorStateCheckpointPanel({
       createBusy ||
       restoreBusy ||
       deleteBusy ||
-      pendingDeleteId != null
+      pendingDeleteId != null ||
+      pinBusy ||
+      pinInFlightRef.current
     ) {
       return;
     }
@@ -947,11 +1017,12 @@ export function EditorStateCheckpointPanel({
     restoreBusy,
     deleteBusy,
     pendingDeleteId,
+    pinBusy,
   ]);
 
   /**
    * 用途：进入单条删除确认；清恢复/命名意图；零 DELETE。
-   * 约束：不依赖 props.disabled；受列表/创建/恢复/命名/删除在途阻断。
+   * 约束：不依赖 props.disabled；受列表/创建/恢复/命名/删除/固定在途阻断。
    */
   const handleDeleteClick = useCallback(
     (checkpointId: string) => {
@@ -965,6 +1036,8 @@ export function EditorStateCheckpointPanel({
         pendingRestoreId != null ||
         deleteBusy ||
         pendingDeleteId != null ||
+        pinBusy ||
+        pinInFlightRef.current ||
         searchFlightActiveRef.current != null
       ) {
         return;
@@ -991,6 +1064,7 @@ export function EditorStateCheckpointPanel({
       pendingRestoreId,
       deleteBusy,
       pendingDeleteId,
+      pinBusy,
     ],
   );
 
@@ -1007,7 +1081,9 @@ export function EditorStateCheckpointPanel({
       createBusy ||
       restoreBusy ||
       nameBusy ||
-      pendingNameId != null
+      pendingNameId != null ||
+      pinBusy ||
+      pinInFlightRef.current
     ) {
       return;
     }
@@ -1072,16 +1148,111 @@ export function EditorStateCheckpointPanel({
     restoreBusy,
     nameBusy,
     pendingNameId,
+    pinBusy,
   ]);
 
   const handleCancelDelete = useCallback(() => {
-    if (deleteBusy) return;
+    if (deleteBusy || pinBusy) return;
     pendingDeleteIdRef.current = null;
     setPendingDeleteId(null);
-  }, [deleteBusy]);
+  }, [deleteBusy, pinBusy]);
+
+  /**
+   * 用途：单击固定/取消固定；全局单飞；成功仅原位更新 isPinned。
+   * 约束：await 前同步关门；success/catch/finally 核对 mounted/session/gen/project/checkpoint。
+   * 固定入口不依赖 props.disabled，但与全部检查点操作真实互斥。
+   */
+  const handlePinClick = useCallback(
+    async (checkpointId: string, currentlyPinned: boolean) => {
+      if (
+        !expanded ||
+        !projectId ||
+        listLoading ||
+        createBusy ||
+        restoreBusy ||
+        nameBusy ||
+        deleteBusy ||
+        pinBusy ||
+        pinInFlightRef.current ||
+        pendingDeleteId != null ||
+        pendingNameId != null ||
+        searchFlightActiveRef.current != null
+      ) {
+        return;
+      }
+      // 同步单飞：await 前关门，双击/另一行只产生一次 PATCH
+      pinInFlightRef.current = true;
+      const session = sessionRef.current;
+      const myGen = ++pinGenRef.current;
+      const projectAtStart = projectId;
+      const desired = !currentlyPinned;
+      pinCheckpointIdRef.current = checkpointId;
+      pinProjectIdRef.current = projectAtStart;
+      // 开始固定：作废其它行操作意图
+      nameGenRef.current += 1;
+      pendingNameIdRef.current = null;
+      setPendingNameId(null);
+      setNameDraft("");
+      setNameBusy(false);
+      setPendingRestoreId(null);
+      pendingDeleteIdRef.current = null;
+      setPendingDeleteId(null);
+      setPinBusy(true);
+      setStatusMessage(MSG_PIN_SAVING);
+      setStatusTone(null);
+      const stillCurrent = () =>
+        mountedRef.current &&
+        session === sessionRef.current &&
+        myGen === pinGenRef.current &&
+        projectIdRef.current === projectAtStart &&
+        pinProjectIdRef.current === projectAtStart &&
+        pinCheckpointIdRef.current === checkpointId;
+      try {
+        const saved = await setEditorStateCheckpointPin(
+          projectAtStart,
+          checkpointId,
+          desired,
+        );
+        if (!stillCurrent()) return;
+        // 成功：仅原位替换目标 isPinned；零 list/search/detail 重载
+        setItems((prev) =>
+          prev.map((it) =>
+            it.checkpointId === checkpointId ? { ...it, isPinned: saved } : it,
+          ),
+        );
+        setStatusMessage(desired ? MSG_PIN_OK : MSG_PIN_UNPIN_OK);
+        setStatusTone("ok");
+      } catch {
+        if (!stillCurrent()) return;
+        // 失败保值：不清 items
+        setStatusMessage(MSG_PIN_FAIL);
+        setStatusTone("err");
+      } finally {
+        if (stillCurrent()) {
+          setPinBusy(false);
+          pinInFlightRef.current = false;
+          pinCheckpointIdRef.current = null;
+          pinProjectIdRef.current = null;
+        }
+      }
+    },
+    [
+      expanded,
+      projectId,
+      listLoading,
+      createBusy,
+      restoreBusy,
+      nameBusy,
+      deleteBusy,
+      pinBusy,
+      pendingDeleteId,
+      pendingNameId,
+    ],
+  );
 
   const nameUiLocked = pendingNameId != null || nameBusy;
   const deleteUiLocked = pendingDeleteId != null || deleteBusy;
+  const pinUiLocked = pinBusy;
   const searchActive = appliedSearch != null;
   const actionsDisabled =
     disabled ||
@@ -1091,8 +1262,9 @@ export function EditorStateCheckpointPanel({
     nameBusy ||
     pendingNameId != null ||
     deleteBusy ||
-    pendingDeleteId != null;
-  /** 搜索控件：与 list/create/restore/name/delete/确认态互斥；真实传 disabled */
+    pendingDeleteId != null ||
+    pinBusy;
+  /** 搜索控件：与 list/create/restore/name/delete/pin/确认态互斥；真实传 disabled */
   const searchControlsDisabled =
     disabled ||
     listLoading ||
@@ -1102,8 +1274,9 @@ export function EditorStateCheckpointPanel({
     pendingNameId != null ||
     deleteBusy ||
     pendingDeleteId != null ||
-    pendingRestoreId != null;
-  /** 删除入口：不依赖 props.disabled，但仍受其它操作互斥（含恢复确认） */
+    pendingRestoreId != null ||
+    pinBusy;
+  /** 删除入口：不依赖 props.disabled，但仍受其它操作互斥（含恢复确认/固定） */
   const deleteEntryDisabled =
     listLoading ||
     createBusy ||
@@ -1112,7 +1285,30 @@ export function EditorStateCheckpointPanel({
     pendingNameId != null ||
     pendingRestoreId != null ||
     deleteBusy ||
-    pendingDeleteId != null;
+    pendingDeleteId != null ||
+    pinBusy;
+  /** 命名入口：受 list/create/restore/delete/pin 互斥 */
+  const nameEntryDisabled =
+    listLoading ||
+    createBusy ||
+    restoreBusy ||
+    nameBusy ||
+    pendingNameId != null ||
+    pendingRestoreId != null ||
+    deleteBusy ||
+    pendingDeleteId != null ||
+    pinBusy;
+  /** 固定入口：不依赖 props.disabled；受 list/create/restore/name/delete/pin 互斥 */
+  const pinEntryDisabled =
+    listLoading ||
+    createBusy ||
+    restoreBusy ||
+    nameBusy ||
+    pendingNameId != null ||
+    pendingRestoreId != null ||
+    deleteBusy ||
+    pendingDeleteId != null ||
+    pinBusy;
 
   return (
     <div
@@ -1138,7 +1334,7 @@ export function EditorStateCheckpointPanel({
           className="btn btn-ghost btn-sm"
           data-testid="editor-state-checkpoint-toggle"
           aria-expanded={expanded}
-          disabled={(nameUiLocked || deleteUiLocked) && expanded}
+          disabled={(nameUiLocked || deleteUiLocked || pinUiLocked) && expanded}
           onClick={handleToggle}
         >
           {expanded ? "收起版本检查点" : "版本检查点"}
@@ -1343,6 +1539,14 @@ export function EditorStateCheckpointPanel({
                         {item.displayName}
                       </span>
                     ) : null}
+                    {item.isPinned ? (
+                      <span
+                        data-testid={`editor-state-checkpoint-pinned-badge-${index}`}
+                        style={{ fontWeight: 600, color: "var(--text-muted, #4b5563)" }}
+                      >
+                        已固定
+                      </span>
+                    ) : null}
                   </div>
                   {naming ? (
                     <div
@@ -1368,7 +1572,7 @@ export function EditorStateCheckpointPanel({
                           type="button"
                           className="btn btn-primary btn-sm"
                           data-testid={`editor-state-checkpoint-name-save-${index}`}
-                          disabled={nameBusy || listLoading || deleteBusy}
+                          disabled={nameBusy || listLoading || deleteBusy || pinBusy}
                           onClick={() => {
                             void handleNameSave();
                           }}
@@ -1380,7 +1584,7 @@ export function EditorStateCheckpointPanel({
                             type="button"
                             className="btn btn-soft btn-sm"
                             data-testid={`editor-state-checkpoint-name-clear-${index}`}
-                            disabled={nameBusy || listLoading || deleteBusy}
+                            disabled={nameBusy || listLoading || deleteBusy || pinBusy}
                             onClick={() => {
                               void handleNameClear();
                             }}
@@ -1392,7 +1596,7 @@ export function EditorStateCheckpointPanel({
                           type="button"
                           className="btn btn-ghost btn-sm"
                           data-testid={`editor-state-checkpoint-name-cancel-${index}`}
-                          disabled={nameBusy || deleteBusy}
+                          disabled={nameBusy || deleteBusy || pinBusy}
                           onClick={handleNameCancel}
                         >
                           取消
@@ -1418,7 +1622,7 @@ export function EditorStateCheckpointPanel({
                           type="button"
                           className="btn btn-primary btn-sm"
                           data-testid={`editor-state-checkpoint-confirm-delete-${index}`}
-                          disabled={deleteBusy || listLoading || createBusy || restoreBusy || nameBusy}
+                          disabled={deleteBusy || listLoading || createBusy || restoreBusy || nameBusy || pinBusy}
                           onClick={() => {
                             void handleConfirmDelete();
                           }}
@@ -1429,7 +1633,7 @@ export function EditorStateCheckpointPanel({
                           type="button"
                           className="btn btn-ghost btn-sm"
                           data-testid={`editor-state-checkpoint-cancel-delete-${index}`}
-                          disabled={deleteBusy}
+                          disabled={deleteBusy || pinBusy}
                           onClick={handleCancelDelete}
                         >
                           取消
@@ -1466,7 +1670,7 @@ export function EditorStateCheckpointPanel({
                           type="button"
                           className="btn btn-ghost btn-sm"
                           data-testid={`editor-state-checkpoint-cancel-restore-${index}`}
-                          disabled={restoreBusy || deleteBusy}
+                          disabled={restoreBusy || deleteBusy || pinBusy}
                           onClick={handleCancelRestore}
                         >
                           取消
@@ -1495,12 +1699,23 @@ export function EditorStateCheckpointPanel({
                         type="button"
                         className="btn btn-ghost btn-sm"
                         data-testid={`editor-state-checkpoint-name-${index}`}
-                        disabled={actionsDisabled}
+                        disabled={nameEntryDisabled || disabled}
                         onClick={() =>
                           handleNameClick(item.checkpointId, item.displayName)
                         }
                       >
                         {item.displayName != null ? "重命名" : "命名"}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        data-testid={`editor-state-checkpoint-pin-${index}`}
+                        disabled={pinEntryDisabled}
+                        onClick={() => {
+                          void handlePinClick(item.checkpointId, item.isPinned);
+                        }}
+                      >
+                        {item.isPinned ? "取消固定" : "固定"}
                       </button>
                       <button
                         type="button"

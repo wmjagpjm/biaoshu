@@ -51,7 +51,7 @@ _INJECT_COMMIT = "p12ja_injected_commit_failure"
 
 _CHECKPOINT_ID_RE = re.compile(r"^escp_[0-9a-f]{32}$")
 _STATE_VERSION_RE = re.compile(r"^esv_[0-9a-f]{32}$")
-_META_KEYS_SEVEN = frozenset(
+_META_KEYS_EIGHT = frozenset(
     {
         "checkpointId",
         "stateVersion",
@@ -60,9 +60,10 @@ _META_KEYS_SEVEN = frozenset(
         "chapterCount",
         "createdAt",
         "displayName",
+        "isPinned",
     }
 )
-_DETAIL_KEYS_EIGHT = _META_KEYS_SEVEN | {"snapshot"}
+_DETAIL_KEYS_NINE = _META_KEYS_EIGHT | {"snapshot"}
 
 _CODE_PIN_LIMIT = "editor_state_checkpoint_pin_limit"
 _MSG_PIN_LIMIT = "固定检查点已达上限"
@@ -299,8 +300,8 @@ def _assert_success_pin(res, expected: bool) -> None:
     assert _SECRET not in blob
 
 
-def _assert_meta_seven(item: dict) -> None:
-    assert set(item.keys()) == _META_KEYS_SEVEN, item.keys()
+def _assert_meta_eight(item: dict, *, is_pinned: bool = False) -> None:
+    assert set(item.keys()) == _META_KEYS_EIGHT, item.keys()
     assert _CHECKPOINT_ID_RE.match(item["checkpointId"])
     assert _STATE_VERSION_RE.match(item["stateVersion"])
     assert type(item["snapshotBytes"]) is int and item["snapshotBytes"] > 0
@@ -309,7 +310,8 @@ def _assert_meta_seven(item: dict) -> None:
     assert type(item["createdAt"]) is str and item["createdAt"]
     dn = item["displayName"]
     assert dn is None or type(dn) is str
-    assert "isPinned" not in item
+    assert type(item["isPinned"]) is bool
+    assert item["isPinned"] is is_pinned
 
 
 def _bootstrap(role: str = auth_service.ROLE_BID_WRITER):
@@ -1194,27 +1196,68 @@ def test_patch_required_roles_csrf(required_client):
     _assert_success_pin(res_ok, True)
 
 
-def test_list_detail_seven_eight_keys_without_is_pinned(disabled_client):
-    """用途：pin 后 list 七键 / detail 八键仍无 isPinned（本包不扩展读取合同）。"""
+def test_create_list_search_detail_eight_nine_keys_after_pin(disabled_client):
+    """
+    用途：create 固定 isPinned=false；pin 后 list/search/detail 精确八/九键；
+      目标 true、其它 false；原生 boolean。
+    """
     client = disabled_client
-    pid = _create_project(client, name="七键无固定字段")
+    pid = _create_project(client, name="八键固定读取")
+    _ensure_editor_state(pid, "cur_pin_read")
+    create_res = client.post(_create_url(pid), json={})
+    assert create_res.status_code == 201, create_res.text
+    created = create_res.json()
+    _assert_meta_eight(created, is_pinned=False)
+    assert created["isPinned"] is False
+
     rows = _seed_five_domain(pid, ["k0", "k1"])
-    cid = rows[0]["id"]
+    # _db_cp_rows 含 create 行；按 seed 标签挑目标，避免 pin 到 create
+    by_seed = {r["id"]: r for r in rows}
+    assert created["checkpointId"] in by_seed
+    seeded = [r for r in rows if r["id"] != created["checkpointId"]]
+    assert len(seeded) >= 2
+    cid = seeded[0]["id"]
+    other = seeded[1]["id"]
     _assert_success_pin(_patch_pin(client, pid, cid, True), True)
 
     list_res = client.get(_list_url(pid))
     assert list_res.status_code == 200, list_res.text
-    items = list_res.json()["items"]
-    assert items
-    for item in items:
-        _assert_meta_seven(item)
+    by_id = {it["checkpointId"]: it for it in list_res.json()["items"]}
+    _assert_meta_eight(by_id[cid], is_pinned=True)
+    _assert_meta_eight(by_id[other], is_pinned=False)
+    _assert_meta_eight(by_id[created["checkpointId"]], is_pinned=False)
+
+    search_res = client.post(
+        f"/api/projects/{pid}/editor-state-checkpoints/search",
+        json={"query": "章节"},
+    )
+    assert search_res.status_code == 200, search_res.text
+    for item in search_res.json()["items"]:
+        want = item["checkpointId"] == cid
+        _assert_meta_eight(item, is_pinned=want)
 
     detail_res = client.get(_detail_url(pid, cid))
     assert detail_res.status_code == 200, detail_res.text
     detail = detail_res.json()
-    assert set(detail.keys()) == _DETAIL_KEYS_EIGHT
-    assert "isPinned" not in detail
+    assert set(detail.keys()) == _DETAIL_KEYS_NINE
+    meta_only = {k: detail[k] for k in _META_KEYS_EIGHT}
+    _assert_meta_eight(meta_only, is_pinned=True)
     assert isinstance(detail["snapshot"], dict)
+
+    # 恢复前安全检查点初始 isPinned=false
+    expected = client.get(f"/api/projects/{pid}/editor-state").json()["stateVersion"]
+    restore_res = client.post(
+        _restore_url(pid, cid),
+        json={"expectedStateVersion": expected},
+    )
+    assert restore_res.status_code == 200, restore_res.text
+    safety_id = restore_res.json()["safetyCheckpointId"]
+    list_after = client.get(_list_url(pid))
+    assert list_after.status_code == 200, list_after.text
+    safety = next(
+        i for i in list_after.json()["items"] if i["checkpointId"] == safety_id
+    )
+    _assert_meta_eight(safety, is_pinned=False)
 
 
 def test_corrupt_is_pinned_meta_fixed_500_zero_write(disabled_client):
@@ -1234,6 +1277,51 @@ def test_corrupt_is_pinned_meta_fixed_500_zero_write(disabled_client):
     res_s = _patch_pin(client, pid, clean_id, True)
     _assert_fixed_error(res_s, 500, _CODE_PIN_FAILED, message=_MSG_PIN_FAILED)
     assert _domain_snapshot(pid) == before
+
+
+def test_read_paths_corrupt_is_pinned_list_detail_search_zero_write(disabled_client):
+    """
+    用途：list/detail/search 在原始 is_pinned=2 时固定 corrupt；
+      未命中候选亦整次失败；读路径五域零写；禁止 ORM Boolean 吞 2。
+    """
+    client = disabled_client
+    pid = _create_project(client, name="读取坏固定")
+    rows = _seed_five_domain(pid, ["r0", "r1", "r2"])
+    victim = rows[0]["id"]
+    non_hit = rows[1]["id"]
+    _set_corrupt_is_pinned_sql(victim, 2)
+    domain_before = _domain_snapshot(pid)
+
+    list_res = client.get(_list_url(pid))
+    assert list_res.status_code == 500, list_res.text
+    assert list_res.json()["detail"]["code"] == _CODE_CORRUPT
+    assert victim not in list_res.text
+    assert _SECRET not in list_res.text
+
+    detail_res = client.get(_detail_url(pid, victim))
+    assert detail_res.status_code == 500, detail_res.text
+    assert detail_res.json()["detail"]["code"] == _CODE_CORRUPT
+    assert victim not in detail_res.text
+
+    # 恢复 victim 合法固定值后，未命中候选 is_pinned=2 仍使 search 整次失败
+    _set_pinned_sql(victim, 0)
+    _set_corrupt_is_pinned_sql(non_hit, 2)
+    domain_mid = _domain_snapshot(pid)
+    search_res = client.post(
+        f"/api/projects/{pid}/editor-state-checkpoints/search",
+        json={"query": "章节r0"},
+    )
+    assert search_res.status_code == 500, search_res.text
+    assert search_res.json()["detail"]["code"] == _CODE_CORRUPT
+    assert non_hit not in search_res.text
+    assert victim not in search_res.text
+    assert _domain_snapshot(pid) == domain_mid
+    # list 也应对 sibling 坏值失败
+    list2 = client.get(_list_url(pid))
+    assert list2.status_code == 500, list2.text
+    assert list2.json()["detail"]["code"] == _CODE_CORRUPT
+    assert _domain_snapshot(pid) == domain_mid
+    assert domain_before["revisions"] == domain_mid["revisions"]
 
 
 def test_detect_over_20_rows_fixed_500(disabled_client):
@@ -1908,6 +1996,14 @@ def test_production_source_guards_and_pin_service_shape():
     assert "snapshot_json" in svc_src
     assert "MAX_PINNED_CHECKPOINTS_PER_PROJECT" in svc_src
     assert "protect_id is not None" in svc_src
+    # P12J-B：list/detail/search 三处原始 Integer 投影；禁止 .get 默认 false
+    coerce_label = 'type_coerce(EditorStateCheckpointRow.is_pinned, Integer).label('
+    assert svc_src.count(coerce_label) >= 4  # trim + list + detail + search
+    assert '.get("is_pinned"' not in svc_src
+    assert ".get('is_pinned'" not in svc_src
+    api_src2 = _API_PATH.read_text(encoding="utf-8")
+    assert 'data["is_pinned"]' in api_src2
+    assert '.get("is_pinned"' not in api_src2
 
     db_src = _DATABASE_PATH.read_text(encoding="utf-8")
     assert "migrate_editor_state_checkpoints_is_pinned" in db_src

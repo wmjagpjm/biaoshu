@@ -234,8 +234,18 @@ def _require_project(
     return project
 
 
-def _meta_from_row(row: EditorStateCheckpointRow) -> dict[str, Any]:
-    """用途：ORM 行 → API 元数据字典（七键含 display_name）。"""
+def _validate_is_pinned_raw(value: Any) -> bool:
+    """
+    用途：严格校验 type_coerce 后的原始 is_pinned。
+    规则：仅原生 int 且恰为 0/1；拒绝 bool/其它类型/非法整数（含 2）。
+    """
+    if type(value) is int and value in (0, 1):
+        return value == 1
+    raise _corrupt() from None
+
+
+def _meta_from_row(row: EditorStateCheckpointRow, *, is_pinned: bool) -> dict[str, Any]:
+    """用途：ORM 行 + 已校验固定状态 → API 元数据字典（八键）。"""
     return {
         "checkpoint_id": row.id,
         "state_version": row.state_version,
@@ -244,6 +254,7 @@ def _meta_from_row(row: EditorStateCheckpointRow) -> dict[str, Any]:
         "chapter_count": int(row.chapter_count),
         "created_at": row.created_at,
         "display_name": row.display_name,
+        "is_pinned": is_pinned,
     }
 
 
@@ -449,7 +460,7 @@ def create_editor_state_checkpoint(
             chapter_count=chapter_count,
         )
         # 提交前构造元数据，避免 commit 成功后 refresh 失败导致假失败/重复创建；
-        # 名称固定初始 null（不接受客户端投稿，列默认 NULL）
+        # 名称固定初始 null；固定状态固定初始 false（不接受客户端投稿）
         meta = {
             "checkpoint_id": checkpoint_id,
             "state_version": state_version,
@@ -458,6 +469,7 @@ def create_editor_state_checkpoint(
             "chapter_count": chapter_count,
             "created_at": row.created_at,
             "display_name": None,
+            "is_pinned": False,
         }
         _trim_checkpoints(db, workspace_id, project_id)
         db.commit()
@@ -476,32 +488,44 @@ def list_editor_state_checkpoints(
     project_id: str,
 ) -> dict[str, Any]:
     """
-    用途：固定最近 20 条元数据列表；SQL 显式投影，不含 snapshot_json。
+    用途：固定最近 20 条元数据列表；SQL 显式八列投影（含原始 is_pinned），不含 snapshot_json。
     对接：GET /api/projects/{projectId}/editor-state-checkpoints。
+    二次开发：完整物化并校验全部最多 20 条固定值；任一非法整次 corrupt。
     """
     _require_project(db, workspace_id, project_id, lock=False)
-    rows = db.execute(
-        select(
-            EditorStateCheckpointRow.id,
-            EditorStateCheckpointRow.state_version,
-            EditorStateCheckpointRow.snapshot_bytes,
-            EditorStateCheckpointRow.outline_node_count,
-            EditorStateCheckpointRow.chapter_count,
-            EditorStateCheckpointRow.created_at,
-            EditorStateCheckpointRow.display_name,
+    try:
+        rows = list(
+            db.execute(
+                select(
+                    EditorStateCheckpointRow.id,
+                    EditorStateCheckpointRow.state_version,
+                    EditorStateCheckpointRow.snapshot_bytes,
+                    EditorStateCheckpointRow.outline_node_count,
+                    EditorStateCheckpointRow.chapter_count,
+                    EditorStateCheckpointRow.created_at,
+                    EditorStateCheckpointRow.display_name,
+                    type_coerce(EditorStateCheckpointRow.is_pinned, Integer).label(
+                        "is_pinned"
+                    ),
+                )
+                .where(
+                    EditorStateCheckpointRow.workspace_id == workspace_id,
+                    EditorStateCheckpointRow.project_id == project_id,
+                )
+                .order_by(
+                    EditorStateCheckpointRow.created_at.desc(),
+                    EditorStateCheckpointRow.id.desc(),
+                )
+                .limit(MAX_CHECKPOINTS_PER_PROJECT)
+            ).all()
         )
-        .where(
-            EditorStateCheckpointRow.workspace_id == workspace_id,
-            EditorStateCheckpointRow.project_id == project_id,
-        )
-        .order_by(
-            EditorStateCheckpointRow.created_at.desc(),
-            EditorStateCheckpointRow.id.desc(),
-        )
-        .limit(MAX_CHECKPOINTS_PER_PROJECT)
-    ).all()
+    except EditorStateCheckpointError:
+        raise
+    except Exception:
+        raise _corrupt() from None
     items: list[dict[str, Any]] = []
     for row in rows:
+        pinned = _validate_is_pinned_raw(row.is_pinned)
         items.append(
             {
                 "checkpoint_id": row.id,
@@ -511,6 +535,7 @@ def list_editor_state_checkpoints(
                 "chapter_count": int(row.chapter_count),
                 "created_at": row.created_at,
                 "display_name": row.display_name,
+                "is_pinned": pinned,
             }
         )
     return {"items": items}
@@ -626,20 +651,40 @@ def get_editor_state_checkpoint(
     """
     用途：按 ID 读取单条检查点并重验快照；跨项目/空间统一 not_found。
     对接：GET .../editor-state-checkpoints/{checkpointId}。
-    二次开发：SQL 必须同时带 id/workspace_id/project_id，禁止先全局 get 再 Python 过滤。
+    二次开发：
+      - SQL 必须同时带 id/workspace_id/project_id，禁止先全局 get 再 Python 过滤；
+      - 显式投影含原始 is_pinned Integer；禁止整实体 ORM Boolean 吞非法 2。
     """
     _require_project(db, workspace_id, project_id, lock=False)
-    row = db.execute(
-        select(EditorStateCheckpointRow).where(
-            EditorStateCheckpointRow.id == checkpoint_id,
-            EditorStateCheckpointRow.workspace_id == workspace_id,
-            EditorStateCheckpointRow.project_id == project_id,
-        )
-    ).scalar_one_or_none()
+    try:
+        row = db.execute(
+            select(
+                EditorStateCheckpointRow.id,
+                EditorStateCheckpointRow.state_version,
+                EditorStateCheckpointRow.snapshot_bytes,
+                EditorStateCheckpointRow.outline_node_count,
+                EditorStateCheckpointRow.chapter_count,
+                EditorStateCheckpointRow.created_at,
+                EditorStateCheckpointRow.display_name,
+                EditorStateCheckpointRow.snapshot_json,
+                type_coerce(EditorStateCheckpointRow.is_pinned, Integer).label(
+                    "is_pinned"
+                ),
+            ).where(
+                EditorStateCheckpointRow.id == checkpoint_id,
+                EditorStateCheckpointRow.workspace_id == workspace_id,
+                EditorStateCheckpointRow.project_id == project_id,
+            )
+        ).one_or_none()
+    except EditorStateCheckpointError:
+        raise
+    except Exception:
+        raise _corrupt() from None
     if row is None:
         raise EditorStateCheckpointError(
             404, CODE_CHECKPOINT_NOT_FOUND, MSG_CHECKPOINT_NOT_FOUND
         )
+    pinned = _validate_is_pinned_raw(row.is_pinned)
     snapshot = _validate_snapshot_payload(
         snapshot_json=row.snapshot_json,
         state_version=row.state_version,
@@ -647,8 +692,17 @@ def get_editor_state_checkpoint(
         outline_node_count=row.outline_node_count,
         chapter_count=row.chapter_count,
     )
-    meta = _meta_from_row(row)
-    meta["snapshot"] = snapshot
+    meta = {
+        "checkpoint_id": row.id,
+        "state_version": row.state_version,
+        "snapshot_bytes": int(row.snapshot_bytes),
+        "outline_node_count": int(row.outline_node_count),
+        "chapter_count": int(row.chapter_count),
+        "created_at": row.created_at,
+        "display_name": row.display_name,
+        "is_pinned": pinned,
+        "snapshot": snapshot,
+    }
     return meta
 
 
@@ -1063,11 +1117,11 @@ def search_editor_state_checkpoints(
     query: Any,
 ) -> dict[str, Any]:
     """
-    用途：在当前项目最近 20 条检查点内按名称或可见内容显式搜索；只返回七键元数据。
+    用途：在当前项目最近 20 条检查点内按名称或可见内容显式搜索；只返回八键元数据。
     对接：POST .../editor-state-checkpoints/search。
     二次开发：
-      - 顺序：项目存在 → 关键词 → 一次八列候选；
-      - 先完整重验全部候选名称与规范快照，再 NFKC+casefold 匹配；
+      - 顺序：项目存在 → 关键词 → 一次九列候选（含原始 is_pinned）；
+      - 先完整重验全部候选固定值、名称与规范快照，再 NFKC+casefold 匹配；
       - 坏行/预算超限整次 corrupt；双命中只 append 一次；顺序保持候选倒序；
       - 禁止 OFFSET/COUNT/LIKE/JSON SQL/N+1/补扫第 21 条/写操作/名称短路校验。
     """
@@ -1086,6 +1140,9 @@ def search_editor_state_checkpoints(
                 EditorStateCheckpointRow.created_at,
                 EditorStateCheckpointRow.display_name,
                 EditorStateCheckpointRow.snapshot_json,
+                type_coerce(EditorStateCheckpointRow.is_pinned, Integer).label(
+                    "is_pinned"
+                ),
             )
             .where(
                 EditorStateCheckpointRow.workspace_id == workspace_id,
@@ -1104,9 +1161,10 @@ def search_editor_state_checkpoints(
     except Exception:
         raise _corrupt() from None
 
-    # 先完整校验全部候选；任一行损坏整次失败（与名称/内容是否命中无关）
+    # 先完整校验全部候选（含未命中）固定值/名称/快照；任一行损坏整次失败
     validated: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for row in rows:
+        pinned = _validate_is_pinned_raw(row.is_pinned)
         dname = _validate_stored_display_name(row.display_name)
         snapshot = _validate_snapshot_payload(
             snapshot_json=row.snapshot_json,
@@ -1125,6 +1183,7 @@ def search_editor_state_checkpoints(
                     "chapter_count": int(row.chapter_count),
                     "created_at": row.created_at,
                     "display_name": dname,
+                    "is_pinned": pinned,
                 },
                 snapshot,
             )

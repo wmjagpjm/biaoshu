@@ -1,10 +1,10 @@
 /**
- * 模块：P12B-D2 / P12G / P12H / P12I editor-state 检查点 API 封装
+ * 模块：P12B-D2 / P12G / P12H / P12I / P12J-B editor-state 检查点 API 封装
  * 用途：封装元数据 list、空对象 create、带 expected 的 restore、单条 display-name PATCH、
- *       单条 DELETE、名称/可见内容显式 search；严格校验响应 shape。
+ *       单条 DELETE、名称/可见内容显式 search、单条 pin PATCH；严格校验响应 shape。
  * 对接：GET|POST|PATCH|DELETE /api/projects/{id}/editor-state-checkpoints*；apiFetch。
  * 二次开发：禁止请求详情 snapshot；禁止本地生成版本/ID；禁止持久化 checkpoint 正文；
- *   名称/ID/关键词不得进入 URL/存储/Cookie/console/外网。
+ *   名称/ID/关键词/固定值不得进入 URL/存储/Cookie/console/外网。
  */
 
 import { apiFetch } from "../../shared/lib/api";
@@ -15,7 +15,7 @@ const STATE_VERSION_RE = /^esv_[0-9a-f]{32}$/;
 /** 服务端 checkpointId 精确格式 */
 const CHECKPOINT_ID_RE = /^escp_[0-9a-f]{32}$/;
 
-/** metadata 精确七键（P12G 含 displayName） */
+/** metadata 精确八键（P12G displayName + P12J-B isPinned） */
 const META_KEYS = [
   "checkpointId",
   "stateVersion",
@@ -24,6 +24,7 @@ const META_KEYS = [
   "chapterCount",
   "createdAt",
   "displayName",
+  "isPinned",
 ] as const;
 
 /** restore 成功响应精确四键 */
@@ -39,6 +40,9 @@ const LIST_TOP_KEYS = ["items"] as const;
 
 /** 命名成功响应精确一键 */
 const DISPLAY_NAME_OUT_KEYS = ["displayName"] as const;
+
+/** 固定成功响应精确一键 */
+const PIN_OUT_KEYS = ["isPinned"] as const;
 
 /** 列表契约上限 */
 const MAX_LIST_ITEMS = 20;
@@ -197,7 +201,7 @@ export function normalizeDisplayNameForSave(raw: string): string | null {
 
 /**
  * 模块：检查点元数据（无 snapshot）
- * 用途：列表与创建响应共用字段；精确七键含 displayName。
+ * 用途：列表与创建响应共用字段；精确八键含 displayName/isPinned。
  */
 export type EditorStateCheckpointMeta = {
   checkpointId: string;
@@ -207,6 +211,8 @@ export type EditorStateCheckpointMeta = {
   chapterCount: number;
   createdAt: string;
   displayName: string | null;
+  /** 是否固定；原生 boolean */
+  isPinned: boolean;
 };
 
 /**
@@ -221,11 +227,11 @@ export type EditorStateCheckpointRestoreResult = {
 };
 
 /**
- * 用途：严格解析检查点元数据；精确七键，任一字段非法抛错。
+ * 用途：严格解析检查点元数据；精确八键，任一字段非法抛错。
  * 二次开发：
  *   - metadata 非对象，或 stateVersion 缺失/空白/非法 → 专用 CheckpointCreateStateVersionError
  *     （须先于 hasExactKeys，避免缺键被普通 shape 错误吞掉；供 create Hook 全量阻断）
- *   - 其余 shape（额外字段/非法 id/计数/名称等）→ 普通 Error，create 仅 failed 不阻断
+ *   - 其余 shape（额外字段/非法 id/计数/名称/非原生 isPinned 等）→ 普通 Error
  *   - 错误固定脱敏（不把响应原文外泄）
  */
 export function parseCheckpointMeta(raw: unknown): EditorStateCheckpointMeta {
@@ -268,6 +274,9 @@ export function parseCheckpointMeta(raw: unknown): EditorStateCheckpointMeta {
   } catch {
     throw new Error("checkpoint_meta_invalid");
   }
+  if (typeof o.isPinned !== "boolean") {
+    throw new Error("checkpoint_meta_invalid");
+  }
   return {
     checkpointId: o.checkpointId as string,
     stateVersion: sv,
@@ -276,6 +285,7 @@ export function parseCheckpointMeta(raw: unknown): EditorStateCheckpointMeta {
     chapterCount: o.chapterCount,
     createdAt: o.createdAt,
     displayName,
+    isPinned: o.isPinned,
   };
 }
 
@@ -317,7 +327,7 @@ export function parseRestoreResult(
 }
 
 /**
- * 用途：严格解析 list/search 共用顶层 {items}；最多 maxItems 条七键元数据。
+ * 用途：严格解析 list/search 共用顶层 {items}；最多 maxItems 条八键元数据。
  */
 function parseCheckpointListPayload(
   raw: unknown,
@@ -555,6 +565,55 @@ export async function deleteEditorStateCheckpoint(
     `/projects/${encodeURIComponent(projectId)}/editor-state-checkpoints/${encodeURIComponent(checkpointId)}`,
     { method: "DELETE" },
   );
+}
+
+/**
+ * 用途：严格解析固定成功响应；精确一键 isPinned；必须等于请求目标。
+ */
+function parsePinResponse(raw: unknown, expected: boolean): boolean {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("checkpoint_pin_invalid");
+  }
+  const o = raw as Record<string, unknown>;
+  if (!hasExactKeys(o, PIN_OUT_KEYS)) {
+    throw new Error("checkpoint_pin_invalid");
+  }
+  if (typeof o.isPinned !== "boolean") {
+    throw new Error("checkpoint_pin_invalid");
+  }
+  if (o.isPinned !== expected) {
+    throw new Error("checkpoint_pin_invalid");
+  }
+  return o.isPinned;
+}
+
+/**
+ * 用途：PATCH 单条检查点固定状态；精确 body {isPinned}；成功回目标布尔。
+ * 对接：PATCH /projects/{projectId}/editor-state-checkpoints/{checkpointId}/pin
+ * 约束：
+ *   - 非法 checkpointId 或非原生 bool 在发请求前固定抛出
+ *   - 禁止 query/retry/轮询/额外 header
+ *   - 响应精确一键且等于请求目标
+ */
+export async function setEditorStateCheckpointPin(
+  projectId: string,
+  checkpointId: string,
+  isPinned: boolean,
+): Promise<boolean> {
+  if (!isValidCheckpointId(checkpointId)) {
+    throw new Error("checkpoint_id_invalid");
+  }
+  if (typeof isPinned !== "boolean") {
+    throw new Error("checkpoint_pin_invalid");
+  }
+  const raw = await apiFetch<unknown>(
+    `/projects/${encodeURIComponent(projectId)}/editor-state-checkpoints/${encodeURIComponent(checkpointId)}/pin`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ isPinned }),
+    },
+  );
+  return parsePinResponse(raw, isPinned);
 }
 
 /**
