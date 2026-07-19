@@ -1,6 +1,7 @@
 """
-模块：P12A/P12B-D1/P12G/P12H editor-state 检查点路由
-用途：显式创建、有限列表、按需只读详情、锁后原子安全恢复、单条展示名称 PATCH、单条 DELETE。
+模块：P12A/P12B-D1/P12G/P12H/P12I editor-state 检查点路由
+用途：显式创建、有限列表、按需只读详情、锁后原子安全恢复、单条展示名称 PATCH、
+  单条 DELETE、名称/可见内容显式搜索。
 对接：/api/projects/{projectId}/editor-state-checkpoints*；
   editor_state_checkpoint_service；editor_state_checkpoint_name_service；
   editor_state_checkpoint_delete_service；deps.get_workspace_id。
@@ -9,6 +10,7 @@
   - POST/PATCH/DELETE 继续既有 CSRF；所有成功/业务错误 Cache-Control: no-store；
   - PATCH display-name：query 空、body≤1024、精确一键；成功仅回 displayName；
   - DELETE 详情：无 query、body 严格零字节；成功严格空 204；
+  - POST search：query 空、body≤1024、精确一键 query；成功复用列表七键；
   - 错误固定 code/message（409 另含 currentStateVersion），不反射 ID/正文/路径/SQL。
 """
 
@@ -44,8 +46,9 @@ from app.services.editor_state_checkpoint_name_service import (
 )
 from app.services.editor_state_checkpoint_service import EditorStateCheckpointError
 
-# P12G：命名请求体原始字节硬上限
+# P12G / P12I：命名与搜索请求体原始字节硬上限
 _DISPLAY_NAME_BODY_MAX_BYTES = 1024
+_SEARCH_BODY_MAX_BYTES = 1024
 
 router = APIRouter(prefix="/projects", tags=["editor-state-checkpoints"])
 
@@ -59,6 +62,12 @@ _NAME_REQUEST_INVALID_DETAIL = {
 _DELETE_REQUEST_INVALID_DETAIL = {
     "code": "editor_state_checkpoint_delete_request_invalid",
     "message": "检查点删除请求无效",
+}
+
+# P12I 搜索请求 query/body 外壳失败的固定脱敏 detail；禁止反射输入
+_SEARCH_REQUEST_INVALID_DETAIL = {
+    "code": "editor_state_checkpoint_search_request_invalid",
+    "message": "检查点搜索请求无效",
 }
 
 
@@ -119,6 +128,41 @@ def _raise_delete_error(exc: EditorStateCheckpointDeleteError) -> NoReturn:
         detail=exc.as_detail(),
         headers={"Cache-Control": "no-store"},
     ) from None
+
+
+def _raise_search_request_invalid() -> NoReturn:
+    """
+    用途：search 路由专用；query 非空或 body 外壳非法固定脱敏 422。
+    二次开发：禁止回显 query/body/路径/header/异常原文/关键词。
+    """
+    raise HTTPException(
+        status_code=422,
+        detail=dict(_SEARCH_REQUEST_INVALID_DETAIL),
+        headers={"Cache-Control": "no-store"},
+    ) from None
+
+
+async def _read_search_query_value(request: Request) -> Any:
+    """
+    用途：仅 search 路由读取 ≤1024 字节 JSON 对象，精确一键 query。
+    二次开发：空体/超长/非对象/额外或缺失键/解析失败固定 422，禁止反射。
+    """
+    try:
+        raw = await request.body()
+    except Exception:
+        _raise_search_request_invalid()
+    if not raw or len(raw) > _SEARCH_BODY_MAX_BYTES:
+        _raise_search_request_invalid()
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError, TypeError):
+        _raise_search_request_invalid()
+    if not isinstance(data, dict):
+        _raise_search_request_invalid()
+    # 精确一键 query；拒绝 snake_case 与额外/缺失键
+    if set(data.keys()) != {"query"}:
+        _raise_search_request_invalid()
+    return data["query"]
 
 
 async def _read_display_name_json_object(request: Request) -> dict[str, Any]:
@@ -212,6 +256,41 @@ def list_editor_state_checkpoints(
     try:
         data = editor_state_checkpoint_service.list_editor_state_checkpoints(
             db, workspace_id, project_id
+        )
+    except EditorStateCheckpointError as exc:
+        _raise_app_error(exc)
+    return EditorStateCheckpointListOut(
+        items=[_meta_out(item) for item in data["items"]]
+    )
+
+
+@router.post(
+    "/{project_id}/editor-state-checkpoints/search",
+    response_model=EditorStateCheckpointListOut,
+)
+async def search_editor_state_checkpoints(
+    project_id: str,
+    request: Request,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    workspace_id: Annotated[str, Depends(get_workspace_id)],
+) -> EditorStateCheckpointListOut:
+    """
+    用途：在最近 20 条检查点候选中按名称或可见内容显式搜索；仅返回七键元数据。
+    对接：P12I；editor_state_checkpoint_service.search_editor_state_checkpoints。
+    二次开发：
+      - 必须静态注册在 /{checkpoint_id} 之前；
+      - 任意 query 或 body 外壳失败固定 422 脱敏（request_invalid）；
+      - body 原始长度 ≤1024；精确一键 query；值由 service 判型；
+      - 成功/业务错误 no-store；不反射 query/正文/ID；不写库。
+    """
+    _no_store(response)
+    if request.query_params:
+        _raise_search_request_invalid()
+    query_value = await _read_search_query_value(request)
+    try:
+        data = editor_state_checkpoint_service.search_editor_state_checkpoints(
+            db, workspace_id, project_id, query_value
         )
     except EditorStateCheckpointError as exc:
         _raise_app_error(exc)

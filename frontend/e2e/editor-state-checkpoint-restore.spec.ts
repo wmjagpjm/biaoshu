@@ -100,6 +100,18 @@ type DeleteMode =
       rawMessage?: string;
     };
 
+/** P12I 搜索 mock 模式 */
+type SearchMode =
+  | { kind: "ok" }
+  | { kind: "http_error"; status: number; rawMessage?: string }
+  | {
+      kind: "hold";
+      gate: HoldGate;
+      then?: "ok" | "http_error";
+      status?: number;
+      rawMessage?: string;
+    };
+
 type EditorState = {
   projectId: string;
   parsedMarkdown: string;
@@ -245,6 +257,26 @@ type ProbeState = {
     checkpointId: string;
     status: number;
   }>;
+  /** P12I 搜索 */
+  searchMode: SearchMode;
+  searchModeByProject: Record<string, SearchMode>;
+  searchLog: Array<{
+    projectId: string;
+    method: string;
+    path: string;
+    postData: string | null;
+    queryKeys: string[];
+    search: string;
+    bodyKeys: string[];
+    query: string | null | undefined;
+  }>;
+  searchCompleteLog: Array<{
+    projectId: string;
+    status: number;
+    itemCount: number;
+  }>;
+  /** 可选：按关键词过滤 displayName 子串（探针级模拟服务端命中） */
+  searchFilter?: (meta: CheckpointMeta, query: string) => boolean;
 };
 
 function seedStateVersion(n: number): string {
@@ -404,7 +436,26 @@ function createProbeState(mode: Mode): ProbeState {
     deleteModeByCheckpoint: {},
     deleteLog: [],
     deleteCompleteLog: [],
+    searchMode: { kind: "ok" },
+    searchModeByProject: {},
+    searchLog: [],
+    searchCompleteLog: [],
+    searchFilter: (meta, query) => {
+      const q = query.normalize("NFKC").toLocaleLowerCase();
+      if (
+        meta.displayName != null &&
+        meta.displayName.normalize("NFKC").toLocaleLowerCase().includes(q)
+      ) {
+        return true;
+      }
+      // 探针默认：displayName 未命中时用 checkpointId 末段伪装内容命中标记（测试可覆写 filter）
+      return false;
+    },
   };
+}
+
+function resolveSearchMode(state: ProbeState, projectId: string): SearchMode {
+  return state.searchModeByProject[projectId] ?? state.searchMode;
 }
 
 function resolveNameMode(
@@ -796,6 +847,125 @@ async function installRoutes(page: Page, state: ProbeState) {
         await json(route, next);
         return;
       }
+    }
+
+    // P12I 搜索：必须在 list/create 与 detail 之前匹配，避免 "search" 被当 checkpointId
+    const searchMatch = path.match(
+      /^\/api\/projects\/([^/]+)\/editor-state-checkpoints\/search\/?$/,
+    );
+    if (searchMatch && method === "POST") {
+      const pid = searchMatch[1];
+      const queryKeys = [...url.searchParams.keys()];
+      const postData = req.postData();
+      let bodyKeys: string[] = [];
+      let query: string | null | undefined = undefined;
+      if (postData != null && postData !== "") {
+        try {
+          const parsed = JSON.parse(postData) as unknown;
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            const body = parsed as Record<string, unknown>;
+            bodyKeys = Object.keys(body);
+            if (Object.prototype.hasOwnProperty.call(body, "query")) {
+              const v = body.query;
+              if (typeof v === "string") query = v;
+              else query = null;
+            }
+          }
+        } catch {
+          bodyKeys = [];
+          query = undefined;
+        }
+      }
+      if (!known.has(pid)) {
+        state.forbiddenHits.push(`${method} ${path}`);
+        await json(route, { detail: "not_found" }, 404);
+        return;
+      }
+      state.searchLog.push({
+        projectId: pid,
+        method,
+        path,
+        postData,
+        queryKeys,
+        search: url.search,
+        bodyKeys,
+        query,
+      });
+      if (queryKeys.length > 0 || url.search.length > 1) {
+        state.forbiddenHits.push(`${method} ${path}${url.search}`);
+      }
+      const searchMode = resolveSearchMode(state, pid);
+      if (searchMode.kind === "hold") {
+        await searchMode.gate.wait();
+        if (searchMode.then === "http_error") {
+          const detail: Record<string, unknown> = {
+            code: "editor_state_checkpoint_search_error",
+            message: "检查点名称或内容搜索失败",
+          };
+          if (searchMode.rawMessage) detail.debug = searchMode.rawMessage;
+          await json(route, { detail }, searchMode.status ?? 500);
+          state.searchCompleteLog.push({
+            projectId: pid,
+            status: searchMode.status ?? 500,
+            itemCount: 0,
+          });
+          return;
+        }
+      }
+      if (searchMode.kind === "http_error") {
+        const detail: Record<string, unknown> = {
+          code: "editor_state_checkpoint_search_error",
+          message: "检查点名称或内容搜索失败",
+        };
+        if (searchMode.rawMessage) detail.debug = searchMode.rawMessage;
+        await json(route, { detail }, searchMode.status);
+        state.searchCompleteLog.push({
+          projectId: pid,
+          status: searchMode.status,
+          itemCount: 0,
+        });
+        return;
+      }
+      if (
+        bodyKeys.length !== 1 ||
+        bodyKeys[0] !== "query" ||
+        typeof query !== "string"
+      ) {
+        await json(
+          route,
+          {
+            detail: {
+              code: "editor_state_checkpoint_search_request_invalid",
+              message: "检查点搜索请求无效",
+            },
+          },
+          422,
+        );
+        state.searchCompleteLog.push({
+          projectId: pid,
+          status: 422,
+          itemCount: 0,
+        });
+        return;
+      }
+      const filter =
+        state.searchFilter ??
+        ((meta: CheckpointMeta, q: string) =>
+          meta.displayName != null &&
+          meta.displayName
+            .normalize("NFKC")
+            .toLocaleLowerCase()
+            .includes(q.normalize("NFKC").toLocaleLowerCase()));
+      const items = (state.checkpoints[pid] || [])
+        .filter((m) => filter(m, query as string))
+        .slice(0, 20);
+      await json(route, { items });
+      state.searchCompleteLog.push({
+        projectId: pid,
+        status: 200,
+        itemCount: items.length,
+      });
+      return;
     }
 
     const listMatch = path.match(
@@ -4316,7 +4486,7 @@ test.describe("P12H 检查点单条删除", () => {
     );
     expect(start).not.toBe(-1);
     const end = lines.findIndex(
-      (l, i) => i > start && l.includes('test("契约常量格式"'),
+      (l, i) => i > start && l.includes('test.describe("P12I'),
     );
     expect(end).not.toBe(-1);
     const staticStart = lines.findIndex(
@@ -4351,6 +4521,657 @@ test.describe("P12H 检查点单条删除", () => {
     expect(block).not.toMatch(
       /postData\s*!=\s*null\s*&&\s*postData\s*!==\s*["']{2}/,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P12I 检查点名称与可见内容显式搜索
+// ---------------------------------------------------------------------------
+
+const MSG_SEARCH_ACTIVE = "当前为名称或内容搜索结果";
+const MSG_SEARCH_EMPTY = "没有匹配名称或内容的检查点";
+const MSG_SEARCH_FAIL = "检查点名称或内容搜索失败，请稍后重试";
+const MSG_SEARCH_QUERY_INVALID =
+  "搜索关键词需为 1 至 64 个字符，且不能含首尾空白或控制字符";
+const LABEL_SEARCH = "名称或内容搜索";
+const MSG_DELETE_OK_P12I = "已删除所选检查点";
+const MSG_NAME_OK_P12I = "已保存检查点名称";
+
+test.describe("P12I 检查点名称与可见内容显式搜索", () => {
+  test.describe.configure({ mode: "serial" });
+
+  for (const mode of ["tech", "biz"] as const) {
+    const ids = projectIds(mode);
+    const projectId = ids.a;
+
+    test(`${mode}：入口可见；输入零请求；精确 POST body；同值零重发；清除 GET；空态`, async ({
+      page,
+    }) => {
+      const state = createProbeState(mode);
+      const guards = await installRuntimeErrorGuards(page);
+      await installRoutes(page, state);
+      seedCheckpoint(state, projectId, 1);
+      appendCheckpoint(state, projectId, 2);
+      state.checkpoints[projectId][0].displayName = "P12I_HIT_NAME";
+      state.checkpoints[projectId][1].displayName = "其它名称";
+      await openWorkspace(page, mode, projectId);
+      await expandPanel(page);
+
+      // 共用入口
+      await expect(
+        page.getByText(LABEL_SEARCH, { exact: true }),
+      ).toBeVisible();
+      await expect(
+        page.getByTestId("editor-state-checkpoint-search-input"),
+      ).toBeVisible();
+      await expect(
+        page.getByTestId("editor-state-checkpoint-search-apply"),
+      ).toBeVisible();
+      await expect(
+        page.getByTestId("editor-state-checkpoint-search-clear"),
+      ).toBeVisible();
+
+      const listBefore = state.listLog.length;
+      const searchBefore = state.searchLog.length;
+
+      // 输入零请求
+      await page
+        .getByTestId("editor-state-checkpoint-search-input")
+        .fill("P12I_HIT");
+      expect(state.searchLog.length).toBe(searchBefore);
+      expect(state.listLog.length).toBe(listBefore);
+
+      // 非法关键词零请求
+      await page
+        .getByTestId("editor-state-checkpoint-search-input")
+        .fill("  bad");
+      await page.getByTestId("editor-state-checkpoint-search-apply").click();
+      await expect(
+        page.getByTestId("editor-state-checkpoint-search-error"),
+      ).toHaveText(MSG_SEARCH_QUERY_INVALID);
+      expect(state.searchLog.length).toBe(searchBefore);
+
+      // 合法搜索
+      await page
+        .getByTestId("editor-state-checkpoint-search-input")
+        .fill("P12I_HIT");
+      await page.getByTestId("editor-state-checkpoint-search-apply").click();
+      await expect
+        .poll(() => state.searchCompleteLog.length, { timeout: 10_000 })
+        .toBe(1);
+      expect(state.searchLog.length).toBe(1);
+      expect(state.searchLog[0].method).toBe("POST");
+      expect(state.searchLog[0].path).toContain(
+        `/projects/${projectId}/editor-state-checkpoints/search`,
+      );
+      expect(state.searchLog[0].queryKeys).toEqual([]);
+      expect(state.searchLog[0].search).toBe("");
+      expect(state.searchLog[0].bodyKeys).toEqual(["query"]);
+      expect(state.searchLog[0].query).toBe("P12I_HIT");
+      expect(state.searchLog[0].postData).toBe(
+        JSON.stringify({ query: "P12I_HIT" }),
+      );
+      expect(state.listLog.length).toBe(listBefore);
+
+      await expect(
+        page.getByTestId("editor-state-checkpoint-search-active"),
+      ).toHaveText(MSG_SEARCH_ACTIVE);
+      await expect(
+        page.getByTestId("editor-state-checkpoint-display-name-0"),
+      ).toHaveText("P12I_HIT_NAME");
+      await expect(
+        page.getByTestId("editor-state-checkpoint-item-1"),
+      ).toHaveCount(0);
+
+      // 同值零重发
+      await page.getByTestId("editor-state-checkpoint-search-apply").click();
+      expect(state.searchLog.length).toBe(1);
+
+      // 空结果
+      await page
+        .getByTestId("editor-state-checkpoint-search-input")
+        .fill("NO_MATCH_ZZZ");
+      await page.getByTestId("editor-state-checkpoint-search-apply").click();
+      await expect
+        .poll(() => state.searchCompleteLog.length, { timeout: 10_000 })
+        .toBe(2);
+      await expect(
+        page.getByTestId("editor-state-checkpoint-empty"),
+      ).toHaveText(MSG_SEARCH_EMPTY);
+
+      // 清除 → 恰好一次 GET
+      const listMid = state.listLog.length;
+      await page.getByTestId("editor-state-checkpoint-search-clear").click();
+      await expect
+        .poll(() => state.listLog.length, { timeout: 10_000 })
+        .toBe(listMid + 1);
+      expect(state.searchLog.length).toBe(2);
+      await expect(
+        page.getByTestId("editor-state-checkpoint-search-active"),
+      ).toHaveCount(0);
+      await expect(
+        page.getByTestId("editor-state-checkpoint-item-0"),
+      ).toBeVisible();
+      await expect(
+        page.getByTestId("editor-state-checkpoint-item-1"),
+      ).toBeVisible();
+
+      const html = await page.content();
+      expect(html).not.toContain(state.checkpoints[projectId][0].checkpointId);
+      expect(state.externalHits).toEqual([]);
+      expect(guards.pageErrors).toEqual([]);
+      expect(await guards.readUnhandled()).toEqual([]);
+    });
+  }
+
+  test("tech：active 刷新/创建重发 POST；命名/删除原位；失败保值；单飞；disabled", async ({
+    page,
+  }) => {
+    const state = createProbeState("tech");
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+    seedCheckpoint(state, TECH_A, 1);
+    appendCheckpoint(state, TECH_A, 2);
+    state.checkpoints[TECH_A][0].displayName = "P12I_ACTIVE_HIT";
+    state.checkpoints[TECH_A][1].displayName = "保留名";
+
+    await openWorkspace(page, "tech", TECH_A);
+    await expandPanel(page);
+
+    await page
+      .getByTestId("editor-state-checkpoint-search-input")
+      .fill("P12I_ACTIVE");
+    await page.getByTestId("editor-state-checkpoint-search-apply").click();
+    await expect
+      .poll(() => state.searchCompleteLog.length, { timeout: 10_000 })
+      .toBe(1);
+    const listBefore = state.listLog.length;
+
+    // 刷新重发同一 POST，非 GET
+    await page.getByTestId("editor-state-checkpoint-refresh").click();
+    await expect
+      .poll(() => state.searchCompleteLog.length, { timeout: 10_000 })
+      .toBe(2);
+    expect(state.listLog.length).toBe(listBefore);
+    expect(state.searchLog[1].query).toBe("P12I_ACTIVE");
+
+    // 命名成功原位，零 search/list 重载
+    const searchMid = state.searchLog.length;
+    await page.getByTestId("editor-state-checkpoint-name-0").click();
+    await page
+      .getByTestId("editor-state-checkpoint-name-input-0")
+      .fill("P12I_ACTIVE_HIT");
+    await page.getByTestId("editor-state-checkpoint-name-save-0").click();
+    await expect
+      .poll(() => state.nameCompleteLog.length, { timeout: 10_000 })
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-status"),
+    ).toContainText(MSG_NAME_OK_P12I);
+    expect(state.searchLog.length).toBe(searchMid);
+    expect(state.listLog.length).toBe(listBefore);
+
+    // 删除成功原位
+    await page.getByTestId("editor-state-checkpoint-delete-0").click();
+    await page.getByTestId("editor-state-checkpoint-confirm-delete-0").click();
+    await expect
+      .poll(() => state.deleteCompleteLog.length, { timeout: 10_000 })
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-status"),
+    ).toContainText(MSG_DELETE_OK_P12I);
+    expect(state.searchLog.length).toBe(searchMid);
+    expect(state.listLog.length).toBe(listBefore);
+
+    // 重新播种并测失败保值
+    state.checkpoints[TECH_A] = [];
+    seedCheckpoint(state, TECH_A, 3);
+    state.checkpoints[TECH_A][0].displayName = "P12I_FAIL_HIT";
+    const listBeforeClear = state.listLog.length;
+    await page.getByTestId("editor-state-checkpoint-search-clear").click();
+    await expect
+      .poll(() => state.listLog.length, { timeout: 10_000 })
+      .toBe(listBeforeClear + 1);
+    const listAfterClear = state.listLog.length;
+    await page
+      .getByTestId("editor-state-checkpoint-search-input")
+      .fill("P12I_FAIL");
+    await page.getByTestId("editor-state-checkpoint-search-apply").click();
+    await expect
+      .poll(() => state.searchCompleteLog.length, { timeout: 10_000 })
+      .toBe(searchMid + 1);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-display-name-0"),
+    ).toHaveText("P12I_FAIL_HIT");
+
+    state.searchMode = { kind: "http_error", status: 500 };
+    await page
+      .getByTestId("editor-state-checkpoint-search-input")
+      .fill("P12I_FAIL2");
+    await page.getByTestId("editor-state-checkpoint-search-apply").click();
+    await expect
+      .poll(() => state.searchCompleteLog.length, { timeout: 10_000 })
+      .toBe(searchMid + 2);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-list-error"),
+    ).toHaveText(MSG_SEARCH_FAIL);
+    // 失败保值：已应用结果保留
+    await expect(
+      page.getByTestId("editor-state-checkpoint-display-name-0"),
+    ).toHaveText("P12I_FAIL_HIT");
+    await expect(
+      page.getByTestId("editor-state-checkpoint-search-active"),
+    ).toHaveText(MSG_SEARCH_ACTIVE);
+    expect(state.listLog.length).toBe(listAfterClear);
+
+    // 单飞：双击仅一次
+    state.searchMode = { kind: "ok" };
+    const hold = createHoldGate();
+    state.searchMode = { kind: "hold", gate: hold, then: "ok" };
+    await page
+      .getByTestId("editor-state-checkpoint-search-input")
+      .fill("P12I_SINGLE");
+    state.checkpoints[TECH_A][0].displayName = "P12I_SINGLE_HIT";
+    await page.evaluate(() => {
+      const btn = document.querySelector(
+        '[data-testid="editor-state-checkpoint-search-apply"]',
+      ) as HTMLButtonElement | null;
+      if (!btn) throw new Error("search apply missing");
+      btn.click();
+      btn.click();
+    });
+    await hold.waitUntilEntered(1);
+    expect(state.searchLog.filter((x) => x.query === "P12I_SINGLE").length).toBe(
+      1,
+    );
+    hold.release();
+    await expect
+      .poll(
+        () => state.searchLog.filter((x) => x.query === "P12I_SINGLE").length,
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+
+    // disabled：冲突后搜索控件真实 disabled
+    await page.clock.install();
+    const putHold = createHoldGate();
+    state.putMode = { kind: "hold", gate: putHold, then: "conflict" };
+    await editContent(page, "tech", "P12I_DISABLED_EDIT");
+    await page.clock.fastForward(debounceMs("tech") + 100);
+    await putHold.waitUntilEntered(1);
+    putHold.release();
+    await expect(page.getByTestId(conflictTestId("tech"))).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-search-input"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-search-apply"),
+    ).toBeDisabled();
+
+    expect(state.externalHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+  });
+
+  test("tech：失败后同关键词必须可重试（返修红测 A1）", async ({ page }) => {
+    const state = createProbeState("tech");
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+    seedCheckpoint(state, TECH_A, 1);
+    state.checkpoints[TECH_A][0].displayName = "P12I_RETRY_HIT";
+
+    await openWorkspace(page, "tech", TECH_A);
+    await expandPanel(page);
+
+    const keyword = "P12I_RETRY";
+    await page
+      .getByTestId("editor-state-checkpoint-search-input")
+      .fill(keyword);
+    // 首次失败
+    state.searchMode = {
+      kind: "http_error",
+      status: 500,
+      rawMessage: "P12I_RAW_ERROR_SECRET|P12I_CSRF_SECRET",
+    };
+    await page.getByTestId("editor-state-checkpoint-search-apply").click();
+    await expect
+      .poll(() => state.searchCompleteLog.length, { timeout: 10_000 })
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-list-error"),
+    ).toHaveText(MSG_SEARCH_FAIL);
+    // 失败后输入与已应用关键词保值
+    await expect(
+      page.getByTestId("editor-state-checkpoint-search-input"),
+    ).toHaveValue(keyword);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-search-active"),
+    ).toHaveText(MSG_SEARCH_ACTIVE);
+
+    // 不改输入，恢复 mock 为成功，再提交同一关键词
+    state.searchMode = { kind: "ok" };
+    const arrivedBefore = state.searchLog.length;
+    const completeBefore = state.searchCompleteLog.length;
+    await page.getByTestId("editor-state-checkpoint-search-apply").click();
+    await expect
+      .poll(() => state.searchCompleteLog.length, { timeout: 10_000 })
+      .toBe(completeBefore + 1);
+    expect(state.searchLog.length).toBe(arrivedBefore + 1);
+    expect(state.searchLog[arrivedBefore].query).toBe(keyword);
+    expect(state.searchLog[arrivedBefore].postData).toBe(
+      JSON.stringify({ query: keyword }),
+    );
+    await expect(
+      page.getByTestId("editor-state-checkpoint-list-error"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-display-name-0"),
+    ).toHaveText("P12I_RETRY_HIT");
+
+    expect(state.externalHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+  });
+
+  test("tech：active 刷新双击精确单飞（返修红测 A2）", async ({ page }) => {
+    const state = createProbeState("tech");
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+    seedCheckpoint(state, TECH_A, 1);
+    state.checkpoints[TECH_A][0].displayName = "P12I_REFRESH_HIT";
+
+    await openWorkspace(page, "tech", TECH_A);
+    await expandPanel(page);
+    await page
+      .getByTestId("editor-state-checkpoint-search-input")
+      .fill("P12I_REFRESH");
+    await page.getByTestId("editor-state-checkpoint-search-apply").click();
+    await expect
+      .poll(() => state.searchCompleteLog.length, { timeout: 10_000 })
+      .toBe(1);
+
+    const hold = createHoldGate();
+    state.searchMode = { kind: "hold", gate: hold, then: "ok" };
+    const before = state.searchLog.length;
+    // 确保 loading 结束且刷新可点（避免 complete 与 React listLoading 竞态）
+    await expect(
+      page.getByTestId("editor-state-checkpoint-refresh"),
+    ).toBeEnabled();
+    // 同一浏览器任务内连续两次真实 DOM click（与 apply/name 单飞证据同构）
+    await page
+      .getByTestId("editor-state-checkpoint-refresh")
+      .evaluate((el) => {
+        const btn = el as HTMLButtonElement;
+        if (btn.disabled) throw new Error("refresh disabled before double click");
+        btn.click();
+        btn.click();
+      });
+    await hold.waitUntilEntered(1);
+    // 在途必须精确 1；双 DOM click 不得进入第二次 POST
+    expect(state.searchLog.length).toBe(before + 1);
+    expect(hold.enteredCount).toBe(1);
+    // 在途互斥：搜索/创建/刷新/清除等真实 disabled
+    await expect(
+      page.getByTestId("editor-state-checkpoint-search-input"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-search-apply"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-search-clear"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-create"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-refresh"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-restore-0"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-name-0"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-delete-0"),
+    ).toBeDisabled();
+    hold.release();
+    await expect
+      .poll(() => state.searchCompleteLog.length, { timeout: 10_000 })
+      .toBe(2);
+    expect(state.searchLog.length).toBe(before + 1);
+
+    expect(state.externalHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+  });
+
+  test("tech：active create/restore 各精确一次同关键词 POST；零额外 list GET", async ({
+    page,
+  }) => {
+    const state = createProbeState("tech");
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+    seedCheckpoint(state, TECH_A, 1);
+    state.checkpoints[TECH_A][0].displayName = "P12I_CR_HIT";
+
+    await openWorkspace(page, "tech", TECH_A);
+    await expandPanel(page);
+    await page
+      .getByTestId("editor-state-checkpoint-search-input")
+      .fill("P12I_CR");
+    await page.getByTestId("editor-state-checkpoint-search-apply").click();
+    await expect
+      .poll(() => state.searchCompleteLog.length, { timeout: 10_000 })
+      .toBe(1);
+
+    const searchBeforeCreate = state.searchLog.length;
+    const listBeforeCreate = state.listLog.length;
+
+    // active create 成功 → 精确 +1 同关键词 POST，零 list GET
+    await page.getByTestId("editor-state-checkpoint-create").click();
+    await expect
+      .poll(() => state.searchCompleteLog.length, { timeout: 10_000 })
+      .toBe(2);
+    expect(state.searchLog.length).toBe(searchBeforeCreate + 1);
+    expect(state.searchLog[searchBeforeCreate].query).toBe("P12I_CR");
+    expect(state.listLog.length).toBe(listBeforeCreate);
+
+    // active restore 成功 → 再 +1 同关键词 POST，零 list GET
+    const searchBeforeRestore = state.searchLog.length;
+    const listBeforeRestore = state.listLog.length;
+    await page.getByTestId("editor-state-checkpoint-restore-0").click();
+    await page
+      .getByTestId("editor-state-checkpoint-confirm-restore-0")
+      .click();
+    await expect
+      .poll(() => state.searchCompleteLog.length, { timeout: 10_000 })
+      .toBe(3);
+    expect(state.searchLog.length).toBe(searchBeforeRestore + 1);
+    expect(state.searchLog[searchBeforeRestore].query).toBe("P12I_CR");
+    expect(state.listLog.length).toBe(listBeforeRestore);
+    // 唯一 editor-state 语义：restore 成功后状态提示
+    await expect(
+      page.getByTestId("editor-state-checkpoint-status"),
+    ).toContainText("已恢复到所选检查点");
+
+    expect(state.externalHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+  });
+
+  test("tech：A→B 双 hold 旧 A failure 不得解锁 B；泄漏门含 raw/csrf", async ({
+    page,
+  }) => {
+    const state = createProbeState("tech");
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+    seedCheckpoint(state, TECH_A, 1);
+    seedCheckpoint(state, TECH_B, 1);
+    state.checkpoints[TECH_A][0].displayName = "P12I_A_ONLY";
+    state.checkpoints[TECH_B][0].displayName = "P12I_B_ONLY";
+
+    const holdA = createHoldGate();
+    const holdB = createHoldGate();
+    state.searchModeByProject[TECH_A] = {
+      kind: "hold",
+      gate: holdA,
+      then: "http_error",
+      status: 500,
+      rawMessage: "P12I_RAW_ERROR_SECRET leak-with-P12I_CSRF_SECRET",
+    };
+    state.searchModeByProject[TECH_B] = {
+      kind: "hold",
+      gate: holdB,
+      then: "ok",
+    };
+
+    await openWorkspace(page, "tech", TECH_A);
+    await expandPanel(page);
+    await page
+      .getByTestId("editor-state-checkpoint-search-input")
+      .fill("P12I_A");
+    await page.getByTestId("editor-state-checkpoint-search-apply").click();
+    await holdA.waitUntilEntered(1);
+
+    // 切到 B：B 搜索也 hold
+    await page.goto(`/technical-plan/${TECH_B}/analysis`);
+    await expandPanel(page);
+    await page
+      .getByTestId("editor-state-checkpoint-search-input")
+      .fill("P12I_B");
+    await page.getByTestId("editor-state-checkpoint-search-apply").click();
+    await holdB.waitUntilEntered(1);
+    expect(state.searchLog.filter((x) => x.projectId === TECH_B).length).toBe(
+      1,
+    );
+
+    // 释放 A failure：B 仍未完成、控件仍 disabled、B arrived 精确 1
+    holdA.release();
+    await expect
+      .poll(
+        () =>
+          state.searchCompleteLog.filter((x) => x.projectId === TECH_A).length,
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    expect(holdB.released).toBe(false);
+    expect(state.searchLog.filter((x) => x.projectId === TECH_B).length).toBe(
+      1,
+    );
+    await expect(
+      page.getByTestId("editor-state-checkpoint-search-input"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-search-apply"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-create"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-refresh"),
+    ).toBeDisabled();
+
+    // 再释放 B 后才完成
+    holdB.release();
+    await expect
+      .poll(
+        () =>
+          state.searchCompleteLog.filter((x) => x.projectId === TECH_B).length,
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-display-name-0"),
+    ).toHaveText("P12I_B_ONLY");
+    await expect(
+      page.getByTestId("editor-state-checkpoint-search-active"),
+    ).toHaveText(MSG_SEARCH_ACTIVE);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-list-error"),
+    ).toHaveCount(0);
+
+    // 泄漏门：DOM/URL/storage/Cookie/console/pageerror/unhandled/外网
+    const secrets = [
+      "P12I_RAW_ERROR_SECRET",
+      "P12I_CSRF_SECRET",
+      state.checkpoints[TECH_A][0].checkpointId,
+      state.checkpoints[TECH_B][0].checkpointId,
+      state.checkpoints[TECH_A][0].stateVersion,
+    ];
+    const storage = await page.evaluate(() => ({
+      ls: JSON.stringify(window.localStorage),
+      ss: JSON.stringify(window.sessionStorage),
+      cookie: document.cookie,
+      href: location.href,
+    }));
+    const html = await page.content();
+    const consoleBlob = guards.consoleLogs.join("\n");
+    const pageErrBlob = guards.pageErrors.map(String).join("\n");
+    const unhandled = await guards.readUnhandled();
+    const unhandledBlob = unhandled.map(String).join("\n");
+    for (const s of secrets) {
+      expect(storage.ls).not.toContain(s);
+      expect(storage.ss).not.toContain(s);
+      expect(storage.cookie).not.toContain(s);
+      expect(storage.href).not.toContain(s);
+      expect(html).not.toContain(s);
+      expect(consoleBlob).not.toContain(s);
+      expect(pageErrBlob).not.toContain(s);
+      expect(unhandledBlob).not.toContain(s);
+    }
+    // 名称仅允许 React 文本（B 命中名可见；A 名不得出现在 B 页）
+    await expect(page.getByText("P12I_B_ONLY", { exact: true })).toBeVisible();
+    expect(html).not.toContain("P12I_A_ONLY");
+    expect(state.externalHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(unhandled).toEqual([]);
+  });
+
+  test("P12I 静态守卫：禁止 force 与宽泛计数", () => {
+    const src = fs.readFileSync(
+      path.join(process.cwd(), "e2e/editor-state-checkpoint-restore.spec.ts"),
+      "utf8",
+    );
+    const lines = src.split(/\r?\n/);
+    const start = lines.findIndex(
+      (l) =>
+        l.includes('test.describe("P12I 检查点名称与可见内容显式搜索"') &&
+        l.includes("() =>"),
+    );
+    expect(start).not.toBe(-1);
+    const end = lines.findIndex(
+      (l, i) => i > start && l.includes('test("契约常量格式"'),
+    );
+    expect(end).not.toBe(-1);
+    const staticStart = lines.findIndex(
+      (l, i) =>
+        i > start &&
+        i < end &&
+        l.includes('test("P12I 静态守卫：禁止 force 与宽泛计数"'),
+    );
+    expect(staticStart).not.toBe(-1);
+    let depth = 0;
+    let seenOpen = false;
+    let staticEnd = staticStart;
+    for (let i = staticStart; i < end; i++) {
+      const open = (lines[i].match(/\{/g) || []).length;
+      const close = (lines[i].match(/\}/g) || []).length;
+      depth += open - close;
+      if (open > 0) seenOpen = true;
+      if (seenOpen && depth <= 0) {
+        staticEnd = i;
+        break;
+      }
+    }
+    const block = [
+      ...lines.slice(start, staticStart),
+      ...lines.slice(staticEnd + 1, end),
+    ].join("\n");
+    expect(block).not.toMatch(/force\s*:\s*true/);
+    expect(block).not.toMatch(/toBeGreaterThanOrEqual/);
+    expect(block).not.toMatch(/toBeGreaterThan\(/);
+    expect(block).not.toMatch(/waitForTimeout\s*\(/);
   });
 });
 

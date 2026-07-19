@@ -1,24 +1,28 @@
 /**
- * 模块：P12B-D2 / P12G / P12H 双工作区共用检查点折叠面板
+ * 模块：P12B-D2 / P12G / P12H / P12I 双工作区共用检查点折叠面板
  * 用途：展开后 list 元数据；保存服务器当前版本；内联二次确认后 restore；
  *       内联命名保存/覆盖/清除（成功原位更新，失败保值）；
- *       内联二次确认后单条 DELETE（成功原位移除，失败保值可重试）。
+ *       内联二次确认后单条 DELETE（成功原位移除，失败保值可重试）；
+ *       显式名称/内容搜索（输入零请求；按钮/Enter 才 POST；同值零重发）。
  * 对接：editorStateCheckpointApi；技术/商务 hook 的 create/restore 回调。
  * 二次开发：
  *   - 不渲染 checkpointId/stateVersion；不请求详情 snapshot
- *   - 项目切换/折叠/卸载用会话代次隔离迟到 list/create/restore/name/delete
- *   - 名称/删除与 list/create/restore/toggle/其它行意图互斥；await 前同步 ref 单飞
+ *   - 项目切换/折叠/卸载用会话代次隔离迟到 list/search/create/restore/name/delete
+ *   - 搜索/名称/删除与 list/create/restore/toggle/其它行意图互斥；await 前同步 ref 单飞
  *   - 删除不依赖 props.disabled；成功零 list/editor-state 重载
+ *   - active search 下刷新/创建/恢复重发同一 POST；清除恰好一次 GET
  *   - 固定中文脱敏；禁止 console/存储/URL/Cookie/剪贴板/下载/轮询/外网
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  assertValidSearchQuery,
   deleteEditorStateCheckpoint,
   formatCheckpointBytes,
   formatCheckpointTime,
   listEditorStateCheckpoints,
   normalizeDisplayNameForSave,
+  searchEditorStateCheckpoints,
   setEditorStateCheckpointDisplayName,
   type EditorStateCheckpointMeta,
 } from "./editorStateCheckpointApi";
@@ -49,6 +53,13 @@ const MSG_NAME_FAIL = "保存检查点名称失败，请稍后重试";
 const MSG_DELETE_SAVING = "删除中…";
 const MSG_DELETE_OK = "已删除所选检查点";
 const MSG_DELETE_FAIL = "删除检查点失败，当前列表已保留";
+/** P12I 搜索固定中文 */
+const MSG_SEARCH_QUERY_INVALID =
+  "搜索关键词需为 1 至 64 个字符，且不能含首尾空白或控制字符";
+const MSG_SEARCH_EMPTY = "没有匹配名称或内容的检查点";
+const MSG_SEARCH_FAIL = "检查点名称或内容搜索失败，请稍后重试";
+const MSG_SEARCH_ACTIVE = "当前为名称或内容搜索结果";
+const LABEL_SEARCH = "名称或内容搜索";
 
 /** 创建回调结果 */
 export type CheckpointCreateOutcome =
@@ -106,13 +117,27 @@ export function EditorStateCheckpointPanel({
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   /** P12H：删除 DELETE 在途 */
   const [deleteBusy, setDeleteBusy] = useState(false);
+  /** P12I：搜索输入草稿（仅内存） */
+  const [searchDraft, setSearchDraft] = useState("");
+  /** P12I：已应用关键词（仅内存；非 null 表示搜索态） */
+  const [appliedSearch, setAppliedSearch] = useState<string | null>(null);
+  /** P12I：关键词本地校验错误 */
+  const [searchError, setSearchError] = useState<string | null>(null);
 
   /**
-   * 项目会话代次：projectId 变化或折叠时递增，隔离迟到 list/create/restore/name/delete。
+   * 项目会话代次：projectId 变化或折叠时递增，隔离迟到 list/search/create/restore/name/delete。
    */
   const sessionRef = useRef(0);
   const mountedRef = useRef(true);
   const projectIdRef = useRef(projectId);
+  /** P12I 已应用关键词同步镜像；render 同步，避免 effect 滞后 */
+  const appliedSearchRef = useRef<string | null>(null);
+  /**
+   * P12I 真同步在途 token：search 在任何 await 前原子占用；
+   * catch/finally 仅清理同一 token，旧 A 永远不能清掉 B 新 token。
+   */
+  const searchFlightTokenRef = useRef(0);
+  const searchFlightActiveRef = useRef<number | null>(null);
   /** P12G 命名请求代次：项目切换/折叠/另一行命名递增 */
   const nameGenRef = useRef(0);
   /**
@@ -146,6 +171,7 @@ export function EditorStateCheckpointPanel({
   projectIdRef.current = projectId;
   // 列表项同步镜像（render 同步，避免 effect 滞后）
   itemsRef.current = items;
+  appliedSearchRef.current = appliedSearch;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -154,9 +180,11 @@ export function EditorStateCheckpointPanel({
     };
   }, []);
 
-  // 项目切换：重置面板，作废在途（含命名/删除 flight token）
+  // 项目切换：重置面板，作废在途（含搜索/命名/删除 flight token）
   useEffect(() => {
     sessionRef.current += 1;
+    searchFlightTokenRef.current += 1;
+    searchFlightActiveRef.current = null;
     nameGenRef.current += 1;
     nameFlightTokenRef.current += 1;
     nameFlightActiveRef.current = null;
@@ -179,23 +207,104 @@ export function EditorStateCheckpointPanel({
     setNameBusy(false);
     setPendingDeleteId(null);
     setDeleteBusy(false);
+    setSearchDraft("");
+    setAppliedSearch(null);
+    appliedSearchRef.current = null;
+    setSearchError(null);
   }, [projectId]);
 
+  /**
+   * 用途：在第一个 await 前同步占用 search flight；已在途则返回 null。
+   * 所有 search POST 路径（apply/refresh/create/restore 重载）共用。
+   */
+  const tryBeginSearchFlight = useCallback((): number | null => {
+    if (searchFlightActiveRef.current != null) {
+      return null;
+    }
+    const token = ++searchFlightTokenRef.current;
+    searchFlightActiveRef.current = token;
+    return token;
+  }, []);
+
+  /**
+   * 用途：统一首屏/刷新加载；有已应用关键词走 search POST，否则 list GET。
+   * 二次开发：
+   *   - 凡 search POST 必须在调用前同步占用 flight 并传入 flightToken；
+   *   - finally 仅释放自己的 token，旧 A 不得清掉 B。
+   */
   const loadList = useCallback(
-    async (session: number) => {
-      if (!projectId) return;
+    async (session: number, flightToken: number | null = null) => {
+      if (!projectId) {
+        // 调用方已占用 flight 时，入口失败也必须释放自己的 token
+        if (
+          flightToken != null &&
+          searchFlightActiveRef.current === flightToken
+        ) {
+          searchFlightActiveRef.current = null;
+        }
+        return;
+      }
+      const projectAtStart = projectId;
+      const searchQ = appliedSearchRef.current;
+      // search POST 必须带 flight；缺省视为调用方未占位，拒绝发请求防双飞
+      if (searchQ != null && flightToken == null) {
+        return;
+      }
+      const ownedFlight = flightToken;
       setListLoading(true);
       setListError(null);
       try {
-        const next = await listEditorStateCheckpoints(projectId);
-        if (!mountedRef.current || session !== sessionRef.current) return;
+        const next = searchQ
+          ? await searchEditorStateCheckpoints(projectAtStart, searchQ)
+          : await listEditorStateCheckpoints(projectAtStart);
+        if (
+          !mountedRef.current ||
+          session !== sessionRef.current ||
+          projectIdRef.current !== projectAtStart ||
+          appliedSearchRef.current !== searchQ
+        ) {
+          return;
+        }
+        if (
+          ownedFlight != null &&
+          searchFlightActiveRef.current !== ownedFlight
+        ) {
+          return;
+        }
         setItems(next);
       } catch {
-        if (!mountedRef.current || session !== sessionRef.current) return;
-        setListError(MSG_LIST_FAIL);
-        setItems([]);
+        if (
+          !mountedRef.current ||
+          session !== sessionRef.current ||
+          projectIdRef.current !== projectAtStart ||
+          appliedSearchRef.current !== searchQ
+        ) {
+          return;
+        }
+        if (
+          ownedFlight != null &&
+          searchFlightActiveRef.current !== ownedFlight
+        ) {
+          return;
+        }
+        setListError(searchQ ? MSG_SEARCH_FAIL : MSG_LIST_FAIL);
+        // 失败保值：搜索态保留已应用结果；普通 list 失败清空
+        if (!searchQ) {
+          setItems([]);
+        }
       } finally {
-        if (mountedRef.current && session === sessionRef.current) {
+        // 仅释放自己的 token：旧 A 迟到 finally 不得解锁 B
+        if (
+          ownedFlight != null &&
+          searchFlightActiveRef.current === ownedFlight
+        ) {
+          searchFlightActiveRef.current = null;
+        }
+        if (
+          mountedRef.current &&
+          session === sessionRef.current &&
+          projectIdRef.current === projectAtStart
+        ) {
           setListLoading(false);
         }
       }
@@ -205,8 +314,10 @@ export function EditorStateCheckpointPanel({
 
   const handleToggle = useCallback(() => {
     if (expanded) {
-      // 折叠：递增会话，丢弃迟到 list/create/restore/name/delete 对 UI 的写入
+      // 折叠：递增会话，丢弃迟到 list/search/create/restore/name/delete 对 UI 的写入
       sessionRef.current += 1;
+      searchFlightTokenRef.current += 1;
+      searchFlightActiveRef.current = null;
       nameGenRef.current += 1;
       nameFlightTokenRef.current += 1;
       nameFlightActiveRef.current = null;
@@ -225,10 +336,20 @@ export function EditorStateCheckpointPanel({
       setListLoading(false);
       setCreateBusy(false);
       setRestoreBusy(false);
+      setSearchDraft("");
+      setAppliedSearch(null);
+      appliedSearchRef.current = null;
+      setSearchError(null);
       return;
     }
-    // 展开时若命名/删除在途则拒绝（互斥）
-    if (nameBusy || pendingNameId != null || deleteBusy || pendingDeleteId != null) {
+    // 展开时若命名/删除/搜索在途则拒绝（互斥）
+    if (
+      nameBusy ||
+      pendingNameId != null ||
+      deleteBusy ||
+      pendingDeleteId != null ||
+      searchFlightActiveRef.current != null
+    ) {
       return;
     }
     const session = sessionRef.current;
@@ -248,7 +369,8 @@ export function EditorStateCheckpointPanel({
       nameBusy ||
       pendingNameId != null ||
       deleteBusy ||
-      pendingDeleteId != null
+      pendingDeleteId != null ||
+      searchFlightActiveRef.current != null
     ) {
       return;
     }
@@ -256,6 +378,15 @@ export function EditorStateCheckpointPanel({
     setStatusMessage(null);
     setStatusTone(null);
     setPendingRestoreId(null);
+    // active search 下重发同一 POST（await 前同步占 flight）；否则 GET
+    if (appliedSearchRef.current != null) {
+      const myFlight = tryBeginSearchFlight();
+      if (myFlight == null) {
+        return;
+      }
+      void loadList(session, myFlight);
+      return;
+    }
     void loadList(session);
   }, [
     expanded,
@@ -267,7 +398,146 @@ export function EditorStateCheckpointPanel({
     deleteBusy,
     pendingDeleteId,
     loadList,
+    tryBeginSearchFlight,
   ]);
+
+  /**
+   * 用途：搜索草稿变更；输入零请求。
+   */
+  const handleSearchDraftChange = useCallback((value: string) => {
+    setSearchDraft(value);
+    setSearchError(null);
+  }, []);
+
+  /**
+   * 用途：显式应用搜索（按钮/Enter）；不 trim；非法零请求保值；同值零重发；同步单飞。
+   */
+  const handleSearchApply = useCallback(() => {
+    if (
+      !expanded ||
+      disabled ||
+      listLoading ||
+      createBusy ||
+      restoreBusy ||
+      nameBusy ||
+      pendingNameId != null ||
+      deleteBusy ||
+      pendingDeleteId != null ||
+      pendingRestoreId != null
+    ) {
+      return;
+    }
+    // 真同步单飞：await 前原子占用
+    if (searchFlightActiveRef.current != null) {
+      return;
+    }
+    const raw = searchDraft;
+    try {
+      assertValidSearchQuery(raw);
+    } catch {
+      setSearchError(MSG_SEARCH_QUERY_INVALID);
+      return;
+    }
+    setSearchError(null);
+    // 同值零重发：仅拦截「上次同关键词已成功且无当前搜索错误」；
+    // HTTP/解析失败后同一关键词必须可重试（失败结果与输入保值，重试开始清旧错误）
+    if (raw === appliedSearchRef.current && listError == null) {
+      return;
+    }
+    const myFlight = tryBeginSearchFlight();
+    if (myFlight == null) {
+      return;
+    }
+    const session = sessionRef.current;
+    appliedSearchRef.current = raw;
+    setAppliedSearch(raw);
+    setListError(null);
+    setStatusMessage(null);
+    setStatusTone(null);
+    setPendingRestoreId(null);
+    void loadList(session, myFlight);
+  }, [
+    expanded,
+    disabled,
+    listLoading,
+    createBusy,
+    restoreBusy,
+    nameBusy,
+    pendingNameId,
+    deleteBusy,
+    pendingDeleteId,
+    pendingRestoreId,
+    searchDraft,
+    listError,
+    loadList,
+    tryBeginSearchFlight,
+  ]);
+
+  /**
+   * 用途：清除搜索草稿与已应用态；有过应用态则恰好一次 list GET。
+   */
+  const handleSearchClear = useCallback(() => {
+    if (
+      !expanded ||
+      listLoading ||
+      createBusy ||
+      restoreBusy ||
+      nameBusy ||
+      pendingNameId != null ||
+      deleteBusy ||
+      pendingDeleteId != null ||
+      pendingRestoreId != null ||
+      searchFlightActiveRef.current != null
+    ) {
+      return;
+    }
+    const hadApplied = appliedSearchRef.current != null;
+    const hadDraft = searchDraft !== "";
+    setSearchDraft("");
+    setSearchError(null);
+    appliedSearchRef.current = null;
+    setAppliedSearch(null);
+    if (!hadApplied && !hadDraft) {
+      return;
+    }
+    if (!hadApplied) {
+      // 仅草稿：零请求
+      return;
+    }
+    setListError(null);
+    setStatusMessage(null);
+    setStatusTone(null);
+    const session = sessionRef.current;
+    void loadList(session);
+  }, [
+    expanded,
+    listLoading,
+    createBusy,
+    restoreBusy,
+    nameBusy,
+    pendingNameId,
+    deleteBusy,
+    pendingDeleteId,
+    pendingRestoreId,
+    searchDraft,
+    loadList,
+  ]);
+
+  /** active search 下重载：await 前同步占 flight；GET 路径 flight=null */
+  const reloadVisibleList = useCallback(
+    async (session: number) => {
+      if (appliedSearchRef.current != null) {
+        const myFlight = tryBeginSearchFlight();
+        if (myFlight == null) {
+          return;
+        }
+        await loadList(session, myFlight);
+        return;
+      }
+      await loadList(session);
+    },
+    [loadList, tryBeginSearchFlight],
+  );
 
   const handleCreate = useCallback(async () => {
     if (
@@ -278,6 +548,7 @@ export function EditorStateCheckpointPanel({
       pendingNameId != null ||
       deleteBusy ||
       pendingDeleteId != null ||
+      searchFlightActiveRef.current != null ||
       !expanded
     ) {
       return;
@@ -293,24 +564,24 @@ export function EditorStateCheckpointPanel({
       if (outcome.status === "success") {
         setStatusMessage(MSG_CREATE_OK);
         setStatusTone("ok");
-        await loadList(session);
+        // active search 下重发同一 POST；否则 GET
+        await reloadVisibleList(session);
         return;
       }
       if (outcome.status === "blocked") {
         setStatusMessage(MSG_CREATE_BLOCKED);
         setStatusTone("err");
-        // 仍刷新列表供确认
-        await loadList(session);
+        await reloadVisibleList(session);
         return;
       }
       setStatusMessage(MSG_CREATE_FAIL);
       setStatusTone("err");
-      await loadList(session);
+      await reloadVisibleList(session);
     } catch {
       if (!mountedRef.current || session !== sessionRef.current) return;
       setStatusMessage(MSG_CREATE_FAIL);
       setStatusTone("err");
-      await loadList(session);
+      await reloadVisibleList(session);
     } finally {
       if (mountedRef.current && session === sessionRef.current) {
         setCreateBusy(false);
@@ -326,7 +597,7 @@ export function EditorStateCheckpointPanel({
     pendingDeleteId,
     expanded,
     createCheckpoint,
-    loadList,
+    reloadVisibleList,
   ]);
 
   const handleRestoreClick = useCallback(
@@ -338,7 +609,9 @@ export function EditorStateCheckpointPanel({
         nameBusy ||
         pendingNameId != null ||
         deleteBusy ||
-        pendingDeleteId != null
+        pendingDeleteId != null ||
+        listLoading ||
+        searchFlightActiveRef.current != null
       ) {
         return;
       }
@@ -354,6 +627,7 @@ export function EditorStateCheckpointPanel({
       pendingNameId,
       deleteBusy,
       pendingDeleteId,
+      listLoading,
     ],
   );
 
@@ -366,6 +640,7 @@ export function EditorStateCheckpointPanel({
       pendingNameId != null ||
       deleteBusy ||
       pendingDeleteId != null ||
+      searchFlightActiveRef.current != null ||
       !pendingRestoreId ||
       !expanded
     ) {
@@ -384,15 +659,14 @@ export function EditorStateCheckpointPanel({
       if (outcome.status === "success") {
         setStatusMessage(MSG_RESTORE_OK);
         setStatusTone("ok");
-        // 列表 GET 显示新安全检查点；不计入唯一 editor-state GET
-        await loadList(session);
+        // active search 下重发同一 POST；否则 GET 显示安全检查点
+        await reloadVisibleList(session);
         return;
       }
       if (outcome.status === "reload_failed") {
         setStatusMessage(MSG_RESTORE_RELOAD_FAIL);
         setStatusTone("err");
-        // 业务已成功：仍可尝试刷新列表展示安全检查点
-        await loadList(session);
+        await reloadVisibleList(session);
         return;
       }
       if (outcome.status === "blocked") {
@@ -423,7 +697,7 @@ export function EditorStateCheckpointPanel({
     pendingRestoreId,
     expanded,
     restoreCheckpoint,
-    loadList,
+    reloadVisibleList,
   ]);
 
   const handleCancelRestore = useCallback(() => {
@@ -444,7 +718,8 @@ export function EditorStateCheckpointPanel({
         nameBusy ||
         pendingRestoreId != null ||
         deleteBusy ||
-        pendingDeleteId != null
+        pendingDeleteId != null ||
+        searchFlightActiveRef.current != null
       ) {
         return;
       }
@@ -689,7 +964,8 @@ export function EditorStateCheckpointPanel({
         pendingNameId != null ||
         pendingRestoreId != null ||
         deleteBusy ||
-        pendingDeleteId != null
+        pendingDeleteId != null ||
+        searchFlightActiveRef.current != null
       ) {
         return;
       }
@@ -806,6 +1082,7 @@ export function EditorStateCheckpointPanel({
 
   const nameUiLocked = pendingNameId != null || nameBusy;
   const deleteUiLocked = pendingDeleteId != null || deleteBusy;
+  const searchActive = appliedSearch != null;
   const actionsDisabled =
     disabled ||
     createBusy ||
@@ -815,6 +1092,17 @@ export function EditorStateCheckpointPanel({
     pendingNameId != null ||
     deleteBusy ||
     pendingDeleteId != null;
+  /** 搜索控件：与 list/create/restore/name/delete/确认态互斥；真实传 disabled */
+  const searchControlsDisabled =
+    disabled ||
+    listLoading ||
+    createBusy ||
+    restoreBusy ||
+    nameBusy ||
+    pendingNameId != null ||
+    deleteBusy ||
+    pendingDeleteId != null ||
+    pendingRestoreId != null;
   /** 删除入口：不依赖 props.disabled，但仍受其它操作互斥（含恢复确认） */
   const deleteEntryDisabled =
     listLoading ||
@@ -886,6 +1174,86 @@ export function EditorStateCheckpointPanel({
           data-testid="editor-state-checkpoint-body"
           style={{ marginTop: 10 }}
         >
+          <div
+            data-testid="editor-state-checkpoint-search-row"
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 8,
+              alignItems: "center",
+              marginBottom: 8,
+            }}
+          >
+            <label
+              htmlFor="editor-state-checkpoint-search-input"
+              style={{
+                fontSize: 13,
+                color: "var(--text-muted, #4b5563)",
+              }}
+            >
+              {LABEL_SEARCH}
+            </label>
+            <input
+              id="editor-state-checkpoint-search-input"
+              type="text"
+              data-testid="editor-state-checkpoint-search-input"
+              value={searchDraft}
+              disabled={searchControlsDisabled}
+              onChange={(e) => {
+                handleSearchDraftChange(e.target.value);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  handleSearchApply();
+                }
+              }}
+              style={{
+                fontSize: 13,
+                maxWidth: "100%",
+                minWidth: 140,
+                padding: "4px 8px",
+              }}
+            />
+            <button
+              type="button"
+              className="btn btn-soft btn-sm"
+              data-testid="editor-state-checkpoint-search-apply"
+              disabled={searchControlsDisabled}
+              onClick={handleSearchApply}
+            >
+              搜索
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              data-testid="editor-state-checkpoint-search-clear"
+              disabled={searchControlsDisabled}
+              onClick={handleSearchClear}
+            >
+              清除
+            </button>
+          </div>
+          {searchError ? (
+            <p
+              data-testid="editor-state-checkpoint-search-error"
+              style={{ margin: "0 0 8px", color: "var(--danger)" }}
+            >
+              {searchError}
+            </p>
+          ) : null}
+          {searchActive ? (
+            <p
+              data-testid="editor-state-checkpoint-search-active"
+              style={{
+                margin: "0 0 8px",
+                fontSize: 13,
+                color: "var(--text-muted, #4b5563)",
+              }}
+            >
+              {MSG_SEARCH_ACTIVE}
+            </p>
+          ) : null}
           {statusMessage ? (
             <p
               data-testid="editor-state-checkpoint-status"
@@ -913,7 +1281,7 @@ export function EditorStateCheckpointPanel({
               data-testid="editor-state-checkpoint-list-loading"
               style={{ margin: 0, color: "var(--text-muted, #6b7280)" }}
             >
-              加载检查点列表…
+              {searchActive ? "搜索检查点…" : "加载检查点列表…"}
             </p>
           ) : null}
           {!listLoading && !listError && items.length === 0 ? (
@@ -921,7 +1289,7 @@ export function EditorStateCheckpointPanel({
               data-testid="editor-state-checkpoint-empty"
               style={{ margin: 0, color: "var(--text-muted, #6b7280)" }}
             >
-              暂无检查点
+              {searchActive ? MSG_SEARCH_EMPTY : "暂无检查点"}
             </p>
           ) : null}
           <ul

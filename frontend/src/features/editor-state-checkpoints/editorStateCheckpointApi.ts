@@ -1,9 +1,10 @@
 /**
- * 模块：P12B-D2 / P12G / P12H editor-state 检查点 API 封装
- * 用途：仅封装元数据 list、空对象 create、带 expected 的 restore、单条 display-name PATCH、单条 DELETE；严格校验响应 shape。
+ * 模块：P12B-D2 / P12G / P12H / P12I editor-state 检查点 API 封装
+ * 用途：封装元数据 list、空对象 create、带 expected 的 restore、单条 display-name PATCH、
+ *       单条 DELETE、名称/可见内容显式 search；严格校验响应 shape。
  * 对接：GET|POST|PATCH|DELETE /api/projects/{id}/editor-state-checkpoints*；apiFetch。
  * 二次开发：禁止请求详情 snapshot；禁止本地生成版本/ID；禁止持久化 checkpoint 正文；
- *   名称/ID 不得进入 URL/存储/Cookie/console/外网。
+ *   名称/ID/关键词不得进入 URL/存储/Cookie/console/外网。
  */
 
 import { apiFetch } from "../../shared/lib/api";
@@ -41,6 +42,12 @@ const DISPLAY_NAME_OUT_KEYS = ["displayName"] as const;
 
 /** 列表契约上限 */
 const MAX_LIST_ITEMS = 20;
+
+/** 搜索结果上限（与列表相同，最多 20） */
+const MAX_SEARCH_ITEMS = 20;
+
+/** 搜索关键词 Unicode 码点上限 */
+const MAX_SEARCH_QUERY_CODEPOINTS = 64;
 
 /** 展示名称 Unicode 码点上限 */
 const DISPLAY_NAME_MAX_CODEPOINTS = 40;
@@ -310,6 +317,41 @@ export function parseRestoreResult(
 }
 
 /**
+ * 用途：严格解析 list/search 共用顶层 {items}；最多 maxItems 条七键元数据。
+ */
+function parseCheckpointListPayload(
+  raw: unknown,
+  maxItems: number,
+  errorCode: string,
+  requireUniqueIds = false,
+): EditorStateCheckpointMeta[] {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(errorCode);
+  }
+  const o = raw as Record<string, unknown>;
+  if (!hasExactKeys(o, LIST_TOP_KEYS)) {
+    throw new Error(errorCode);
+  }
+  if (!Array.isArray(o.items)) {
+    throw new Error(errorCode);
+  }
+  if (o.items.length > maxItems) {
+    throw new Error(errorCode);
+  }
+  const items = o.items.map((item) => parseCheckpointMeta(item));
+  if (requireUniqueIds) {
+    const seen = new Set<string>();
+    for (const meta of items) {
+      if (seen.has(meta.checkpointId)) {
+        throw new Error(errorCode);
+      }
+      seen.add(meta.checkpointId);
+    }
+  }
+  return items;
+}
+
+/**
  * 用途：GET 最近 20 条元数据；不请求详情 snapshot。
  * 对接：GET /projects/{projectId}/editor-state-checkpoints
  * 约束：顶层精确 items；最多 20 条；禁止额外字段。
@@ -320,20 +362,71 @@ export async function listEditorStateCheckpoints(
   const raw = await apiFetch<unknown>(
     `/projects/${encodeURIComponent(projectId)}/editor-state-checkpoints`,
   );
-  if (!raw || typeof raw !== "object") {
-    throw new Error("checkpoint_list_invalid");
+  return parseCheckpointListPayload(
+    raw,
+    MAX_LIST_ITEMS,
+    "checkpoint_list_invalid",
+  );
+}
+
+/**
+ * 用途：客户端先判定搜索关键词；合法原生字符串、首尾无空白、无 C0/C1、NFKC 后 1..64 码点。
+ * 二次开发：不 trim 后接受；非法固定抛出，零请求。
+ */
+export function assertValidSearchQuery(
+  value: unknown,
+): asserts value is string {
+  if (typeof value !== "string") {
+    throw new Error("checkpoint_search_query_invalid");
   }
-  const o = raw as Record<string, unknown>;
-  if (!hasExactKeys(o, LIST_TOP_KEYS)) {
-    throw new Error("checkpoint_list_invalid");
+  if (value.length === 0) {
+    throw new Error("checkpoint_search_query_invalid");
   }
-  if (!Array.isArray(o.items)) {
-    throw new Error("checkpoint_list_invalid");
+  if (value.trim() !== value) {
+    throw new Error("checkpoint_search_query_invalid");
   }
-  if (o.items.length > MAX_LIST_ITEMS) {
-    throw new Error("checkpoint_list_invalid");
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f || (code >= 0x80 && code <= 0x9f)) {
+      throw new Error("checkpoint_search_query_invalid");
+    }
   }
-  return o.items.map((item) => parseCheckpointMeta(item));
+  const normalized = value.normalize("NFKC");
+  let codepoints = 0;
+  for (const _ch of normalized) {
+    codepoints += 1;
+    if (codepoints > MAX_SEARCH_QUERY_CODEPOINTS) {
+      throw new Error("checkpoint_search_query_invalid");
+    }
+  }
+  if (codepoints < 1) {
+    throw new Error("checkpoint_search_query_invalid");
+  }
+}
+
+/**
+ * 用途：POST 显式搜索；body 精确 {query}；URL 无关键词/query 参数；复用七键 parser。
+ * 对接：POST /projects/{projectId}/editor-state-checkpoints/search
+ * 约束：发请求前 assertValidSearchQuery；最多 20 条；禁止本地 snapshot 过滤。
+ */
+export async function searchEditorStateCheckpoints(
+  projectId: string,
+  query: string,
+): Promise<EditorStateCheckpointMeta[]> {
+  assertValidSearchQuery(query);
+  const raw = await apiFetch<unknown>(
+    `/projects/${encodeURIComponent(projectId)}/editor-state-checkpoints/search`,
+    {
+      method: "POST",
+      body: JSON.stringify({ query }),
+    },
+  );
+  return parseCheckpointListPayload(
+    raw,
+    MAX_SEARCH_ITEMS,
+    "checkpoint_search_invalid",
+    true,
+  );
 }
 
 /**

@@ -1,12 +1,14 @@
 """
-模块：P12A/P12B-D1/P12C-B-D3 editor-state 检查点服务
-用途：手动创建/列表/详情；以及锁后 CAS 的原子安全恢复与修订账本接入。
+模块：P12A/P12B-D1/P12C-B-D3/P12I editor-state 检查点服务
+用途：手动创建/列表/详情；锁后 CAS 的原子安全恢复与修订账本接入；
+  以及当前项目最多 20 条候选内的名称/可见内容显式只读搜索。
 对接：api.editor_state_checkpoints；editor_state_service（共享全状态版本算法与写回原语）；
   editor_state_revision_service.record_editor_state_transition；EditorStateCheckpointRow。
 二次开发：
   - 禁止接受客户端 snapshot/版本/计数/名称；
   - 创建与裁剪同事务；恢复与安全检查点/写回/修订/裁剪同事务；失败必须 rollback；
   - 列表 SQL 只投影元数据列，绝不 select snapshot_json；
+  - 搜索 SQL 投影八列（含 snapshot_json）且 LIMIT 20；先完整重验再匹配；全程零写；
   - 13 键/规范 JSON/stateVersion/ORM 映射必须委托 editor_state_service，禁止第二套算法；
   - 禁止调用会自行 commit 的 create_editor_state_checkpoint 或 upsert_editor_state 做嵌套恢复；
   - 不同版本恢复固定 source_kind=checkpoint_restore；同版本禁止调用 recorder；
@@ -17,6 +19,7 @@ from __future__ import annotations
 
 import json
 import secrets
+import unicodedata
 from typing import Any
 
 from sqlalchemy import delete, select, update
@@ -47,6 +50,34 @@ CODE_CHECKPOINT_TOO_LARGE = "editor_state_checkpoint_too_large"
 MSG_CHECKPOINT_TOO_LARGE = "检查点快照超过大小限制，未写入"
 CODE_CHECKPOINT_CORRUPT = "editor_state_checkpoint_corrupt"
 MSG_CHECKPOINT_CORRUPT = "检查点数据损坏，无法读取"
+# P12I 搜索关键词错误
+CODE_SEARCH_QUERY_INVALID = "editor_state_checkpoint_search_query_invalid"
+MSG_SEARCH_QUERY_INVALID = "检查点搜索关键词无效"
+
+# P12I 搜索预算与关键词边界（与修订搜索白名单一致，禁止另起一套语义）
+CHECKPOINT_SEARCH_QUERY_MIN_LEN = 1
+CHECKPOINT_SEARCH_QUERY_MAX_LEN = 64
+CHECKPOINT_SEARCH_MAX_OBJECTS = 4096
+CHECKPOINT_SEARCH_MAX_STRING_LEAVES = 8192
+CHECKPOINT_SEARCH_CANDIDATE_LIMIT = MAX_CHECKPOINTS_PER_PROJECT
+
+# 展示名称字符禁区（与 P12G 存储校验一致；搜索侧坏行固定 corrupt）
+_BIDI_CONTROLS_DISPLAY_NAME = frozenset(
+    {
+        "\u061c",
+        "\u200e",
+        "\u200f",
+        "\u202a",
+        "\u202b",
+        "\u202c",
+        "\u202d",
+        "\u202e",
+        "\u2066",
+        "\u2067",
+        "\u2068",
+        "\u2069",
+    }
+)
 
 
 class EditorStateCheckpointError(Exception):
@@ -731,3 +762,302 @@ def restore_editor_state_checkpoint(
     except Exception:
         db.rollback()
         raise
+
+
+def _search_query_invalid() -> EditorStateCheckpointError:
+    """用途：构造固定搜索关键词错误，禁止反射原值。"""
+    return EditorStateCheckpointError(
+        400, CODE_SEARCH_QUERY_INVALID, MSG_SEARCH_QUERY_INVALID
+    )
+
+
+def _normalize_search_query(query: Any) -> str:
+    """
+    用途：严格规范化搜索关键词。
+    规则：原生 str、首尾无空白、无 C0/C1/换行/制表/NUL；NFKC 后 1..64 码点；
+      拒绝 null/布尔/数值/对象/数组；错误固定不反射。
+    """
+    if type(query) is not str:
+        raise _search_query_invalid() from None
+    if query == "" or query.strip() != query:
+        raise _search_query_invalid() from None
+    for ch in query:
+        code = ord(ch)
+        # C0（含 \\t\\n\\r）、DEL、C1
+        if code < 0x20 or code == 0x7F or (0x80 <= code <= 0x9F):
+            raise _search_query_invalid() from None
+    normalized = unicodedata.normalize("NFKC", query)
+    n = len(normalized)
+    if n < CHECKPOINT_SEARCH_QUERY_MIN_LEN or n > CHECKPOINT_SEARCH_QUERY_MAX_LEN:
+        raise _search_query_invalid() from None
+    return query
+
+
+def _fold_for_search(value: str) -> str:
+    """用途：匹配双方统一 NFKC + casefold。"""
+    return unicodedata.normalize("NFKC", value).casefold()
+
+
+def _char_forbidden_in_stored_display_name(ch: str) -> bool:
+    """用途：拒绝 C0/C1、换行/制表/NUL、U+2028/U+2029 与双向控制字符。"""
+    code = ord(ch)
+    if code < 0x20 or code == 0x7F or (0x80 <= code <= 0x9F):
+        return True
+    if ch in ("\u2028", "\u2029"):
+        return True
+    if ch in _BIDI_CONTROLS_DISPLAY_NAME:
+        return True
+    return False
+
+
+def _validate_stored_display_name(value: Any) -> str | None:
+    """
+    用途：严格校验库内 display_name；null 合法；坏类型/长度/字符固定 corrupt。
+    规则：已规范字符串须等于 NFKC、首尾无空白、1..40 码点、无控制/双向字符。
+    """
+    if value is None:
+        return None
+    if type(value) is not str:
+        raise _corrupt() from None
+    if value == "" or value.strip() != value:
+        raise _corrupt() from None
+    for ch in value:
+        if _char_forbidden_in_stored_display_name(ch):
+            raise _corrupt() from None
+    normalized = unicodedata.normalize("NFKC", value)
+    if normalized != value:
+        raise _corrupt() from None
+    n = len(value)
+    if n < 1 or n > 40:
+        raise _corrupt() from None
+    return value
+
+
+def _extract_allowed_search_strings(snapshot: dict[str, Any]) -> list[str]:
+    """
+    用途：按契约白名单提取用户可见字符串；显式栈遍历 outline.children。
+    规则：
+      - 仅 type is str 的允许叶子；数组只看对象项；未知键/异型忽略；
+      - 对象/字符串叶预算在规范化前计数，超限固定 corrupt；
+      - 禁止递归全树收集、regex、HTML/Markdown 渲染。
+    """
+    out: list[str] = []
+    object_count = 0
+    string_count = 0
+
+    def _touch_object() -> None:
+        nonlocal object_count
+        object_count += 1
+        if object_count > CHECKPOINT_SEARCH_MAX_OBJECTS:
+            raise _corrupt() from None
+
+    def _add_str(value: Any) -> None:
+        nonlocal string_count
+        if type(value) is not str:
+            return
+        string_count += 1
+        if string_count > CHECKPOINT_SEARCH_MAX_STRING_LEAVES:
+            raise _corrupt() from None
+        out.append(value)
+
+    # 1) outline：单对象或对象数组；只沿 children 对象数组
+    outline = snapshot.get("outline")
+    stack: list[Any] = []
+    if isinstance(outline, dict):
+        stack.append(outline)
+    elif isinstance(outline, list):
+        for item in outline:
+            if isinstance(item, dict):
+                stack.append(item)
+    while stack:
+        node = stack.pop()
+        if not isinstance(node, dict):
+            continue
+        _touch_object()
+        _add_str(node.get("title"))
+        _add_str(node.get("description"))
+        children = node.get("children")
+        if isinstance(children, list):
+            for child in children:
+                if isinstance(child, dict):
+                    stack.append(child)
+
+    # 2) chapters：title/preview/body
+    chapters = snapshot.get("chapters")
+    if isinstance(chapters, list):
+        for chapter in chapters:
+            if not isinstance(chapter, dict):
+                continue
+            _touch_object()
+            _add_str(chapter.get("title"))
+            _add_str(chapter.get("preview"))
+            _add_str(chapter.get("body"))
+
+    # 3) 共享 parsedMarkdown
+    _add_str(snapshot.get("parsedMarkdown"))
+
+    # 4) businessQualify
+    qualify = snapshot.get("businessQualify")
+    if isinstance(qualify, list):
+        for item in qualify:
+            if not isinstance(item, dict):
+                continue
+            _touch_object()
+            _add_str(item.get("requirement"))
+            _add_str(item.get("response"))
+            _add_str(item.get("evidence"))
+
+    # 5) businessToc
+    toc = snapshot.get("businessToc")
+    if isinstance(toc, list):
+        for item in toc:
+            if not isinstance(item, dict):
+                continue
+            _touch_object()
+            _add_str(item.get("title"))
+            _add_str(item.get("category"))
+            _add_str(item.get("note"))
+
+    # 6) businessQuote.rows + notes；quote 容器本身计入对象预算
+    quote = snapshot.get("businessQuote")
+    if isinstance(quote, dict):
+        _touch_object()
+        rows = quote.get("rows")
+        if isinstance(rows, list):
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                _touch_object()
+                _add_str(row.get("name"))
+                _add_str(row.get("unit"))
+                _add_str(row.get("quantity"))
+                _add_str(row.get("unitPrice"))
+                _add_str(row.get("amount"))
+                _add_str(row.get("remark"))
+        _add_str(quote.get("notes"))
+
+    # 7) businessCommit
+    commit = snapshot.get("businessCommit")
+    if isinstance(commit, list):
+        for item in commit:
+            if not isinstance(item, dict):
+                continue
+            _touch_object()
+            _add_str(item.get("title"))
+            _add_str(item.get("body"))
+
+    return out
+
+
+def _snapshot_matches_query(snapshot: dict[str, Any], needle_folded: str) -> bool:
+    """用途：白名单字符串中是否存在连续字面子串（已 NFKC+casefold）。"""
+    for raw in _extract_allowed_search_strings(snapshot):
+        if needle_folded in _fold_for_search(raw):
+            return True
+    return False
+
+
+def _display_name_matches_query(
+    display_name: str | None, needle_folded: str
+) -> bool:
+    """
+    用途：已通过校验的非 null display_name 与同一 needle 做连续包含。
+    规则：null 不命中；折叠规则与 query/快照共用 _fold_for_search。
+    """
+    if display_name is None:
+        return False
+    return needle_folded in _fold_for_search(display_name)
+
+
+def _materialize_search_rows(result: Any) -> list[Any]:
+    """用途：安全物化搜索候选；任一行列解码失败固定 corrupt。"""
+    try:
+        return list(result.all())
+    except EditorStateCheckpointError:
+        raise
+    except Exception:
+        raise _corrupt() from None
+
+
+def search_editor_state_checkpoints(
+    db: Session,
+    workspace_id: str,
+    project_id: str,
+    query: Any,
+) -> dict[str, Any]:
+    """
+    用途：在当前项目最近 20 条检查点内按名称或可见内容显式搜索；只返回七键元数据。
+    对接：POST .../editor-state-checkpoints/search。
+    二次开发：
+      - 顺序：项目存在 → 关键词 → 一次八列候选；
+      - 先完整重验全部候选名称与规范快照，再 NFKC+casefold 匹配；
+      - 坏行/预算超限整次 corrupt；双命中只 append 一次；顺序保持候选倒序；
+      - 禁止 OFFSET/COUNT/LIKE/JSON SQL/N+1/补扫第 21 条/写操作/名称短路校验。
+    """
+    _require_project(db, workspace_id, project_id, lock=False)
+    raw_query = _normalize_search_query(query)
+    needle = _fold_for_search(raw_query)
+
+    try:
+        stmt = (
+            select(
+                EditorStateCheckpointRow.id,
+                EditorStateCheckpointRow.state_version,
+                EditorStateCheckpointRow.snapshot_bytes,
+                EditorStateCheckpointRow.outline_node_count,
+                EditorStateCheckpointRow.chapter_count,
+                EditorStateCheckpointRow.created_at,
+                EditorStateCheckpointRow.display_name,
+                EditorStateCheckpointRow.snapshot_json,
+            )
+            .where(
+                EditorStateCheckpointRow.workspace_id == workspace_id,
+                EditorStateCheckpointRow.project_id == project_id,
+            )
+            .order_by(
+                EditorStateCheckpointRow.created_at.desc(),
+                EditorStateCheckpointRow.id.desc(),
+            )
+            .limit(CHECKPOINT_SEARCH_CANDIDATE_LIMIT)
+        )
+        result = db.execute(stmt)
+        rows = _materialize_search_rows(result)
+    except EditorStateCheckpointError:
+        raise
+    except Exception:
+        raise _corrupt() from None
+
+    # 先完整校验全部候选；任一行损坏整次失败（与名称/内容是否命中无关）
+    validated: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for row in rows:
+        dname = _validate_stored_display_name(row.display_name)
+        snapshot = _validate_snapshot_payload(
+            snapshot_json=row.snapshot_json,
+            state_version=row.state_version,
+            snapshot_bytes=row.snapshot_bytes,
+            outline_node_count=row.outline_node_count,
+            chapter_count=row.chapter_count,
+        )
+        validated.append(
+            (
+                {
+                    "checkpoint_id": row.id,
+                    "state_version": row.state_version,
+                    "snapshot_bytes": int(row.snapshot_bytes),
+                    "outline_node_count": int(row.outline_node_count),
+                    "chapter_count": int(row.chapter_count),
+                    "created_at": row.created_at,
+                    "display_name": dname,
+                },
+                snapshot,
+            )
+        )
+
+    items: list[dict[str, Any]] = []
+    for meta, snapshot in validated:
+        # 两侧均先求值：禁止 name_match 短路跳过快照提取预算校验
+        name_match = _display_name_matches_query(meta["display_name"], needle)
+        snapshot_match = _snapshot_matches_query(snapshot, needle)
+        if name_match or snapshot_match:
+            items.append(meta)
+    return {"items": items}
