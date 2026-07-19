@@ -1,9 +1,9 @@
 /**
- * 模块：P12B-D2 / P12G editor-state 检查点 API 封装
- * 用途：仅封装元数据 list、空对象 create、带 expected 的 restore、单条 display-name PATCH；严格校验响应 shape。
- * 对接：GET|POST|PATCH /api/projects/{id}/editor-state-checkpoints*；apiFetch。
+ * 模块：P12B-D2 / P12G / P12H editor-state 检查点 API 封装
+ * 用途：仅封装元数据 list、空对象 create、带 expected 的 restore、单条 display-name PATCH、单条 DELETE；严格校验响应 shape。
+ * 对接：GET|POST|PATCH|DELETE /api/projects/{id}/editor-state-checkpoints*；apiFetch。
  * 二次开发：禁止请求详情 snapshot；禁止本地生成版本/ID；禁止持久化 checkpoint 正文；
- *   名称不得进入 URL/存储/Cookie/console/外网。
+ *   名称/ID 不得进入 URL/存储/Cookie/console/外网。
  */
 
 import { apiFetch } from "../../shared/lib/api";
@@ -441,6 +441,27 @@ export async function setEditorStateCheckpointDisplayName(
     },
   );
   return parseDisplayNameResponse(raw, normalized);
+}
+
+/**
+ * 用途：DELETE 单条检查点；无 query/body；成功 204 空体。
+ * 对接：DELETE /projects/{projectId}/editor-state-checkpoints/{checkpointId}
+ * 约束：
+ *   - 非法 checkpointId 在发请求前固定抛出内部错误
+ *   - init 精确仅 { method: "DELETE" }
+ *   - 不读响应 JSON、不重试、不导出响应体类型
+ */
+export async function deleteEditorStateCheckpoint(
+  projectId: string,
+  checkpointId: string,
+): Promise<void> {
+  if (!isValidCheckpointId(checkpointId)) {
+    throw new Error("checkpoint_id_invalid");
+  }
+  await apiFetch<void>(
+    `/projects/${encodeURIComponent(projectId)}/editor-state-checkpoints/${encodeURIComponent(checkpointId)}`,
+    { method: "DELETE" },
+  );
 }
 
 /**

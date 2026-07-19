@@ -1325,7 +1325,8 @@ def test_project_not_found_and_missing_project(disabled_client):
 
 def test_disallowed_methods_405_and_restore_missing_expected_is_422(disabled_client):
     """
-    用途：集合/详情 PUT/PATCH/DELETE 仍精确 405；
+    用途：详情 PUT/PATCH 仍精确 405；集合 PUT/PATCH/DELETE 仍精确 405；
+      详情 DELETE 已由 P12H 接管，本守卫不再要求 405；
       /restore 已注册但空体缺 expectedStateVersion 时精确 422（不得宽泛 404/2xx）。
     """
     client = disabled_client
@@ -1334,18 +1335,17 @@ def test_disallowed_methods_405_and_restore_missing_expected_is_422(disabled_cli
     assert cid_res.status_code == 201
     cid = cid_res.json()["checkpointId"]
 
-    # 已存在资源上的不允许方法 → 精确 405
+    # 已存在资源上的不允许方法 → 精确 405（P12H：详情 DELETE 不再守卫为 405）
     for method, with_json in (
         ("put", True),
         ("patch", True),
-        ("delete", False),
     ):
         path = _url(pid, cid)
         fn = getattr(client, method)
         res = fn(path, json={}) if with_json else fn(path)
         assert res.status_code == 405, (method, path, res.status_code, res.text)
 
-    # 集合资源上的不允许方法 → 精确 405
+    # 集合资源上的不允许方法 → 精确 405（含集合 DELETE）
     for method, with_json in (
         ("put", True),
         ("patch", True),

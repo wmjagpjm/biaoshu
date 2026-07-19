@@ -88,6 +88,18 @@ type NameMode =
       status?: number;
     };
 
+/** P12H 单条删除 mock 模式 */
+type DeleteMode =
+  | { kind: "ok" }
+  | { kind: "http_error"; status: number; rawMessage?: string }
+  | {
+      kind: "hold";
+      gate: HoldGate;
+      then?: "ok" | "http_error";
+      status?: number;
+      rawMessage?: string;
+    };
+
 type EditorState = {
   projectId: string;
   parsedMarkdown: string;
@@ -215,6 +227,24 @@ type ProbeState = {
     displayName: string | null;
   }>;
   nameResponseOverride: unknown | null;
+  /** P12H 删除 */
+  deleteMode: DeleteMode;
+  deleteModeByProject: Record<string, DeleteMode>;
+  deleteModeByCheckpoint: Record<string, DeleteMode>;
+  deleteLog: Array<{
+    projectId: string;
+    checkpointId: string;
+    method: string;
+    path: string;
+    postData: string | null;
+    queryKeys: string[];
+    search: string;
+  }>;
+  deleteCompleteLog: Array<{
+    projectId: string;
+    checkpointId: string;
+    status: number;
+  }>;
 };
 
 function seedStateVersion(n: number): string {
@@ -369,6 +399,11 @@ function createProbeState(mode: Mode): ProbeState {
     nameLog: [],
     nameCompleteLog: [],
     nameResponseOverride: null,
+    deleteMode: { kind: "ok" },
+    deleteModeByProject: {},
+    deleteModeByCheckpoint: {},
+    deleteLog: [],
+    deleteCompleteLog: [],
   };
 }
 
@@ -381,6 +416,18 @@ function resolveNameMode(
     state.nameModeByCheckpoint[checkpointId] ??
     state.nameModeByProject[projectId] ??
     state.nameMode
+  );
+}
+
+function resolveDeleteMode(
+  state: ProbeState,
+  projectId: string,
+  checkpointId: string,
+): DeleteMode {
+  return (
+    state.deleteModeByCheckpoint[checkpointId] ??
+    state.deleteModeByProject[projectId] ??
+    state.deleteMode
   );
 }
 
@@ -532,8 +579,12 @@ function projectMeta(id: string, mode: Mode, name: string) {
 
 async function installRuntimeErrorGuards(page: Page) {
   const pageErrors: string[] = [];
+  const consoleLogs: string[] = [];
   page.on("pageerror", (err) => {
     pageErrors.push(String(err?.message || err));
+  });
+  page.on("console", (msg) => {
+    consoleLogs.push(msg.text());
   });
   await page.addInitScript(() => {
     window.addEventListener("unhandledrejection", (ev) => {
@@ -551,6 +602,7 @@ async function installRuntimeErrorGuards(page: Page) {
   });
   return {
     pageErrors,
+    consoleLogs,
     async readUnhandled(): Promise<string[]> {
       return page.evaluate(() => {
         return (
@@ -1148,6 +1200,142 @@ async function installRoutes(page: Page, state: ProbeState) {
       return;
     }
 
+    // P12H 单条删除：精确 DELETE 详情路径；无 query/body；成功 204 空体并原位移除
+    const cpDeleteMatch = path.match(
+      /^\/api\/projects\/([^/]+)\/editor-state-checkpoints\/([^/]+)\/?$/,
+    );
+    if (cpDeleteMatch && method === "DELETE") {
+      const pid = cpDeleteMatch[1];
+      const checkpointId = cpDeleteMatch[2];
+      const queryKeys = [...url.searchParams.keys()];
+      const postData = req.postData();
+      if (!known.has(pid)) {
+        state.forbiddenHits.push(`${method} ${path}`);
+        await json(route, { detail: "not_found" }, 404);
+        return;
+      }
+      state.deleteLog.push({
+        projectId: pid,
+        checkpointId,
+        method,
+        path,
+        postData,
+        queryKeys,
+        search: url.search,
+      });
+      if (queryKeys.length > 0 || url.search.length > 1) {
+        state.forbiddenHits.push(`${method} ${path}${url.search}`);
+        await json(
+          route,
+          {
+            detail: {
+              code: "editor_state_checkpoint_delete_request_invalid",
+              message: "检查点删除请求无效",
+            },
+          },
+          422,
+        );
+        state.deleteCompleteLog.push({
+          projectId: pid,
+          checkpointId,
+          status: 422,
+        });
+        return;
+      }
+      // 精确零字节：仅 postData === null 合法；空字符串视为非法请求体
+      if (postData !== null) {
+        state.forbiddenHits.push(`${method} ${path} body`);
+        await json(
+          route,
+          {
+            detail: {
+              code: "editor_state_checkpoint_delete_request_invalid",
+              message: "检查点删除请求无效",
+            },
+          },
+          422,
+        );
+        state.deleteCompleteLog.push({
+          projectId: pid,
+          checkpointId,
+          status: 422,
+        });
+        return;
+      }
+      const deleteMode = resolveDeleteMode(state, pid, checkpointId);
+      if (deleteMode.kind === "hold") {
+        await deleteMode.gate.wait();
+        if (deleteMode.then === "http_error") {
+          const detail: Record<string, unknown> = {
+            code: "editor_state_checkpoint_delete_error",
+            message: "删除检查点失败",
+          };
+          if (deleteMode.rawMessage) {
+            detail.debug = deleteMode.rawMessage;
+          }
+          await json(route, { detail }, deleteMode.status ?? 500);
+          state.deleteCompleteLog.push({
+            projectId: pid,
+            checkpointId,
+            status: deleteMode.status ?? 500,
+          });
+          return;
+        }
+      }
+      if (deleteMode.kind === "http_error") {
+        const detail: Record<string, unknown> = {
+          code: "editor_state_checkpoint_delete_error",
+          message: "删除检查点失败",
+        };
+        if (deleteMode.rawMessage) {
+          detail.debug = deleteMode.rawMessage;
+        }
+        await json(route, { detail }, deleteMode.status);
+        state.deleteCompleteLog.push({
+          projectId: pid,
+          checkpointId,
+          status: deleteMode.status,
+        });
+        return;
+      }
+      const list = state.checkpoints[pid] || [];
+      const idx = list.findIndex((c) => c.checkpointId === checkpointId);
+      if (idx < 0) {
+        await json(
+          route,
+          {
+            detail: {
+              code: "editor_state_checkpoint_not_found",
+              message: "检查点不存在",
+            },
+          },
+          404,
+        );
+        state.deleteCompleteLog.push({
+          projectId: pid,
+          checkpointId,
+          status: 404,
+        });
+        return;
+      }
+      list.splice(idx, 1);
+      state.checkpoints[pid] = list;
+      await route.fulfill({
+        status: 204,
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store",
+        },
+        body: "",
+      });
+      state.deleteCompleteLog.push({
+        projectId: pid,
+        checkpointId,
+        status: 204,
+      });
+      return;
+    }
+
     const detailMatch = path.match(
       /^\/api\/projects\/([^/]+)\/editor-state-checkpoints\/([^/]+)\/?$/,
     );
@@ -1286,6 +1474,28 @@ function seedCheckpoint(
     displayName: null,
   };
   state.checkpoints[projectId] = [meta];
+  state.checkpointSeq = Math.max(state.checkpointSeq, n);
+  return meta;
+}
+
+/** 用途：追加一条检查点元数据（不覆盖既有列表）；P12H 多行场景。 */
+function appendCheckpoint(
+  state: ProbeState,
+  projectId: string,
+  n: number,
+): CheckpointMeta {
+  const meta: CheckpointMeta = {
+    checkpointId: seedCheckpointId(n),
+    stateVersion: seedStateVersion(5 + n),
+    snapshotBytes: 100 + n,
+    outlineNodeCount: state.mode === "tech" ? 1 : 0,
+    chapterCount: state.mode === "tech" ? 1 : 0,
+    createdAt: `2026-07-15T10:0${n}:00.000Z`,
+    displayName: null,
+  };
+  const list = state.checkpoints[projectId] || [];
+  list.push(meta);
+  state.checkpoints[projectId] = list;
   state.checkpointSeq = Math.max(state.checkpointSeq, n);
   return meta;
 }
@@ -3587,7 +3797,7 @@ test.describe("P12G 检查点展示名称", () => {
     const marker = 'test.describe("P12G 检查点展示名称"';
     const start = src.indexOf(marker);
     expect(start).not.toBe(-1);
-    const endMarker = 'test("契约常量格式"';
+    const endMarker = 'test.describe("P12H 检查点单条删除"';
     const end = src.indexOf(endMarker, start);
     expect(end).not.toBe(-1);
     let block = src.slice(start, end);
@@ -3598,6 +3808,549 @@ test.describe("P12G 检查点展示名称", () => {
     );
     expect(block).not.toMatch(/force\s*:\s*true/);
     expect(block).not.toMatch(/toBeGreaterThanOrEqual/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P12H 检查点单条删除
+// ---------------------------------------------------------------------------
+const DELETE_CONFIRM =
+  "删除后无法恢复。当前编辑内容、修订历史和其它检查点不会改变，确定删除这条检查点吗？";
+const MSG_DELETE_OK = "已删除所选检查点";
+const MSG_DELETE_FAIL = "删除检查点失败，当前列表已保留";
+const MSG_DELETE_SAVING = "删除中…";
+
+test.describe("P12H 检查点单条删除", () => {
+  test.describe.configure({ mode: "serial" });
+
+  for (const mode of ["tech", "biz"] as const) {
+    const ids = projectIds(mode);
+    const projectId = ids.a;
+
+    test(`${mode}：确认前/取消零请求；成功原位移除；零 list/restore/editor-state 旁路`, async ({
+      page,
+    }) => {
+      const state = createProbeState(mode);
+      const guards = await installRuntimeErrorGuards(page);
+      await installRoutes(page, state);
+      seedCheckpoint(state, projectId, 1);
+      appendCheckpoint(state, projectId, 2);
+      const targetId = state.checkpoints[projectId][0].checkpointId;
+      const keepId = state.checkpoints[projectId][1].checkpointId;
+      await openWorkspace(page, mode, projectId);
+      await expandPanel(page);
+
+      const listBefore = state.listLog.length;
+      const editorGetBefore = state.editorGetLog.length;
+      const restoreBefore = state.restoreLog.length;
+      const createBefore = state.createLog.length;
+
+      // 进入确认：零 DELETE
+      await page.getByTestId("editor-state-checkpoint-delete-0").click();
+      await expect(
+        page.getByTestId("editor-state-checkpoint-delete-confirm-0"),
+      ).toBeVisible();
+      await expect(
+        page.getByTestId("editor-state-checkpoint-delete-confirm-0"),
+      ).toContainText(DELETE_CONFIRM);
+      expect(state.deleteLog.length).toBe(0);
+
+      // 取消：零 DELETE
+      await page.getByTestId("editor-state-checkpoint-cancel-delete-0").click();
+      expect(state.deleteLog.length).toBe(0);
+      await expect(
+        page.getByTestId("editor-state-checkpoint-delete-confirm-0"),
+      ).toHaveCount(0);
+
+      // 确认删除
+      await page.getByTestId("editor-state-checkpoint-delete-0").click();
+      await page.getByTestId("editor-state-checkpoint-confirm-delete-0").click();
+      await expect
+        .poll(() => state.deleteCompleteLog.length, { timeout: 10_000 })
+        .toBe(1);
+      expect(state.deleteLog.length).toBe(1);
+      expect(state.deleteLog[0].method).toBe("DELETE");
+      expect(state.deleteLog[0].queryKeys).toEqual([]);
+      expect(state.deleteLog[0].search).toBe("");
+      expect(state.deleteLog[0].postData).toBe(null);
+      expect(state.deleteLog[0].checkpointId).toBe(targetId);
+      expect(state.deleteCompleteLog[0].status).toBe(204);
+
+      // 成功原位移除；零旁路
+      await expect(
+        page.getByTestId("editor-state-checkpoint-status"),
+      ).toContainText(MSG_DELETE_OK);
+      await expect(page.getByTestId("editor-state-checkpoint-item-0")).toBeVisible();
+      await expect(page.getByTestId("editor-state-checkpoint-item-1")).toHaveCount(0);
+      expect(state.checkpoints[projectId].map((c) => c.checkpointId)).toEqual([
+        keepId,
+      ]);
+      expect(state.listLog.length).toBe(listBefore);
+      expect(state.restoreLog.length).toBe(restoreBefore);
+      expect(state.editorGetLog.length).toBe(editorGetBefore);
+      expect(state.createLog.length).toBe(createBefore);
+
+      const html = await page.content();
+      expect(html).not.toContain(targetId);
+      expect(html).not.toContain(keepId);
+      expect(guards.pageErrors).toEqual([]);
+      expect(await guards.readUnhandled()).toEqual([]);
+    });
+  }
+
+  test("失败保值可重试：保留列表与确认；零重载", async ({ page }) => {
+    const state = createProbeState("tech");
+    await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+    seedCheckpoint(state, TECH_A, 1);
+    appendCheckpoint(state, TECH_A, 2);
+    state.checkpoints[TECH_A][0].displayName = "保留名";
+    state.deleteMode = { kind: "http_error", status: 500 };
+    await openWorkspace(page, "tech", TECH_A);
+    await expandPanel(page);
+
+    const listBefore = state.listLog.length;
+    await page.getByTestId("editor-state-checkpoint-delete-0").click();
+    await page.getByTestId("editor-state-checkpoint-confirm-delete-0").click();
+    await expect
+      .poll(() => state.deleteCompleteLog.length, { timeout: 10_000 })
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-status"),
+    ).toContainText(MSG_DELETE_FAIL);
+    // 确认态保留
+    await expect(
+      page.getByTestId("editor-state-checkpoint-delete-confirm-0"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-display-name-0"),
+    ).toHaveText("保留名");
+    expect(state.checkpoints[TECH_A].length).toBe(2);
+    expect(state.listLog.length).toBe(listBefore);
+    expect(state.deleteLog.length).toBe(1);
+
+    // 显式重试成功
+    state.deleteMode = { kind: "ok" };
+    await page.getByTestId("editor-state-checkpoint-confirm-delete-0").click();
+    await expect
+      .poll(() => state.deleteCompleteLog.length, { timeout: 10_000 })
+      .toBe(2);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-status"),
+    ).toContainText(MSG_DELETE_OK);
+    expect(state.checkpoints[TECH_A].length).toBe(1);
+    expect(state.listLog.length).toBe(listBefore);
+  });
+
+  test("disabled=true 仍可删除；同任务双击单飞", async ({ page }) => {
+    const state = createProbeState("tech");
+    await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+    seedCheckpoint(state, TECH_A, 1);
+    // 真实 PUT 409/conflict → fullStateConflict=true → props.disabled=true
+    await page.clock.install();
+    const putHold = createHoldGate();
+    state.putMode = { kind: "hold", gate: putHold, then: "conflict" };
+    const hold = createHoldGate();
+    state.deleteMode = { kind: "hold", gate: hold, then: "ok" };
+    await openWorkspace(page, "tech", TECH_A);
+    await expandPanel(page);
+
+    await editContent(page, "tech", "P12H_DISABLED_DELETE_EDIT");
+    await page.clock.fastForward(debounceMs("tech") + 100);
+    await putHold.waitUntilEntered(1);
+    putHold.release();
+    await expect(page.getByTestId(conflictTestId("tech"))).toBeVisible();
+    await expect(page.getByTestId(conflictTestId("tech"))).toContainText(
+      FULL_STATE_CONFLICT_MSG,
+    );
+    // 受 props.disabled 的入口真实 disabled
+    await expect(page.getByTestId("editor-state-checkpoint-create")).toBeDisabled();
+    await expect(page.getByTestId("editor-state-checkpoint-restore-0")).toBeDisabled();
+    await expect(page.getByTestId("editor-state-checkpoint-name-0")).toBeDisabled();
+    // 删除仍可进入确认
+    await expect(
+      page.getByTestId("editor-state-checkpoint-delete-0"),
+    ).toBeEnabled();
+    await page.getByTestId("editor-state-checkpoint-delete-0").click();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-confirm-delete-0"),
+    ).toBeVisible();
+
+    // 同任务双击确认：仅一次 DELETE
+    await page.evaluate(() => {
+      const btn = document.querySelector(
+        '[data-testid="editor-state-checkpoint-confirm-delete-0"]',
+      ) as HTMLButtonElement | null;
+      if (!btn) throw new Error("confirm delete missing");
+      btn.click();
+      btn.click();
+    });
+    await hold.waitUntilEntered(1);
+    expect(state.deleteLog.length).toBe(1);
+    expect(state.deleteCompleteLog.length).toBe(0);
+    expect(state.deleteLog[0].postData).toBe(null);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-confirm-delete-0"),
+    ).toBeDisabled();
+    await expect(page.getByTestId("editor-state-checkpoint-create")).toBeDisabled();
+    await expect(page.getByTestId("editor-state-checkpoint-refresh")).toBeDisabled();
+    hold.release();
+    await expect
+      .poll(() => state.deleteCompleteLog.length, { timeout: 10_000 })
+      .toBe(1);
+    expect(state.deleteLog.length).toBe(1);
+    expect(state.deleteCompleteLog.length).toBe(1);
+  });
+
+  test("确认/在途全操作互斥", async ({ page }) => {
+    const state = createProbeState("tech");
+    await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+    seedCheckpoint(state, TECH_A, 1);
+    appendCheckpoint(state, TECH_A, 2);
+    const hold = createHoldGate();
+    state.deleteMode = { kind: "hold", gate: hold, then: "ok" };
+    await openWorkspace(page, "tech", TECH_A);
+    await expandPanel(page);
+
+    // A. 先进入恢复确认：删除入口真实 disabled、DELETE=0
+    await page.getByTestId("editor-state-checkpoint-restore-0").click();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-confirm-0"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-delete-1"),
+    ).toBeDisabled();
+    expect(state.deleteLog.length).toBe(0);
+
+    // B. 取消恢复后进入删除确认：恢复/命名/创建/刷新/其它删除真实 disabled
+    await page.getByTestId("editor-state-checkpoint-cancel-restore-0").click();
+    await page.getByTestId("editor-state-checkpoint-delete-0").click();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-delete-confirm-0"),
+    ).toBeVisible();
+    await expect(page.getByTestId("editor-state-checkpoint-create")).toBeDisabled();
+    await expect(page.getByTestId("editor-state-checkpoint-refresh")).toBeDisabled();
+    await expect(page.getByTestId("editor-state-checkpoint-restore-1")).toBeDisabled();
+    await expect(page.getByTestId("editor-state-checkpoint-name-1")).toBeDisabled();
+    await expect(page.getByTestId("editor-state-checkpoint-delete-1")).toBeDisabled();
+    expect(state.deleteLog.length).toBe(0);
+
+    // C. 删除在途继续保持这些入口 disabled
+    await page.getByTestId("editor-state-checkpoint-confirm-delete-0").click();
+    await hold.waitUntilEntered(1);
+    expect(state.deleteLog.length).toBe(1);
+    expect(state.deleteLog[0].postData).toBe(null);
+    await expect(page.getByTestId("editor-state-checkpoint-create")).toBeDisabled();
+    await expect(page.getByTestId("editor-state-checkpoint-refresh")).toBeDisabled();
+    await expect(page.getByTestId("editor-state-checkpoint-restore-1")).toBeDisabled();
+    await expect(page.getByTestId("editor-state-checkpoint-name-1")).toBeDisabled();
+    await expect(page.getByTestId("editor-state-checkpoint-delete-1")).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-cancel-delete-0"),
+    ).toBeDisabled();
+    hold.release();
+    await expect
+      .poll(() => state.deleteCompleteLog.length, { timeout: 10_000 })
+      .toBe(1);
+  });
+
+  test("A→B 迟到 success 不污染 B；旧 finally 不解锁 B", async ({ page }) => {
+    const state = createProbeState("tech");
+    await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+    seedCheckpoint(state, TECH_A, 1);
+    seedCheckpoint(state, TECH_B, 2);
+    const holdA = createHoldGate();
+    const holdB = createHoldGate();
+    state.deleteModeByProject[TECH_A] = {
+      kind: "hold",
+      gate: holdA,
+      then: "ok",
+    };
+    state.deleteModeByProject[TECH_B] = {
+      kind: "hold",
+      gate: holdB,
+      then: "ok",
+    };
+    await openWorkspace(page, "tech", TECH_A);
+    await expandPanel(page);
+
+    await page.getByTestId("editor-state-checkpoint-delete-0").click();
+    await page.getByTestId("editor-state-checkpoint-confirm-delete-0").click();
+    await holdA.waitUntilEntered(1);
+    expect(
+      state.deleteLog.filter((x) => x.projectId === TECH_A).length,
+    ).toBe(1);
+
+    await openWorkspace(page, "tech", TECH_B);
+    await expandPanel(page);
+    await page.getByTestId("editor-state-checkpoint-delete-0").click();
+    await page.getByTestId("editor-state-checkpoint-confirm-delete-0").click();
+    await holdB.waitUntilEntered(1);
+    expect(
+      state.deleteLog.filter((x) => x.projectId === TECH_B).length,
+    ).toBe(1);
+    expect(
+      state.deleteCompleteLog.filter((x) => x.projectId === TECH_B).length,
+    ).toBe(0);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-confirm-delete-0"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-status"),
+    ).toContainText(MSG_DELETE_SAVING);
+
+    // 释放 A：B 仍 busy、确认保留、不被 A 成功移除
+    holdA.release();
+    await expect
+      .poll(
+        () =>
+          state.deleteCompleteLog.filter((x) => x.projectId === TECH_A).length,
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    expect(holdB.released).toBe(false);
+    expect(
+      state.deleteLog.filter((x) => x.projectId === TECH_B).length,
+    ).toBe(1);
+    expect(
+      state.deleteCompleteLog.filter((x) => x.projectId === TECH_B).length,
+    ).toBe(0);
+    await expect(page.getByTestId("editor-state-checkpoint-item-0")).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-confirm-delete-0"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-status"),
+    ).toContainText(MSG_DELETE_SAVING);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-status"),
+    ).not.toContainText(MSG_DELETE_OK);
+
+    holdB.release();
+    await expect
+      .poll(
+        () =>
+          state.deleteCompleteLog.filter((x) => x.projectId === TECH_B).length,
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-status"),
+    ).toContainText(MSG_DELETE_OK);
+    await expect(page.getByTestId("editor-state-checkpoint-empty")).toBeVisible();
+  });
+
+  test("A→B 迟到 failure 不污染 B 消息/busy", async ({ page }) => {
+    const state = createProbeState("tech");
+    await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+    seedCheckpoint(state, TECH_A, 1);
+    seedCheckpoint(state, TECH_B, 2);
+    const holdA = createHoldGate();
+    const holdB = createHoldGate();
+    state.deleteModeByProject[TECH_A] = {
+      kind: "hold",
+      gate: holdA,
+      then: "http_error",
+      status: 500,
+    };
+    state.deleteModeByProject[TECH_B] = {
+      kind: "hold",
+      gate: holdB,
+      then: "ok",
+    };
+    await openWorkspace(page, "tech", TECH_A);
+    await expandPanel(page);
+
+    await page.getByTestId("editor-state-checkpoint-delete-0").click();
+    await page.getByTestId("editor-state-checkpoint-confirm-delete-0").click();
+    await holdA.waitUntilEntered(1);
+
+    await openWorkspace(page, "tech", TECH_B);
+    await expandPanel(page);
+    await page.getByTestId("editor-state-checkpoint-delete-0").click();
+    await page.getByTestId("editor-state-checkpoint-confirm-delete-0").click();
+    await holdB.waitUntilEntered(1);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-status"),
+    ).toContainText(MSG_DELETE_SAVING);
+
+    holdA.release();
+    await expect
+      .poll(
+        () =>
+          state.deleteCompleteLog.filter((x) => x.projectId === TECH_A).length,
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    expect(holdB.released).toBe(false);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-confirm-delete-0"),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-status"),
+    ).toContainText(MSG_DELETE_SAVING);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-status"),
+    ).not.toContainText(MSG_DELETE_FAIL);
+
+    holdB.release();
+    await expect
+      .poll(
+        () =>
+          state.deleteCompleteLog.filter((x) => x.projectId === TECH_B).length,
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-status"),
+    ).toContainText(MSG_DELETE_OK);
+  });
+
+  test("ID/名称/错误不进 URL/storage/Cookie/console；零外网", async ({
+    page,
+  }) => {
+    const state = createProbeState("tech");
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+    seedCheckpoint(state, TECH_A, 1);
+    const SECRET_NAME = "SECRET_P12H_NAME_LEAK";
+    const SECRET_RAW = "SECRET_P12H_RAW_ERR";
+    const SECRET_CSRF = "SECRET_P12H_CSRF_TOKEN";
+    state.checkpoints[TECH_A][0].displayName = SECRET_NAME;
+    // 失败响应携带原始错误与 CSRF 探针标记
+    state.deleteMode = {
+      kind: "http_error",
+      status: 500,
+      rawMessage: `${SECRET_RAW}|csrf=${SECRET_CSRF}`,
+    };
+    await openWorkspace(page, "tech", TECH_A);
+    await expandPanel(page);
+
+    const cid = state.checkpoints[TECH_A][0].checkpointId;
+    // 名称在删除成功前作为合法 React 文本可见，不算泄漏
+    await expect(
+      page.getByTestId("editor-state-checkpoint-display-name-0"),
+    ).toHaveText(SECRET_NAME);
+
+    await page.getByTestId("editor-state-checkpoint-delete-0").click();
+    await page.getByTestId("editor-state-checkpoint-confirm-delete-0").click();
+    await expect
+      .poll(() => state.deleteCompleteLog.length, { timeout: 10_000 })
+      .toBe(1);
+    // UI 仅固定失败文案
+    await expect(
+      page.getByTestId("editor-state-checkpoint-status"),
+    ).toContainText(MSG_DELETE_FAIL);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-status"),
+    ).not.toContainText(SECRET_RAW);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-status"),
+    ).not.toContainText(SECRET_CSRF);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-status"),
+    ).not.toContainText(cid);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-delete-confirm-0"),
+    ).toBeVisible();
+
+    // 显式重试成功：目标行消失
+    state.deleteMode = { kind: "ok" };
+    await page.getByTestId("editor-state-checkpoint-confirm-delete-0").click();
+    await expect
+      .poll(() => state.deleteCompleteLog.length, { timeout: 10_000 })
+      .toBe(2);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-status"),
+    ).toContainText(MSG_DELETE_OK);
+    await expect(page.getByTestId("editor-state-checkpoint-empty")).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-item-0"),
+    ).toHaveCount(0);
+
+    const secrets = [cid, SECRET_NAME, SECRET_RAW, SECRET_CSRF];
+    const html = await page.content();
+    for (const s of secrets) {
+      expect(html).not.toContain(s);
+      expect(page.url()).not.toContain(s);
+    }
+    const storage = await page.evaluate(() => ({
+      ls: JSON.stringify(localStorage),
+      ss: JSON.stringify(sessionStorage),
+      cookie: document.cookie,
+    }));
+    for (const s of secrets) {
+      expect(storage.ls).not.toContain(s);
+      expect(storage.ss).not.toContain(s);
+      expect(storage.cookie).not.toContain(s);
+    }
+    const consoleBlob = guards.consoleLogs.join("\n");
+    const pageErrorBlob = guards.pageErrors.join("\n");
+    const unhandled = await guards.readUnhandled();
+    const unhandledBlob = unhandled.join("\n");
+    for (const s of secrets) {
+      expect(consoleBlob).not.toContain(s);
+      expect(pageErrorBlob).not.toContain(s);
+      expect(unhandledBlob).not.toContain(s);
+    }
+    expect(state.externalHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(unhandled).toEqual([]);
+  });
+
+  test("P12H 静态守卫：禁止 force 与宽泛计数", () => {
+    // 不受 CRLF 影响：按行切分；自剔除本用例，避免扫描到自身断言文本
+    const src = fs.readFileSync(
+      path.join(process.cwd(), "e2e/editor-state-checkpoint-restore.spec.ts"),
+      "utf8",
+    );
+    const lines = src.split(/\r?\n/);
+    const start = lines.findIndex(
+      (l) =>
+        l.includes('test.describe("P12H 检查点单条删除"') &&
+        l.includes("() =>"),
+    );
+    expect(start).not.toBe(-1);
+    const end = lines.findIndex(
+      (l, i) => i > start && l.includes('test("契约常量格式"'),
+    );
+    expect(end).not.toBe(-1);
+    const staticStart = lines.findIndex(
+      (l, i) =>
+        i > start &&
+        i < end &&
+        l.includes('test("P12H 静态守卫：禁止 force 与宽泛计数"'),
+    );
+    expect(staticStart).not.toBe(-1);
+    let depth = 0;
+    let seenOpen = false;
+    let staticEnd = staticStart;
+    for (let i = staticStart; i < end; i++) {
+      const open = (lines[i].match(/\{/g) || []).length;
+      const close = (lines[i].match(/\}/g) || []).length;
+      depth += open - close;
+      if (open > 0) seenOpen = true;
+      if (seenOpen && depth <= 0) {
+        staticEnd = i;
+        break;
+      }
+    }
+    const block = [
+      ...lines.slice(start, staticStart),
+      ...lines.slice(staticEnd + 1, end),
+    ].join("\n");
+    expect(block).not.toMatch(/force\s*:\s*true/);
+    expect(block).not.toMatch(/toBeGreaterThanOrEqual/);
+    // 弱 OR 回归门：禁止 postData 接受 null 或空串的宽断言
+    expect(block).not.toMatch(/postData\s*==\s*null\s*\|\|/);
+    expect(block).not.toMatch(/postData\s*===\s*null\s*\|\|/);
+    expect(block).not.toMatch(
+      /postData\s*!=\s*null\s*&&\s*postData\s*!==\s*["']{2}/,
+    );
   });
 });
 
