@@ -399,6 +399,8 @@ P12E-B 真实 failure-first 为 13 项红测：11 项路由缺失 404、1 项同
 
 **P12F-J-A 已完成**：契约=`docs/p12f-revision-pinning-backend-contract.md`，计划=`docs/plans/2026-07-19-p12f-revision-pinning-backend-plan.md`，冻结=`2f03b8c`，实现=`a7021c4`，Grok review=`msg_88f4752ef1cf4a929c6b194df00d9398`，Codex ack=`msg_c630805296ac48d6941809bbca957b7f`。最终独立结果 **16/96/1/1165 passed**；SQLite 非法 `is_pinned=2` 通过原始整数投影被固定 500/裁剪整次回滚，迁移中途 DROP 回滚、execute/flush/commit 零写均有真实证据。前端、七键历史响应、固定按钮与 E2E 留给 P12F-J-B。
 
+**P12F-J-B 已冻结、待实现**：契约=`docs/p12f-revision-pinning-frontend-contract.md`、计划=`docs/plans/2026-07-19-p12f-revision-pinning-frontend-plan.md`。严格十四文件：后端 Schema/路由/history service 三文件，前端 API/共用面板/history E2E 三文件，以及八份既有后端测试的七键机械同步与真实坏固定值证据。后端 list/page/search 扩为七键、detail 扩为七键加 snapshot，四类 SQL 必须用 `type_coerce(Integer)` 保留 SQLite 原始固定值；前端提供单击固定/取消固定、全局单飞、全操作互斥、成功原位更新、失败保值与 A→B 迟到隔离。排序、游标、候选上限、P12F-J-A PATCH/配额/裁剪不变；固定排序、批量、检查点命名、跨项目历史和多人协作继续另包。
+
 **P13-A 已完成并推送**：契约=`docs/p13a-task-sse-workspace-auth-contract.md`，计划=`docs/plans/2026-07-17-p13a-task-sse-workspace-auth-plan.md`，冻结=`e8dfa61`、实现=`1509aa2`。SSE 连接前短 Session 复用统一 workspace/成员/bid_writer 解析，流内每轮按 workspace/project/task 再校验；disabled、原生 EventSource、事件/回退不变。真实 failure-first **8 failed / 5 passed**；Codex 一轮 test-only 返修关闭恒真泄漏断言、secret marker 跳过和宽松三参，独立通过 **13/72/918 passed**。首次全量只因 20 分钟外层时限不足终止，40 分钟外层干净重跑为 **918 passed in 1310.97s**。
 ## P12D-B 完成状态（2026-07-17）
 

@@ -1,11 +1,11 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-19（P12F-J-A 已完成实现、独立验收并推送）
+> **交接日期**：2026-07-19（P12F-J-A 已完成；P12F-J-B 已冻结、待 Grok 实现）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
 > **协作分支功能基线**：P12F-J-A 冻结=`2f03b8c`、实现=`a7021c4`；P12F-I 冻结=`060191e`、实现=`008e443`；P12F-H 冻结=`0660145`、范围修订=`0db935b`/`aca68b6`、实现=`b4338ba`；P12F-G-B 冻结=`89b5728`、实现=`bb7c4f4`；P12F-G-A 冻结=`c176cb5`、实现=`d2555d4`；P12F-F-B 冻结=`4585388`、实现=`be2fe77`；P12F-F-A 冻结=`b2eed7c`、实现=`e6516e8`；P12F-E-B 冻结=`a31e50e`、实现=`f9127ec`；P12F-E-A 冻结=`af3798a`、实现=`c66b69d`；P12F-D 冻结=`a2acdf3`、实现=`587df9a`；P13-A 冻结=`e8dfa61`、实现=`1509aa2`；P12F-C 冻结=`bb1ae3e`、实现=`fe99f5a`；P12F-B 冻结=`4ddd896`、实现=`c84a94d`；P12F-A 冻结=`e713fb3`、实现=`24f4cf2`；P12E-A 冻结=`5aa205c`、实现=`f9f067e`；P12E-B 冻结=`00ef081`、实现=`5a5b08a`；P12E-C 冻结=`8b40bf4`、实现=`b6a4375`；其余既有功能基线见本文 §11。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
-> **最新增量基线**：P12F-J-A 已交付修订单条固定、5 条/10 MiB 固定上限、SQLite 幂等迁移与保护性自动裁剪；历史响应仍为六键，前端尚无固定入口，留给 P12F-J-B。
+> **最新增量基线**：P12F-J-A 已交付修订单条固定、5 条/10 MiB 固定上限、SQLite 幂等迁移与保护性自动裁剪；P12F-J-B 已完成只读审计并冻结严格十四文件，下一步由 Grok 实现七键历史响应和共用固定入口。
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
 > **本地状态**：P12F-J-A 实现提交 `a7021c4` 已推送；本文档闭环提交后再次核对工作区、HEAD 与远端一致。
 > **验收基线**：P12F-J-A Codex 独立后端 pin/核心回归/删除守卫/全量 **16/96/1/1165 passed**；前端沿用 P12F-I 全量 **318 passed**，py_compile/diff/九文件/哈希/SQL/AST 门通过。仅保留既有 pytest 弃用警告与 build 大 chunk 提示。**所有 pytest 与 Playwright E2E 共用 SQLite 重置库，pytest 禁止 xdist/并发分组，Playwright 必须显式 `--workers=1 --retries=0` 逐条串行运行。**
@@ -21,8 +21,8 @@
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
 当前进度：P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/B、P12E-A/B/C、P12F-A/B/C/D/E-A/E-B/F-A/F-B/G-A/G-B/H/I/J-A、P13-A、P9D、P9C-R1、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。P12F-J-A 实现=`a7021c4`；后端/前端全量基线为 1165/318 passed。
 当前状态：修订历史已闭合来源、UTC 时间、联合搜索、游标分页、单条删除、展示名称，以及后端单条固定与保护性裁剪；历史响应仍为六键，前端尚不能显示或操作固定。
-当前执行包：P12F-J-A 已完成并推送；下一包候选为 P12F-J-B 七键元数据与技术/商务共用固定入口，尚未审计、冻结或下发。
-下一步：先只读审计现有 history API/parser/共享面板/E2E，另立 P12F-J-B 契约、计划和精确白名单并提交推送，再通过 Grok 消息箱下发 failure-first。固定排序、批量固定、检查点命名、跨项目历史和多人协作继续不得混入。
+当前执行包：P12F-J-B 七键元数据与技术/商务共用固定入口；契约=`docs/p12f-revision-pinning-frontend-contract.md`，计划=`docs/plans/2026-07-19-p12f-revision-pinning-frontend-plan.md`，严格十四文件已冻结。
+下一步：先提交并推送 P12F-J-B 冻结文档，再通过 Grok 消息箱和后台静默 runner 下发 failure-first；Grok 不得提交。Codex 收到 review_request 后逐文件审查并独立串行验收。固定排序、批量固定、检查点命名、跨项目历史和多人协作继续不得混入。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
