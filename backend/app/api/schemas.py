@@ -667,6 +667,20 @@ class ReviseOut(BaseModel):
     project_id: str | None = Field(default=None, serialization_alias="projectId")
 
 
+# P13-C：修订账本九类固定来源（与 editor_state_revision_service.REVISION_SOURCE_KINDS 对齐）
+EditorStateRevisionSourceKind = Literal[
+    "browser_put",
+    "task",
+    "revise",
+    "callback",
+    "local_parser",
+    "content_fuse_apply",
+    "content_fuse_consume",
+    "checkpoint_restore",
+    "revision_restore",
+]
+
+
 class EditorStateOut(BaseModel):
     """
     用途：编辑器整包状态（技术标 outline/chapters/responseMatrix + 商务标 business*）。
@@ -674,6 +688,7 @@ class EditorStateOut(BaseModel):
     二次开发：
       - responseMatrixVersion 仅表示收敛后的矩阵内容版本，与 updatedAt 无关。
       - stateVersion 为全状态 13 键规范哈希，与 P12A 检查点版本算法一致。
+      - P13-C currentRevisionSourceKind 必出可空；非空仅九类；不得进入 13 键哈希。
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -705,6 +720,9 @@ class EditorStateOut(BaseModel):
         default=None, serialization_alias="businessCommit"
     )
     updated_at: str | None = Field(default=None, serialization_alias="updatedAt")
+    current_revision_source_kind: EditorStateRevisionSourceKind | None = Field(
+        default=None, serialization_alias="currentRevisionSourceKind"
+    )
 
 
 class EditorStateUpdate(BaseModel):

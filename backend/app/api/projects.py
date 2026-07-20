@@ -25,7 +25,12 @@ from app.api.schemas import (
     ProjectUpdate,
 )
 from app.core.database import get_db
-from app.services import editor_state_service, hr_team_recommendation_service, project_service
+from app.services import (
+    editor_state_revision_service,
+    editor_state_service,
+    hr_team_recommendation_service,
+    project_service,
+)
 from app.services.project_service import ProjectNotFoundError
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -205,12 +210,13 @@ def get_editor_state(
     """
     用途：读取技术标工作区编辑状态（无则空字段）。
     对接：前端 editors / guidance 初始化
+    二次开发：P13-C 在响应中附带只读 currentRevisionSourceKind（可 null）。
     """
     try:
         data = editor_state_service.get_editor_state(db, workspace_id, project_id)
     except ProjectNotFoundError:
         raise HTTPException(status_code=404, detail="项目不存在") from None
-    return _editor_out(data)
+    return _editor_out(db, workspace_id, data)
 
 
 @router.put("/{project_id}/editor-state", response_model=EditorStateOut)
@@ -230,6 +236,7 @@ def put_editor_state(
       - 同时带 responseMatrix 与 responseMatrixVersion 时矩阵乐观锁；
         与全状态共用一次锁，全状态冲突优先。
       - 缺 expected 保持兼容写入（非最终安全门）。
+      - P13-C：成功响应附带只读 currentRevisionSourceKind；并发漂移保守 null。
     """
     # exclude_unset：未出现在 JSON 的字段不覆盖
     payload = body.model_dump(by_alias=False, exclude_unset=True)
@@ -295,14 +302,30 @@ def put_editor_state(
             },
         ) from None
 
-    return _editor_out(data)
+    return _editor_out(db, workspace_id, data)
 
 
-def _editor_out(data: dict) -> EditorStateOut:
-    """用途：service dict → EditorStateOut（含 analysis / 商务字段 / 矩阵与全状态版本）。"""
+def _editor_out(
+    db: Session, workspace_id: str, data: dict
+) -> EditorStateOut:
+    """
+    用途：service dict → EditorStateOut（含 analysis / 商务字段 / 矩阵与全状态版本）。
+    二次开发：P13-C 用响应 stateVersion 只读解析 currentRevisionSourceKind；
+      查询不写库；版本不匹配或来源非法时保守 null。
+    """
+    state_version = data.get("stateVersion") or ""
+    project_id = data["projectId"]
+    source_kind = (
+        editor_state_revision_service.resolve_current_revision_source_kind(
+            db,
+            workspace_id,
+            project_id,
+            state_version if isinstance(state_version, str) else "",
+        )
+    )
     return EditorStateOut.model_validate(
         {
-            "project_id": data["projectId"],
+            "project_id": project_id,
             "outline": data["outline"],
             "chapters": data["chapters"],
             "facts": data["facts"],
@@ -311,7 +334,7 @@ def _editor_out(data: dict) -> EditorStateOut:
             "analysis": data.get("analysis"),
             "response_matrix": data.get("responseMatrix"),
             "response_matrix_version": data.get("responseMatrixVersion") or "",
-            "state_version": data.get("stateVersion") or "",
+            "state_version": state_version,
             "guidance": data["guidance"],
             "parsed_markdown": data.get("parsedMarkdown"),
             "business_qualify": data.get("businessQualify"),
@@ -319,5 +342,6 @@ def _editor_out(data: dict) -> EditorStateOut:
             "business_quote": data.get("businessQuote"),
             "business_commit": data.get("businessCommit"),
             "updated_at": data["updatedAt"],
+            "current_revision_source_kind": source_kind,
         }
     )

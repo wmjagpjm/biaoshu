@@ -1,15 +1,18 @@
 """
-模块：P12C-A / P12F-A / P12F-J-A editor-state 有限自动修订账本服务
+模块：P12C-A / P12F-A / P12F-J-A / P13-C editor-state 有限自动修订账本服务
 用途：独立 revision 表上的无提交 transition 原语（相邻去重、断链补点、
-  最多 20 条且总快照 20 MiB；固定行永不被自动裁剪）。
-对接：EditorStateRevisionRow；editor_state_service（共享 13 键/规范 JSON/版本算法）。
+  最多 20 条且总快照 20 MiB；固定行永不被自动裁剪）；
+  P13-C 只读解析当前已载入版本的最新修订来源（不写、不回扫）。
+对接：EditorStateRevisionRow；editor_state_service（共享 13 键/规范 JSON/版本算法）；
+  GET|PUT editor-state 的 currentRevisionSourceKind。
 二次开发：
-  - 只 flush，绝不 commit/rollback/refresh/项目查询/锁/审计
+  - 只 flush，绝不 commit/rollback/refresh/项目查询/锁/审计（transition 路径）
   - 13 键/JSON/哈希必须委托 editor_state_service，禁止第二套算法
-  - 最新/裁剪 SQL 不得加载 snapshot_json；DELETE 必须 workspace+project+id 三重限定
+  - 最新/裁剪/P13-C 来源 SQL 不得加载 snapshot_json；DELETE 必须 workspace+project+id 三重限定
   - 校验完所有 snapshot_bytes/is_pinned 后才允许删除；固定行全保留；
     非固定按最新前缀补足；禁止跳洞保留更旧小非固定行
   - 返回值不含 snapshot/行 ID/项目/空间
+  - resolve_current_revision_source_kind 仅 LIMIT 1 最新行，禁止回扫旧同版本
 """
 
 from __future__ import annotations
@@ -141,6 +144,59 @@ def _latest_id_and_version(
     if row is None:
         return None
     return str(row.id), str(row.state_version)
+
+
+def resolve_current_revision_source_kind(
+    db: Session,
+    workspace_id: str,
+    project_id: str,
+    state_version: str,
+) -> str | None:
+    """
+    用途：P13-C 只读解析当前已载入版本在修订账本中的来源。
+    规则：
+      - 仅查最新一条（created_at DESC, id DESC, LIMIT 1），只投影 state_version/source_kind；
+      - 禁止加载 snapshot_json、禁止回扫旧同版本、禁止写/commit/裁剪；
+      - 最新 state_version 与响应版本精确相等且 source_kind 属九类白名单时返回原样；
+      - 无账本、版本不匹配、来源非法、响应版本非法一律返回 None。
+    对接：GET|PUT /editor-state 构造 EditorStateOut.currentRevisionSourceKind。
+    """
+    if not isinstance(workspace_id, str) or not workspace_id:
+        return None
+    if not isinstance(project_id, str) or not project_id:
+        return None
+    if not isinstance(state_version, str) or not state_version:
+        return None
+    # 非法版本格式保守 null，避免把损坏账本伪装为当前来源
+    if not editor_state_service.is_valid_state_version(state_version):
+        return None
+
+    row = db.execute(
+        select(
+            EditorStateRevisionRow.state_version,
+            EditorStateRevisionRow.source_kind,
+        )
+        .where(
+            EditorStateRevisionRow.workspace_id == workspace_id,
+            EditorStateRevisionRow.project_id == project_id,
+        )
+        .order_by(
+            EditorStateRevisionRow.created_at.desc(),
+            EditorStateRevisionRow.id.desc(),
+        )
+        .limit(1)
+    ).one_or_none()
+    if row is None:
+        return None
+
+    latest_version = row.state_version
+    if not isinstance(latest_version, str) or latest_version != state_version:
+        return None
+
+    source_kind = row.source_kind
+    if not isinstance(source_kind, str) or source_kind not in REVISION_SOURCE_KINDS:
+        return None
+    return source_kind
 
 
 def _insert_revision_row(

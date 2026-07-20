@@ -1,20 +1,22 @@
 /**
- * 模块：商务标工作区状态（P11B 服务端权威 + P12B 全状态 CAS + P13-B 版本时间）
+ * 模块：商务标工作区状态（P11B 服务端权威 + P12B 全状态 CAS + P13-B/C）
  * 用途：分步编辑数据只认 GET|PUT /api/projects/{id}/editor-state；真实空态保持空；
  *       全部 editor-state PUT 携带 expectedStateVersion；同项目串行保存链；
- *       P13-B：在合法 stateVersion 被当前会话接受时同步 versionUpdatedAt 供标题区展示。
+ *       P13-B/C：合法 stateVersion 被当前会话接受时同步 versionUpdatedAt 与
+ *       currentRevisionSourceKind 供标题区展示。
  * 对接：
  *   - GET|PUT /api/projects/{id}/editor-state（businessQualify/Toc/Quote/Commit、parsedMarkdown）
  *   - POST /api/projects/{id}/artifacts/workspace/revise（stage=business_*）
  *   - EditorStateVersionFreshness（只读展示，零额外请求）
+ *   - parseRevisionSourceKind（唯一九类校验）
  * 明确非目标：
  *   - 禁止读写/删除/迁移 biaoshu.businessBid.workspace.*（旧键忽略并保值）
  *   - biaoshu.businessBid.feedback.{projectId} 仅作 AI 反馈历史本地存储，
  *     绝不参与 workspace 水合、API 成功判定或加载失败回退
  *   - 禁止本地计算 stateVersion；禁止版本落盘
- *   - versionUpdatedAt 禁止参与 CAS/保存队列/缓存键
+ *   - versionUpdatedAt / currentRevisionSourceKind 禁止参与 CAS/保存队列/缓存键
  * 二次开发：形状保持 BusinessBidWorkspaceState；不得复活 createDemoWorkspace 生产路径；
- *       全状态 409 阻断后仅允许显式全量 GET 恢复；切项目须立即清空 versionUpdatedAt。
+ *       全状态 409 阻断后仅允许显式全量 GET 恢复；切项目须立即清空时间与来源。
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -27,7 +29,11 @@ import type {
   CheckpointCreateOutcome,
   CheckpointRestoreOutcome,
 } from "../../editor-state-checkpoints/EditorStateCheckpointPanel";
-import { restoreEditorStateRevision as postRestoreEditorStateRevision } from "../../editor-state-revisions/editorStateRevisionApi";
+import {
+  parseRevisionSourceKind,
+  restoreEditorStateRevision as postRestoreEditorStateRevision,
+  type RevisionSourceKind,
+} from "../../editor-state-revisions/editorStateRevisionApi";
 import type { RevisionRestoreOutcome } from "../../editor-state-revisions/EditorStateRevisionPanel";
 import { apiFetch } from "../../../shared/lib/api";
 import type {
@@ -90,6 +96,8 @@ type EditorStateApi = {
   stateVersion?: string | null;
   /** P13-B：服务端权威更新时间；仅展示，不参与 CAS */
   updatedAt?: string | null;
+  /** P13-C：当前版本修订来源；仅展示，须经 parseRevisionSourceKind */
+  currentRevisionSourceKind?: string | null;
 };
 
 /** 用途：读取反馈历史；失败返回 []，不抛原文。 */
@@ -150,6 +158,12 @@ export function useBusinessBidWorkspace(projectId: string) {
    * 切项目立即清空；仅在合法 stateVersion 被接受时更新。
    */
   const [versionUpdatedAt, setVersionUpdatedAt] = useState<string | null>(null);
+  /**
+   * P13-C：当前项目会话已接受的修订来源（仅展示）。
+   * 与 versionUpdatedAt 同一合法 stateVersion 门；切项目立即清空。
+   */
+  const [currentRevisionSourceKind, setCurrentRevisionSourceKind] =
+    useState<RevisionSourceKind | null>(null);
 
   /** 跳过水合后的下一次防抖 PUT */
   const skipNextSave = useRef(true);
@@ -212,6 +226,14 @@ export function useBusinessBidWorkspace(projectId: string) {
   }, []);
 
   /**
+   * 用途：P13-C 在合法 stateVersion 已被接受后，同步同一响应的来源供展示。
+   * 对接：parseRevisionSourceKind 唯一九类精确匹配；非法一律 null。
+   */
+  const acceptCurrentRevisionSourceKind = useCallback((value: unknown) => {
+    setCurrentRevisionSourceKind(parseRevisionSourceKind(value));
+  }, []);
+
+  /**
    * 用途：从 editor-state 刷新当前项目。
    * 成功：水合真实字段、接受合法 stateVersion、清冲突、apiReady=true。
    * 失败：见全状态阻断分支；不抛原文。
@@ -257,6 +279,7 @@ export function useBusinessBidWorkspace(projectId: string) {
       setWorkspace(fromApi(pid, remote));
       stateVersionRef.current = remote.stateVersion;
       acceptVersionUpdatedAt(remote.updatedAt);
+      acceptCurrentRevisionSourceKind(remote.currentRevisionSourceKind);
       setApiReady(true);
       setLoadError(null);
       setSaveError(null);
@@ -283,7 +306,12 @@ export function useBusinessBidWorkspace(projectId: string) {
         setLoading(false);
       }
     }
-  }, [acceptVersionUpdatedAt, isCurrentSession, projectId]);
+  }, [
+    acceptVersionUpdatedAt,
+    acceptCurrentRevisionSourceKind,
+    isCurrentSession,
+    projectId,
+  ]);
 
   // 切项目：立即作废旧会话、清计时器/错误/版本/链，重置空 workspace，再拉真实 GET
   useEffect(() => {
@@ -297,8 +325,9 @@ export function useBusinessBidWorkspace(projectId: string) {
     saveChainRef.current = Promise.resolve();
     skipNextSave.current = true;
     stateVersionRef.current = null;
-    // P13-B：切项目立即清空，禁止短暂显示旧项目时间
+    // P13-B/C：切项目立即清空，禁止短暂显示旧项目时间与来源
     setVersionUpdatedAt(null);
+    setCurrentRevisionSourceKind(null);
     fullStateBlockedRef.current = false;
     setApiReady(false);
     setLoadError(null);
@@ -372,6 +401,7 @@ export function useBusinessBidWorkspace(projectId: string) {
         }
         stateVersionRef.current = saved.stateVersion;
         acceptVersionUpdatedAt(saved.updatedAt);
+        acceptCurrentRevisionSourceKind(saved.currentRevisionSourceKind);
         setSaveError(null);
         return "ok";
       } catch (err) {
@@ -386,7 +416,12 @@ export function useBusinessBidWorkspace(projectId: string) {
         return "error";
       }
     },
-    [acceptVersionUpdatedAt, enterFullStateBlock, isCurrentWriteEpoch],
+    [
+      acceptVersionUpdatedAt,
+      acceptCurrentRevisionSourceKind,
+      enterFullStateBlock,
+      isCurrentWriteEpoch,
+    ],
   );
 
   // 防抖入队：真正执行时读取 workspaceRef + stateVersionRef 最新值
@@ -977,6 +1012,8 @@ export function useBusinessBidWorkspace(projectId: string) {
       : null,
     /** P13-B：当前已载入版本的服务端 updatedAt（仅展示） */
     versionUpdatedAt,
+    /** P13-C：当前已载入版本的修订来源（仅展示） */
+    currentRevisionSourceKind,
     refreshFromApi,
     createCheckpoint,
     restoreCheckpoint,

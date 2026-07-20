@@ -1,19 +1,31 @@
 /**
- * 模块：P13-B 已载入编辑版本更新时间展示组件
+ * 模块：P13-B/P13-C 已载入编辑版本更新时间与修订来源展示组件
  * 用途：以纯函数严格格式化 editor-state 服务端 UTC `updatedAt`，在工作区标题区展示
- *       「当前已载入版本」时间；非法/缺失值显示固定未知文案。
- * 对接：useTechnicalPlanEditors / useBusinessBidWorkspace 的 versionUpdatedAt；
- *       技术标 testid=`technical-editor-version-freshness`；
- *       商务标 testid=`business-editor-version-freshness`。
+ *       「当前已载入版本」时间；并展示「当前版本来源」中文标签。
+ *       非法/缺失时间显示固定未知文案；非法/缺失来源显示「来源未知」。
+ * 对接：useTechnicalPlanEditors / useBusinessBidWorkspace 的 versionUpdatedAt
+ *       与 currentRevisionSourceKind；
+ *       技术标 testid=`technical-editor-version-freshness` /
+ *       `technical-editor-version-source`；
+ *       商务标 testid=`business-editor-version-freshness` /
+ *       `business-editor-version-source`。
  * 二次开发：禁止发请求、设定时器、读 storage/Cookie/URL 或持有项目状态；
- *       不得按浏览器时区重解释；不得使用 toLocaleString；不得声称远端最新/实时/在线。
+ *       不得按浏览器时区重解释；不得使用 toLocaleString；
+ *       不得声称远端最新/实时/在线；来源标签必须复用 REVISION_SOURCE_LABELS，
+ *       禁止第二套中文映射。
  */
+
+import {
+  formatRevisionSourceLabel,
+  type RevisionSourceKind,
+} from "../editor-state-revisions/editorStateRevisionApi";
 
 /** 服务端 UTC 无后缀 ISO：YYYY-MM-DDTHH:mm:ss 可选 1–6 位小数 */
 const STRICT_UTC_ISO_RE =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?$/;
 
-const UNKNOWN_BODY = "更新时间未知";
+const UNKNOWN_TIME_BODY = "更新时间未知";
+const UNKNOWN_SOURCE_BODY = "来源未知";
 
 /**
  * 用途：校验日历日期是否真实存在（拒绝 2026-02-30 等）。
@@ -35,9 +47,9 @@ function isRealCalendarDate(year: number, month: number, day: number): boolean {
 function formatServerUpdatedAt(
   updatedAt: string | null | undefined,
 ): string {
-  if (typeof updatedAt !== "string") return UNKNOWN_BODY;
+  if (typeof updatedAt !== "string") return UNKNOWN_TIME_BODY;
   const match = STRICT_UTC_ISO_RE.exec(updatedAt);
-  if (!match) return UNKNOWN_BODY;
+  if (!match) return UNKNOWN_TIME_BODY;
 
   const year = Number(match[1]);
   const month = Number(match[2]);
@@ -54,10 +66,10 @@ function formatServerUpdatedAt(
     !Number.isFinite(minute) ||
     !Number.isFinite(second)
   ) {
-    return UNKNOWN_BODY;
+    return UNKNOWN_TIME_BODY;
   }
-  if (hour > 23 || minute > 59 || second > 59) return UNKNOWN_BODY;
-  if (!isRealCalendarDate(year, month, day)) return UNKNOWN_BODY;
+  if (hour > 23 || minute > 59 || second > 59) return UNKNOWN_TIME_BODY;
+  if (!isRealCalendarDate(year, month, day)) return UNKNOWN_TIME_BODY;
 
   const y = String(year).padStart(4, "0");
   const mo = String(month).padStart(2, "0");
@@ -68,24 +80,44 @@ function formatServerUpdatedAt(
   return `${y}-${mo}-${d} ${h}:${mi}:${s} UTC`;
 }
 
+/**
+ * 用途：格式化九类来源；null/非法由调用方已归一，此处 null → 来源未知。
+ */
+function formatSourceBody(sourceKind: RevisionSourceKind | null): string {
+  if (sourceKind == null) return UNKNOWN_SOURCE_BODY;
+  return formatRevisionSourceLabel(sourceKind);
+}
+
 export type EditorStateVersionFreshnessProps = {
   /** 当前会话已接受的服务端 updatedAt；null 表示未知 */
   updatedAt: string | null;
-  /** 固定 data-testid（技术/商务各一） */
+  /** P13-C：当前会话已接受的修订来源；null 表示未知 */
+  sourceKind?: RevisionSourceKind | null;
+  /** 固定 data-testid（技术/商务各一，时间行） */
   testId: string;
+  /** 固定来源行 data-testid（技术/商务各一） */
+  sourceTestId: string;
 };
 
 /**
- * 用途：标题区无副作用展示「当前已载入版本：…」。
+ * 用途：标题区无副作用展示「当前已载入版本：…」与「当前版本来源：…」。
  */
 export function EditorStateVersionFreshness({
   updatedAt,
+  sourceKind = null,
   testId,
+  sourceTestId,
 }: EditorStateVersionFreshnessProps) {
-  const body = formatServerUpdatedAt(updatedAt);
+  const timeBody = formatServerUpdatedAt(updatedAt);
+  const sourceBody = formatSourceBody(sourceKind);
   return (
-    <p data-testid={testId} style={{ margin: "6px 0 0" }}>
-      {`当前已载入版本：${body}`}
-    </p>
+    <div style={{ margin: "6px 0 0" }}>
+      <p data-testid={testId} style={{ margin: 0 }}>
+        {`当前已载入版本：${timeBody}`}
+      </p>
+      <p data-testid={sourceTestId} style={{ margin: "2px 0 0" }}>
+        {`当前版本来源：${sourceBody}`}
+      </p>
+    </div>
   );
 }

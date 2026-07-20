@@ -174,13 +174,16 @@ def test_first_browser_put_writes_before_and_after_browser_put(client):
     body = put.json()
     after_ver = _assert_state_version(body["stateVersion"])
     assert body["facts"][0]["id"] == "f1"
-    # 响应不得出现来源或 revision 正文/ID
+    # 响应仅新增只读 currentRevisionSourceKind=browser_put；
+    # 不得回显请求侧 sourceKind/revisionSourceKind/snake_case，不得泄漏修订 ID/snapshot
     raw = put.text
-    assert "sourceKind" not in raw
-    assert "revisionSourceKind" not in raw
-    assert "revision_source_kind" not in raw
-    assert "browser_put" not in raw
+    assert "sourceKind" not in body
+    assert "revisionSourceKind" not in body
+    assert "revision_source_kind" not in body
+    assert body.get("currentRevisionSourceKind") == "browser_put"
     assert "esr_" not in raw
+    for leak_key in ("revisionId", "revision_id", "snapshotJson", "snapshot_json"):
+        assert leak_key not in body
 
     rows = _db_rev_rows(pid)
     assert len(rows) == 2, [r.state_version for r in rows]
@@ -709,7 +712,8 @@ def test_direct_upsert_without_source_writes_zero_revision(client):
 
 
 def test_client_forged_source_fields_ignored(client):
-    """用途：客户端伪造 sourceKind 等无效，行来源只能是 browser_put；响应无来源字段。"""
+    """用途：客户端伪造 sourceKind 等无效，行来源只能是 browser_put；
+    响应仅公开 currentRevisionSourceKind，不回显伪造字段、不泄漏修订 ID。"""
     pid = _create_project(client, name="伪造来源")
     res = client.put(
         f"/api/projects/{pid}/editor-state",
@@ -723,13 +727,18 @@ def test_client_forged_source_fields_ignored(client):
     assert res.status_code == 200, res.text
     body = res.json()
     raw = res.text
-    assert "sourceKind" not in body
-    assert "revisionSourceKind" not in body
-    assert "revision_source_kind" not in body
-    assert "browser_put" not in raw
-    assert "esr_" not in raw
+    # 伪造的请求字段不得出现在响应键中；仅允许新增只读 currentRevisionSourceKind
     for key in ("sourceKind", "revisionSourceKind", "revision_source_kind"):
         assert key not in body
+    assert body.get("currentRevisionSourceKind") == "browser_put"
+    # 不得泄漏 revision ID；伪造值不得作为响应正文回显为独立来源字段
+    assert "esr_" not in raw
+    for leak_key in ("revisionId", "revision_id", "snapshotJson", "snapshot_json"):
+        assert leak_key not in body
+    # 响应不得把客户端伪造值写成有效来源（仅 browser_put 为权威）
+    assert body["currentRevisionSourceKind"] != "task"
+    assert body["currentRevisionSourceKind"] != "revise"
+    assert body["currentRevisionSourceKind"] != "callback"
 
     rows = _db_rev_rows(pid)
     assert len(rows) == 2

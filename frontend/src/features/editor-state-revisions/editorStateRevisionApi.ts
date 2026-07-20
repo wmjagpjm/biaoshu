@@ -1741,3 +1741,17 @@ export function formatRevisionBytes(bytes: number): string {
 export function formatRevisionSourceLabel(kind: RevisionSourceKind): string {
   return REVISION_SOURCE_LABELS[kind] || "未知来源";
 }
+
+/**
+ * 用途：P13-C 严格校验 editor-state 响应中的 currentRevisionSourceKind。
+ * 规则：仅接受九类精确字符串；缺失/null/非字符串/大小写变化/首尾空白/未知值一律 null。
+ * 对接：useTechnicalPlanEditors / useBusinessBidWorkspace 与 updatedAt 同门接受。
+ * 二次开发：禁止第二套白名单或本地猜值；不得 trim 后放宽匹配。
+ */
+export function parseRevisionSourceKind(
+  value: unknown,
+): RevisionSourceKind | null {
+  if (typeof value !== "string") return null;
+  if (!SOURCE_KIND_SET.has(value)) return null;
+  return value as RevisionSourceKind;
+}
