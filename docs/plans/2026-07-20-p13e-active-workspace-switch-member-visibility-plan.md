@@ -81,7 +81,9 @@ git status --short
 3. 审查成员只在 owner 显式加载、坏响应整批拒绝、userId 无出口、disabled/非 owner 零请求；确认 `isActive` 未被写成在线状态。
 4. 审查 E2E 请求计数真实到达、重载确实发生、旧页面确实卸载、存储/URL/console/外网断言覆盖目标值，不接受恒真泄漏门。
 5. 独立串行运行 P13-E 聚焦与完整 auth-rbac E2E、lint、`git diff --check`；build 若 Grok 已通过且生产未返修可不机械重复。按信号选择三个后端既有节点，不运行后端全量或整仓 E2E。
-6. 审查不通过时只向 Grok 下发精确返修白名单；Codex 不代写功能生产代码。
+6. 审查发现疑似问题时，Codex 先下发只读确认消息，给出位置、行为、风险与最小范围；该消息不是返修授权，Grok 不得据此改文件或做 Git 写操作。
+7. 仅当 Codex 与 Grok 都明确确认问题存在后，Codex 才另发精确返修白名单与验收命令；若结论不一致，保持代码不动并补只读证据，仍无共识则交用户裁定。
+8. 若双确认前误触文件，立即中止并冻结现场，不继续、不清理、不提交；先补齐双方确认，再由新的独立返修任务接管。发现、确认、返修与 review_request 消息 ID 都写入闭环文档。
 
 ## 8. 提交与闭环
 
@@ -89,3 +91,11 @@ git status --short
 2. Grok review_request 后，Codex 独立验收并精确暂存通过的六生产加一测试文件，以中文功能提交推送。
 3. 将真实 failure-first、Grok/Codex 命令与结果、消息 ID、最终 SHA-256、未运行套件和遗留风险写回五份文档，单独中文闭环提交推送。
 4. 每次提交前核对分支、暂存白名单与 `git diff --check`；完成后核对空工作区、本地 HEAD 与远端一致。
+
+## 9. 完成记录
+
+- 文档冻结=`19f0bfe`，功能实现=`5685441`，均已推送 `collab/grok-code-codex-review`；代码提交严格六生产加一 E2E。
+- Failure-first 在生产哈希冻结时为 **14 failed / 2 passed**；Grok 最终 P13-E/完整认证 **25/36 passed**，lint/build/diff-check 通过。
+- Codex 独立 P13-E/完整认证 **25/36 passed**，lint/diff-check 通过；此前三个既有后端节点 **3 passed**，最终未改后端所以未重复。未运行后端全量或整仓 E2E。
+- 第二轮发现先经只读双确认 `msg_c1e71b76f13c418f99d6f73fbf778b77`/`msg_e6f7094596fc4d3db79661611b217f10`，再以新任务 `msg_f3914a680ccf4b9fbf3b3a099fb3f3cb` 修复；review_request=`msg_1bfe78d7492e476d9b7187ad847dbdbd`，Codex result=`msg_1ab08b68c9e74278ad7b17e537633321`。
+- 已清理测试产物，暂存区按提交边界核对；既有 Settings `get_or_create` 并发 UNIQUE 日志噪声另行立项，不在 P13-E 静默修复。

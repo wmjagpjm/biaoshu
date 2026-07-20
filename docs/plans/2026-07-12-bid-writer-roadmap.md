@@ -319,9 +319,10 @@
 
 1. 开工前：在本文件补充阶段目标、允许改动文件、数据边界、验收命令和明确不做项。
 2. 实现中：Grok 通过协作消息箱报告范围与测试；不得绕过 Codex 审查提交。
-3. 完成后：更新本文件、`docs/HANDOFF-next.md`、必要的联调/测试文档，并与代码一同提交、推送到协作分支。
-4. 提交前：必须通过 `git diff --check`；按改动范围运行后端测试、lint、build 和 E2E。
-5. GitHub 历史：一个可验收阶段至少一个中文提交，提交信息明确功能与阶段；禁止把数据库、密钥、构建产物和协作消息带入提交。
+3. 审查返修：Codex 发现疑似问题后先请 Grok 只读独立确认；只有双方明确确认存在，Codex 才另发修复授权。确认前禁止改代码；有分歧时保留现场补证据，不能静默修复。若已误触文件，立即冻结到双确认和新授权完成。
+4. 完成后：更新本文件、`docs/HANDOFF-next.md`、必要的联调/测试文档，并与代码一同提交、推送到协作分支。
+5. 提交前：必须通过 `git diff --check`；按改动范围运行后端测试、lint、build 和 E2E。
+6. GitHub 历史：一个可验收阶段至少一个中文提交，提交信息明确功能与阶段；禁止把数据库、密钥、构建产物和协作消息带入提交。
 
 ## 5. 当前下一步
 
@@ -365,15 +366,17 @@
 
 **严格边界**：九个生产文件、四个测试文件；无表/列/迁移、用户名快照、身份/成员 API、历史 actor、按 actor 搜索、presence、在线状态、SSE/WebSocket、协同光标/锁、评论、审批或完整审计。
 
-### P13-E：活动工作空间切换与成员只读可见性（已冻结，待实现）
+### P13-E：活动工作空间切换与成员只读可见性（已完成并推送）
 
 **目标**：复用 P10A 既有 `PUT /auth/active-workspace` 与 owner-only `GET /auth/members`，在权威业务壳提供活动空间选择器，在设置页提供所有者显式加载的脱敏成员只读列表，并消除 required 模式工作空间假值。
 
 **冻结边界**：严格前端六个生产文件加一个 auth-rbac E2E；成功切换按新角色整页重载，失败先 `/auth/me` 对账，避免 UI 与服务端会话空间分叉。成员列表不向非所有者放宽，不显示 userId，不把启用状态冒充在线状态。无后端、router、统一 HTTP 客户端、表/迁移、成员写 UI、存储、轮询、presence 或事件协议。完整契约=`docs/p13e-active-workspace-switch-member-visibility-contract.md`，计划=`docs/plans/2026-07-20-p13e-active-workspace-switch-member-visibility-plan.md`。
 
+**完成状态（2026-07-20）**：冻结=`19f0bfe`，实现=`5685441`。真实 failure-first **14 failed / 2 passed**；Grok 最终 P13-E/完整认证 **25/36 passed**、lint/build/diff-check 通过，Codex 独立 **25/36 passed**、lint/diff-check 通过，既有后端三个节点此前 **3 passed**。第二轮活动真值回退/重复 ID 与伪稳定 helper 先由 Codex/Grok 双确认，再以独立授权返修；最终非空空间必须精确 active、重复 ID 整响应拒绝、无首项角色/owner 回退。未跑后端全量或整仓 E2E。
+
 ### P13 后续协作主线（未实现）
 
-账号、workspace、RBAC、CAS、冲突提示与任务 SSE 工作空间鉴权已经存在；P13-E 已冻结活动空间切换 UI 与 owner-only 成员只读可见性。真正多人协作仍缺 presence/心跳、协同光标、章节锁/租约、事件广播与游标重放、WebSocket、多任务总线、断线恢复、评论/审批/通知。P13-E 完成后应分别冻结 presence 和事件协议，禁止一次合包。
+账号、workspace、RBAC、CAS、冲突提示与任务 SSE 工作空间鉴权已经存在；P13-E 已完成活动空间切换 UI 与 owner-only 成员只读可见性。真正多人协作仍缺 presence/心跳、协同光标、章节锁/租约、事件广播与游标重放、WebSocket、多任务总线、断线恢复、评论/审批/通知。下一包应单独审计和冻结，不得把 presence 与事件协议一次合包。
 
 阶段 0/1/2、阶段 3 M3-A 至 M3-D、阶段 4 **包 5** 至 **包 8/P8B/P8C/P8D/P8E**、P9A/P9B/P9C/P9D、阶段 5 P10A 至 P10K、**P11A/P11B/P11C 三个真实数据收口包**，以及 **P12A/P12B-A/B/C/D/P12C-A/B/C/P12D-A/B/P12E-A/B/C/P12F-A/B/C/D/P13-A** 均保持已交付。P8E 完整契约见 `docs/p8e-docling-local-helper-contract.md`，实施与独立验收记录见 `docs/plans/2026-07-15-p8e-docling-local-helper-plan.md`。
 
