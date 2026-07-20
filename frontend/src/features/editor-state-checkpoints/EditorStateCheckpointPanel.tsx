@@ -1,10 +1,11 @@
 /**
- * 模块：P12B-D2 / P12G / P12H / P12I / P12J-B 双工作区共用检查点折叠面板
+ * 模块：P12B-D2 / P12G / P12H / P12I / P12J-B / P12L 双工作区共用检查点折叠面板
  * 用途：展开后 list 元数据；保存服务器当前版本；内联二次确认后 restore；
  *       内联命名保存/覆盖/清除（成功原位更新，失败保值）；
  *       内联二次确认后单条 DELETE（成功原位移除，失败保值可重试）；
  *       显式名称/内容搜索（输入零请求；按钮/Enter 才 POST；同值零重发）；
- *       单条固定/取消固定（成功原位更新 isPinned，失败保值）。
+ *       单条固定/取消固定（成功原位更新 isPinned，失败保值）；
+ *       默认列表固定名额提示（render 期纯派生 isPinned===true 计数，搜索态隐藏）。
  * 对接：editorStateCheckpointApi；技术/商务 hook 的 create/restore 回调。
  * 二次开发：
  *   - 不渲染 checkpointId/stateVersion；不请求详情 snapshot
@@ -13,6 +14,7 @@
  *   - 删除/固定不依赖 props.disabled；成功零 list/editor-state 重载
  *   - active search 下刷新/创建/恢复重发同一 POST；清除恰好一次 GET；固定仅原位
  *   - 固定中文脱敏；禁止 console/存储/URL/Cookie/剪贴板/下载/轮询/外网
+ *   - 名额提示零新增请求/state/effect；不得本地阻断第 6 条固定
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -67,6 +69,8 @@ const MSG_PIN_SAVING = "保存固定状态中…";
 const MSG_PIN_OK = "检查点已固定";
 const MSG_PIN_UNPIN_OK = "已取消固定";
 const MSG_PIN_FAIL = "保存检查点固定状态失败，当前状态已保留";
+/** P12L：默认列表固定名额展示上限（仅展示，不阻断请求） */
+const MAX_PINNED_CHECKPOINTS_DISPLAY = 5;
 
 /** 创建回调结果 */
 export type CheckpointCreateOutcome =
@@ -1254,6 +1258,16 @@ export function EditorStateCheckpointPanel({
   const deleteUiLocked = pendingDeleteId != null || deleteBusy;
   const pinUiLocked = pinBusy;
   const searchActive = appliedSearch != null;
+  /**
+   * P12L：render 期纯派生固定条数；严格 isPinned === true，禁止 truthy 宽判。
+   * 仅展开后的默认列表成功态展示；不新增 state/effect/请求。
+   */
+  const pinnedCount = items.reduce(
+    (n, it) => (it.isPinned === true ? n + 1 : n),
+    0,
+  );
+  const showPinnedCount =
+    !searchActive && !listLoading && listError == null;
   const actionsDisabled =
     disabled ||
     createBusy ||
@@ -1470,6 +1484,18 @@ export function EditorStateCheckpointPanel({
               style={{ margin: "0 0 8px", color: "var(--danger)" }}
             >
               {listError}
+            </p>
+          ) : null}
+          {showPinnedCount ? (
+            <p
+              data-testid="editor-state-checkpoint-pinned-count"
+              style={{
+                margin: "0 0 8px",
+                fontSize: 13,
+                color: "var(--text-muted, #4b5563)",
+              }}
+            >
+              {`已固定 ${pinnedCount} 条（最多 ${MAX_PINNED_CHECKPOINTS_DISPLAY} 条）`}
             </p>
           ) : null}
           {listLoading && items.length === 0 ? (

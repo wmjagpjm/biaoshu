@@ -6311,6 +6311,630 @@ test.describe("P12J-B 终态静态自检", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// P12L 检查点固定名额提示前端
+// failure-first：必须先进入页面且默认列表已加载，再因 editor-state-checkpoint-pinned-count 缺失失败。
+// ---------------------------------------------------------------------------
+
+/** 用途：生成精确固定名额中文文案（合同：已固定 X 条（最多 5 条））。 */
+function pinnedCountText(count: number): string {
+  return `已固定 ${count} 条（最多 5 条）`;
+}
+
+test.describe("P12L 技术标默认固定名额提示与状态变化", () => {
+  test("P12L 技术标：列表已加载后显示名额；0/X/5；pin/unpin/delete/失败/5满仍请求；搜索隐藏；零旁路", async ({
+    page,
+  }) => {
+    const state = createProbeState("tech");
+    appendCheckpoint(state, TECH_A, 1);
+    appendCheckpoint(state, TECH_A, 2);
+    state.checkpoints[TECH_A][0].displayName = "P12L_ALPHA";
+    state.checkpoints[TECH_A][1].displayName = "P12L_BETA";
+    const id0 = state.checkpoints[TECH_A][0].checkpointId;
+    const id1 = state.checkpoints[TECH_A][1].checkpointId;
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+
+    await openWorkspace(page, "tech", TECH_A);
+    await expandPanel(page);
+    await expect
+      .poll(() => state.listLog.length, { timeout: 10_000 })
+      .toBe(1);
+    // failure-first 前置：默认列表真实加载可见，证明不是路由/白页/服务失败
+    await expect(page.getByTestId("editor-state-checkpoint-item-0")).toBeVisible();
+    await expect(page.getByTestId("editor-state-checkpoint-item-1")).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-list-error"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-list-loading"),
+    ).toHaveCount(0);
+    // 业务红：缺 editor-state-checkpoint-pinned-count 即失败
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-count"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-count"),
+    ).toHaveText(pinnedCountText(0));
+
+    const listBase = state.listLog.length;
+    const searchBase = state.searchLog.length;
+    const editorBase = state.editorGetLog.length;
+    const putBase = state.putLog.length;
+    const restoreBase = state.restoreLog.length;
+    const createBase = state.createLog.length;
+    const deleteBase = state.deleteLog.length;
+    const nameBase = state.nameLog.length;
+    const detailBase = state.detailLog.length;
+    const pinBase = state.pinLog.length;
+
+    // pin 成功：0 → 1，零 list/search 重载
+    await page.getByTestId("editor-state-checkpoint-pin-0").click();
+    await expect
+      .poll(() => pinCompleteCount(state, TECH_A, id0), { timeout: 10_000 })
+      .toBe(1);
+    expect(pinHitCount(state, TECH_A, id0)).toBe(1);
+    expect(state.pinLog.length).toBe(pinBase + 1);
+    expect(state.pinLog[pinBase].isPinned).toBe(true);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-count"),
+    ).toHaveText(pinnedCountText(1));
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-badge-0"),
+    ).toHaveText("已固定");
+    expect(state.listLog.length).toBe(listBase);
+    expect(state.searchLog.length).toBe(searchBase);
+    expect(state.editorGetLog.length).toBe(editorBase);
+    expect(state.detailLog.length).toBe(detailBase);
+    expect(state.putLog.length).toBe(putBase);
+    expect(state.restoreLog.length).toBe(restoreBase);
+    expect(state.createLog.length).toBe(createBase);
+    expect(state.deleteLog.length).toBe(deleteBase);
+    expect(state.nameLog.length).toBe(nameBase);
+
+    // 再固定第二项：1 → 2
+    await page.getByTestId("editor-state-checkpoint-pin-1").click();
+    await expect
+      .poll(() => pinCompleteCount(state, TECH_A, id1), { timeout: 10_000 })
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-count"),
+    ).toHaveText(pinnedCountText(2));
+    expect(state.listLog.length).toBe(listBase);
+    expect(state.searchLog.length).toBe(searchBase);
+
+    // unpin 成功：2 → 1
+    await page.getByTestId("editor-state-checkpoint-pin-0").click();
+    await expect
+      .poll(() => pinCompleteCount(state, TECH_A, id0), { timeout: 10_000 })
+      .toBe(2);
+    expect(state.pinLog[state.pinLog.length - 1].isPinned).toBe(false);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-count"),
+    ).toHaveText(pinnedCountText(1));
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-badge-0"),
+    ).toHaveCount(0);
+    expect(state.listLog.length).toBe(listBase);
+    expect(state.searchLog.length).toBe(searchBase);
+
+    // pin 失败保值：保持 1
+    state.pinModeByCheckpoint[id0] = { kind: "http_error", status: 500 };
+    await page.getByTestId("editor-state-checkpoint-pin-0").click();
+    await expect
+      .poll(() => pinCompleteCount(state, TECH_A, id0), { timeout: 10_000 })
+      .toBe(3);
+    expect(state.pinCompleteLog[state.pinCompleteLog.length - 1].status).toBe(
+      500,
+    );
+    await expect(page.getByTestId("editor-state-checkpoint-status")).toHaveText(
+      MSG_PIN_FAIL,
+    );
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-count"),
+    ).toHaveText(pinnedCountText(1));
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-badge-0"),
+    ).toHaveCount(0);
+    expect(state.listLog.length).toBe(listBase);
+    expect(state.searchLog.length).toBe(searchBase);
+    state.pinModeByCheckpoint[id0] = { kind: "ok" };
+
+    // 删除固定项成功：1 → 0（item-1 仍固定）
+    const deleteCompleteBeforePinned = state.deleteCompleteLog.length;
+    await page.getByTestId("editor-state-checkpoint-delete-1").click();
+    await page
+      .getByTestId("editor-state-checkpoint-confirm-delete-1")
+      .click();
+    await expect
+      .poll(() => state.deleteCompleteLog.length, { timeout: 10_000 })
+      .toBe(deleteCompleteBeforePinned + 1);
+    expect(state.deleteLog.length).toBe(deleteBase + 1);
+    expect(state.deleteLog[state.deleteLog.length - 1].checkpointId).toBe(id1);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-count"),
+    ).toHaveText(pinnedCountText(0));
+    await expect(page.getByTestId("editor-state-checkpoint-item-0")).toBeVisible();
+    await expect(page.getByTestId("editor-state-checkpoint-item-1")).toHaveCount(
+      0,
+    );
+    expect(state.listLog.length).toBe(listBase);
+    expect(state.searchLog.length).toBe(searchBase);
+    expect(state.editorGetLog.length).toBe(editorBase);
+
+    // 固定剩余项后追加普通项；删除普通项数量不变
+    await page.getByTestId("editor-state-checkpoint-pin-0").click();
+    await expect
+      .poll(() => pinCompleteCount(state, TECH_A, id0), { timeout: 10_000 })
+      .toBe(4);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-count"),
+    ).toHaveText(pinnedCountText(1));
+    appendCheckpoint(state, TECH_A, 3);
+    state.checkpoints[TECH_A][1].displayName = "P12L_GAMMA";
+    const id2 = state.checkpoints[TECH_A][1].checkpointId;
+    const listBeforeRefresh = state.listLog.length;
+    await page.getByTestId("editor-state-checkpoint-refresh").click();
+    await expect
+      .poll(() => state.listLog.length, { timeout: 10_000 })
+      .toBe(listBeforeRefresh + 1);
+    await expect(page.getByTestId("editor-state-checkpoint-item-1")).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-count"),
+    ).toHaveText(pinnedCountText(1));
+    const listAfterRefresh = state.listLog.length;
+    const deleteCompleteBeforeNormal = state.deleteCompleteLog.length;
+    await page.getByTestId("editor-state-checkpoint-delete-1").click();
+    await page
+      .getByTestId("editor-state-checkpoint-confirm-delete-1")
+      .click();
+    await expect
+      .poll(() => state.deleteCompleteLog.length, { timeout: 10_000 })
+      .toBe(deleteCompleteBeforeNormal + 1);
+    expect(state.deleteLog[state.deleteLog.length - 1].checkpointId).toBe(id2);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-count"),
+    ).toHaveText(pinnedCountText(1));
+    expect(state.listLog.length).toBe(listAfterRefresh);
+    expect(state.searchLog.length).toBe(searchBase);
+
+    // 删除失败保值
+    state.deleteModeByCheckpoint[id0] = {
+      kind: "http_error",
+      status: 500,
+      rawMessage: "P12L_DELETE_RAW_SECRET",
+    };
+    const deleteCompleteBeforeFail = state.deleteCompleteLog.length;
+    await page.getByTestId("editor-state-checkpoint-delete-0").click();
+    await page
+      .getByTestId("editor-state-checkpoint-confirm-delete-0")
+      .click();
+    await expect
+      .poll(() => state.deleteCompleteLog.length, { timeout: 10_000 })
+      .toBe(deleteCompleteBeforeFail + 1);
+    expect(state.deleteCompleteLog[state.deleteCompleteLog.length - 1].status).toBe(
+      500,
+    );
+    await expect(page.getByTestId("editor-state-checkpoint-status")).toHaveText(
+      MSG_DELETE_FAIL,
+    );
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-count"),
+    ).toHaveText(pinnedCountText(1));
+    await expect(page.getByTestId("editor-state-checkpoint-item-0")).toBeVisible();
+    // 失败保留确认态：取消后解锁刷新/固定入口
+    await page.getByTestId("editor-state-checkpoint-cancel-delete-0").click();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-delete-confirm-0"),
+    ).toHaveCount(0);
+    expect(state.listLog.length).toBe(listAfterRefresh);
+    delete state.deleteModeByCheckpoint[id0];
+
+    // 构造 5 固定 + 1 普通：5/5 文案；第 6 条固定仍发一次 PATCH 且失败保值
+    state.checkpoints[TECH_A] = [];
+    for (let n = 1; n <= 6; n += 1) {
+      appendCheckpoint(state, TECH_A, 10 + n);
+      state.checkpoints[TECH_A][n - 1].displayName = `P12L_CAP_${n}`;
+      state.checkpoints[TECH_A][n - 1].isPinned = n <= 5;
+    }
+    const unpinnedId = state.checkpoints[TECH_A][5].checkpointId;
+    const listBeforeCap = state.listLog.length;
+    await page.getByTestId("editor-state-checkpoint-refresh").click();
+    await expect
+      .poll(() => state.listLog.length, { timeout: 10_000 })
+      .toBe(listBeforeCap + 1);
+    await expect(page.getByTestId("editor-state-checkpoint-item-0")).toBeVisible();
+    await expect(page.getByTestId("editor-state-checkpoint-item-5")).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-count"),
+    ).toHaveText(pinnedCountText(5));
+    const listAtCap = state.listLog.length;
+    const searchAtCap = state.searchLog.length;
+    const pinAtCap = state.pinLog.length;
+    const pinCompleteAtCap = pinCompleteCount(state, TECH_A, unpinnedId);
+    state.pinModeByCheckpoint[unpinnedId] = {
+      kind: "http_error",
+      status: 409,
+      rawMessage: "P12L_PIN_CAP_RAW_SECRET",
+    };
+    await expect(page.getByTestId("editor-state-checkpoint-pin-5")).toHaveText(
+      "固定",
+    );
+    await expect(page.getByTestId("editor-state-checkpoint-pin-5")).toBeEnabled();
+    await page.getByTestId("editor-state-checkpoint-pin-5").click();
+    await expect
+      .poll(() => pinCompleteCount(state, TECH_A, unpinnedId), {
+        timeout: 10_000,
+      })
+      .toBe(pinCompleteAtCap + 1);
+    expect(state.pinLog.length).toBe(pinAtCap + 1);
+    expect(pinHitCount(state, TECH_A, unpinnedId)).toBe(pinCompleteAtCap + 1);
+    expect(state.pinLog[pinAtCap].isPinned).toBe(true);
+    expect(state.pinCompleteLog[state.pinCompleteLog.length - 1].status).toBe(
+      409,
+    );
+    await expect(page.getByTestId("editor-state-checkpoint-status")).toHaveText(
+      MSG_PIN_FAIL,
+    );
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-count"),
+    ).toHaveText(pinnedCountText(5));
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-badge-5"),
+    ).toHaveCount(0);
+    expect(state.listLog.length).toBe(listAtCap);
+    expect(state.searchLog.length).toBe(searchAtCap);
+    expect(state.editorGetLog.length).toBe(editorBase);
+    delete state.pinModeByCheckpoint[unpinnedId];
+
+    // active search：隐藏名额；搜索内 pin 仍隐藏；清除后一次 GET 恢复默认数量
+    state.checkpoints[TECH_A][0].displayName = "P12L_HIT_ONE";
+    state.checkpoints[TECH_A][1].displayName = "P12L_HIT_TWO";
+    state.checkpoints[TECH_A][5].displayName = "P12L_HIT_SIX";
+    state.checkpoints[TECH_A][5].isPinned = false;
+    state.searchFilter = (meta, query) =>
+      meta.displayName != null && meta.displayName.includes(query);
+    const listBeforeSearch = state.listLog.length;
+    const searchBefore = state.searchLog.length;
+    await page
+      .getByTestId("editor-state-checkpoint-search-input")
+      .fill("P12L_HIT");
+    await page.getByTestId("editor-state-checkpoint-search-apply").click();
+    await expect
+      .poll(() => state.searchCompleteLog.length, { timeout: 10_000 })
+      .toBe(1);
+    expect(state.searchLog.length).toBe(searchBefore + 1);
+    expect(state.listLog.length).toBe(listBeforeSearch);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-search-active"),
+    ).toHaveText("当前为名称或内容搜索结果");
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-count"),
+    ).toHaveCount(0);
+    await expect(page.getByTestId("editor-state-checkpoint-item-0")).toBeVisible();
+    await expect(page.getByTestId("editor-state-checkpoint-item-1")).toBeVisible();
+    await expect(page.getByTestId("editor-state-checkpoint-item-2")).toBeVisible();
+    // 搜索结果第三项对应原未固定项
+    const searchTarget = state.checkpoints[TECH_A][5].checkpointId;
+    await expect(page.getByTestId("editor-state-checkpoint-pin-2")).toHaveText(
+      "固定",
+    );
+    const pinSearchBefore = state.pinLog.length;
+    const pinSearchCompleteBefore = pinCompleteCount(
+      state,
+      TECH_A,
+      searchTarget,
+    );
+    const searchMid = state.searchLog.length;
+    const listMid = state.listLog.length;
+    await page.getByTestId("editor-state-checkpoint-pin-2").click();
+    await expect
+      .poll(() => pinCompleteCount(state, TECH_A, searchTarget), {
+        timeout: 10_000,
+      })
+      .toBe(pinSearchCompleteBefore + 1);
+    expect(state.pinLog.length).toBe(pinSearchBefore + 1);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-badge-2"),
+    ).toHaveText("已固定");
+    // 搜索态始终隐藏名额提示，不得用子集冒充全局数
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-count"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-search-active"),
+    ).toHaveText("当前为名称或内容搜索结果");
+    expect(state.searchLog.length).toBe(searchMid);
+    expect(state.listLog.length).toBe(listMid);
+
+    // 清除前将探针第 6 条改回未固定，保证默认重载后仍为合同 5
+    state.checkpoints[TECH_A][5].isPinned = false;
+    const listBeforeClear = state.listLog.length;
+    const searchBeforeClear = state.searchLog.length;
+    await page.getByTestId("editor-state-checkpoint-search-clear").click();
+    await expect
+      .poll(() => state.listLog.length, { timeout: 10_000 })
+      .toBe(listBeforeClear + 1);
+    expect(state.searchLog.length).toBe(searchBeforeClear);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-search-active"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-count"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-count"),
+    ).toHaveText(pinnedCountText(5));
+
+    // 空成功列表：0/5
+    state.checkpoints[TECH_A] = [];
+    const listBeforeEmpty = state.listLog.length;
+    await page.getByTestId("editor-state-checkpoint-refresh").click();
+    await expect
+      .poll(() => state.listLog.length, { timeout: 10_000 })
+      .toBe(listBeforeEmpty + 1);
+    await expect(page.getByTestId("editor-state-checkpoint-empty")).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-count"),
+    ).toHaveText(pinnedCountText(0));
+
+    // 列表错误：隐藏提示
+    state.listResponseOverride = { items: [{ bad: true }] };
+    const listBeforeErr = state.listLog.length;
+    await page.getByTestId("editor-state-checkpoint-refresh").click();
+    await expect
+      .poll(() => state.listLog.length, { timeout: 10_000 })
+      .toBe(listBeforeErr + 1);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-list-error"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-count"),
+    ).toHaveCount(0);
+    state.listResponseOverride = null;
+
+    // 加载中：hold list，提示不得出现
+    const holdList = createHoldGate();
+    state.listMode = { kind: "hold", gate: holdList };
+    await page.getByTestId("editor-state-checkpoint-toggle").click();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-body"),
+    ).toHaveCount(0);
+    await page.getByTestId("editor-state-checkpoint-toggle").click();
+    await holdList.waitUntilEntered(1);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-list-loading"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-count"),
+    ).toHaveCount(0);
+    holdList.release();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-list-loading"),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-count"),
+    ).toHaveText(pinnedCountText(0));
+    state.listMode = { kind: "ok" };
+
+    expect(state.externalHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+    const consoleBlob = guards.consoleLogs.join("\n");
+    expect(consoleBlob).not.toContain("P12L_DELETE_RAW_SECRET");
+    expect(consoleBlob).not.toContain("P12L_PIN_CAP_RAW_SECRET");
+  });
+});
+
+test.describe("P12L 技术标 A→B 迟到隔离", () => {
+  test("P12L 技术标：A→B 迟到 pin success 不污染 B 数量", async ({ page }) => {
+    const state = createProbeState("tech");
+    appendCheckpoint(state, TECH_A, 1);
+    appendCheckpoint(state, TECH_A, 2);
+    appendCheckpoint(state, TECH_B, 3);
+    appendCheckpoint(state, TECH_B, 4);
+    state.checkpoints[TECH_A][0].displayName = "P12L_A0";
+    state.checkpoints[TECH_B][0].displayName = "P12L_B0";
+    state.checkpoints[TECH_B][0].isPinned = true;
+    state.checkpoints[TECH_B][1].displayName = "P12L_B1";
+    const targetA = state.checkpoints[TECH_A][0].checkpointId;
+    const targetB = state.checkpoints[TECH_B][1].checkpointId;
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+
+    await openWorkspace(page, "tech", TECH_A);
+    await expandPanel(page);
+    await expect
+      .poll(() => state.listLog.length, { timeout: 10_000 })
+      .toBe(1);
+    await expect(page.getByTestId("editor-state-checkpoint-item-0")).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-count"),
+    ).toHaveText(pinnedCountText(0));
+
+    const gateA = createHoldGate();
+    state.pinModeByCheckpoint[targetA] = {
+      kind: "hold",
+      gate: gateA,
+      then: "ok",
+    };
+    await page.getByTestId("editor-state-checkpoint-pin-0").click();
+    await gateA.waitUntilEntered(1);
+    await expect
+      .poll(() => pinHitCount(state, TECH_A, targetA), { timeout: 10_000 })
+      .toBe(1);
+    await expect(page.getByTestId("editor-state-checkpoint-status")).toHaveText(
+      MSG_PIN_SAVING,
+    );
+
+    await page.goto(`/technical-plan/${TECH_B}/analysis`);
+    await expect(
+      page.getByTestId("technical-editor-workspace"),
+    ).toBeVisible();
+    await expandPanel(page);
+    await expect
+      .poll(() => state.listLog.filter((p) => p === TECH_B).length, {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    await expect(page.getByTestId("editor-state-checkpoint-item-0")).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-count"),
+    ).toHaveText(pinnedCountText(1));
+    const listB = state.listLog.length;
+    const searchB = state.searchLog.length;
+
+    gateA.release();
+    await expect
+      .poll(() => pinCompleteCount(state, TECH_A, targetA), { timeout: 10_000 })
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-count"),
+    ).toHaveText(pinnedCountText(1));
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-badge-0"),
+    ).toHaveText("已固定");
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-badge-1"),
+    ).toHaveCount(0);
+    expect(state.listLog.length).toBe(listB);
+    expect(state.searchLog.length).toBe(searchB);
+    expect(state.checkpoints[TECH_B][0].isPinned).toBe(true);
+    expect(state.checkpoints[TECH_B][1].isPinned).toBe(false);
+
+    // B 本项目 pin 普通项：1 → 2
+    await page.getByTestId("editor-state-checkpoint-pin-1").click();
+    await expect
+      .poll(() => pinCompleteCount(state, TECH_B, targetB), { timeout: 10_000 })
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-count"),
+    ).toHaveText(pinnedCountText(2));
+    expect(state.listLog.length).toBe(listB);
+    expect(state.searchLog.length).toBe(searchB);
+    expect(state.externalHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+  });
+});
+
+test.describe("P12L 商务标共用与数据最小化", () => {
+  test("P12L 商务标：同一 testid/文案；pin 即时重算；零 list/search/editor-state 旁路；零泄漏", async ({
+    page,
+  }) => {
+    const state = createProbeState("biz");
+    appendCheckpoint(state, BIZ_A, 1);
+    appendCheckpoint(state, BIZ_A, 2);
+    state.checkpoints[BIZ_A][0].isPinned = true;
+    state.checkpoints[BIZ_A][0].displayName = "BIZ_P12L_PINNED";
+    state.checkpoints[BIZ_A][1].displayName = "BIZ_P12L_NORMAL";
+    const target1 = state.checkpoints[BIZ_A][1].checkpointId;
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+
+    await openWorkspace(page, "biz", BIZ_A);
+    await expandPanel(page);
+    await expect
+      .poll(() => state.listLog.length, { timeout: 10_000 })
+      .toBe(1);
+    await expect(page.getByTestId("editor-state-checkpoint-item-0")).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-count"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-count"),
+    ).toHaveText(pinnedCountText(1));
+
+    const listBefore = state.listLog.length;
+    const searchBefore = state.searchLog.length;
+    const editorBefore = state.editorGetLog.length;
+    const detailBefore = state.detailLog.length;
+    await page.getByTestId("editor-state-checkpoint-pin-1").click();
+    await expect
+      .poll(() => pinCompleteCount(state, BIZ_A, target1), { timeout: 10_000 })
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-count"),
+    ).toHaveText(pinnedCountText(2));
+    expect(state.listLog.length).toBe(listBefore);
+    expect(state.searchLog.length).toBe(searchBefore);
+    expect(state.editorGetLog.length).toBe(editorBefore);
+    expect(state.detailLog.length).toBe(detailBefore);
+    expect(state.externalHits).toEqual([]);
+
+    const secrets = [
+      state.checkpoints[BIZ_A][0].checkpointId,
+      state.checkpoints[BIZ_A][0].stateVersion,
+      target1,
+    ];
+    const storage = await page.evaluate(() => ({
+      ls: JSON.stringify(window.localStorage),
+      ss: JSON.stringify(window.sessionStorage),
+      cookie: document.cookie,
+      href: location.href,
+    }));
+    const html = await page.content();
+    const consoleBlob = guards.consoleLogs.join("\n");
+    for (const s of secrets) {
+      expect(storage.ls).not.toContain(s);
+      expect(storage.ss).not.toContain(s);
+      expect(storage.cookie).not.toContain(s);
+      expect(storage.href).not.toContain(s);
+      expect(html).not.toContain(s);
+      expect(consoleBlob).not.toContain(s);
+    }
+    await expect(
+      page.getByTestId("editor-state-checkpoint-pinned-count"),
+    ).toHaveText(pinnedCountText(2));
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+  });
+});
+
+test.describe("P12L 终态静态自检", () => {
+  test("P12L marker 后禁止项精确零命中", () => {
+    const src = fs.readFileSync(
+      path.join(process.cwd(), "e2e/editor-state-checkpoint-restore.spec.ts"),
+      "utf8",
+    );
+    const beginMark = "// P12L 检查点固定名额提示前端";
+    const endMark = "// P12L 终态静态自检";
+    const begin = src.indexOf(beginMark);
+    const end = src.indexOf(endMark);
+    expect(begin).not.toBe(-1);
+    expect(end).not.toBe(-1);
+    expect(end > begin).toBe(true);
+    const block = src.slice(begin, end);
+    expect(block).not.toMatch(/force\s*:\s*true/);
+    expect(block).not.toMatch(/toBeGreaterThanOrEqual/);
+    expect(block).not.toMatch(/toBeGreaterThan\(/);
+    expect(block).not.toMatch(/waitForTimeout\s*\(/);
+    expect(block).not.toMatch(/Promise\.race/);
+    expect(block).not.toMatch(/Math\.min/);
+    expect(block).not.toMatch(/\btest\.skip\b/);
+    expect(block).not.toMatch(/\bxfail\b/);
+    expect(block).not.toMatch(/\bretries\s*:\s*[1-9]/);
+  });
+
+  test("P12L 生产面板固定名额提示可执行守卫", () => {
+    const panel = fs.readFileSync(
+      path.join(
+        process.cwd(),
+        "src/features/editor-state-checkpoints/EditorStateCheckpointPanel.tsx",
+      ),
+      "utf8",
+    );
+    expect(panel).toContain("MAX_PINNED_CHECKPOINTS_DISPLAY");
+    expect(panel).toContain("editor-state-checkpoint-pinned-count");
+    expect(panel).toContain("已固定");
+    expect(panel).toContain("最多");
+    expect(panel).toMatch(/isPinned\s*===\s*true/);
+    // 禁止本地阻断第 6 条固定请求
+    expect(panel).not.toMatch(/pinnedCount\s*>=\s*MAX_PINNED/);
+    expect(panel).not.toMatch(/pinnedCount\s*===\s*MAX_PINNED/);
+  });
+});
+
 test("契约常量格式", () => {
   expect(seedStateVersion(1)).toMatch(STATE_VERSION_RE);
   expect(seedCheckpointId(1)).toMatch(CHECKPOINT_ID_RE);
