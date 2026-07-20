@@ -331,7 +331,7 @@
 
 **冻结边界**：严格六文件、纯前端、零新请求、零持久化；共享组件只做严格无后缀 UTC ISO 格式化，两份 Hook 复用既有 session/write epoch 接受响应元数据，两份页面只展示。禁止后端、API、数据库、身份、presence、轮询、SSE/WebSocket 和“实时/最后由谁”承诺。完整契约见 `docs/p13b-editor-state-version-freshness-contract.md`，实施计划见 `docs/plans/2026-07-20-p13b-editor-state-version-freshness-plan.md`。
 
-**选择依据**：现有 CAS/冲突 UI 已完整，不重复包装；精确操作者归因必须覆盖浏览器、任务、解析回调、融合与恢复等全部写链和 SQLite 迁移，不能为赶首版只标记浏览器写入而产生错误归因，因此留给独立 P13-C。
+**选择依据**：现有 CAS/冲突 UI 已完整，不重复包装；精确操作者归因必须覆盖浏览器、任务、解析回调、融合与恢复等全部写链和 SQLite 迁移，不能为赶首版只标记浏览器写入而产生错误归因，因此留给独立 P13-D1/D2。
 
 **验收**：真实 failure-first **6 failed / 0 passed**；Grok P13-B/技术商务真值 **6/46 passed**，lint/build 通过。Codex 首轮仅退回 E2E 反假绿，关闭死 GET gate、宽泛计数与缺失真实 PUT abort 后独立 P13-B **6 passed（24.7s）**、lint/diff-check 通过。纯前端展示包未运行后端 pytest，不重复整仓 318 E2E。
 
@@ -343,7 +343,13 @@
 
 **验收**：真实 failure-first 后端 **18 failed**、前端 **5 failed**；Grok 后端 P13-C **18 passed**、P13-B/C E2E **11 passed**、lint/build 通过。Codex 定点回归发现两条旧 P12C 合同冲突并退回 test-only，同时关闭 SQLite PRAGMA 污染和 SQL 宽证据；最终独立后端 **32 + 19 passed**、前端 **11 passed**，lint/py_compile/diff-check/白名单通过。未跑后端全量或整仓 E2E。
 
-**下一步口径**：系统已具备可用的版本时间与流程来源快速第一版。精确操作者归因仍需覆盖浏览器、任务、revise、两类解析、融合和两类恢复的 actor 传播与 SQLite 迁移，不能只给浏览器写入贴用户名；先继续审计其它无需外部制品/授权的高收益小包。真实 MinerU/Docling 制品、用户真实语料调优、外部标讯来源与 Word 整章版式仍分别受本机制品、用户语料、合法授权和跨页视觉决策约束，不混入本包。
+**下一步口径**：系统已具备可用的版本时间与流程来源快速第一版。精确操作者归因拆为连续 P13-D1/D2：D1 先为修订与异步任务建立可信可空 actor 账本，覆盖浏览器、任务、revise、两类解析、融合和两类恢复九条写链；D2 再解析当前版本用户名并接入技术/商务标题区。不得只给浏览器写入贴用户名。D1 契约=`docs/p13d1-editor-state-revision-actor-ledger-contract.md`，计划=`docs/plans/2026-07-20-p13d1-editor-state-revision-actor-ledger-plan.md`。真实 MinerU/Docling 制品、用户真实语料调优、外部标讯来源与 Word 整章版式仍分别受本机制品、用户语料、合法授权和跨页视觉决策约束，不混入本包。
+
+### P13-D1：editor-state 修订操作者可信账本（已冻结，待实现）
+
+**目标**：为 `editor_state_revisions` 与异步 `project_tasks` 增加可空 `actor_user_id`，required 模式只认认证 request state，disabled/旧数据固定未知；九类真实写链在原事务传播 actor。
+
+**关键真实性**：空账本或断链时补入的 `before` 修订 actor 固定 `NULL`，只有真实不同的 `after` 才记录本次 actor；无变化、stale、零恢复和同版本恢复不伪造操作者。P13-D1 不公开用户名或新响应字段，完成后立即推进 P13-D2 展示。
 
 阶段 0/1/2、阶段 3 M3-A 至 M3-D、阶段 4 **包 5** 至 **包 8/P8B/P8C/P8D/P8E**、P9A/P9B/P9C/P9D、阶段 5 P10A 至 P10K、**P11A/P11B/P11C 三个真实数据收口包**，以及 **P12A/P12B-A/B/C/D/P12C-A/B/C/P12D-A/B/P12E-A/B/C/P12F-A/B/C/D/P13-A** 均保持已交付。P8E 完整契约见 `docs/p8e-docling-local-helper-contract.md`，实施与独立验收记录见 `docs/plans/2026-07-15-p8e-docling-local-helper-plan.md`。
 

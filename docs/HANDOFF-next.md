@@ -1,6 +1,6 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-20（P13-C 当前已载入版本修订来源可见性快速第一版已完成；下一增量待审计）
+> **交接日期**：2026-07-20（P13-C 快速第一版已完成；P13-D1 修订操作者可信账本已冻结待实现）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
@@ -24,8 +24,8 @@
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
 当前进度：P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/B、P12E-A/B/C、P12F-A/B/C/D/E-A/E-B/F-A/F-B/G-A/G-B/H/I/J-A/J-B/P12K/P12L/P12M/P12N、P13-A/P13-B/P13-C、P9D、P9C-R1、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。P13-C 实现=`6eaa89f`；整仓前端 **318 passed** 仍仅作既有历史基线。
 当前状态：修订历史已闭合来源、UTC 时间、联合搜索、搜索命中来源标签、游标分页、单条删除、展示名称、固定与保护性裁剪；检查点已有创建、列表、详情、安全恢复、展示名称、单条删除、当前项目显式搜索、固定状态读取/入口、固定/安全双保护裁剪、默认列表固定优先排序与固定名额提示。
-当前执行包：P13-C 已闭环；冻结=`e62ea27`、实现=`6eaa89f`。`editor-state` 必出可空当前修订来源，技术/商务标题区复用九类中文标签；零迁移、零新前端请求，不声称操作者或远端实时最新。
-下一步：先确认 P13-C 文档闭环推送且工作区干净，再审计下一个无需外部制品/授权的高收益小包。精确操作者包必须覆盖全部 editor-state 写入口和 SQLite 迁移；presence/SSE/WebSocket、尚未加载固定项提前进入第一页、Word 整章版式、真实解析模型/语料与新增外部来源仍是独立后续项。
+当前执行包：P13-D1 editor-state 修订操作者可信账本；契约=`docs/p13d1-editor-state-revision-actor-ledger-contract.md`，计划=`docs/plans/2026-07-20-p13d1-editor-state-revision-actor-ledger-plan.md`。为 revision/task 增加可空 actor，覆盖九类写链；补账 before 固定未知，真实变化 after 才归因。
+下一步：Grok 先写 failure-first 专项，再按白名单实现 P13-D1；Codex 审查迁移、九路传播、异步身份、无泄漏和原子回滚。D1 验收推送后立即做 P13-D2 当前操作者用户名展示。presence/SSE/WebSocket、按 actor 搜索、Word 整章版式、真实解析模型/语料与新增外部来源仍是独立后续项。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
