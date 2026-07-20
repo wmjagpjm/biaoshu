@@ -1,6 +1,6 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-20（P12N 已完成；P13-B 已载入编辑版本更新时间可见性已冻结，待 Grok 实现）
+> **交接日期**：2026-07-20（P13-B 已载入编辑版本更新时间可见性快速第一版已完成；下一增量待审计）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
@@ -10,7 +10,7 @@
 > **P12M 完成状态**：冻结=`95b298f`、实现=`cc23542`。首轮七文件实现后，受影响回归准确暴露两份旧七键测试；经 Codex 明确 test-only 扩围后闭环，生产边界未扩大。
 > **P12M 最终生产哈希**：schemas=`76633E2BFF418A9FBBD0DD3AD18164C62496340AB4AD30BCCD7BDE2918DDF39D`；route=`3CC358D8280F3C6579261F88848D986E0A5A929D46D09F81FD378E7A9F23EF0C`；service=`F8D373B8DCCACB5B0921D4F972F0B85B29AAAAF82CFA0BE8E3D08AC2D107C1FA`；前端 API=`CEDCC06FDCB9B0743BEE2A5A019003D19145B2837BBB273226C15E7EFFD45BA3`；面板=`5C41D4A3C2807B1A69DB40D34F22E40A7A664280765A3F8D7C7DFCE3EB25E31D`。
 > **P12N 完成状态**：冻结=`337b401`、实现=`394639a`；严格两文件，只做非搜索态当前已加载修订的前端稳定固定优先，不改后端或游标。最终面板哈希=`FEAD15B6CB4043D1E6A96C1BFF9782A3B1F072A28D6619E375D9B5F07A23FF3B`，history E2E=`617C7481B55A2F7760A36127E5E5DB8C50E193526206D444F13D56AA6F65698F`。
-> **本地状态**：只允许分支 `collab/grok-code-codex-review`；P12N 已闭环，P13-B 契约/计划与交接文档冻结提交推送后必须恢复工作区干净且 HEAD/远端一致。
+> **本地状态**：只允许分支 `collab/grok-code-codex-review`；P13-B 实现=`1d4fe0b`，文档闭环提交推送后必须恢复工作区干净且 HEAD/远端一致。
 > **验收基线**：P12K Grok 串行专项/受影响集/后端全量 **12/132/1273 passed**；Codex 独立受影响集 **132 passed**。P12L Grok 聚焦/受影响 checkpoint **5/87 passed**，Codex 独立聚焦 **5 passed**。P12M Grok 搜索专项 **33 passed**、P12M/受影响 history **2/6 passed**；Codex 独立后端定点 **1/1/3 passed**、前端 **2/6 passed**。P12N Grok 聚焦/受影响 **5/12 passed**，Codex 独立 **5 passed**。P12M/P12N 均未跑后端全量或整仓 318 E2E。**所有 pytest 与 Playwright E2E 共用 SQLite 重置库，pytest 禁止 xdist/并发分组，Playwright 必须显式 `--workers=1 --retries=0` 逐条串行运行；按风险分级验收，避免 Grok 与 Codex 重复全量。**
 
 ---
@@ -24,8 +24,8 @@
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
 当前进度：P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/B、P12E-A/B/C、P12F-A/B/C/D/E-A/E-B/F-A/F-B/G-A/G-B/H/I/J-A/J-B/P12K/P12L/P12M/P12N、P13-A、P9D、P9C-R1、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。P12N 实现=`394639a`；Grok/Codex 聚焦 **5/5 passed**，整仓前端 **318 passed** 仍仅作既有基线。
 当前状态：修订历史已闭合来源、UTC 时间、联合搜索、搜索命中来源标签、游标分页、单条删除、展示名称、固定与保护性裁剪；检查点已有创建、列表、详情、安全恢复、展示名称、单条删除、当前项目显式搜索、固定状态读取/入口、固定/安全双保护裁剪、默认列表固定优先排序与固定名额提示。
-当前执行包：P13-B 已载入编辑版本更新时间可见性快速第一版；契约 `docs/p13b-editor-state-version-freshness-contract.md`，计划 `docs/plans/2026-07-20-p13b-editor-state-version-freshness-plan.md`。严格六文件、纯前端、零新请求，显示当前客户端已接受版本的服务端 UTC 更新时间。
-下一步：确认 P13-B 冻结提交已推送且工作区干净，通过消息箱让 Grok failure-first 实现。Grok 只跑 P13-B 与技术/商务真值聚焦；Codex 独立专项验收，不重复后端或整仓 318 E2E。精确操作者归因、presence/SSE/WebSocket、尚未加载固定项提前进入第一页仍是独立后续项。
+当前执行包：P13-B 已闭环；冻结=`040d644`、实现=`1d4fe0b`。严格六文件、纯前端、零新请求，技术/商务标题区显示当前客户端已接受版本的服务端 UTC 更新时间。
+下一步：确认 P13-B 文档闭环推送且工作区干净，再只读审计 P13-C 精确操作者归因或其它更高收益小包。操作者包必须覆盖全部 editor-state 写入口和 SQLite 迁移，不能只记录浏览器 PUT；presence/SSE/WebSocket、尚未加载固定项提前进入第一页仍是独立后续项。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -729,11 +729,11 @@ Codex 独立专项/受影响回归/后端全量 **13/72/918 passed**，仅 1 条
 
 P13-A 未修改 `deps.py`、中间件、前端、E2E、数据库或任务 schema；未实现 SSE 事件游标、重放、多任务总线、WebSocket、presence、前端工作空间切换 UI、URL token 或审计扩展。下一包必须重新审计、冻结并提交计划，Grok 不得自行沿用三文件白名单。
 
-## P13-B 已载入编辑版本更新时间可见性（已冻结，待实现，2026-07-20）
+## P13-B 已载入编辑版本更新时间可见性（已完成并推送，2026-07-20）
 
-契约=`docs/p13b-editor-state-version-freshness-contract.md`，计划=`docs/plans/2026-07-20-p13b-editor-state-version-freshness-plan.md`。只改共享展示组件、技术/商务 Hook 与页面、新专项 E2E 六文件；复用 editor-state 既有 `updatedAt` 显示“当前已载入版本”UTC 时间。初始 GET、成功 PUT 和显式重载接受同一响应时间；409/失败/非法版本/迟到 A 不改变当前时间；零新增请求、零持久化、零后端改动。
+契约=`docs/p13b-editor-state-version-freshness-contract.md`，计划=`docs/plans/2026-07-20-p13b-editor-state-version-freshness-plan.md`，冻结=`040d644`、实现=`1d4fe0b`。只改共享展示组件、技术/商务 Hook 与页面、新专项 E2E 六文件；复用 editor-state 既有 `updatedAt` 显示“当前已载入版本”UTC 时间。初始 GET、成功 PUT 和显式重载接受同一响应时间；409/失败/非法版本/迟到 A 不改变当前时间；零新增请求、零持久化、零后端改动。
 
-现有技术/商务工作区已经具备全状态 CAS、409 阻断、保留本地内容和显式重载，因此 P13-B 不重复包装旧冲突功能。精确操作者需要覆盖浏览器、任务、解析回调、融合与恢复等全部写链和 SQLite 迁移，明确留给 P13-C；P13-B 不猜用户、不声称实时或在线。Grok 只跑 P13-B 与技术/商务真值聚焦，不跑整仓 E2E；Codex 独立专项和静态门，不运行后端 pytest 或机械重复整仓 318 E2E。
+现有技术/商务工作区已经具备全状态 CAS、409 阻断、保留本地内容和显式重载，因此 P13-B 不重复包装旧冲突功能。精确操作者需要覆盖浏览器、任务、解析回调、融合与恢复等全部写链和 SQLite 迁移，明确留给 P13-C；P13-B 不猜用户、不声称实时或在线。真实 failure-first **6 failed / 0 passed**；Grok P13-B/技术商务真值 **6/46 passed**，Codex test-only 返修后独立 P13-B **6 passed（24.7s）**、lint 通过。未运行后端 pytest 或整仓 318 E2E。
 
 ## P12F-D 修订来源筛选完成交接（2026-07-18）
 

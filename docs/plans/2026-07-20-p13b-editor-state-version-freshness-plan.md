@@ -2,7 +2,7 @@
 
 > **执行者：Grok**：严格按六文件白名单先真实业务红测再实现；Codex 负责受限审查、独立验收、中文文档闭环、提交与推送。
 
-> **状态**：2026-07-20 已冻结，待实现。
+> **状态**：2026-07-20 已完成并推送；冻结=`040d644`、实现=`1d4fe0b`，Codex 独立专项 **6 passed**。
 
 **目标：** 不改后端和请求合同，利用 editor-state 既有 `updatedAt` 为技术标/商务标增加当前已载入版本的 UTC 更新时间，并在成功保存、重载和项目切换时保持准确隔离。
 
@@ -62,3 +62,8 @@ npm run build
 
 不改后端/API/数据库/请求数，不做用户身份、online/presence、轮询、SSE/WebSocket、相对时间刷新、协同编辑、评论审批、通知、审计或跨项目时间线。
 
+## 8. 实际执行记录
+
+初始任务/review_request=`msg_7cb045b4462c4339936da5b6d61847b3`/`msg_fcf02c791c7a4bc985f75f9358dec8f4`；真实 failure-first **6 failed / 0 passed**。实现后 Grok P13-B/技术商务真值为 **6/46 passed**，lint/build 通过。
+
+Codex 仅针对测试证据下发返修=`msg_99198f2e001c4619b9913ad65cf67df6`，最终 review_request=`msg_5a0de7a89a624787a4d421c14faf0b6f`：关闭死 GET gate、宽泛请求数与缺失真实 PUT abort，生产五文件逐字冻结。Codex 独立 P13-B **6 passed（24.7s）**、lint 通过，验收回执=`msg_73ddfc7f7da243aaa2c5705e564664d9`。按分级策略未运行后端 pytest、未重复 46 truth、build 或整仓 318 E2E；实现由 Codex 提交推送，Grok 未执行 Git。
