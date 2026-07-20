@@ -10,17 +10,94 @@ import {
   Sparkles,
   Trash2,
   Upload,
+  Users,
 } from "lucide-react";
 import { currentWorkspace } from "../../../shared/mock/projects";
 import { useSiteBackground } from "../../../shared/hooks/useSiteBackground";
+import { apiFetch } from "../../../shared/lib/api";
+import {
+  authRoleLabel,
+  useAuthSession,
+} from "../../auth/hooks/useAuthSession";
+import type { AuthMember, AuthRole } from "../../auth/types";
 import { useWorkspaceSettings } from "../hooks/useWorkspaceSettings";
 import type { ParseStrategy } from "../types";
 import "./Settings.css";
 
+/** 成员列表固定中文文案（不回显 detail/URL/ID） */
+const MEMBERS_LOADING_TEXT = "正在加载成员列表…";
+const MEMBERS_FAIL_TEXT = "成员列表加载失败，请重试";
+const MEMBERS_EMPTY_TEXT = "暂无成员";
+
+const AUTH_ROLES: ReadonlySet<string> = new Set([
+  "bid_writer",
+  "finance",
+  "hr",
+  "bidder",
+]);
+
+function isAuthRole(value: unknown): value is AuthRole {
+  return typeof value === "string" && AUTH_ROLES.has(value);
+}
+
+/** 成员项精确 7 键（顺序无关；缺一或额外字段整批失败） */
+const MEMBER_KEYS = [
+  "userId",
+  "username",
+  "role",
+  "isOwner",
+  "isActive",
+  "createdAt",
+  "updatedAt",
+] as const;
+
+const MEMBER_KEY_SET: ReadonlySet<string> = new Set(MEMBER_KEYS);
+
+/**
+ * 用途：严格校验 GET /auth/members 整批脱敏形状；坏项整批失败。
+ * 每项 Object.keys 必须精确等于 7 字段（userId/username/role/isOwner/isActive/createdAt/updatedAt）；
+ * 缺失或额外字段（如 password/token/marker）整批失败，不把半真半假结果写入 UI。
+ */
+function sanitizeMembers(raw: unknown): AuthMember[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out: AuthMember[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") return null;
+    const m = item as Record<string, unknown>;
+    const keys = Object.keys(m);
+    // 精确七键：数量与集合必须一致，拒绝额外敏感键
+    if (keys.length !== MEMBER_KEYS.length) return null;
+    for (const k of keys) {
+      if (!MEMBER_KEY_SET.has(k)) return null;
+    }
+    for (const required of MEMBER_KEYS) {
+      if (!(required in m)) return null;
+    }
+    if (typeof m.userId !== "string" || !m.userId.trim()) return null;
+    if (typeof m.username !== "string" || !m.username.trim()) return null;
+    if (!isAuthRole(m.role)) return null;
+    if (typeof m.isOwner !== "boolean") return null;
+    if (typeof m.isActive !== "boolean") return null;
+    if (typeof m.createdAt !== "string") return null;
+    if (typeof m.updatedAt !== "string") return null;
+    out.push({
+      userId: m.userId,
+      username: m.username,
+      role: m.role,
+      isOwner: m.isOwner,
+      isActive: m.isActive,
+      createdAt: m.createdAt,
+      updatedAt: m.updatedAt,
+    });
+  }
+  return out;
+}
+
 /**
  * 模块：设置页
- * 用途：工作空间、模型 Key（明文输入输出）、解析策略、站点背景图、导出模板。
- * 对接：useWorkspaceSettings → GET|PUT /api/settings；连通测试 POST /api/llm/test
+ * 用途：工作空间真值、成员只读列表、模型 Key、解析策略、站点背景、导出模板。
+ * 对接：useAuthSession 活动空间；apiFetch GET /auth/members；useWorkspaceSettings。
+ * 二次开发：禁止自动拉取成员、userId 出 DOM、在线 presence 文案。
  */
 export function SettingsPage() {
   const {
@@ -33,6 +110,7 @@ export function SettingsPage() {
     source,
     testConnection,
   } = useWorkspaceSettings();
+  const { phase, activeMembership } = useAuthSession();
   const bg = useSiteBackground();
   const fileRef = useRef<HTMLInputElement>(null);
   const [bgError, setBgError] = useState("");
@@ -40,6 +118,33 @@ export function SettingsPage() {
   const [testMsg, setTestMsg] = useState("");
   const [testBusy, setTestBusy] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  /** 成员列表仅内存；成功后不再自动/重复请求 */
+  const [members, setMembers] = useState<AuthMember[] | null>(null);
+  const [membersLoading, setMembersLoading] = useState(false);
+  const [membersError, setMembersError] = useState(false);
+  const [membersStatus, setMembersStatus] = useState<string | null>(null);
+  const membersInFlightRef = useRef(false);
+
+  /** required 所有者才显示显式加载入口；disabled/非 owner 零 UI 零请求 */
+  const canLoadMembers =
+    phase === "authenticated" && Boolean(activeMembership?.isOwner);
+
+  /** 工作空间展示真值：required 用 activeMembership；disabled 明确个人版 */
+  const workspaceName =
+    phase === "disabled"
+      ? "个人版默认空间"
+      : (activeMembership?.name ?? "未选择空间");
+  const workspaceId =
+    phase === "disabled"
+      ? currentWorkspace.id
+      : (activeMembership?.id ?? "");
+  const workspaceRole =
+    phase === "disabled"
+      ? "个人版"
+      : authRoleLabel(activeMembership?.role);
+  const workspaceOwner =
+    phase === "disabled" ? "—" : activeMembership?.isOwner ? "是" : "否";
 
   async function handleSave() {
     setSaving(true);
@@ -61,14 +166,47 @@ export function SettingsPage() {
     setTestBusy(false);
   }
 
+  async function handleLoadMembers() {
+    if (!canLoadMembers) return;
+    // 单飞
+    if (membersInFlightRef.current || membersLoading) return;
+    // 成功已加载则不再请求（仅失败后允许显式重试）
+    if (members !== null && !membersError) return;
+
+    membersInFlightRef.current = true;
+    setMembersLoading(true);
+    setMembersError(false);
+    setMembersStatus(MEMBERS_LOADING_TEXT);
+    setMembers(null);
+
+    try {
+      const raw = await apiFetch<unknown>("/auth/members");
+      const list = sanitizeMembers(raw);
+      if (!list) {
+        throw new Error("bad_members");
+      }
+      setMembers(list);
+      setMembersError(false);
+      setMembersStatus(list.length === 0 ? MEMBERS_EMPTY_TEXT : null);
+    } catch {
+      setMembers(null);
+      setMembersError(true);
+      setMembersStatus(MEMBERS_FAIL_TEXT);
+    } finally {
+      membersInFlightRef.current = false;
+      setMembersLoading(false);
+    }
+  }
+
   return (
     <div className="page settings-page">
       <header className="page-header">
         <div>
           <h1>设置</h1>
           <p>
-            个人版：算力走你自己的 API Key。配置保存在本机后端（明文可回显），用于 revise
-            等编排调用。
+            {phase === "disabled"
+              ? "个人版：算力走你自己的 API Key。配置保存在本机后端（明文可回显），用于 revise 等编排调用。"
+              : "工作空间设置：算力走当前空间配置的 API Key。配置保存在本机后端（明文可回显），用于 revise 等编排调用。"}
           </p>
         </div>
       </header>
@@ -99,7 +237,7 @@ export function SettingsPage() {
         </div>
       )}
 
-      {/* 1. 工作空间 */}
+      {/* 1. 工作空间（P13-E：活动空间真值 + 所有者成员只读） */}
       <section className="card card-pad settings-section">
         <div className="settings-section__head">
           <div className="settings-section__icon">
@@ -107,24 +245,48 @@ export function SettingsPage() {
           </div>
           <div>
             <h2>工作空间</h2>
-            <p>一账号 ≈ 一工作空间；项目、知识库、任务均挂在此空间下。</p>
+            <p>
+              {phase === "disabled"
+                ? "个人版默认空间：配置与项目均挂在本机空间下，无多人成员能力。"
+                : "当前会话活动工作空间；项目、知识库、任务均挂在此空间下。"}
+            </p>
           </div>
         </div>
         <div className="settings-grid">
           <div className="field">
-            <label>当前工作空间</label>
+            <label htmlFor="settings-workspace-name">当前工作空间</label>
             <input
-              value={
-                source === "api" ? "我的工作空间（后端）" : currentWorkspace.name
-              }
+              id="settings-workspace-name"
+              data-testid="settings-workspace-name"
+              value={workspaceName}
               readOnly
             />
           </div>
           <div className="field">
-            <label>空间 ID</label>
+            <label htmlFor="settings-workspace-id">空间 ID</label>
             <input
+              id="settings-workspace-id"
+              data-testid="settings-workspace-id"
               className="mono"
-              value={source === "api" ? "ws_local" : currentWorkspace.id}
+              value={workspaceId}
+              readOnly
+            />
+          </div>
+          <div className="field">
+            <label htmlFor="settings-workspace-role">当前角色</label>
+            <input
+              id="settings-workspace-role"
+              data-testid="settings-workspace-role"
+              value={workspaceRole}
+              readOnly
+            />
+          </div>
+          <div className="field">
+            <label htmlFor="settings-workspace-owner">是否所有者</label>
+            <input
+              id="settings-workspace-owner"
+              data-testid="settings-workspace-owner"
+              value={workspaceOwner}
               readOnly
             />
           </div>
@@ -140,6 +302,67 @@ export function SettingsPage() {
             />
           </div>
         </div>
+
+        {canLoadMembers && (
+          <div className="settings-members">
+            <div className="settings-members__head">
+              <div className="settings-section__icon">
+                <Users size={18} />
+              </div>
+              <div>
+                <h3 className="settings-members__title">空间成员</h3>
+                <p className="settings-members__hint">
+                  仅所有者可查看；需手动加载。启用/停用表示成员关系状态，不代表在线。
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="btn btn-soft btn-sm"
+              data-testid="load-members-button"
+              onClick={() => void handleLoadMembers()}
+              disabled={membersLoading}
+            >
+              {membersLoading
+                ? "加载中…"
+                : membersError
+                  ? "重试加载成员"
+                  : members !== null
+                    ? "已加载成员"
+                    : "加载成员列表"}
+            </button>
+            {membersStatus && (
+              <div
+                className={`settings-members__status${
+                  membersError ? " is-error" : ""
+                }`}
+                data-testid="members-status"
+                role="status"
+                aria-live="polite"
+              >
+                {membersStatus}
+              </div>
+            )}
+            {members !== null && members.length > 0 && (
+              <ul className="settings-members__list" data-testid="members-list">
+                {members.map((m, index) => (
+                  <li
+                    key={`${m.username}-${m.role}-${index}`}
+                    className="settings-members__item"
+                  >
+                    <span className="settings-members__name">{m.username}</span>
+                    <span className="settings-members__meta">
+                      {authRoleLabel(m.role)}
+                      {m.isOwner ? " · 所有者" : ""}
+                      {" · "}
+                      {m.isActive ? "启用" : "停用"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
       </section>
 
       {/* 2. 模型与算力 */}

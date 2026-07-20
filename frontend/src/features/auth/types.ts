@@ -29,6 +29,20 @@ export type AuthWorkspace = {
 };
 
 /**
+ * GET /auth/members 脱敏成员项（仅所有者）。
+ * 不含口令、Cookie、Token、审计或在线 presence。
+ */
+export type AuthMember = {
+  userId: string;
+  username: string;
+  role: AuthRole;
+  isOwner: boolean;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/**
  * 登录 / me 脱敏响应。
  * csrfToken 仅登录响应可能非空；GET /me 通常为 null。
  * 硬刷新后由 GET /auth/csrf 单独续发，勿依赖 me 回传。

@@ -34,7 +34,22 @@ import {
   authRoleLabel,
   useAuthSession,
 } from "../../features/auth/hooks/useAuthSession";
+import type { AuthRole } from "../../features/auth/types";
 import "./AppShell.css";
+
+/**
+ * 切换成功后按服务端已校验目标角色整页落点（清空旧空间页面内存）。
+ * 导航目标只能来自 switchWorkspace 返回的 membership.role，禁止旧选项表猜测。
+ */
+const ROLE_HOME: Record<AuthRole, string> = {
+  bid_writer: "/create",
+  finance: "/finance",
+  hr: "/hr",
+  bidder: "/bidder",
+};
+
+const SWITCH_STATUS_BUSY = "正在切换工作空间";
+const SWITCH_STATUS_FAIL = "工作空间切换失败，请重试";
 
 /**
  * 模块：应用壳（易标式左侧栏 + 主内容区）
@@ -266,6 +281,7 @@ export function AppShell() {
   const [apiStatus, setApiStatus] = useState<ApiHealthStatus>("unknown");
   const [apiTitle, setApiTitle] = useState(getApiBase());
   const [loggingOut, setLoggingOut] = useState(false);
+  const [switchError, setSwitchError] = useState<string | null>(null);
   const {
     phase,
     me,
@@ -275,7 +291,9 @@ export function AppShell() {
     canAccessFinance,
     canAccessHr,
     canAccessBidder,
+    workspaceSwitching,
     logout,
+    switchWorkspace,
   } = useAuthSession();
 
   const isCreate = pathname === "/" || pathname.startsWith("/create");
@@ -307,6 +325,17 @@ export function AppShell() {
   const visibleBidder = bidderNav.filter(
     (item) => !item.bidderOnly || canAccessBidder,
   );
+
+  /**
+   * 仅 authenticated 且已精确命中 activeMembership 时展示选择器。
+   * 不得因 workspaces 非空却 active 缺失而猜测首项。
+   */
+  const showWorkspaceSwitcher =
+    phase === "authenticated" && Boolean(activeMembership);
+  const workspaceOptions = me?.workspaces ?? [];
+  const multiWorkspace = workspaceOptions.length > 1;
+  // 选择器真值只取 activeMembership.id；缺失为空，禁止 me/workspaces[0] 猜测
+  const selectValue = activeMembership?.id ?? "";
 
   useEffect(() => {
     setMobileOpen(false);
@@ -345,21 +374,42 @@ export function AppShell() {
     phase === "disabled"
       ? "个人版"
       : authRoleLabel(activeMembership?.role);
+  // 展示名只取精确命中的 activeMembership；缺失时不猜 me/首项
   const workspaceLabel =
     phase === "disabled"
       ? "ws_local"
-      : (activeMembership?.name ??
-        activeMembership?.id ??
-        me?.activeWorkspaceId ??
-        "未选择空间");
+      : (activeMembership?.name ?? activeMembership?.id ?? "未选择空间");
 
   async function onLogout() {
     if (phase !== "authenticated" || loggingOut) return;
     setLoggingOut(true);
+    setSwitchError(null);
     try {
       await logout();
     } finally {
       setLoggingOut(false);
+    }
+  }
+
+  async function onWorkspaceChange(nextId: string) {
+    if (!showWorkspaceSwitcher || workspaceSwitching) return;
+    // 同值 / 单空间 / 不在列表（精确匹配，不 trim 别名）：零请求
+    if (!multiWorkspace) return;
+    if (!nextId || nextId === selectValue) return;
+    if (!workspaceOptions.some((w) => w.id === nextId)) return;
+
+    setSwitchError(null);
+    try {
+      // switchWorkspace 返回服务端已严格校验的目标 AuthWorkspace；
+      // 无请求/单飞/失败返回 null，调用方不得导航。
+      const targetMembership = await switchWorkspace(nextId);
+      if (!targetMembership) return;
+      // 只按返回 membership.role 选择 ROLE_HOME；
+      // 禁止旧闭包 workspaceOptions 角色与 `/create` 猜测回退。
+      const home = ROLE_HOME[targetMembership.role];
+      window.location.assign(home);
+    } catch {
+      setSwitchError(SWITCH_STATUS_FAIL);
     }
   }
 
@@ -471,6 +521,45 @@ export function AppShell() {
               {activeMembership?.isOwner ? " · 所有者" : ""}
             </div>
             <div className="auth-shell__meta">{workspaceLabel}</div>
+            {showWorkspaceSwitcher && (
+              <div className="workspace-switcher-wrap">
+                <label
+                  className="workspace-switcher-label"
+                  htmlFor="workspace-switcher"
+                >
+                  活动工作空间
+                </label>
+                <select
+                  id="workspace-switcher"
+                  className="workspace-switcher"
+                  data-testid="workspace-switcher"
+                  value={selectValue}
+                  disabled={!multiWorkspace || workspaceSwitching || loggingOut}
+                  aria-label="切换活动工作空间"
+                  onChange={(e) => {
+                    void onWorkspaceChange(e.target.value);
+                  }}
+                >
+                  {workspaceOptions.map((w) => (
+                    <option key={w.id} value={w.id}>
+                      {w.name}
+                    </option>
+                  ))}
+                </select>
+                {(workspaceSwitching || switchError) && (
+                  <div
+                    className={`workspace-switch-status${
+                      switchError ? " is-error" : ""
+                    }`}
+                    data-testid="workspace-switch-status"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    {workspaceSwitching ? SWITCH_STATUS_BUSY : switchError}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           {phase === "authenticated" && (
             <button
@@ -478,7 +567,7 @@ export function AppShell() {
               className="btn btn-ghost btn-sm auth-shell__logout"
               data-testid="logout-button"
               onClick={() => void onLogout()}
-              disabled={loggingOut}
+              disabled={loggingOut || workspaceSwitching}
             >
               {loggingOut ? "退出中…" : "退出登录"}
             </button>

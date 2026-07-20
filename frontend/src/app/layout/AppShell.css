@@ -108,6 +108,45 @@
   background: var(--surface-card);
 }
 
+/* P13-E：活动工作空间选择器（仅 authenticated） */
+.workspace-switcher-wrap {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.workspace-switcher-label {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.workspace-switcher {
+  width: 100%;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-content-solid, #fff);
+  color: var(--text-primary);
+  font-size: 12px;
+  padding: 0 8px;
+}
+
+.workspace-switcher:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.workspace-switch-status {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  line-height: 1.4;
+}
+
+.workspace-switch-status.is-error {
+  color: var(--danger, #dc2626);
+}
+
 /* API 联通状态点 */
 .api-status-chip {
   display: flex;
