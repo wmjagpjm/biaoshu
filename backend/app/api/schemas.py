@@ -689,6 +689,8 @@ class EditorStateOut(BaseModel):
       - responseMatrixVersion 仅表示收敛后的矩阵内容版本，与 updatedAt 无关。
       - stateVersion 为全状态 13 键规范哈希，与 P12A 检查点版本算法一致。
       - P13-C currentRevisionSourceKind 必出可空；非空仅九类；不得进入 13 键哈希。
+      - P13-D2 currentRevisionActorUsername 必出可空；非空须通过安全文本门；
+        不公开 actor ID；不得进入 13 键哈希。
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -722,6 +724,9 @@ class EditorStateOut(BaseModel):
     updated_at: str | None = Field(default=None, serialization_alias="updatedAt")
     current_revision_source_kind: EditorStateRevisionSourceKind | None = Field(
         default=None, serialization_alias="currentRevisionSourceKind"
+    )
+    current_revision_actor_username: str | None = Field(
+        default=None, serialization_alias="currentRevisionActorUsername"
     )
 
 

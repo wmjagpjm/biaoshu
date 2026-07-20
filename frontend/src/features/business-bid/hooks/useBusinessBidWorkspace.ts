@@ -1,22 +1,23 @@
 /**
- * 模块：商务标工作区状态（P11B 服务端权威 + P12B 全状态 CAS + P13-B/C）
+ * 模块：商务标工作区状态（P11B 服务端权威 + P12B 全状态 CAS + P13-B/C/D2）
  * 用途：分步编辑数据只认 GET|PUT /api/projects/{id}/editor-state；真实空态保持空；
  *       全部 editor-state PUT 携带 expectedStateVersion；同项目串行保存链；
- *       P13-B/C：合法 stateVersion 被当前会话接受时同步 versionUpdatedAt 与
- *       currentRevisionSourceKind 供标题区展示。
+ *       P13-B/C/D2：合法 stateVersion 被当前会话接受时同步 versionUpdatedAt、
+ *       currentRevisionSourceKind 与 currentRevisionActorUsername 供标题区展示。
  * 对接：
  *   - GET|PUT /api/projects/{id}/editor-state（businessQualify/Toc/Quote/Commit、parsedMarkdown）
  *   - POST /api/projects/{id}/artifacts/workspace/revise（stage=business_*）
  *   - EditorStateVersionFreshness（只读展示，零额外请求）
- *   - parseRevisionSourceKind（唯一九类校验）
+ *   - parseRevisionSourceKind / parseRevisionActorUsername（唯一校验）
  * 明确非目标：
  *   - 禁止读写/删除/迁移 biaoshu.businessBid.workspace.*（旧键忽略并保值）
  *   - biaoshu.businessBid.feedback.{projectId} 仅作 AI 反馈历史本地存储，
  *     绝不参与 workspace 水合、API 成功判定或加载失败回退
  *   - 禁止本地计算 stateVersion；禁止版本落盘
- *   - versionUpdatedAt / currentRevisionSourceKind 禁止参与 CAS/保存队列/缓存键
+ *   - versionUpdatedAt / currentRevisionSourceKind / currentRevisionActorUsername
+ *     禁止参与 CAS/保存队列/缓存键
  * 二次开发：形状保持 BusinessBidWorkspaceState；不得复活 createDemoWorkspace 生产路径；
- *       全状态 409 阻断后仅允许显式全量 GET 恢复；切项目须立即清空时间与来源。
+ *       全状态 409 阻断后仅允许显式全量 GET 恢复；切项目须立即清空时间、来源与操作者。
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -30,6 +31,7 @@ import type {
   CheckpointRestoreOutcome,
 } from "../../editor-state-checkpoints/EditorStateCheckpointPanel";
 import {
+  parseRevisionActorUsername,
   parseRevisionSourceKind,
   restoreEditorStateRevision as postRestoreEditorStateRevision,
   type RevisionSourceKind,
@@ -98,6 +100,8 @@ type EditorStateApi = {
   updatedAt?: string | null;
   /** P13-C：当前版本修订来源；仅展示，须经 parseRevisionSourceKind */
   currentRevisionSourceKind?: string | null;
+  /** P13-D2：当前版本操作者用户名；仅展示，须经 parseRevisionActorUsername */
+  currentRevisionActorUsername?: string | null;
 };
 
 /** 用途：读取反馈历史；失败返回 []，不抛原文。 */
@@ -164,6 +168,8 @@ export function useBusinessBidWorkspace(projectId: string) {
    */
   const [currentRevisionSourceKind, setCurrentRevisionSourceKind] =
     useState<RevisionSourceKind | null>(null);
+  const [currentRevisionActorUsername, setCurrentRevisionActorUsername] =
+    useState<string | null>(null);
 
   /** 跳过水合后的下一次防抖 PUT */
   const skipNextSave = useRef(true);
@@ -234,6 +240,14 @@ export function useBusinessBidWorkspace(projectId: string) {
   }, []);
 
   /**
+   * 用途：P13-D2 在合法 stateVersion 已被接受后，同步同一响应的操作者用户名。
+   * 对接：parseRevisionActorUsername 安全文本门；非法/缺失一律 null。
+   */
+  const acceptCurrentRevisionActorUsername = useCallback((value: unknown) => {
+    setCurrentRevisionActorUsername(parseRevisionActorUsername(value));
+  }, []);
+
+  /**
    * 用途：从 editor-state 刷新当前项目。
    * 成功：水合真实字段、接受合法 stateVersion、清冲突、apiReady=true。
    * 失败：见全状态阻断分支；不抛原文。
@@ -280,6 +294,7 @@ export function useBusinessBidWorkspace(projectId: string) {
       stateVersionRef.current = remote.stateVersion;
       acceptVersionUpdatedAt(remote.updatedAt);
       acceptCurrentRevisionSourceKind(remote.currentRevisionSourceKind);
+      acceptCurrentRevisionActorUsername(remote.currentRevisionActorUsername);
       setApiReady(true);
       setLoadError(null);
       setSaveError(null);
@@ -309,6 +324,7 @@ export function useBusinessBidWorkspace(projectId: string) {
   }, [
     acceptVersionUpdatedAt,
     acceptCurrentRevisionSourceKind,
+    acceptCurrentRevisionActorUsername,
     isCurrentSession,
     projectId,
   ]);
@@ -325,9 +341,10 @@ export function useBusinessBidWorkspace(projectId: string) {
     saveChainRef.current = Promise.resolve();
     skipNextSave.current = true;
     stateVersionRef.current = null;
-    // P13-B/C：切项目立即清空，禁止短暂显示旧项目时间与来源
+    // P13-B/C/D2：切项目立即清空，禁止短暂显示旧项目时间/来源/操作者
     setVersionUpdatedAt(null);
     setCurrentRevisionSourceKind(null);
+    setCurrentRevisionActorUsername(null);
     fullStateBlockedRef.current = false;
     setApiReady(false);
     setLoadError(null);
@@ -402,6 +419,7 @@ export function useBusinessBidWorkspace(projectId: string) {
         stateVersionRef.current = saved.stateVersion;
         acceptVersionUpdatedAt(saved.updatedAt);
         acceptCurrentRevisionSourceKind(saved.currentRevisionSourceKind);
+        acceptCurrentRevisionActorUsername(saved.currentRevisionActorUsername);
         setSaveError(null);
         return "ok";
       } catch (err) {
@@ -419,6 +437,7 @@ export function useBusinessBidWorkspace(projectId: string) {
     [
       acceptVersionUpdatedAt,
       acceptCurrentRevisionSourceKind,
+      acceptCurrentRevisionActorUsername,
       enterFullStateBlock,
       isCurrentWriteEpoch,
     ],
@@ -1014,6 +1033,8 @@ export function useBusinessBidWorkspace(projectId: string) {
     versionUpdatedAt,
     /** P13-C：当前已载入版本的修订来源（仅展示） */
     currentRevisionSourceKind,
+    /** P13-D2：当前已载入版本的操作者用户名（仅展示） */
+    currentRevisionActorUsername,
     refreshFromApi,
     createCheckpoint,
     restoreCheckpoint,

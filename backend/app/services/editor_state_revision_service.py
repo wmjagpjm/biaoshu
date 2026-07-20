@@ -1,29 +1,36 @@
 """
-模块：P12C-A / P12F-A / P12F-J-A / P13-C editor-state 有限自动修订账本服务
+模块：P12C-A / P12F-A / P12F-J-A / P13-C / P13-D2 editor-state 有限自动修订账本服务
 用途：独立 revision 表上的无提交 transition 原语（相邻去重、断链补点、
   最多 20 条且总快照 20 MiB；固定行永不被自动裁剪）；
-  P13-C 只读解析当前已载入版本的最新修订来源（不写、不回扫）。
-对接：EditorStateRevisionRow；editor_state_service（共享 13 键/规范 JSON/版本算法）；
-  GET|PUT editor-state 的 currentRevisionSourceKind。
+  P13-C/D2 只读解析当前已载入版本的最新修订来源与操作者用户名（不写、不回扫）。
+对接：EditorStateRevisionRow；LocalUserRow/WorkspaceMemberRow；
+  editor_state_service（共享 13 键/规范 JSON/版本算法）；
+  GET|PUT editor-state 的 currentRevisionSourceKind / currentRevisionActorUsername。
 二次开发：
   - 只 flush，绝不 commit/rollback/refresh/项目查询/锁/审计（transition 路径）
   - 13 键/JSON/哈希必须委托 editor_state_service，禁止第二套算法
-  - 最新/裁剪/P13-C 来源 SQL 不得加载 snapshot_json；DELETE 必须 workspace+project+id 三重限定
+  - 最新/裁剪/P13 元数据 SQL 不得加载 snapshot_json；DELETE 必须 workspace+project+id 三重限定
   - 校验完所有 snapshot_bytes/is_pinned 后才允许删除；固定行全保留；
     非固定按最新前缀补足；禁止跳洞保留更旧小非固定行
-  - 返回值不含 snapshot/行 ID/项目/空间
-  - resolve_current_revision_source_kind 仅 LIMIT 1 最新行，禁止回扫旧同版本
+  - 返回值不含 snapshot/行 ID/项目/空间/actor_user_id/口令
+  - resolve_current_revision_meta 仅 LIMIT 1 最新行 + 同 workspace 左联，禁止回扫旧同版本
 """
 
 from __future__ import annotations
 
 import secrets
+from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import Integer, delete, select, type_coerce
+from sqlalchemy import Integer, and_, delete, select, type_coerce
 from sqlalchemy.orm import Session
 
-from app.models.entities import EditorStateRevisionRow, utc_now
+from app.models.entities import (
+    EditorStateRevisionRow,
+    LocalUserRow,
+    WorkspaceMemberRow,
+    utc_now,
+)
 from app.services import editor_state_service
 
 MAX_REVISIONS_PER_PROJECT = 20
@@ -146,35 +153,131 @@ def _latest_id_and_version(
     return str(row.id), str(row.state_version)
 
 
-def resolve_current_revision_source_kind(
+# 用户名拒绝：C0/C1/DEL 由码点范围判定；另禁行分隔与双向控制
+_BIDI_AND_LINE_CONTROLS: frozenset[str] = frozenset(
+    {
+        "\u061c",
+        "\u200e",
+        "\u200f",
+        "\u2028",
+        "\u2029",
+        "\u202a",
+        "\u202b",
+        "\u202c",
+        "\u202d",
+        "\u202e",
+        "\u2066",
+        "\u2067",
+        "\u2068",
+        "\u2069",
+    }
+)
+
+
+@dataclass(frozen=True)
+class CurrentRevisionMeta:
+    """
+    用途：P13-C/D2 当前已载入版本只读元数据（不可变）。
+    字段：source_kind / actor_username；均已按契约独立校验，非法侧为 None。
+    对接：仅由 resolve_current_revision_meta 构造；_editor_out 与兼容入口只读消费。
+    二次开发：禁止加入 actor_user_id/行 ID/snapshot 或可变字段；
+      两侧独立降级，不得因一侧非法连带清空另一侧。
+    """
+
+    source_kind: str | None
+    actor_username: str | None
+
+
+def _safe_actor_username(value: Any) -> str | None:
+    """
+    用途：严格用户名安全文本门。
+    规则：原生 str、1..100 Unicode 码点、无首尾空白；拒绝 C0/C1/DEL、
+      U+2028/U+2029 与约定双向控制；不 trim、不 NFKC、不改写。
+    """
+    if not isinstance(value, str):
+        return None
+    # 码点长度（Python 3 str 以 Unicode 码点计）
+    n = len(value)
+    if n < 1 or n > 100:
+        return None
+    if value.strip() != value:
+        return None
+    for ch in value:
+        o = ord(ch)
+        if o < 0x20 or o == 0x7F or (0x80 <= o <= 0x9F):
+            return None
+        if ch in _BIDI_AND_LINE_CONTROLS:
+            return None
+    return value
+
+
+def _strict_active_flag(value: Any) -> bool:
+    """用途：启用位仅接受原始整数 1（或严格 True）；禁止 truthy 宽判。"""
+    if value is True:
+        return True
+    if isinstance(value, int) and not isinstance(value, bool) and value == 1:
+        return True
+    # SQLAlchemy/SQLite 可能以 int 1 返回；bool 子类 int 已在 True 分支处理
+    if type(value) is int and value == 1:
+        return True
+    return False
+
+
+def resolve_current_revision_meta(
     db: Session,
     workspace_id: str,
     project_id: str,
     state_version: str,
-) -> str | None:
+) -> CurrentRevisionMeta:
     """
-    用途：P13-C 只读解析当前已载入版本在修订账本中的来源。
+    用途：P13-C/D2 一次 SQL 解析最新修订来源与操作者用户名。
     规则：
-      - 仅查最新一条（created_at DESC, id DESC, LIMIT 1），只投影 state_version/source_kind；
-      - 禁止加载 snapshot_json、禁止回扫旧同版本、禁止写/commit/裁剪；
-      - 最新 state_version 与响应版本精确相等且 source_kind 属九类白名单时返回原样；
-      - 无账本、版本不匹配、来源非法、响应版本非法一律返回 None。
-    对接：GET|PUT /editor-state 构造 EditorStateOut.currentRevisionSourceKind。
+      - 仅最新一条（created_at DESC, id DESC, LIMIT 1）；
+      - 投影 state_version/source_kind/username/两个严格启用位；
+      - 左联 local_users 与同 workspace_id 的 workspace_members；
+      - 禁止 snapshot_json/口令/会话/审计/actor ID 响应；
+      - 禁止回扫旧同版本、禁止 add/delete/flush/commit/rollback/refresh；
+      - 版本不匹配时两项均为 None；来源与用户名独立降级。
+    对接：_editor_out 只调用一次；兼容入口 resolve_current_revision_source_kind 复用本函数。
+    二次开发：禁止第二套查询/排序/回扫；JOIN ON 中的 actor_user_id 不得进入 SELECT 投影；
+      禁止在本函数内写会话或加载 snapshot；禁止向响应公开内部 user id。
     """
+    empty = CurrentRevisionMeta(source_kind=None, actor_username=None)
     if not isinstance(workspace_id, str) or not workspace_id:
-        return None
+        return empty
     if not isinstance(project_id, str) or not project_id:
-        return None
+        return empty
     if not isinstance(state_version, str) or not state_version:
-        return None
-    # 非法版本格式保守 null，避免把损坏账本伪装为当前来源
+        return empty
     if not editor_state_service.is_valid_state_version(state_version):
-        return None
+        return empty
 
+    user_active_col = type_coerce(LocalUserRow.is_active, Integer).label(
+        "user_is_active"
+    )
+    member_active_col = type_coerce(WorkspaceMemberRow.is_active, Integer).label(
+        "member_is_active"
+    )
     row = db.execute(
         select(
             EditorStateRevisionRow.state_version,
             EditorStateRevisionRow.source_kind,
+            LocalUserRow.username,
+            user_active_col,
+            member_active_col,
+        )
+        .select_from(EditorStateRevisionRow)
+        .outerjoin(
+            LocalUserRow,
+            LocalUserRow.id == EditorStateRevisionRow.actor_user_id,
+        )
+        .outerjoin(
+            WorkspaceMemberRow,
+            and_(
+                WorkspaceMemberRow.user_id == EditorStateRevisionRow.actor_user_id,
+                WorkspaceMemberRow.workspace_id
+                == EditorStateRevisionRow.workspace_id,
+            ),
         )
         .where(
             EditorStateRevisionRow.workspace_id == workspace_id,
@@ -187,16 +290,43 @@ def resolve_current_revision_source_kind(
         .limit(1)
     ).one_or_none()
     if row is None:
-        return None
+        return empty
 
     latest_version = row.state_version
     if not isinstance(latest_version, str) or latest_version != state_version:
-        return None
+        return empty
 
-    source_kind = row.source_kind
-    if not isinstance(source_kind, str) or source_kind not in REVISION_SOURCE_KINDS:
-        return None
-    return source_kind
+    # 来源独立校验
+    source_kind: str | None = None
+    raw_source = row.source_kind
+    if isinstance(raw_source, str) and raw_source in REVISION_SOURCE_KINDS:
+        source_kind = raw_source
+
+    # 用户名：用户存在 + 双方启用 + 安全文本
+    actor_username: str | None = None
+    if _strict_active_flag(row.user_is_active) and _strict_active_flag(
+        row.member_is_active
+    ):
+        actor_username = _safe_actor_username(row.username)
+
+    return CurrentRevisionMeta(
+        source_kind=source_kind, actor_username=actor_username
+    )
+
+
+def resolve_current_revision_source_kind(
+    db: Session,
+    workspace_id: str,
+    project_id: str,
+    state_version: str,
+) -> str | None:
+    """
+    用途：P13-C 兼容入口；复用 resolve_current_revision_meta，禁止第二套查询/排序。
+    对接：既有调用方可继续只取来源；生产 _editor_out 应改用 meta 一次调用。
+    """
+    return resolve_current_revision_meta(
+        db, workspace_id, project_id, state_version
+    ).source_kind
 
 
 def _validate_actor_user_id(actor_user_id: str | None) -> str | None:

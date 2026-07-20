@@ -1,13 +1,14 @@
 /**
- * 模块：商务标分步工作区（含 P13-B/C 版本时间与来源）
+ * 模块：商务标分步工作区（含 P13-B/C/D2 版本时间、来源与操作者）
  * 用途：六步流水线；上传/解析/biz_* 生成/导出接 project/task/editor-state；
- *       标题区展示当前已载入版本 UTC 更新时间（共享组件，零额外请求）。
+ *       标题区展示当前已载入版本 UTC 更新时间、修订来源与操作者用户名（共享组件，零额外请求）。
  * 对接：useProjectPipeline、useBusinessBidWorkspace、GET project、useWorkspaceParseStrategy、
- *       EditorStateVersionFreshness（testid=business-editor-version-freshness / business-editor-version-source）
+ *       EditorStateVersionFreshness（testid=business-editor-version-freshness /
+ *       business-editor-version-source / business-editor-version-actor）
  * 二次开发：勿大改步骤信息架构；新任务类型扩在 pipeline TaskType；解析入口统一 handleParse。
  *       项目详情只认 GET /api/projects/{id}，禁止 mockBusinessProjects 复活。
  *       P11B：editor-state 加载失败显示固定失败卡，禁止挂步骤/表格/编辑控件。
- *       版本时间文案不得改称远端最新/实时/在线/最后由。
+ *       版本时间/来源/操作者文案不得改称远端最新/实时/在线/最后由；用户名只作文本节点。
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -112,6 +113,7 @@ export function BusinessBidWorkspace() {
     fullStateConflictMessage,
     versionUpdatedAt,
     currentRevisionSourceKind,
+    currentRevisionActorUsername,
     refreshFromApi,
     setParseMarkdown,
     updateQualifyItem,
@@ -389,8 +391,10 @@ export function BusinessBidWorkspace() {
           <EditorStateVersionFreshness
             updatedAt={versionUpdatedAt}
             sourceKind={currentRevisionSourceKind}
+            actorUsername={currentRevisionActorUsername}
             testId="business-editor-version-freshness"
             sourceTestId="business-editor-version-source"
+            actorTestId="business-editor-version-actor"
           />
           {fullStateConflict ? (
             <div

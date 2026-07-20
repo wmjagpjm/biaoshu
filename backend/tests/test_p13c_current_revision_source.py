@@ -458,8 +458,10 @@ def test_conflict_422_zero_write_unchanged(client: TestClient):
 
 
 def test_sql_projects_only_two_columns_limit_one(client: TestClient):
-    """用途：SQL 证据——投影含且仅含 state_version/source_kind、workspace+project、
-    ORDER BY created_at DESC,id DESC、LIMIT 绑定精确 1；捕获 statement+parameters。"""
+    """用途：SQL 合同——GET 期间 editor_state_revisions SELECT 恰好 1 条；
+    投影精确 5 列固定顺序 state_version/source_kind/username/user_is_active/member_is_active；
+    actor_user_id 仅两处 JOIN ON；WHERE workspace+project；ORDER/LIMIT=1/OFFSET=0；
+    无 snapshot/password/salt/hash/session/audit；GET actor null 合法。"""
     pid = _create_project(client, name="SQL证据")
     put = _put(
         client,
@@ -483,58 +485,71 @@ def test_sql_projects_only_two_columns_limit_one(client: TestClient):
         got = _get(client, pid).json()
         assert got["currentRevisionSourceKind"] == "browser_put"
         assert got["stateVersion"] == ver
+        # P13-D2 合法新键：无账本 actor 时为 null 但仍必出
+        assert "currentRevisionActorUsername" in got
+        assert got["currentRevisionActorUsername"] is None
     finally:
         event.remove(engine, "before_cursor_execute", _capture)
 
-    assert captured, "应捕获至少一条 revision SELECT"
-
-    # 定位 helper：投影含 state_version + source_kind、无 snapshot 的 SELECT
-    chosen: tuple[str, object] | None = None
-    for statement, parameters in reversed(captured):
-        low = " ".join(statement.lower().split())
-        if "snapshot_json" in low:
-            continue
-        if "state_version" in low and "source_kind" in low:
-            chosen = (statement, parameters)
-            break
-    assert chosen is not None, [s for s, _ in captured]
-
-    statement, parameters = chosen
+    # 精确恰好一次，不得弱化为「至少含」
+    assert len(captured) == 1, [s for s, _ in captured]
+    statement, parameters = captured[0]
     low = " ".join(statement.lower().split())
 
-    # 投影含且仅含 state_version/source_kind（生产顺序固定）
-    m = re.search(
-        r"select\s+(.+?)\s+from\s+editor_state_revisions\b",
-        low,
-    )
+    m = re.search(r"select\s+(.+?)\s+from\s+", low)
     assert m is not None, low
-    col_names = [c.strip().split(".")[-1] for c in m.group(1).split(",")]
-    assert col_names == ["state_version", "source_kind"], col_names
+    proj = m.group(1)
     assert "select *" not in low
-    assert "snapshot_json" not in low
-
-    # WHERE workspace+project
-    assert re.search(r"workspace_id\s*=\s*\?", low)
-    assert re.search(r"project_id\s*=\s*\?", low)
-
-    # ORDER BY created_at DESC, id DESC
+    proj_items = [p.strip() for p in proj.split(",")]
+    assert len(proj_items) == 5, proj_items
+    assert "state_version" in proj_items[0]
+    assert "source_kind" in proj_items[1]
+    assert "username" in proj_items[2]
+    assert "user_is_active" in proj_items[3]
+    assert "member_is_active" in proj_items[4]
+    # actor_user_id 仅 JOIN ON，不得进投影
+    assert "actor_user_id" not in proj
+    assert low.count("actor_user_id") == 2, low
     assert re.search(
-        r"order by\s+\S+\.created_at\s+desc\s*,\s*\S+\.id\s+desc",
+        r"local_users\.id\s*=\s*editor_state_revisions\.actor_user_id", low
+    ), low
+    assert re.search(
+        r"workspace_members\.user_id\s*=\s*editor_state_revisions\.actor_user_id",
         low,
     ), low
+    assert re.search(
+        r"workspace_members\.workspace_id\s*=\s*editor_state_revisions\.workspace_id",
+        low,
+    ), low
+    assert "local_users" in low
+    assert "workspace_members" in low
 
-    # 绑定参数：workspace、project、LIMIT=1；方言被动 OFFSET 0 可接受但必须断言
+    assert re.search(
+        r"editor_state_revisions\.workspace_id\s*=\s*\?", low
+    ), low
+    assert re.search(
+        r"editor_state_revisions\.project_id\s*=\s*\?", low
+    ), low
+    assert re.search(
+        r"order by\s+editor_state_revisions\.created_at\s+desc\s*,\s*"
+        r"editor_state_revisions\.id\s+desc",
+        low,
+    ), low
+    assert "limit ?" in low
+    assert "offset ?" in low
     assert parameters is not None
     params = list(parameters)
-    assert params[0] == _WS, params
-    assert params[1] == pid, params
-    assert " limit " in f" {low} " or "limit ?" in low
-    if "offset" in low:
-        assert len(params) >= 4, params
-        assert params[2] == 1, params  # LIMIT 精确 1
-        assert params[3] == 0, params  # OFFSET 0 可接受且必须断言
-    else:
-        assert params[2] == 1, params
+    assert params == [_WS, pid, 1, 0], params
+
+    for banned in (
+        "snapshot",
+        "password",
+        "salt",
+        "hash",
+        "session",
+        "audit",
+    ):
+        assert banned not in low, banned
 
 
 def test_helper_direct_scope_and_order(client: TestClient):

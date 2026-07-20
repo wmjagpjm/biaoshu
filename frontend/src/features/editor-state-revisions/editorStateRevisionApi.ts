@@ -1755,3 +1755,41 @@ export function parseRevisionSourceKind(
   if (!SOURCE_KIND_SET.has(value)) return null;
   return value as RevisionSourceKind;
 }
+
+/** P13-D2：用户名拒绝的行分隔与双向控制字符 */
+const ACTOR_USERNAME_FORBIDDEN_CHARS = new Set<string>([
+  "\u061c",
+  "\u200e",
+  "\u200f",
+  "\u2028",
+  "\u2029",
+  "\u202a",
+  "\u202b",
+  "\u202c",
+  "\u202d",
+  "\u202e",
+  "\u2066",
+  "\u2067",
+  "\u2068",
+  "\u2069",
+]);
+
+/**
+ * 用途：P13-D2 严格校验 editor-state 响应中的 currentRevisionActorUsername。
+ * 规则：原生字符串、1..100 Unicode 码点、无首尾空白；拒绝 C0/C1/DEL、
+ *       U+2028/U+2029 与约定双向控制；缺失/null/非字符串/空白包裹/超长一律 null。
+ * 对接：useTechnicalPlanEditors / useBusinessBidWorkspace 与来源/时间同门接受。
+ * 二次开发：禁止 trim/NFKC/小写后放宽；不得从会话或角色猜用户名。
+ */
+export function parseRevisionActorUsername(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const n = [...value].length;
+  if (n < 1 || n > 100) return null;
+  if (value.trim() !== value) return null;
+  for (const ch of value) {
+    const o = ch.codePointAt(0) ?? 0;
+    if (o < 0x20 || o === 0x7f || (o >= 0x80 && o <= 0x9f)) return null;
+    if (ACTOR_USERNAME_FORBIDDEN_CHARS.has(ch)) return null;
+  }
+  return value;
+}

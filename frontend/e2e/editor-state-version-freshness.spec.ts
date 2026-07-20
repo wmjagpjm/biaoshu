@@ -1,10 +1,11 @@
 /**
- * 模块：P13-B/P13-C 已载入版本时间与修订来源可见性专项 E2E
- * 用途：验证技术标/商务标标题区展示当前已载入服务端版本 UTC 更新时间与修订来源；
+ * 模块：P13-B/P13-C/P13-D2 已载入版本时间、修订来源与操作者可见性专项 E2E
+ * 用途：验证技术标/商务标标题区展示当前已载入服务端版本 UTC 更新时间、修订来源与操作者用户名；
  *       覆盖初始 GET、成功 PUT、409/失败保值、显式重载、A→B 迟到隔离与零额外请求。
  * 对接：Playwright chromium 单 worker；可变 editor-state route 桩；两工作区固定 testid。
  * 二次开发：禁止 sleep 作完成证据、宽泛 or、只读 route 自证；请求计数须精确；
- *       禁止声称「远端最新/实时/在线/最后由」；来源仅九类精确字符串。
+ *       禁止声称「远端最新/实时/在线/最后由」；来源仅九类精确字符串；
+ *       操作者仅经 parseRevisionActorUsername 同门接受。
  */
 import {
   expect,
@@ -23,10 +24,14 @@ const TECH_TESTID = "technical-editor-version-freshness";
 const BIZ_TESTID = "business-editor-version-freshness";
 const TECH_SOURCE_TESTID = "technical-editor-version-source";
 const BIZ_SOURCE_TESTID = "business-editor-version-source";
+const TECH_ACTOR_TESTID = "technical-editor-version-actor";
+const BIZ_ACTOR_TESTID = "business-editor-version-actor";
 const KNOWN_LABEL = "当前已载入版本：2026-07-20 12:34:56 UTC";
 const UNKNOWN_LABEL = "当前已载入版本：更新时间未知";
 const KNOWN_SOURCE_LABEL = "当前版本来源：浏览器保存";
 const UNKNOWN_SOURCE_LABEL = "当前版本来源：来源未知";
+const KNOWN_ACTOR_LABEL = "当前版本操作者：测试用户甲";
+const UNKNOWN_ACTOR_LABEL = "当前版本操作者：操作者未知";
 const FORBIDDEN_PHRASES = ["在线", "最后由", "实时", "远端最新"];
 /** 九类固定修订来源（与 editorStateRevisionApi 唯一集合对齐） */
 const NINE_SOURCES = [
@@ -98,6 +103,11 @@ type EditorState = {
   updatedAt: string | null;
   /** P13-C：当前已载入版本在修订账本中的来源；可 null */
   currentRevisionSourceKind: string | null;
+  /**
+   * P13-D2：当前已载入版本操作者用户名；可 null。
+   * 桩允许 unknown，用于注入非字符串坏值验证前端同门拒绝。
+   */
+  currentRevisionActorUsername: unknown;
 };
 
 type HoldGate = {
@@ -116,6 +126,8 @@ type PutMode =
       kind: "ok";
       updatedAt?: string | null;
       currentRevisionSourceKind?: string | null;
+      /** 允许 unknown：桩可注入 number/boolean/object/array 等坏值 */
+      currentRevisionActorUsername?: unknown;
       stripStateVersion?: boolean;
       invalidStateVersion?: boolean;
     }
@@ -130,6 +142,7 @@ type PutMode =
       status?: number;
       updatedAt?: string | null;
       currentRevisionSourceKind?: string | null;
+      currentRevisionActorUsername?: unknown;
     };
 
 type ProbeState = {
@@ -141,6 +154,8 @@ type ProbeState = {
   nextGetUpdatedAt: Record<string, string | null | undefined>;
   /** 可选：下一次 GET 覆写 currentRevisionSourceKind（用后清除） */
   nextGetSourceKind: Record<string, string | null | undefined>;
+  /** 可选：下一次 GET 覆写 currentRevisionActorUsername（用后清除；允许 unknown 坏值） */
+  nextGetActorUsername: Record<string, unknown>;
   versionSeq: number;
   getLog: string[];
   putLog: Array<{ projectId: string; body: Record<string, unknown> }>;
@@ -291,6 +306,7 @@ function emptyEditor(projectId: string, updatedAt: string | null): EditorState {
     stateVersion: seedStateVersion(1),
     updatedAt,
     currentRevisionSourceKind: null,
+    currentRevisionActorUsername: null,
   };
 }
 
@@ -306,6 +322,7 @@ function createProbeState(seed: ProjectStub[] = []): ProbeState {
     putMode: {},
     nextGetUpdatedAt: {},
     nextGetSourceKind: {},
+    nextGetActorUsername: {},
     versionSeq: 100,
     getLog: [],
     putLog: [],
@@ -534,6 +551,12 @@ async function installRoutes(page: Page, state: ProbeState) {
           ] as string | null;
           delete state.nextGetSourceKind[id];
         }
+        if (
+          Object.prototype.hasOwnProperty.call(state.nextGetActorUsername, id)
+        ) {
+          body.currentRevisionActorUsername = state.nextGetActorUsername[id];
+          delete state.nextGetActorUsername[id];
+        }
         await json(route, body);
         return;
       }
@@ -653,6 +676,22 @@ async function installRoutes(page: Page, state: ProbeState) {
             ? mode.currentRevisionSourceKind!
             : "browser_put";
 
+      const nextActorUsername =
+        mode.kind === "ok" &&
+        Object.prototype.hasOwnProperty.call(
+          mode,
+          "currentRevisionActorUsername",
+        )
+          ? mode.currentRevisionActorUsername!
+          : mode.kind === "gate" &&
+              mode.then === "ok" &&
+              Object.prototype.hasOwnProperty.call(
+                mode,
+                "currentRevisionActorUsername",
+              )
+            ? mode.currentRevisionActorUsername!
+            : prev.currentRevisionActorUsername;
+
       const next: EditorState = {
         ...prev,
         projectId: id,
@@ -700,6 +739,7 @@ async function installRoutes(page: Page, state: ProbeState) {
           typeof nextVersion === "string" ? nextVersion : prev.stateVersion,
         updatedAt: nextUpdatedAt,
         currentRevisionSourceKind: nextSourceKind,
+        currentRevisionActorUsername: nextActorUsername,
       };
       state.editorById[id] = next;
 
@@ -1021,15 +1061,18 @@ test.describe("P13-B 已载入编辑版本更新时间可见性", () => {
     const b = makeProject({ id: TECH_B, name: "P13B技术乙", kind: "technical" });
     const state = createProbeState([a, b]);
     // 迟到 A GET success 若污染，会写成 23:59:59；B 权威时间为 09:00:00
+    // P13-D2：同步挂载 actor，迟到释放不得把「用户甲」写回 B
     state.editorById[TECH_A] = {
       ...emptyEditor(TECH_A, "2026-07-20T23:59:59"),
       stateVersion: seedStateVersion(30),
       analysisOverview: "甲正文",
+      currentRevisionActorUsername: "用户甲",
     };
     state.editorById[TECH_B] = {
       ...emptyEditor(TECH_B, "2026-07-20T09:00:00"),
       stateVersion: seedStateVersion(31),
       analysisOverview: "乙正文",
+      currentRevisionActorUsername: "用户乙",
     };
     const consoleLines = collectConsole(page);
     await installRoutes(page, state);
@@ -1059,17 +1102,23 @@ test.describe("P13-B 已载入编辑版本更新时间可见性", () => {
     await expect(page.getByTestId(TECH_TESTID)).toHaveText(
       "当前已载入版本：2026-07-20 09:00:00 UTC",
     );
+    await expect(page.getByTestId(TECH_ACTOR_TESTID)).toHaveText(
+      "当前版本操作者：用户乙",
+    );
     const getsBAfterReady = state.getLog.filter((id) => id === TECH_B).length;
     expect(getsBAfterReady).toBe(getsBBefore + PROJECT_SESSION_GETS);
     const putsBeforeLateGetOk = state.putLog.length;
 
     getGateOk.release();
-    // 迟到 A GET success/finally：B 时间稳定，且 B 无额外 GET、无额外 PUT
+    // 迟到 A GET success/finally：B 时间与 actor 稳定，且 B 无额外 GET、无额外 PUT
     await expect
       .poll(async () => page.getByTestId(TECH_TESTID).innerText(), {
         timeout: 3_000,
       })
       .toBe("当前已载入版本：2026-07-20 09:00:00 UTC");
+    await expect(page.getByTestId(TECH_ACTOR_TESTID)).toHaveText(
+      "当前版本操作者：用户乙",
+    );
     expect(state.getLog.filter((id) => id === TECH_B).length).toBe(
       getsBAfterReady,
     );
@@ -1105,6 +1154,9 @@ test.describe("P13-B 已载入编辑版本更新时间可见性", () => {
     await expect(page.getByTestId(TECH_TESTID)).toHaveText(
       "当前已载入版本：2026-07-20 09:00:00 UTC",
     );
+    await expect(page.getByTestId(TECH_ACTOR_TESTID)).toHaveText(
+      "当前版本操作者：用户乙",
+    );
     const getsBAfterFailReady = state.getLog.filter((id) => id === TECH_B)
       .length;
     expect(getsBAfterFailReady).toBe(getsBBeforeFail + PROJECT_SESSION_GETS);
@@ -1116,6 +1168,9 @@ test.describe("P13-B 已载入编辑版本更新时间可见性", () => {
         timeout: 3_000,
       })
       .toBe("当前已载入版本：2026-07-20 09:00:00 UTC");
+    await expect(page.getByTestId(TECH_ACTOR_TESTID)).toHaveText(
+      "当前版本操作者：用户乙",
+    );
     expect(state.getLog.filter((id) => id === TECH_B).length).toBe(
       getsBAfterFailReady,
     );
@@ -1130,9 +1185,13 @@ test.describe("P13-B 已载入编辑版本更新时间可见性", () => {
       ...state.editorById[TECH_A],
       updatedAt: "2026-07-20T12:34:56",
       stateVersion: seedStateVersion(32),
+      currentRevisionActorUsername: "用户甲",
     };
     await openTechnical(page, TECH_A);
     await expect(page.getByTestId(TECH_TESTID)).toHaveText(KNOWN_LABEL);
+    await expect(page.getByTestId(TECH_ACTOR_TESTID)).toHaveText(
+      "当前版本操作者：用户甲",
+    );
 
     const putGate = createHoldGate();
     state.putMode[TECH_A] = {
@@ -1140,6 +1199,7 @@ test.describe("P13-B 已载入编辑版本更新时间可见性", () => {
       gate: putGate,
       then: "ok",
       updatedAt: "2026-07-20T23:59:59",
+      currentRevisionActorUsername: "迟到甲操作者",
     };
     const putsBeforeLatePut = state.putLog.filter((p) => p.projectId === TECH_A)
       .length;
@@ -1170,11 +1230,17 @@ test.describe("P13-B 已载入编辑版本更新时间可见性", () => {
     await expect(page.getByTestId(TECH_TESTID)).toHaveText(
       "当前已载入版本：2026-07-20 09:00:00 UTC",
     );
+    await expect(page.getByTestId(TECH_ACTOR_TESTID)).toHaveText(
+      "当前版本操作者：用户乙",
+    );
     const getsBAfterLatePutReady = state.getLog.filter((id) => id === TECH_B)
       .length;
     expect(getsBAfterLatePutReady).toBe(
       getsBBeforeLatePut + PROJECT_SESSION_GETS,
     );
+    const putsBBeforeLatePut = state.putLog.filter(
+      (p) => p.projectId === TECH_B,
+    ).length;
 
     putGate.release();
     await expect
@@ -1182,11 +1248,16 @@ test.describe("P13-B 已载入编辑版本更新时间可见性", () => {
         timeout: 3_000,
       })
       .toBe("当前已载入版本：2026-07-20 09:00:00 UTC");
-    // 迟到 A PUT success 不得触发 B 额外 GET/PUT，也不得写成 23:59:59
+    await expect(page.getByTestId(TECH_ACTOR_TESTID)).toHaveText(
+      "当前版本操作者：用户乙",
+    );
+    // 迟到 A PUT success 不得触发 B 额外 GET/PUT，也不得写成 23:59:59 / 迟到甲
     expect(state.getLog.filter((id) => id === TECH_B).length).toBe(
       getsBAfterLatePutReady,
     );
-    expect(state.putLog.filter((p) => p.projectId === TECH_B).length).toBe(0);
+    expect(state.putLog.filter((p) => p.projectId === TECH_B).length).toBe(
+      putsBBeforeLatePut,
+    );
     expect(state.putLog.filter((p) => p.projectId === TECH_A).length).toBe(
       putsBeforeLatePut + 1,
     );
@@ -1482,12 +1553,14 @@ test.describe("P13-C 当前已载入版本修订来源可见性", () => {
       ...emptyEditor(aId, "2026-07-20T23:59:59"),
       stateVersion: seedStateVersion(80),
       currentRevisionSourceKind: "revise",
+      currentRevisionActorUsername: "来源甲用户",
       analysisOverview: "甲",
     };
     state.editorById[bId] = {
       ...emptyEditor(bId, "2026-07-20T09:00:00"),
       stateVersion: seedStateVersion(81),
       currentRevisionSourceKind: "callback",
+      currentRevisionActorUsername: "来源乙用户",
       analysisOverview: "乙",
     };
     const consoleLines = collectConsole(page);
@@ -1515,6 +1588,9 @@ test.describe("P13-C 当前已载入版本修订来源可见性", () => {
     await expect(page.getByTestId(TECH_SOURCE_TESTID)).toHaveText(
       "当前版本来源：解析回传",
     );
+    await expect(page.getByTestId(TECH_ACTOR_TESTID)).toHaveText(
+      "当前版本操作者：来源乙用户",
+    );
     const getsBAfterReady = state.getLog.filter((id) => id === bId).length;
 
     getGateOk.release();
@@ -1523,6 +1599,9 @@ test.describe("P13-C 当前已载入版本修订来源可见性", () => {
         timeout: 3_000,
       })
       .toBe("当前版本来源：解析回传");
+    await expect(page.getByTestId(TECH_ACTOR_TESTID)).toHaveText(
+      "当前版本操作者：来源乙用户",
+    );
     expect(state.getLog.filter((id) => id === bId).length).toBe(
       getsBAfterReady,
     );
@@ -1534,10 +1613,14 @@ test.describe("P13-C 当前已载入版本修订来源可见性", () => {
       updatedAt: "2026-07-20T12:34:56",
       stateVersion: seedStateVersion(82),
       currentRevisionSourceKind: "browser_put",
+      currentRevisionActorUsername: "来源甲用户",
     };
     await openTechnical(page, aId);
     await expect(page.getByTestId(TECH_SOURCE_TESTID)).toHaveText(
       KNOWN_SOURCE_LABEL,
+    );
+    await expect(page.getByTestId(TECH_ACTOR_TESTID)).toHaveText(
+      "当前版本操作者：来源甲用户",
     );
 
     const putGate = createHoldGate();
@@ -1547,6 +1630,7 @@ test.describe("P13-C 当前已载入版本修订来源可见性", () => {
       then: "ok",
       updatedAt: "2026-07-20T23:59:59",
       currentRevisionSourceKind: "revise",
+      currentRevisionActorUsername: "迟到甲来源操作者",
     };
     const putsBefore = state.putLog.filter((p) => p.projectId === aId).length;
     await editTechnicalOverview(page, "甲迟到PUT来源");
@@ -1568,7 +1652,12 @@ test.describe("P13-C 当前已载入版本修订来源可见性", () => {
     await expect(page.getByTestId(TECH_SOURCE_TESTID)).toHaveText(
       "当前版本来源：解析回传",
     );
+    await expect(page.getByTestId(TECH_ACTOR_TESTID)).toHaveText(
+      "当前版本操作者：来源乙用户",
+    );
     const getsBAfterLate = state.getLog.filter((id) => id === bId).length;
+    const putsBBeforeLate = state.putLog.filter((p) => p.projectId === bId)
+      .length;
 
     putGate.release();
     await expect
@@ -1576,8 +1665,16 @@ test.describe("P13-C 当前已载入版本修订来源可见性", () => {
         timeout: 3_000,
       })
       .toBe("当前版本来源：解析回传");
+    await expect(page.getByTestId(TECH_ACTOR_TESTID)).toHaveText(
+      "当前版本操作者：来源乙用户",
+    );
     expect(state.getLog.filter((id) => id === bId).length).toBe(getsBAfterLate);
-    expect(state.putLog.filter((p) => p.projectId === bId).length).toBe(0);
+    expect(state.putLog.filter((p) => p.projectId === bId).length).toBe(
+      putsBBeforeLate,
+    );
+    expect(state.putLog.filter((p) => p.projectId === aId).length).toBe(
+      putsBefore + 1,
+    );
     assertCleanConsole(consoleLines);
   });
 
@@ -1635,6 +1732,640 @@ test.describe("P13-C 当前已载入版本修订来源可见性", () => {
       .toBe(getsBBefore + PROJECT_SESSION_GETS);
     await expect(page.getByTestId(BIZ_SOURCE_TESTID)).toHaveText(
       "当前版本来源：内容融合应用",
+    );
+    assertCleanConsole(consoleLines);
+    expect(state.externalHits).toEqual([]);
+  });
+});
+
+test.describe("P13-D2 当前已载入版本操作者用户名可见性", () => {
+  // 本包无合规 E2E-only 红测；业务名不使用 failure-first
+  test("双页面展示操作者 testid 与固定文案", async ({ page }) => {
+    const tech = makeProject({
+      id: "proj_e2e_p13d2_tech_ff",
+      name: "P13D2技术可见",
+      kind: "technical",
+    });
+    const biz = makeProject({
+      id: "proj_e2e_p13d2_biz_ff",
+      name: "P13D2商务可见",
+      kind: "business",
+    });
+    const state = createProbeState([tech, biz]);
+    state.editorById[tech.id] = {
+      ...emptyEditor(tech.id, "2026-07-20T12:34:56"),
+      currentRevisionActorUsername: "测试用户甲",
+    };
+    state.editorById[biz.id] = {
+      ...emptyEditor(biz.id, "2026-07-20T12:34:56"),
+      currentRevisionActorUsername: "测试用户甲",
+    };
+    await installRoutes(page, state);
+
+    await openTechnical(page, tech.id);
+    await expect(page.getByTestId("technical-editor-workspace")).toBeVisible();
+    await expect(page.getByTestId(TECH_ACTOR_TESTID)).toBeVisible();
+    await expect(page.getByTestId(TECH_ACTOR_TESTID)).toHaveText(
+      KNOWN_ACTOR_LABEL,
+    );
+
+    await openBusiness(page, biz.id);
+    await expect(page.getByTestId("business-editor-workspace")).toBeVisible();
+    await expect(page.getByTestId(BIZ_ACTOR_TESTID)).toBeVisible();
+    await expect(page.getByTestId(BIZ_ACTOR_TESTID)).toHaveText(
+      KNOWN_ACTOR_LABEL,
+    );
+  });
+
+  test("技术标：合法中文/emoji、PUT 更新、409/abort/非法版本保值、零额外请求", async ({
+    page,
+  }) => {
+    const project = makeProject({
+      id: "proj_e2e_p13d2_tech_put",
+      name: "P13D2技术PUT",
+      kind: "technical",
+    });
+    const state = createProbeState([project]);
+    state.editorById[project.id] = {
+      ...emptyEditor(project.id, "2026-07-20T12:34:56"),
+      stateVersion: seedStateVersion(200),
+      currentRevisionSourceKind: "browser_put",
+      currentRevisionActorUsername: "测试用户甲",
+      analysisOverview: "初始",
+    };
+    state.putMode[project.id] = {
+      kind: "ok",
+      updatedAt: "2026-07-20T15:00:00",
+      currentRevisionSourceKind: "browser_put",
+      currentRevisionActorUsername: "改名后操作者",
+    };
+    const consoleLines = collectConsole(page);
+    await installRoutes(page, state);
+
+    await openTechnical(page, project.id);
+    await expect(page.getByTestId(TECH_ACTOR_TESTID)).toHaveText(
+      KNOWN_ACTOR_LABEL,
+    );
+    await assertNoForbiddenFreshnessCopy(page, TECH_ACTOR_TESTID);
+
+    const getsBefore = state.getLog.length;
+    const putsBefore = state.putLog.length;
+    const editorBefore = state.editorRequestLog.length;
+    await editTechnicalOverview(page, "触发PUT更新操作者");
+    await expect
+      .poll(() => state.putLog.length, { timeout: 10_000 })
+      .toBe(putsBefore + 1);
+    await expect(page.getByTestId(TECH_ACTOR_TESTID)).toHaveText(
+      "当前版本操作者：改名后操作者",
+    );
+    expect(state.getLog.length).toBe(getsBefore);
+    expect(state.editorRequestLog.length).toBe(editorBefore + 1);
+
+    // 409 保值（不得仅依赖代码同门推断）
+    state.putMode[project.id] = { kind: "full_conflict" };
+    const putsBefore409 = state.putLog.length;
+    await editTechnicalOverview(page, "触发409操作者保值");
+    await expect
+      .poll(() => state.putLog.length, { timeout: 10_000 })
+      .toBe(putsBefore409 + 1);
+    await expect(
+      page.getByTestId("technical-editor-state-conflict"),
+    ).toBeVisible();
+    await expect(page.getByTestId(TECH_ACTOR_TESTID)).toHaveText(
+      "当前版本操作者：改名后操作者",
+    );
+    expect(state.getLog.length).toBe(getsBefore);
+
+    // 显式重载解除冲突后：PUT route.abort 保值
+    state.editorById[project.id] = {
+      ...state.editorById[project.id],
+      updatedAt: "2026-07-20T15:00:00",
+      stateVersion: seedStateVersion(201),
+      currentRevisionActorUsername: "改名后操作者",
+    };
+    state.getMode[project.id] = { kind: "ok" };
+    const getsBeforeReload = state.getLog.filter((id) => id === project.id)
+      .length;
+    await page.getByTestId("technical-editor-state-reload").click();
+    await expect
+      .poll(
+        () => state.getLog.filter((id) => id === project.id).length,
+        { timeout: 5_000 },
+      )
+      .toBe(getsBeforeReload + 1);
+    await expect(
+      page.getByTestId("technical-editor-state-conflict"),
+    ).toHaveCount(0);
+    await expect(page.getByTestId(TECH_ACTOR_TESTID)).toHaveText(
+      "当前版本操作者：改名后操作者",
+    );
+
+    state.putMode[project.id] = { kind: "abort" };
+    const putsBeforeAbort = state.putLog.length;
+    const getsBeforeAbort = state.getLog.length;
+    await editTechnicalOverview(page, "触发PUT网络abort保值");
+    await expect
+      .poll(() => state.putLog.length, { timeout: 10_000 })
+      .toBe(putsBeforeAbort + 1);
+    await expect(page.getByTestId("technical-editor-save-error")).toBeVisible();
+    await expect(page.getByTestId(TECH_ACTOR_TESTID)).toHaveText(
+      "当前版本操作者：改名后操作者",
+    );
+    expect(state.getLog.length).toBe(getsBeforeAbort);
+
+    // 缺失 stateVersion：进入全状态阻断且 actor 保值（阻断后不再自动 PUT）
+    state.putMode[project.id] = { kind: "ok" };
+    state.editorById[project.id] = {
+      ...state.editorById[project.id],
+      updatedAt: "2026-07-20T15:00:00",
+      stateVersion: seedStateVersion(202),
+      currentRevisionActorUsername: "改名后操作者",
+    };
+    state.getMode[project.id] = { kind: "ok" };
+    await openTechnical(page, project.id);
+    await expect(page.getByTestId(TECH_ACTOR_TESTID)).toHaveText(
+      "当前版本操作者：改名后操作者",
+    );
+
+    state.putMode[project.id] = {
+      kind: "ok",
+      updatedAt: "2026-07-20T17:00:00",
+      currentRevisionActorUsername: "不应被接受的操作者",
+      stripStateVersion: true,
+    };
+    const putsBeforeStrip = state.putLog.length;
+    const getsBeforeStrip = state.getLog.length;
+    await editTechnicalOverview(page, "缺失stateVersion保值");
+    await expect
+      .poll(() => state.putLog.length, { timeout: 10_000 })
+      .toBe(putsBeforeStrip + 1);
+    await expect(page.getByTestId(TECH_ACTOR_TESTID)).toHaveText(
+      "当前版本操作者：改名后操作者",
+    );
+    expect(state.getLog.length).toBe(getsBeforeStrip);
+
+    // 显式整页重载恢复后：非法 stateVersion 同样保值
+    state.putMode[project.id] = { kind: "ok" };
+    state.editorById[project.id] = {
+      ...state.editorById[project.id],
+      updatedAt: "2026-07-20T15:00:00",
+      stateVersion: seedStateVersion(203),
+      currentRevisionActorUsername: "改名后操作者",
+      analysisOverview: "恢复后基线",
+    };
+    state.getMode[project.id] = { kind: "ok" };
+    await openTechnical(page, project.id);
+    await expect(page.getByTestId(TECH_ACTOR_TESTID)).toHaveText(
+      "当前版本操作者：改名后操作者",
+    );
+
+    state.putMode[project.id] = {
+      kind: "ok",
+      updatedAt: "2026-07-20T17:30:00",
+      currentRevisionActorUsername: "非法版本操作者",
+      invalidStateVersion: true,
+    };
+    const putsBeforeInvalid = state.putLog.length;
+    const getsBeforeInvalid = state.getLog.length;
+    await editTechnicalOverview(page, "非法stateVersion保值");
+    await expect
+      .poll(() => state.putLog.length, { timeout: 10_000 })
+      .toBe(putsBeforeInvalid + 1);
+    await expect(page.getByTestId(TECH_ACTOR_TESTID)).toHaveText(
+      "当前版本操作者：改名后操作者",
+    );
+    expect(state.getLog.length).toBe(getsBeforeInvalid);
+
+    assertCleanConsole(consoleLines);
+    expect(state.externalHits).toEqual([]);
+  });
+
+  test("技术标：坏用户名显示未知；合法新版本坏值覆盖为未知；合法中文/emoji 原样", async ({
+    page,
+  }) => {
+    const badCases: Array<{
+      id: string;
+      value: unknown;
+      omit?: boolean;
+    }> = [
+      { id: "proj_e2e_p13d2_null", value: null },
+      { id: "proj_e2e_p13d2_missing", value: null, omit: true },
+      { id: "proj_e2e_p13d2_empty", value: "" },
+      { id: "proj_e2e_p13d2_num", value: 12345 },
+      { id: "proj_e2e_p13d2_bool", value: true },
+      { id: "proj_e2e_p13d2_obj", value: { name: "x" } },
+      { id: "proj_e2e_p13d2_arr", value: ["甲"] },
+      { id: "proj_e2e_p13d2_pad", value: " 甲 " },
+      { id: "proj_e2e_p13d2_long", value: "汉".repeat(101) },
+      { id: "proj_e2e_p13d2_c0", value: "bad\u0001name" },
+      { id: "proj_e2e_p13d2_c1", value: "bad\u0081name" },
+      { id: "proj_e2e_p13d2_del", value: "bad\u007fname" },
+      { id: "proj_e2e_p13d2_ls", value: "bad\u2028name" },
+      { id: "proj_e2e_p13d2_ps", value: "bad\u2029name" },
+      { id: "proj_e2e_p13d2_bidi_061c", value: "bad\u061cname" },
+      { id: "proj_e2e_p13d2_bidi_200e", value: "bad\u200ename" },
+      { id: "proj_e2e_p13d2_bidi_202e", value: "bad\u202ename" },
+      { id: "proj_e2e_p13d2_bidi_2066", value: "bad\u2066name" },
+    ];
+    for (const c of badCases) {
+      const project = makeProject({
+        id: c.id,
+        name: `P13D2坏-${c.id}`,
+        kind: "technical",
+      });
+      const state = createProbeState([project]);
+      const editor = {
+        ...emptyEditor(c.id, "2026-07-20T12:34:56"),
+        currentRevisionActorUsername: c.value,
+      };
+      if (c.omit) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        delete (editor as any).currentRevisionActorUsername;
+      }
+      state.editorById[c.id] = editor;
+      const consoleLines = collectConsole(page);
+      await installRoutes(page, state);
+      await openTechnical(page, c.id);
+      await expect(page.getByTestId(TECH_ACTOR_TESTID)).toHaveText(
+        UNKNOWN_ACTOR_LABEL,
+      );
+      assertCleanConsole(consoleLines);
+      await page.unrouteAll({ behavior: "ignoreErrors" });
+    }
+
+    // 合法中文 / emoji 边界原样
+    const goodCases: Array<{ id: string; value: string; label: string }> = [
+      {
+        id: "proj_e2e_p13d2_cn",
+        value: "中文用户甲",
+        label: "当前版本操作者：中文用户甲",
+      },
+      {
+        id: "proj_e2e_p13d2_emoji",
+        value: "用户😀尾",
+        label: "当前版本操作者：用户😀尾",
+      },
+    ];
+    for (const c of goodCases) {
+      const project = makeProject({
+        id: c.id,
+        name: `P13D2好-${c.id}`,
+        kind: "technical",
+      });
+      const state = createProbeState([project]);
+      state.editorById[c.id] = {
+        ...emptyEditor(c.id, "2026-07-20T12:34:56"),
+        currentRevisionActorUsername: c.value,
+      };
+      await installRoutes(page, state);
+      await openTechnical(page, c.id);
+      await expect(page.getByTestId(TECH_ACTOR_TESTID)).toHaveText(c.label);
+      await page.unrouteAll({ behavior: "ignoreErrors" });
+    }
+
+    // 合法版本响应中坏用户名 → 精确更新为未知（不保留旧名）
+    const project = makeProject({
+      id: "proj_e2e_p13d2_bad_overwrite",
+      name: "P13D2坏覆盖",
+      kind: "technical",
+    });
+    const state = createProbeState([project]);
+    state.editorById[project.id] = {
+      ...emptyEditor(project.id, "2026-07-20T12:34:56"),
+      stateVersion: seedStateVersion(210),
+      currentRevisionActorUsername: "测试用户甲",
+      analysisOverview: "有名",
+    };
+    state.putMode[project.id] = {
+      kind: "ok",
+      updatedAt: "2026-07-20T16:00:00",
+      currentRevisionActorUsername: " 坏值 ",
+    };
+    await installRoutes(page, state);
+    await openTechnical(page, project.id);
+    await expect(page.getByTestId(TECH_ACTOR_TESTID)).toHaveText(
+      KNOWN_ACTOR_LABEL,
+    );
+    const putsBefore = state.putLog.length;
+    const getsBefore = state.getLog.length;
+    await editTechnicalOverview(page, "覆盖为坏用户名");
+    await expect
+      .poll(() => state.putLog.length, { timeout: 10_000 })
+      .toBe(putsBefore + 1);
+    await expect(page.getByTestId(TECH_ACTOR_TESTID)).toHaveText(
+      UNKNOWN_ACTOR_LABEL,
+    );
+    expect(state.getLog.length).toBe(getsBefore);
+  });
+
+  test("技术标：A→B 立即清空操作者；迟到 A GET/PUT 不污染 B", async ({
+    page,
+  }) => {
+    const aId = "proj_e2e_p13d2_tech_a";
+    const bId = "proj_e2e_p13d2_tech_b";
+    const a = makeProject({ id: aId, name: "P13D2技术甲", kind: "technical" });
+    const b = makeProject({ id: bId, name: "P13D2技术乙", kind: "technical" });
+    const state = createProbeState([a, b]);
+    state.editorById[aId] = {
+      ...emptyEditor(aId, "2026-07-20T23:59:59"),
+      stateVersion: seedStateVersion(220),
+      currentRevisionActorUsername: "用户甲",
+      analysisOverview: "甲",
+    };
+    state.editorById[bId] = {
+      ...emptyEditor(bId, "2026-07-20T09:00:00"),
+      stateVersion: seedStateVersion(221),
+      currentRevisionActorUsername: "用户乙",
+      analysisOverview: "乙",
+    };
+    const consoleLines = collectConsole(page);
+    await installRoutes(page, state);
+
+    // A GET success 在途
+    const getGateOk = createHoldGate();
+    state.getMode[aId] = { kind: "gate", gate: getGateOk, then: "ok" };
+    const getsABefore = state.getLog.filter((id) => id === aId).length;
+    await page.goto(`/technical-plan/${aId}/analysis`);
+    await expect
+      .poll(
+        () => state.getLog.filter((id) => id === aId).length,
+        { timeout: 5_000 },
+      )
+      .toBe(getsABefore + PROJECT_SESSION_GETS);
+    expect(getGateOk.isReleased()).toBe(false);
+
+    const getsBBefore = state.getLog.filter((id) => id === bId).length;
+    await openTechnical(page, bId);
+    await expect
+      .poll(
+        () => state.getLog.filter((id) => id === bId).length,
+        { timeout: 5_000 },
+      )
+      .toBe(getsBBefore + PROJECT_SESSION_GETS);
+    await expect(page.getByTestId(TECH_ACTOR_TESTID)).toHaveText(
+      "当前版本操作者：用户乙",
+    );
+    const getsBAfterReady = state.getLog.filter((id) => id === bId).length;
+    const putsBeforeLateGet = state.putLog.length;
+
+    getGateOk.release();
+    await expect
+      .poll(async () => page.getByTestId(TECH_ACTOR_TESTID).innerText(), {
+        timeout: 3_000,
+      })
+      .toBe("当前版本操作者：用户乙");
+    expect(state.getLog.filter((id) => id === bId).length).toBe(
+      getsBAfterReady,
+    );
+    expect(state.putLog.length).toBe(putsBeforeLateGet);
+
+    // A GET catch/finally 在途
+    const getGateFail = createHoldGate();
+    state.getMode[aId] = {
+      kind: "gate",
+      gate: getGateFail,
+      then: "fail",
+      status: 500,
+    };
+    const getsABeforeFail = state.getLog.filter((id) => id === aId).length;
+    await page.goto(`/technical-plan/${aId}/analysis`);
+    await expect
+      .poll(
+        () => state.getLog.filter((id) => id === aId).length,
+        { timeout: 5_000 },
+      )
+      .toBe(getsABeforeFail + PROJECT_SESSION_GETS);
+
+    const getsBBeforeFail = state.getLog.filter((id) => id === bId).length;
+    await openTechnical(page, bId);
+    await expect
+      .poll(
+        () => state.getLog.filter((id) => id === bId).length,
+        { timeout: 5_000 },
+      )
+      .toBe(getsBBeforeFail + PROJECT_SESSION_GETS);
+    await expect(page.getByTestId(TECH_ACTOR_TESTID)).toHaveText(
+      "当前版本操作者：用户乙",
+    );
+    const getsBAfterFail = state.getLog.filter((id) => id === bId).length;
+    const putsBeforeFail = state.putLog.length;
+
+    getGateFail.release();
+    await expect
+      .poll(async () => page.getByTestId(TECH_ACTOR_TESTID).innerText(), {
+        timeout: 3_000,
+      })
+      .toBe("当前版本操作者：用户乙");
+    expect(state.getLog.filter((id) => id === bId).length).toBe(getsBAfterFail);
+    expect(state.putLog.length).toBe(putsBeforeFail);
+
+    // 迟到 A PUT success
+    state.getMode[aId] = { kind: "ok" };
+    state.getMode[bId] = { kind: "ok" };
+    state.editorById[aId] = {
+      ...state.editorById[aId],
+      updatedAt: "2026-07-20T12:34:56",
+      stateVersion: seedStateVersion(222),
+      currentRevisionActorUsername: "用户甲",
+    };
+    await openTechnical(page, aId);
+    await expect(page.getByTestId(TECH_ACTOR_TESTID)).toHaveText(
+      "当前版本操作者：用户甲",
+    );
+
+    const putGate = createHoldGate();
+    state.putMode[aId] = {
+      kind: "gate",
+      gate: putGate,
+      then: "ok",
+      updatedAt: "2026-07-20T23:59:59",
+      currentRevisionActorUsername: "迟到甲操作者",
+    };
+    const putsBeforeLatePut = state.putLog.filter((p) => p.projectId === aId)
+      .length;
+    const getsABeforeLatePut = state.getLog.filter((id) => id === aId).length;
+    await editTechnicalOverview(page, "甲迟到PUT操作者");
+    await expect
+      .poll(
+        () => state.putLog.filter((p) => p.projectId === aId).length,
+        { timeout: 10_000 },
+      )
+      .toBe(putsBeforeLatePut + 1);
+    expect(state.getLog.filter((id) => id === aId).length).toBe(
+      getsABeforeLatePut,
+    );
+
+    const getsBBeforeLatePut = state.getLog.filter((id) => id === bId).length;
+    await openTechnical(page, bId);
+    await expect
+      .poll(
+        () => state.getLog.filter((id) => id === bId).length,
+        { timeout: 5_000 },
+      )
+      .toBe(getsBBeforeLatePut + PROJECT_SESSION_GETS);
+    await expect(page.getByTestId(TECH_ACTOR_TESTID)).toHaveText(
+      "当前版本操作者：用户乙",
+    );
+    const getsBAfterLatePut = state.getLog.filter((id) => id === bId).length;
+    const putsBBeforeLatePut = state.putLog.filter((p) => p.projectId === bId)
+      .length;
+
+    putGate.release();
+    await expect
+      .poll(async () => page.getByTestId(TECH_ACTOR_TESTID).innerText(), {
+        timeout: 3_000,
+      })
+      .toBe("当前版本操作者：用户乙");
+    expect(state.getLog.filter((id) => id === bId).length).toBe(
+      getsBAfterLatePut,
+    );
+    expect(state.putLog.filter((p) => p.projectId === bId).length).toBe(
+      putsBBeforeLatePut,
+    );
+    expect(state.putLog.filter((p) => p.projectId === aId).length).toBe(
+      putsBeforeLatePut + 1,
+    );
+    assertCleanConsole(consoleLines);
+  });
+
+  test("操作者用户名仅出现在 actor 文本节点；零额外请求与外网", async ({
+    page,
+  }) => {
+    const marker = "MARKER_P13D2_ACTOR_ONLY_甲";
+    const project = makeProject({
+      id: "proj_e2e_p13d2_security",
+      name: "P13D2安全门",
+      kind: "technical",
+    });
+    const state = createProbeState([project]);
+    state.editorById[project.id] = {
+      ...emptyEditor(project.id, "2026-07-20T12:34:56"),
+      stateVersion: seedStateVersion(240),
+      currentRevisionActorUsername: marker,
+      analysisOverview: "安全正文",
+    };
+    const consoleLines = collectConsole(page);
+    await installRoutes(page, state);
+
+    await openTechnical(page, project.id);
+    const actor = page.getByTestId(TECH_ACTOR_TESTID);
+    await expect(actor).toHaveText(`当前版本操作者：${marker}`);
+
+    // 文本节点含 marker；DOM 属性/title 不得含
+    const attrHits = await page.evaluate((m) => {
+      const hits: string[] = [];
+      const all = document.querySelectorAll("*");
+      for (const el of all) {
+        for (const attr of Array.from(el.attributes)) {
+          if (attr.value.includes(m)) {
+            hits.push(`${el.tagName.toLowerCase()}@${attr.name}`);
+          }
+        }
+      }
+      if (document.title.includes(m)) hits.push("document.title");
+      return hits;
+    }, marker);
+    expect(attrHits).toEqual([]);
+
+    // URL / storage / cookie 不得含
+    const url = page.url();
+    expect(url).not.toContain(marker);
+    const storageHits = await page.evaluate((m) => {
+      const hits: string[] = [];
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const k = localStorage.key(i) ?? "";
+        const v = localStorage.getItem(k) ?? "";
+        if (k.includes(m) || v.includes(m)) hits.push(`localStorage:${k}`);
+      }
+      for (let i = 0; i < sessionStorage.length; i += 1) {
+        const k = sessionStorage.key(i) ?? "";
+        const v = sessionStorage.getItem(k) ?? "";
+        if (k.includes(m) || v.includes(m)) hits.push(`sessionStorage:${k}`);
+      }
+      if (document.cookie.includes(m)) hits.push("cookie");
+      return hits;
+    }, marker);
+    expect(storageHits).toEqual([]);
+
+    // 稳定窗口：actor 展示不引发额外 GET/PUT/轮询
+    const getsStable = state.getLog.length;
+    const putsStable = state.putLog.length;
+    const editorStable = state.editorRequestLog.length;
+    await expect
+      .poll(() => {
+        if (state.getLog.length !== getsStable) return "get-drift";
+        if (state.putLog.length !== putsStable) return "put-drift";
+        if (state.editorRequestLog.length !== editorStable) return "editor-drift";
+        return "stable";
+      }, { timeout: 2_000 })
+      .toBe("stable");
+
+    // console / 外网
+    for (const line of appConsoleLines(consoleLines)) {
+      expect(line, line).not.toContain(marker);
+    }
+    expect(state.externalHits).toEqual([]);
+    // actor ID 不由前端伪造：响应桩无 id 字段，页面不得出现 user_ 伪 id
+    const bodyText = await page.locator("body").innerText();
+    expect(bodyText).not.toMatch(/user_[0-9a-f]{8,}/i);
+  });
+
+  test("商务标：操作者展示、PUT 更新、A→B 隔离、零额外请求", async ({
+    page,
+  }) => {
+    const aId = "proj_e2e_p13d2_biz_a";
+    const bId = "proj_e2e_p13d2_biz_b";
+    const a = makeProject({ id: aId, name: "P13D2商务甲", kind: "business" });
+    const b = makeProject({ id: bId, name: "P13D2商务乙", kind: "business" });
+    const state = createProbeState([a, b]);
+    state.editorById[aId] = {
+      ...emptyEditor(aId, "2026-07-20T12:34:56"),
+      stateVersion: seedStateVersion(230),
+      currentRevisionActorUsername: "商务用户甲",
+      parsedMarkdown: "商务甲",
+    };
+    state.editorById[bId] = {
+      ...emptyEditor(bId, "2026-07-20T08:08:08"),
+      stateVersion: seedStateVersion(231),
+      currentRevisionActorUsername: null,
+      parsedMarkdown: "商务乙",
+    };
+    state.putMode[aId] = {
+      kind: "ok",
+      updatedAt: "2026-07-20T16:16:16",
+      currentRevisionActorUsername: "商务用户甲-更新",
+    };
+    const consoleLines = collectConsole(page);
+    await installRoutes(page, state);
+
+    await openBusiness(page, aId);
+    await expect(page.getByTestId(BIZ_ACTOR_TESTID)).toHaveText(
+      "当前版本操作者：商务用户甲",
+    );
+    const getsBefore = state.getLog.filter((id) => id === aId).length;
+    const putsBefore = state.putLog.filter((p) => p.projectId === aId).length;
+    await editBusinessMarkdown(page, "商务甲-已编辑操作者");
+    await expect
+      .poll(
+        () => state.putLog.filter((p) => p.projectId === aId).length,
+        { timeout: 10_000 },
+      )
+      .toBe(putsBefore + 1);
+    await expect(page.getByTestId(BIZ_ACTOR_TESTID)).toHaveText(
+      "当前版本操作者：商务用户甲-更新",
+    );
+    expect(state.getLog.filter((id) => id === aId).length).toBe(getsBefore);
+
+    const getsBBefore = state.getLog.filter((id) => id === bId).length;
+    await openBusiness(page, bId);
+    await expect
+      .poll(
+        () => state.getLog.filter((id) => id === bId).length,
+        { timeout: 5_000 },
+      )
+      .toBe(getsBBefore + PROJECT_SESSION_GETS);
+    await expect(page.getByTestId(BIZ_ACTOR_TESTID)).toHaveText(
+      UNKNOWN_ACTOR_LABEL,
     );
     assertCleanConsole(consoleLines);
     expect(state.externalHits).toEqual([]);

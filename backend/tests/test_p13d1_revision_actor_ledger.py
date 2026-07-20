@@ -522,7 +522,9 @@ def _bootstrap_and_login(client: TestClient) -> tuple[str, str]:
 
 
 def _assert_json_has_no_actor_fields(payload: object) -> None:
-    """用途：递归键集合证明响应无 actorUserId/actor_user_id/currentRevisionActor 等。"""
+    """用途：递归键集合证明响应无内部 actor 泄漏。
+    P13-D2 唯一放行精确键 currentRevisionActorUsername；禁止前缀/后缀/大小写近似键。
+    """
     banned = {
         "actoruserid",
         "actor_user_id",
@@ -532,9 +534,13 @@ def _assert_json_has_no_actor_fields(payload: object) -> None:
         "actorid",
         "actor_id",
     }
+    allowed_exact = {"currentRevisionActorUsername"}
     if isinstance(payload, dict):
         for key, value in payload.items():
             assert isinstance(key, str), key
+            if key in allowed_exact:
+                _assert_json_has_no_actor_fields(value)
+                continue
             assert key.lower() not in banned, f"响应泄漏 actor 键: {key}"
             assert "actor" not in key.lower(), f"响应泄漏 actor 相关键: {key}"
             _assert_json_has_no_actor_fields(value)
@@ -562,7 +568,7 @@ def test_required_browser_put_records_actor(required_client: TestClient):
         json={"parsedMarkdown": "req-body-1"},
     )
     assert r1.status_code == 200, r1.text
-    # 解析 JSON 键集合证明无 actor 泄漏（禁止恒真 or True / 宽松字符串）
+    # 解析 JSON 键集合证明无内部 actor 泄漏（禁止恒真 or True / 宽松字符串）
     body = r1.json()
     assert isinstance(body, dict)
     _assert_json_has_no_actor_fields(body)
@@ -570,6 +576,9 @@ def test_required_browser_put_records_actor(required_client: TestClient):
     assert "actorUserId" not in top_keys
     assert "actor_user_id" not in top_keys
     assert "currentRevisionActor" not in top_keys
+    # P13-D2：唯一合法公开键；required browser PUT 后须精确等于当前活动同工作区用户名
+    assert "currentRevisionActorUsername" in top_keys
+    assert body["currentRevisionActorUsername"] == _TEST_USERNAME
 
     rows = _db_rev_rows(pid)
     assert rows, "应写入修订"

@@ -118,23 +118,24 @@ const STEP_IDS: TechnicalPlanStepId[] = [
 ];
 
 /**
- * 模块：技术方案工作区（P11C 服务端编辑态权威 + P13-B/C 版本时间与来源）
+ * 模块：技术方案工作区（P11C 服务端编辑态权威 + P13-B/C/D2 版本时间、来源与操作者）
  * 用途：六步流水线 + 异步任务 + 反馈修订 + 知识库引用展示。
  *   - 取消任务、大纲 revise「应用到大纲树」、生成后展示 kbCitations
  *   - 响应矩阵智能建议：外层来源页 × 内层候选批串行、本地累计、禁止自动写 editor-state
  *   - 文档解析入口按工作空间 parseStrategy 决策 light/local/ask（P8B）
  *   - 严格 bid_writer 可按需查看人力团队推荐投影（P10F，disabled 不展示）
  *   - P11C：editor-state 加载失败固定卡；项目详情绑定 requestProjectId；A→B 首帧不渲染旧项目
- *   - P13-B/C：标题区展示当前已载入版本 UTC 更新时间与修订来源（共享组件，零额外请求）
+ *   - P13-B/C/D2：标题区展示当前已载入版本 UTC 更新时间、修订来源与操作者用户名（共享组件，零额外请求）
  * 对接：
  *   - useProjectPipeline / useTechnicalPlanEditors / useProjectGuidance
  *   - useWorkspaceParseStrategy / ParseStrategyChoiceDialog
  *   - BidWriterTeamRecommendationPanel
- *   - EditorStateVersionFreshness（testid=technical-editor-version-freshness / technical-editor-version-source）
+ *   - EditorStateVersionFreshness（testid=technical-editor-version-freshness /
+ *     technical-editor-version-source / technical-editor-version-actor）
  *   - editor-state、POST .../tasks（response_match payload.sourceBatchIndex + candidateBatchIndex）、POST .../revise
  * 二次开发：勿在此堆业务；任务与持久化进 hooks；分批合并用 mergeResponseMatrixSuggestions；禁止字段级合并；轻量路径必须 engine=lightweight。
  *       禁止生产演示入口（填入演示数据/伪抽取/示例目录）；M3-D 对话框打开时不得用 loadError 卡提前卸载；
- *       版本时间文案不得改称远端最新/实时/在线/最后由。
+ *       版本时间/来源/操作者文案不得改称远端最新/实时/在线/最后由；用户名只作文本节点。
  */
 
 type MatrixMatchProgress = {
@@ -650,8 +651,10 @@ export function TechnicalPlanWorkspace() {
           <EditorStateVersionFreshness
             updatedAt={editors.versionUpdatedAt}
             sourceKind={editors.currentRevisionSourceKind}
+            actorUsername={editors.currentRevisionActorUsername}
             testId="technical-editor-version-freshness"
             sourceTestId="technical-editor-version-source"
+            actorTestId="technical-editor-version-actor"
           />
           {editors.saveError ? (
             <p

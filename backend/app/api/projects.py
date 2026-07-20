@@ -313,18 +313,17 @@ def _editor_out(
 ) -> EditorStateOut:
     """
     用途：service dict → EditorStateOut（含 analysis / 商务字段 / 矩阵与全状态版本）。
-    二次开发：P13-C 用响应 stateVersion 只读解析 currentRevisionSourceKind；
-      查询不写库；版本不匹配或来源非法时保守 null。
+    二次开发：P13-C/D2 用响应 stateVersion 只读解析来源与操作者用户名；
+      仅调用一次 resolve_current_revision_meta；查询不写库；
+      版本不匹配时两项均为 null；来源与用户名独立降级。
     """
     state_version = data.get("stateVersion") or ""
     project_id = data["projectId"]
-    source_kind = (
-        editor_state_revision_service.resolve_current_revision_source_kind(
-            db,
-            workspace_id,
-            project_id,
-            state_version if isinstance(state_version, str) else "",
-        )
+    meta = editor_state_revision_service.resolve_current_revision_meta(
+        db,
+        workspace_id,
+        project_id,
+        state_version if isinstance(state_version, str) else "",
     )
     return EditorStateOut.model_validate(
         {
@@ -345,6 +344,7 @@ def _editor_out(
             "business_quote": data.get("businessQuote"),
             "business_commit": data.get("businessCommit"),
             "updated_at": data["updatedAt"],
-            "current_revision_source_kind": source_kind,
+            "current_revision_source_kind": meta.source_kind,
+            "current_revision_actor_username": meta.actor_username,
         }
     )

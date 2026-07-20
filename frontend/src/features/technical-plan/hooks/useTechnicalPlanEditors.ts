@@ -1,24 +1,25 @@
 /**
- * 模块：技术方案大纲 / 正文 / 全局事实 / 分析概述（P11C + P12B 全状态 CAS + P13-B/C）
+ * 模块：技术方案大纲 / 正文 / 全局事实 / 分析概述（P11C + P12B 全状态 CAS + P13-B/C/D2）
  * 用途：技术标编辑内容只认 GET|PUT /api/projects/{id}/editor-state；真实空态保持空；
  *       全部 editor-state PUT 携带服务端 expectedStateVersion，同项目串行队列；
  *       P12B-C3 受限「版本化外部写」runner：M3-D apply/consume 与 PUT 共用 matrixSaveChainRef；
- *       P13-B/C：合法 stateVersion 被当前会话接受时同步 versionUpdatedAt 与
- *       currentRevisionSourceKind 供标题区展示。
+ *       P13-B/C/D2：合法 stateVersion 被当前会话接受时同步 versionUpdatedAt、
+ *       currentRevisionSourceKind 与 currentRevisionActorUsername 供标题区展示。
  * 对接：editor-state API；页面 TechnicalPlanWorkspace；responseMatrixVersion 乐观锁；
  *       全状态 409 code=editor_state_version_conflict；矩阵 409 字段级三方合并；
  *       guidance 纳入主状态同一队列；getCsrfToken 内存 CSRF；ContentFuseDialog；
  *       EditorStateVersionFreshness（只读展示，零额外请求）；
- *       parseRevisionSourceKind（唯一九类校验）。
+ *       parseRevisionSourceKind / parseRevisionActorUsername（唯一校验）。
  * 明确非目标：
  *   - 禁止读写/删除/迁移 biaoshu.technicalPlan.editors.*（旧键忽略并保值）
  *   - 禁止生产路径导入 mock 或字段 fallback 伪装成功
  *   - 禁止本地计算 stateVersion；禁止版本落盘/URL/Cookie/console
- *   - versionUpdatedAt / currentRevisionSourceKind 禁止参与 CAS/保存队列/矩阵版本/缓存键
+ *   - versionUpdatedAt / currentRevisionSourceKind / currentRevisionActorUsername
+ *     禁止参与 CAS/保存队列/矩阵版本/缓存键
  * 二次开发：矩阵 409 时禁止静默覆盖本地；须用户显式「重新载入远端矩阵」或「应用合并」；
  *       应用合并 PUT 仅含 responseMatrix + responseMatrixVersion + expectedStateVersion；
  *       全状态冲突时禁止矩阵旁路解除阻断；项目切换后须丢弃过期合并/409 异步结果；
- *       M3-D 不得旁路 runner 直连 POST；切项目须立即清空时间与来源。
+ *       M3-D 不得旁路 runner 直连 POST；切项目须立即清空时间、来源与操作者。
  */
 
 /** 用途：版本化外部写（M3-D apply/consume）结果；Dialog 据此分流文案。 */
@@ -38,6 +39,7 @@ import type {
   CheckpointRestoreOutcome,
 } from "../../editor-state-checkpoints/EditorStateCheckpointPanel";
 import {
+  parseRevisionActorUsername,
   parseRevisionSourceKind,
   restoreEditorStateRevision as postRestoreEditorStateRevision,
   type RevisionSourceKind,
@@ -167,6 +169,8 @@ type EditorStateApi = {
   updatedAt?: string | null;
   /** P13-C：当前版本修订来源；仅展示，须经 parseRevisionSourceKind */
   currentRevisionSourceKind?: string | null;
+  /** P13-D2：当前版本操作者用户名；仅展示，须经 parseRevisionActorUsername */
+  currentRevisionActorUsername?: string | null;
 };
 
 /** 用途：响应矩阵多端冲突时保留本地、展示远端快照；可选附带三方合并预览。 */
@@ -398,6 +402,12 @@ export function useTechnicalPlanEditors(projectId: string) {
    */
   const [currentRevisionSourceKind, setCurrentRevisionSourceKind] =
     useState<RevisionSourceKind | null>(null);
+  /**
+   * P13-D2：当前项目会话已接受的操作者用户名（仅展示）。
+   * 与 versionUpdatedAt / source 同一合法 stateVersion 门；切项目立即清空。
+   */
+  const [currentRevisionActorUsername, setCurrentRevisionActorUsername] =
+    useState<string | null>(null);
   const [matrixConflict, setMatrixConflict] =
     useState<ResponseMatrixConflict | null>(null);
   const [mergeChoices, setMergeChoices] = useState<
@@ -515,6 +525,14 @@ export function useTechnicalPlanEditors(projectId: string) {
   }, []);
 
   /**
+   * 用途：P13-D2 在合法 stateVersion 已被接受后，同步同一响应的操作者用户名。
+   * 对接：parseRevisionActorUsername 安全文本门；非法/缺失一律 null（展示未知）。
+   */
+  const acceptCurrentRevisionActorUsername = useCallback((value: unknown) => {
+    setCurrentRevisionActorUsername(parseRevisionActorUsername(value));
+  }, []);
+
+  /**
    * 用途：进入全状态阻断；保留本地 UI；禁止自动重试。
    * 对接：CAS 409、PUT 200 缺/非法版本。
    */
@@ -557,9 +575,10 @@ export function useTechnicalPlanEditors(projectId: string) {
     matrixPutBlockedRef.current = false;
     fullStateBlockedRef.current = false;
     stateVersionRef.current = null;
-    // P13-B/C：切项目立即清空，禁止短暂显示旧项目时间与来源
+    // P13-B/C/D2：切项目立即清空，禁止短暂显示旧项目时间/来源/操作者
     setVersionUpdatedAt(null);
     setCurrentRevisionSourceKind(null);
+    setCurrentRevisionActorUsername(null);
     clearMatrixBase();
     applyMatrixVersion(null);
     setMatrixConflict(null);
@@ -602,6 +621,7 @@ export function useTechnicalPlanEditors(projectId: string) {
         applyStateVersion(remote.stateVersion);
         acceptVersionUpdatedAt(remote.updatedAt);
         acceptCurrentRevisionSourceKind(remote.currentRevisionSourceKind);
+        acceptCurrentRevisionActorUsername(remote.currentRevisionActorUsername);
         applyMatrixVersion(remote.responseMatrixVersion);
         snapshotMatrixBase(next.responseMatrix, remote.responseMatrixVersion);
         setSelectedOutlineId(next.outline[0]?.id ?? null);
@@ -647,6 +667,7 @@ export function useTechnicalPlanEditors(projectId: string) {
     applyStateVersion,
     acceptVersionUpdatedAt,
     acceptCurrentRevisionSourceKind,
+    acceptCurrentRevisionActorUsername,
     snapshotMatrixBase,
     clearMatrixBase,
     isCurrentEditorSession,
@@ -809,6 +830,7 @@ export function useTechnicalPlanEditors(projectId: string) {
         applyStateVersion(saved.stateVersion);
         acceptVersionUpdatedAt(saved.updatedAt);
         acceptCurrentRevisionSourceKind(saved.currentRevisionSourceKind);
+        acceptCurrentRevisionActorUsername(saved.currentRevisionActorUsername);
         setSaveError(null);
         if (saved.responseMatrixVersion) {
           applyMatrixVersion(saved.responseMatrixVersion);
@@ -839,6 +861,7 @@ export function useTechnicalPlanEditors(projectId: string) {
       applyStateVersion,
       acceptVersionUpdatedAt,
       acceptCurrentRevisionSourceKind,
+      acceptCurrentRevisionActorUsername,
       applyMatrixVersion,
       snapshotMatrixBase,
     ],
@@ -1102,6 +1125,7 @@ export function useTechnicalPlanEditors(projectId: string) {
         applyStateVersion(remote.stateVersion);
         acceptVersionUpdatedAt(remote.updatedAt);
         acceptCurrentRevisionSourceKind(remote.currentRevisionSourceKind);
+        acceptCurrentRevisionActorUsername(remote.currentRevisionActorUsername);
         snapshotMatrixBase(next.responseMatrix, remote.responseMatrixVersion);
         applyMatrixVersion(remote.responseMatrixVersion);
         matrixPutBlockedRef.current = false;
@@ -1153,6 +1177,7 @@ export function useTechnicalPlanEditors(projectId: string) {
       applyStateVersion,
       acceptVersionUpdatedAt,
       acceptCurrentRevisionSourceKind,
+      acceptCurrentRevisionActorUsername,
       snapshotMatrixBase,
       clearMatrixBase,
       isCurrentEditorSession,
@@ -1691,6 +1716,7 @@ export function useTechnicalPlanEditors(projectId: string) {
         applyStateVersion(saved.stateVersion);
         acceptVersionUpdatedAt(saved.updatedAt);
         acceptCurrentRevisionSourceKind(saved.currentRevisionSourceKind);
+        acceptCurrentRevisionActorUsername(saved.currentRevisionActorUsername);
         const savedMatrix = Array.isArray(saved.responseMatrix)
           ? reconcileResponseMatrixLinks(
               normalizeResponseMatrix(saved.responseMatrix),
@@ -1751,6 +1777,7 @@ export function useTechnicalPlanEditors(projectId: string) {
     applyStateVersion,
     acceptVersionUpdatedAt,
     acceptCurrentRevisionSourceKind,
+    acceptCurrentRevisionActorUsername,
     snapshotMatrixBase,
     isCurrentEditorSession,
     isCurrentWriteEpoch,
@@ -2033,6 +2060,8 @@ export function useTechnicalPlanEditors(projectId: string) {
     versionUpdatedAt,
     /** P13-C：当前已载入版本的修订来源（仅展示） */
     currentRevisionSourceKind,
+    /** P13-D2：当前已载入版本的操作者用户名（仅展示） */
+    currentRevisionActorUsername,
     targetWordsTotal,
     selectedOutlineId,
     setSelectedOutlineId,
