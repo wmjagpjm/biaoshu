@@ -1583,3 +1583,66 @@ class EditorStateRevisionRow(Base):
         default=utc_now,
         index=True,
     )
+
+
+class ProjectPresenceLeaseRow(Base):
+    """
+    模块：P13-F1 项目在线租约
+    用途：记录 strict bid_writer 对项目的短租约（45s）；仅存 client SHA-256 摘要。
+    对接：project_presence_service；POST .../presence/heartbeat|leave。
+    二次开发：
+      - 禁止落库或日志原始 clientId；禁止扩展为历史/审计/设备识别；
+      - 唯一键四元组；项目/用户删除 CASCADE；过期靠查询过滤与心跳机会清理。
+    """
+
+    __tablename__ = "project_presence_leases"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "project_id",
+            "user_id",
+            "client_digest",
+            name="uq_project_presence_leases_scope_client",
+        ),
+        Index(
+            "ix_ppl_workspace_project_expires",
+            "workspace_id",
+            "project_id",
+            "expires_at",
+        ),
+        Index(
+            "ix_ppl_workspace_project_user_expires",
+            "workspace_id",
+            "project_id",
+            "user_id",
+            "expires_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("local_users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # 仅存规范 clientId 的 SHA-256 十六进制摘要
+    client_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )

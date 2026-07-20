@@ -2555,3 +2555,70 @@ class EditorStateCheckpointRestoreOut(BaseModel):
         pattern=r"^esv_[0-9a-f]{32}$",
     )
     restored_at: str = Field(serialization_alias="restoredAt")
+
+
+# ---------- P13-F1 项目在线租约 ----------
+
+
+class ProjectPresenceClientBody(BaseModel):
+    """
+    模块：P13-F1 presence 请求体
+    用途：仅接受精确 camelCase clientId；22..64 位 [A-Za-z0-9_-]。
+    对接：POST .../presence/heartbeat|leave。
+    二次开发：extra=forbid；禁止 populate_by_name；禁止 trim/NFKC/snake_case 别名。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    client_id: str = Field(alias="clientId")
+
+    @field_validator("client_id")
+    @classmethod
+    def _validate_client_id(cls, value: Any) -> str:
+        """用途：严格 clientId；拒绝非 str、空白包裹、非法字符与长度。"""
+        if type(value) is not str:
+            raise ValueError("invalid_client_id")
+        # 禁止 trim：首尾空白直接失败
+        if not value or value.strip() != value:
+            raise ValueError("invalid_client_id")
+        if len(value) < 22 or len(value) > 64:
+            raise ValueError("invalid_client_id")
+        for ch in value:
+            o = ord(ch)
+            # A-Z a-z 0-9 _ -
+            if not (
+                48 <= o <= 57
+                or 65 <= o <= 90
+                or 97 <= o <= 122
+                or ch in ("_", "-")
+            ):
+                raise ValueError("invalid_client_id")
+        return value
+
+
+class ProjectPresenceMemberOut(BaseModel):
+    """
+    模块：P13-F1 在线成员项
+    用途：精确两键 username/isSelf；零内部 ID。
+    """
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    username: str
+    is_self: bool = Field(serialization_alias="isSelf")
+
+
+class ProjectPresenceHeartbeatOut(BaseModel):
+    """
+    模块：P13-F1 心跳响应
+    用途：精确四键 leaseExpiresAt/refreshAfterSeconds/members/truncated。
+    对接：POST .../presence/heartbeat 200。
+    二次开发：refreshAfterSeconds 固定 15；禁止导出 digest/leaseId/userId。
+    """
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    lease_expires_at: datetime = Field(serialization_alias="leaseExpiresAt")
+    refresh_after_seconds: int = Field(serialization_alias="refreshAfterSeconds")
+    members: list[ProjectPresenceMemberOut]
+    truncated: bool
