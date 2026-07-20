@@ -2714,3 +2714,35 @@ class ProjectChapterEditLeaseHeartbeatOut(BaseModel):
 
     lease_expires_at: datetime = Field(serialization_alias="leaseExpiresAt")
     refresh_after_seconds: int = Field(serialization_alias="refreshAfterSeconds")
+
+
+class EditorStateEventItemOut(BaseModel):
+    """
+    模块：P13-H1 单条事件
+    用途：精确四键 eventId/stateVersion/sourceKind/occurredAt。
+    对接：GET .../editor-state-events items[]。
+    二次开发：extra=forbid；禁止 snapshot/actor/client/内部 ID。
+    """
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    event_id: str = Field(serialization_alias="eventId")
+    state_version: str = Field(serialization_alias="stateVersion")
+    source_kind: str = Field(serialization_alias="sourceKind")
+    # 服务端已格式化为 ...Z 毫秒串
+    occurred_at: str = Field(serialization_alias="occurredAt")
+
+
+class EditorStateEventListOut(BaseModel):
+    """
+    模块：P13-H1 事件列表响应
+    用途：精确三顶层键 items/nextCursor/hasMore。
+    对接：GET /api/projects/{projectId}/editor-state-events。
+    二次开发：hasMore=false 时 nextCursor 必须 null；禁止额外键。
+    """
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    items: list[EditorStateEventItemOut]
+    next_cursor: str | None = Field(serialization_alias="nextCursor")
+    has_more: bool = Field(serialization_alias="hasMore")

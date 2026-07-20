@@ -1,6 +1,6 @@
 # P13-H1 editor-state 事件账本与游标后端契约
 
-> 状态：已完成只读审计，等待冻结提交后下发 Grok failure-first
+> 状态：已实现、经 Codex 独立验收并完成双确认返修，待提交推送
 > 日期：2026-07-20
 > 审计基线：`83c2c4ad54d6d7c515221c6af23228314098528a`
 > 前置：P13-A 任务 SSE 工作空间鉴权、P12C/P12F editor-state 修订账本、P13-D1/D2 可信操作者元数据
@@ -81,7 +81,7 @@
 
 - `items` 按时间正序返回，最多 `limit` 条；无结果返回空数组、`nextCursor=null`、`hasMore=false`。
 - `after` 指向已保留事件时只返回其后的事件；指向已裁剪/未知事件固定返回脱敏 409 `editor_state_event_cursor_stale`，不得猜测位置或从旧修订表补洞。
-- `nextCursor` 仅在 `hasMore=true` 时为最后一条事件 ID，否则为 `null`。
+- 普通 after 分页仅在 `hasMore=true` 时把 `nextCursor` 设为最后一条事件 ID，否则为 `null`；但无 `after` 且已有事件时，返回空 `items`、`hasMore=false` 和当前最新事件 tip 作为 bootstrap `nextCursor`，以便后续请求使用公开游标增量读取。
 - 响应与业务错误均 `Cache-Control: no-store`；不返回内部异常、SQL、项目/空间/用户 ID、正文或快照。
 - 不支持 `GET` 之外方法、body、SSE、`Last-Event-ID` 或 WebSocket；这些留给后续包。
 
@@ -115,3 +115,7 @@
 ## 8. 后续明确拆分
 
 P13-H2 才能在本包 API/事件表之上增加 SSE `Last-Event-ID` 与断线重放；P13-H3 才能增加前端当前版本提示或按事件触发既有 editor-state GET。评论、审批、通知、协同光标、WebSocket、多任务总线和完整审计仍不在本包。
+
+## 9. 完成记录
+
+failure-first=`msg_ee84a231060941049177cce0f05f501a`，真实 **25 failed / 3 passed**；Grok 初版 review=`msg_4ce83deca5954672951a2337f73d4de2`，专项/回归 **28/90 passed**。Codex 只读问题=`msg_83b6e26440c44662a84e91767747e0c4`，Grok 双确认=`msg_532b006202a4472a99c8220fa0a8a618`，确认初始 tip 不可获得和宽状态断言两项问题真实存在后，才授权最小返修 `msg_695b8f5301a44e0d9d4132c1d6a4ca7b`。最终 Grok review=`msg_80212cd30e6546f3b651a2ddb0ad7510`；Codex 独立通过专项 **28 passed**、editor-state/P13-D1 回归 **90 passed**、compileall 与 diff-check。未运行后端全量、前端、整仓 E2E、xdist 或并发 pytest。

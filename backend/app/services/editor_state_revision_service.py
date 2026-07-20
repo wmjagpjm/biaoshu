@@ -1,5 +1,5 @@
 """
-模块：P12C-A / P12F-A / P12F-J-A / P13-C / P13-D2 editor-state 有限自动修订账本服务
+模块：P12C-A / P12F-A / P12F-J-A / P13-C / P13-D2 / P13-H1 editor-state 有限自动修订账本服务
 用途：独立 revision 表上的无提交 transition 原语（相邻去重、断链补点、
   最多 20 条且总快照 20 MiB；固定行永不被自动裁剪）；
   P13-C/D2 只读解析当前已载入版本的最新修订来源与操作者用户名（不写、不回扫）。
@@ -26,6 +26,7 @@ from sqlalchemy import Integer, and_, delete, select, type_coerce
 from sqlalchemy.orm import Session
 
 from app.models.entities import (
+    EditorStateEventRow,
     EditorStateRevisionRow,
     LocalUserRow,
     WorkspaceMemberRow,
@@ -40,6 +41,8 @@ MIN_SNAPSHOT_BYTES = 1
 # P12F-J-A：固定集合上限（裁剪前校验；与 pin 服务共用语义）
 MAX_PINNED_REVISIONS_PER_PROJECT = 5
 MAX_PINNED_BYTES_PER_PROJECT = 10 * 1024 * 1024  # 10 MiB
+# P13-H1：事件账本每项目保留上限（与修订裁剪独立）
+MAX_EVENTS_PER_PROJECT = 200
 
 REVISION_SOURCE_KINDS: frozenset[str] = frozenset(
     {
@@ -490,6 +493,66 @@ def _trim_revisions(db: Session, workspace_id: str, project_id: str) -> None:
     db.flush()
 
 
+
+def _new_event_id() -> str:
+    """用途：生成不透明事件 ID（ese_ + 32 hex）。"""
+    return f"ese_{secrets.token_hex(16)}"
+
+
+def _insert_event_row(
+    db: Session,
+    *,
+    workspace_id: str,
+    project_id: str,
+    state_version: str,
+    source_kind: str,
+) -> None:
+    """用途：插入一条脱敏 after 事件并 flush；不 commit/refresh。"""
+    row = EditorStateEventRow(
+        id=_new_event_id(),
+        workspace_id=workspace_id,
+        project_id=project_id,
+        state_version=state_version,
+        source_kind=source_kind,
+        occurred_at=utc_now(),
+    )
+    db.add(row)
+    db.flush()
+
+
+def _trim_events(db: Session, workspace_id: str, project_id: str) -> None:
+    """
+    用途：同事务内按 occurred_at DESC,id DESC 连续裁剪本项目事件至最多 200 条。
+    二次开发：SELECT 仅 id；DELETE 必须 workspace+project+id 三重限定；只 flush。
+    """
+    rows = list(
+        db.execute(
+            select(EditorStateEventRow.id)
+            .where(
+                EditorStateEventRow.workspace_id == workspace_id,
+                EditorStateEventRow.project_id == project_id,
+            )
+            .order_by(
+                EditorStateEventRow.occurred_at.desc(),
+                EditorStateEventRow.id.desc(),
+            )
+        ).all()
+    )
+    if len(rows) <= MAX_EVENTS_PER_PROJECT:
+        return
+    drop_ids = [str(r.id) for r in rows[MAX_EVENTS_PER_PROJECT:]]
+    if not drop_ids:
+        return
+    db.execute(
+        delete(EditorStateEventRow).where(
+            EditorStateEventRow.workspace_id == workspace_id,
+            EditorStateEventRow.project_id == project_id,
+            EditorStateEventRow.id.in_(drop_ids),
+        )
+    )
+    db.flush()
+
+
 def record_editor_state_transition(
     db: Session,
     workspace_id: str,
@@ -555,10 +618,19 @@ def record_editor_state_transition(
             source_kind=source_kind,
             actor_user_id=safe_actor,
         )
+        # P13-H1：仅真实 after 修订插入时写一条脱敏事件（before 补账不产事件）
+        _insert_event_row(
+            db,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            state_version=after_ver,
+            source_kind=source_kind,
+        )
         added += 1
         current_version = after_ver
 
     _trim_revisions(db, workspace_id, project_id)
+    _trim_events(db, workspace_id, project_id)
 
     return {
         "added_count": added,

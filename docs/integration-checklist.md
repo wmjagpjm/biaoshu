@@ -770,7 +770,7 @@ P12D-A 已实现并推送（冻结=`2cc6ee3`、实现=`9445fcc`）。GET compari
 
 ## 14. 仍未接（后续）
 
-Celery、MinerU/Docling 自动安装、模型打包、常驻服务、真实模型样本验收与完整孙进程治理、P9B 以外的外部标讯数据源、P9C 的其他模型/GPU/在线 embedding/真实用户语料评测与自动模型更新、修订历史删除/搜索/跨项目历史/多人协作、商务 AI 反馈历史服务端化、P10K 以外的财务税务/审批/导出/预算/回款/版本与失败尝试/完整身份审计、P10I 以外的人力附件与真实证件核验、P10G 以外的投标人矩阵明细/版本/结果跟踪与其他合规数据域、SSE 事件游标/重放/多任务总线/前端工作空间切换 UI、标题整章布局语义。修订游标页/手动加载更多已由 P12F-B/C 完成；SSE 工作空间鉴权已由 P13-A 完成，但不包含上述事件与 UI 扩展。
+Celery、MinerU/Docling 自动安装、模型打包、常驻服务、真实模型样本验收与完整孙进程治理、P9B 以外的外部标讯数据源、P9C 的其他模型/GPU/在线 embedding/真实用户语料评测与自动模型更新、修订历史删除/搜索/跨项目历史/多人协作、商务 AI 反馈历史服务端化、P10K 以外的财务税务/审批/导出/预算/回款/版本与失败尝试/完整身份审计、P10I 以外的人力附件与真实证件核验、P10G 以外的投标人矩阵明细/版本/结果跟踪与其他合规数据域、SSE 事件重放/多任务总线/前端工作空间切换 UI、标题整章布局语义。P13-H1 已交付项目级事件游标后端；修订游标页/手动加载更多已由 P12F-B/C 完成；SSE 工作空间鉴权已由 P13-A 完成，但事件重放与上述 UI 扩展仍未接。
 
 **响应矩阵相关（已接 vs 未扩）：** 多端冲突的版本写保护、409 与双浏览器上下文 E2E 主路径已接；「刷新来源」保留人工映射 E2E 已接；**智能建议人工确认后应用** E2E 已接；**来源超过 80 分页** 已推送（`1289c92`）；**字段级三方合并** MVP + E2E 已推送（`2c7b3e0`，`response-matrix-field-merge.spec.ts`）。仍未接：Word 失效引用在浏览器层的扩展（导出逻辑以后端单测为准）；包 9 交付增强。
 
@@ -1370,8 +1370,10 @@ Codex 第一轮只读问题/确认/返修 task/review/result=`msg_cec182e52c6c47
 
 Codex 独立串行通过 P13-G2 专项/P13-F2 presence/freshness **13/11/17 passed**，lint、build、diff-check、严格四文件、八文件 SHA-256 与临时工件清理门通过；build 仅既有 chunk 大小警告。未运行整仓 318 E2E、后端 pytest、xdist 或并发 Playwright。P13-G2 只表示近期处理意图，不是强制锁、实时协作或在线状态。
 
-## P13-H1 editor-state 事件账本与游标后端（已冻结，待实现）
+## P13-H1 editor-state 事件账本与游标后端（已完成，随本记录提交）
 
-契约=`docs/p13h1-editor-state-event-cursor-backend-contract.md`，计划=`docs/plans/2026-07-20-p13h1-editor-state-event-cursor-backend-plan.md`，审计基线=`83c2c4a`。只读审计确认单任务 SSE 与可删除修订历史均不能直接提供可靠事件游标；本包冻结独立 `editor_state_events` 表和统一 transition 同事务写入，严格 required strict bid_writer 项目级 GET。
+契约=`docs/p13h1-editor-state-event-cursor-backend-contract.md`，计划=`docs/plans/2026-07-20-p13h1-editor-state-event-cursor-backend-plan.md`，审计基线=`83c2c4a`，冻结=`da2537a`。严格八文件交付独立 `editor_state_events` 表和统一 transition 真实 after 同事务写入，以及 required strict bid_writer 项目级 GET。
 
-验收前置边界：严格八文件；先新专项 failure-first，再实现、受影响 editor-state/认证回归、`py_compile` 与 diff/哈希门。事件只含不透明 eventId、stateVersion、sourceKind、occurredAt；不含快照、正文、章节、actor/client、任务结果或异常原文。游标 stale 固定脱敏 409；事件上限 200/项目，失败事务零事件。不得提前实现 SSE、Last-Event-ID、前端自动刷新、WebSocket、通知、评论审批或强制锁；不得运行并发 pytest、xdist、后端全量或整仓 E2E。
+完成证据：failure-first=`msg_ee84a231060941049177cce0f05f501a`，真实 **25 failed / 3 passed**；Grok 初版专项/回归 **28/90 passed**。Codex 只读发现无公开 bootstrap tip、未登录与非 GET 宽状态断言两项问题，经 Grok 确认后才授权最小返修；最终 Grok 与 Codex 独立均为专项/回归 **28/90 passed**，`compileall`、diff-check 和严格八文件哈希门通过。
+
+事件只含不透明 eventId、stateVersion、sourceKind、occurredAt；不含快照、正文、章节、actor/client、任务结果或异常原文。无 `after` 时不回放历史，已有事件返回最新 tip 供后续增量读取；游标 stale 固定脱敏 409，事件上限 200/项目，失败事务零事件。未运行后端全量、前端、整仓 E2E、xdist 或并发 pytest；SSE、Last-Event-ID、前端自动刷新、WebSocket、通知、评论审批和强制锁仍未实现。

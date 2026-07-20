@@ -406,13 +406,13 @@
 
 ### P13 后续协作主线（未实现）
 
-账号、workspace、RBAC、CAS、冲突提示与任务 SSE 工作空间鉴权已经存在；P13-E 已完成活动空间切换 UI 与 owner-only 成员只读可见性，P13-F1/F2 已完成项目近期成员，P13-G1/G2 已完成章节编辑意图租约后端与前端提示。G1/G2 不是强制锁；协同光标、事件广播与游标重放、WebSocket、多任务总线、断线恢复、评论/审批/通知仍缺失，必须继续独立拆包。
+账号、workspace、RBAC、CAS、冲突提示与任务 SSE 工作空间鉴权已经存在；P13-E 已完成活动空间切换 UI 与 owner-only 成员只读可见性，P13-F1/F2 已完成项目近期成员，P13-G1/G2 已完成章节编辑意图租约后端与前端提示，P13-H1 已完成 editor-state 事件账本与 GET 游标。G1/G2 不是强制锁；SSE 事件重放、前端事件提示、协同光标、WebSocket、多任务总线、评论/审批/通知仍缺失，必须继续独立拆包。
 
-### P13-H1：editor-state 事件账本与游标后端（已冻结，待 Grok 实现）
+### P13-H1：editor-state 事件账本与游标后端（已完成，随本记录提交）
 
-**只读审计与冻结状态（2026-07-20）**：基线=`83c2c4a`。现有单任务 SSE 明确不含多任务总线/游标；九类 editor-state 写链共同经过 `record_editor_state_transition`；可删除、固定、裁剪的 `editor_state_revisions` 不能作为可靠事件源。因此冻结独立 `editor_state_events` 表，在真实 after 修订插入时同事务追加脱敏事件，并提供 required strict bid_writer 项目级游标 GET。严格八文件、无前端、无 SSE、无 WebSocket、无通知、无强制锁。契约=`docs/p13h1-editor-state-event-cursor-backend-contract.md`，计划=`docs/plans/2026-07-20-p13h1-editor-state-event-cursor-backend-plan.md`。
+**完成状态（2026-07-20）**：基线=`83c2c4a`，冻结=`da2537a`。严格八文件交付独立 `editor_state_events` 表，在真实 after 修订插入时同事务追加脱敏事件，并提供 required strict bid_writer 项目级游标 GET；无 `after` 不回放历史，已有事件时公开最新 tip 供后续增量读取。failure-first 真实 **25 failed / 3 passed**；Codex 发现的 bootstrap tip 与宽状态断言问题经 Grok 只读确认后才最小返修。Grok 最终专项/回归 **28/90 passed**，Codex 独立专项/editor-state 与 P13-D1 回归 **28/90 passed**，compileall 与 diff-check 通过。严格八文件、无前端、无 SSE、无 WebSocket、无通知、无强制锁。契约=`docs/p13h1-editor-state-event-cursor-backend-contract.md`，计划=`docs/plans/2026-07-20-p13h1-editor-state-event-cursor-backend-plan.md`。
 
-**下一步**：先让 Grok 只写新专项做真实 failure-first，再实现并串行自测；Codex 独立审查与验收。P13-H2 才能接 SSE `Last-Event-ID` 与断线重放，P13-H3 才能接前端版本提示；评论、审批、协同光标、多任务事件总线仍不得合包。
+**下一步**：先只读审计并独立冻结 P13-H2，只允许在 H1 事件账本之上接 SSE `Last-Event-ID` 与断线重放；P13-H3 才能接前端版本提示。评论、审批、协同光标、多任务事件总线仍不得合包。
 
 阶段 0/1/2、阶段 3 M3-A 至 M3-D、阶段 4 **包 5** 至 **包 8/P8B/P8C/P8D/P8E**、P9A/P9B/P9C/P9D、阶段 5 P10A 至 P10K、**P11A/P11B/P11C 三个真实数据收口包**，以及 **P12A/P12B-A/B/C/D/P12C-A/B/C/P12D-A/B/P12E-A/B/C/P12F-A/B/C/D/P13-A** 均保持已交付。P8E 完整契约见 `docs/p8e-docling-local-helper-contract.md`，实施与独立验收记录见 `docs/plans/2026-07-15-p8e-docling-local-helper-plan.md`。
 

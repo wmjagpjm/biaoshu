@@ -1585,6 +1585,64 @@ class EditorStateRevisionRow(Base):
     )
 
 
+
+class EditorStateEventRow(Base):
+    """
+    模块：P13-H1 editor-state 事件账本
+    用途：记录真实 after 修订的脱敏事件（无正文/快照/actor）；每项目最多 200 条。
+    对接：editor_state_revision_service.record_editor_state_transition；
+      editor_state_event_service；GET .../editor-state-events。
+    二次开发：
+      - 禁止 snapshot/actor/client/URL/错误原文；ID 固定 ese_ + 32 hex；
+      - 不得复用可删除修订表；裁剪与写事务同 Session，失败整事务回滚；
+      - 列表只按 (occurred_at, id) 游标，禁止从修订表补洞。
+    """
+
+    __tablename__ = "editor_state_events"
+    __table_args__ = (
+        CheckConstraint(
+            "source_kind IN ("
+            "'browser_put','task','revise','callback',"
+            "'local_parser','content_fuse_apply',"
+            "'content_fuse_consume','checkpoint_restore',"
+            "'revision_restore'"
+            ")",
+            name="ck_editor_state_events_source_kind",
+        ),
+        Index(
+            "ix_ese_workspace_project_occurred_id",
+            "workspace_id",
+            "project_id",
+            "occurred_at",
+            "id",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # esv_ + 规范版本十六进制
+    state_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    # 固定九类来源；与修订账本枚举对齐
+    source_kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        index=True,
+    )
+
+
 class ProjectPresenceLeaseRow(Base):
     """
     模块：P13-F1 项目在线租约

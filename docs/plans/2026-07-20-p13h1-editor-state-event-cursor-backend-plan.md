@@ -1,6 +1,8 @@
 # P13-H1 editor-state 事件账本与游标后端实施计划
 
 > 执行要求：Grok 必须使用 `executing-plans` 工作流逐项执行，先红后绿；Codex 独立审查、验收和提交。
+>
+> 完成状态：已实现并通过 Codex 独立验收；两项审查问题经 Grok 只读确认后完成最小返修，待本次提交推送。
 
 **目标：** 在九类真实 editor-state 写链的同一事务中记录脱敏事件，并提供严格、可裁剪、可检测游标失效的只读 API。
 
@@ -57,7 +59,8 @@ pytest -q tests/test_p13h1_editor_state_events.py
 1. 严格解析 `after` 格式和 `limit` 1..50，禁止 query/body 原文进入异常。
 2. 在 workspace/project 三重作用域下按 `(occurred_at,id)` 正序查询，使用 `limit+1` 判断 `hasMore`。
 3. 游标不存在、已删除、跨项目或跨空间统一 `editor_state_event_cursor_stale`；不得从修订表补洞。
-4. 返回只含 eventId/stateVersion/sourceKind/occurredAt 和 nextCursor/hasMore，禁止快照、actor、项目/空间 ID。
+4. 无 `after` 时不回放历史；已有事件则仅返回最新 tip 作为 bootstrap `nextCursor`，无事件时为 `null`。普通 `after` 分页仍只在 `hasMore=true` 时返回页尾游标。
+5. 返回只含 eventId/stateVersion/sourceKind/occurredAt 和 nextCursor/hasMore，禁止快照、actor、项目/空间 ID。
 
 ## 6. 任务五：API schema、路由与注册
 
@@ -90,3 +93,9 @@ git diff --check
 4. 核对响应精确键、no-store、无快照/actor/client/内部 ID 泄漏；检查测试无直接事件表造假、宽状态或恒真断言。
 5. 疑似问题先发只读 question，Grok 独立确认后才可下发返修授权；确认前禁止修改。
 6. 通过后精确暂存八文件，中文提交并推送；随后更新交接、路线图和联调清单。
+
+## 9. 完成记录
+
+failure-first=`msg_ee84a231060941049177cce0f05f501a`，真实 **25 failed / 3 passed**。Grok 初版 review=`msg_4ce83deca5954672951a2337f73d4de2`，专项/回归 **28/90 passed**。Codex 只读问题=`msg_83b6e26440c44662a84e91767747e0c4`，Grok 确认=`msg_532b006202a4472a99c8220fa0a8a618`；双方确认公开 API 缺少 bootstrap tip、未登录和非 GET 使用宽状态断言两项问题真实存在后，才授权最小返修 `msg_695b8f5301a44e0d9d4132c1d6a4ca7b`。
+
+最终 Grok review=`msg_80212cd30e6546f3b651a2ddb0ad7510`。Codex 独立串行通过专项 **28 passed**、`editor_state_revisions`/P13-D1 回归 **90 passed**、`compileall` 和 `git diff --check`；仅有既有 Starlette/httpx 弃用警告。未运行后端全量、前端、整仓 E2E、xdist 或并发 pytest。
