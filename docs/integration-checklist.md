@@ -1086,6 +1086,20 @@ Codex 独立串行通过后端受影响集/全量 **120/1261 passed**，前端 P
 
 后续验收采用分级策略：Grok 默认运行专项/受影响集，Codex 独立复核并按迁移、鉴权、共享状态、跨域范围和回归信号决定是否补一次全量；不再让双方机械重复同一全量。所有动态测试仍必须串行，Playwright 继续 `--workers=1 --retries=0`。
 
+## P12M 修订搜索命中来源标签（已冻结待实现）
+
+契约=`docs/p12m-revision-search-match-reasons-contract.md`，计划=`docs/plans/2026-07-20-p12m-revision-search-match-reasons-plan.md`，启动 HEAD=`37a4461`；严格七文件。
+
+冻结后的联调验收项：
+
+1. 搜索项精确八键：既有七键 + `matchReasons`；数组只能是非空、无重复、固定顺序 `displayName` 与/或 `visibleContent`。list/page/detail 旧键集不变。
+2. 后端真实验证名称、可见内容、双命中、未命中、20 条候选/第 21 条排除、来源/时间过滤、坏候选先校验、非法响应和五域零写；不返回正文/关键词/命中值。
+3. 前端搜索 parser 严格拒绝缺失/额外/未知/重复/乱序原因；技术/商务共用面板显示固定中文“命中：名称/可见内容”，不高亮、不显示片段、不新增请求。
+4. 搜索一次 POST、顺序、清除/刷新/筛选/项目切换迟到隔离和 URL/storage/Cookie/console 零泄漏保持不变。
+5. Grok 串行运行后端搜索专项/受影响回归、P12M history 聚焦/受影响 E2E、lint/build/py_compile；Codex 独立复跑专项与聚焦，不重复后端全量或整仓 318 E2E。
+
+实现尚未开始。七文件冻结哈希见契约第 6 节；Grok 只负责测试先行、实现与自测，Codex 负责受限审查、独立分级验收、中文文档、提交与推送。
+
 ## P12L 检查点固定名额提示前端（已完成）
 
 契约=`docs/p12l-checkpoint-pinned-count-frontend-contract.md`，计划=`docs/plans/2026-07-20-p12l-checkpoint-pinned-count-frontend-plan.md`，代码哈希基线=`5258f84`、契约冻结=`4526832`、启动口径=`d21cfb5`、实现=`cc6bf11`；严格两文件已完成。
