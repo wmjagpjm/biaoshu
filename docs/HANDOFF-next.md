@@ -1,6 +1,6 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-20（P12M 已闭环；P12N 已加载修订固定优先前端已冻结待实现）
+> **交接日期**：2026-07-20（P12N 已加载修订固定优先快速前端版已完成；下一主线包待审计）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
@@ -9,9 +9,9 @@
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
 > **P12M 完成状态**：冻结=`95b298f`、实现=`cc23542`。首轮七文件实现后，受影响回归准确暴露两份旧七键测试；经 Codex 明确 test-only 扩围后闭环，生产边界未扩大。
 > **P12M 最终生产哈希**：schemas=`76633E2BFF418A9FBBD0DD3AD18164C62496340AB4AD30BCCD7BDE2918DDF39D`；route=`3CC358D8280F3C6579261F88848D986E0A5A929D46D09F81FD378E7A9F23EF0C`；service=`F8D373B8DCCACB5B0921D4F972F0B85B29AAAAF82CFA0BE8E3D08AC2D107C1FA`；前端 API=`CEDCC06FDCB9B0743BEE2A5A019003D19145B2837BBB273226C15E7EFFD45BA3`；面板=`5C41D4A3C2807B1A69DB40D34F22E40A7A664280765A3F8D7C7DFCE3EB25E31D`。
-> **P12N 冻结状态**：代码基线=`6081a41`；严格两文件，只做非搜索态当前已加载修订的前端稳定固定优先，不改后端或游标。面板冻结哈希=`5C41D4A3C2807B1A69DB40D34F22E40A7A664280765A3F8D7C7DFCE3EB25E31D`，history E2E=`64ADC634816E34A8398E2D0694F0714E5191A313ABD68F12CA7F57A4D1ED2CB7`。
-> **本地状态**：只允许分支 `collab/grok-code-codex-review`；P12M 实现=`cc23542`、闭环=`6081a41` 已推送。P12N 冻结文档提交并推送后才可交 Grok。
-> **验收基线**：P12K Grok 串行专项/受影响集/后端全量 **12/132/1273 passed**；Codex 独立受影响集 **132 passed**。P12L Grok 聚焦/受影响 checkpoint **5/87 passed**，Codex 独立聚焦 **5 passed**。P12M Grok 搜索专项 **33 passed**、P12M/受影响 history **2/6 passed**；Codex 独立后端定点 **1/1/3 passed**、前端 **2/6 passed**。P12M 未跑后端全量或整仓 318 E2E。**所有 pytest 与 Playwright E2E 共用 SQLite 重置库，pytest 禁止 xdist/并发分组，Playwright 必须显式 `--workers=1 --retries=0` 逐条串行运行；按风险分级验收，避免 Grok 与 Codex 重复全量。**
+> **P12N 完成状态**：冻结=`337b401`、实现=`394639a`；严格两文件，只做非搜索态当前已加载修订的前端稳定固定优先，不改后端或游标。最终面板哈希=`FEAD15B6CB4043D1E6A96C1BFF9782A3B1F072A28D6619E375D9B5F07A23FF3B`，history E2E=`617C7481B55A2F7760A36127E5E5DB8C50E193526206D444F13D56AA6F65698F`。
+> **本地状态**：只允许分支 `collab/grok-code-codex-review`；P12N 实现=`394639a`，文档闭环提交推送后必须恢复工作区干净且 HEAD/远端一致。
+> **验收基线**：P12K Grok 串行专项/受影响集/后端全量 **12/132/1273 passed**；Codex 独立受影响集 **132 passed**。P12L Grok 聚焦/受影响 checkpoint **5/87 passed**，Codex 独立聚焦 **5 passed**。P12M Grok 搜索专项 **33 passed**、P12M/受影响 history **2/6 passed**；Codex 独立后端定点 **1/1/3 passed**、前端 **2/6 passed**。P12N Grok 聚焦/受影响 **5/12 passed**，Codex 独立 **5 passed**。P12M/P12N 均未跑后端全量或整仓 318 E2E。**所有 pytest 与 Playwright E2E 共用 SQLite 重置库，pytest 禁止 xdist/并发分组，Playwright 必须显式 `--workers=1 --retries=0` 逐条串行运行；按风险分级验收，避免 Grok 与 Codex 重复全量。**
 
 ---
 
@@ -22,10 +22,10 @@
 工作分支只能是 collab/grok-code-codex-review，禁止直接操作 main；先执行 git status -sb，并核对 HEAD 与 origin/collab/grok-code-codex-review 一致且工作区干净。
 完整阅读 docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/plans/2026-07-13-package-9-delivery-enhancement-plan.md、docs/integration-checklist.md。
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
-当前进度：P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/B、P12E-A/B/C、P12F-A/B/C/D/E-A/E-B/F-A/F-B/G-A/G-B/H/I/J-A/J-B/P12K/P12L/P12M、P13-A、P9D、P9C-R1、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。P12M 实现=`cc23542`；Codex 独立后端定点 **1/1/3 passed**、前端 **2/6 passed**，整仓前端 **318 passed** 仍仅作既有基线。
+当前进度：P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/B、P12E-A/B/C、P12F-A/B/C/D/E-A/E-B/F-A/F-B/G-A/G-B/H/I/J-A/J-B/P12K/P12L/P12M/P12N、P13-A、P9D、P9C-R1、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。P12N 实现=`394639a`；Grok/Codex 聚焦 **5/5 passed**，整仓前端 **318 passed** 仍仅作既有基线。
 当前状态：修订历史已闭合来源、UTC 时间、联合搜索、搜索命中来源标签、游标分页、单条删除、展示名称、固定与保护性裁剪；检查点已有创建、列表、详情、安全恢复、展示名称、单条删除、当前项目显式搜索、固定状态读取/入口、固定/安全双保护裁剪、默认列表固定优先排序与固定名额提示。
-当前执行包：P12N 已加载修订固定优先前端；契约=`docs/p12n-revision-loaded-pinned-first-frontend-contract.md`，计划=`docs/plans/2026-07-20-p12n-revision-loaded-pinned-first-frontend-plan.md`，严格两文件。
-下一步：推送 P12N 冻结文档后，通过消息箱交已认证 Grok 做 E2E failure-first 与纯前端实现。Grok 跑 P12N/分页/固定/搜索受影响 history、lint/build；Codex 独立只复核 P12N 聚焦与静态门，不跑后端或整仓 318 E2E。服务端游标级固定优先、尚未加载固定项提前进入第一页、分组标题和固定总数留后续独立包。
+当前执行包：P12N 已闭环；下一主线包尚未冻结，先只读审计协作、版本治理和交付增强的收益/风险。
+下一步：确认 P12N 文档闭环提交推送且工作区干净，再冻结一个最小下一包交 Grok。继续分级验收，不机械重复全量。服务端游标级固定优先、尚未加载固定项提前进入第一页、分组标题和固定总数仍是已知后续项。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。

@@ -2,6 +2,8 @@
 
 > **执行要求：** Grok 按本计划逐步测试先行实现；不得执行 Git 写操作。Codex 逐项审查、独立聚焦验收并负责提交推送。
 
+> **状态：2026-07-20 已完成。** 冻结=`337b401`、实现=`394639a`；Grok 和 Codex 均按分级策略完成验收，未运行全量。
+
 **目标：** 默认/筛选态把当前已加载修订稳定分为固定组和普通组，固定优先；搜索态保持原顺序。
 
 **架构：** 不改变 state、API 或游标。面板 render 期从严格解析后的 `items` 单次遍历派生 `displayItems`，非搜索态拼接固定/普通两组，搜索态直接复用原数组；所有交互继续以 `revisionId` 为身份。
@@ -87,3 +89,11 @@ npm run build
 - active search 顺序、P12M 标签、游标与所有网络合同无回退；
 - 两文件、串行聚焦、lint/build/静态门通过，Grok 零 Git 写操作；
 - 文档明确这不是服务端权威第一页固定优先，后续增强边界不被掩盖。
+
+## 执行结果
+
+1. failure-first：**4 failed / 1 passed**；面板 SHA-256 与冻结值一致。三项真实业务失败为默认混合、筛选/时间或双工作区场景仍按旧 `items` 顺序显示，静态守卫同时证明尚无 `displayItems`。
+2. 生产只新增 render 期 `displayItems` 纯派生并把主列表改为其 map；无可执行的新 state/effect/ref/fetch/sort，active search 原序不变。
+3. Grok P12N/受影响 history **5/12 passed**，lint/build 通过；Codex 独立 P12N **5 passed in 9.4s**、lint 和静态/哈希/差异门通过。
+4. 冻结文字中“新固定项进固定组末尾”与“组内保持服务端原序”冲突；验收以核心稳定原序合同为准，契约已澄清为按原始 `items` 位置进入固定组，不承诺绝对末尾。
+5. 消息追溯：task/review/ack=`msg_821f2f19ef8044fcbd85f28cc764de29`/`msg_449e2631192944c39419507c4956c161`/`msg_77a0632fdf5e4eb5bd21ea9e32205430`。

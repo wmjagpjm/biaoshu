@@ -7,7 +7,7 @@
 
 # 标书制作者能力补全与角色化演进路线图
 
-> **状态**：阶段 0–5 已按下文拆包持续交付；P11A/B/C、P12A 至 P12M 版本治理链及 P13-A 均已完成。P12K 冻结=`fe0fa08`、实现=`3c3cbf9`；P12L 实现=`cc6bf11`；P12M 冻结=`95b298f`、实现=`cc23542`。P12M 按分级策略只运行专项与受影响聚焦，未重复后端全量或整仓前端 **318 passed** 基线；下一包 P12N 已冻结为快速前端版。
+> **状态**：阶段 0–5 已按下文拆包持续交付；P11A/B/C、P12A 至 P12N 版本治理链及 P13-A 均已完成。P12M 冻结=`95b298f`、实现=`cc23542`；P12N 冻结=`337b401`、实现=`394639a`。P12M/P12N 均按分级策略只运行专项与受影响聚焦，未重复后端全量或整仓前端 **318 passed** 基线；下一主线包待只读审计。
 > **当前分支**：`collab/grok-code-codex-review`
 > **协作方式**：Grok 负责限定范围的实现与测试；Codex 负责范围、审查、验收和提交授权。
 
@@ -365,7 +365,7 @@ P8D 与 P8E 本机外置解析助手均已完成并推送：P8D 计划=`30d066f`
 
 **P12E-A 单条修订正文差异预览已完成**：冻结=`5aa205c`、实现=`f9f067e`。只读 GET 返回精确六键和有界章节行差异；前端技术/商务共用按需入口、严格 parser、四意图互斥与 arrived/complete 迟到隔离。Codex 首轮审查复现第 101 个差异章仍进入 difflib，Grok 以真实 **1 failed / 1 passed** 红测返修为 **2 passed**；Codex 独立通过专项/回归/后端全量 **23/27/854**，history/checkpoint/truth/前端全量 **27/51/46/290 passed**。任意历史两两比较、删除、搜索、分页、正文自动恢复和多人协作继续不进入 A 包。
 
-**下一步**：执行已冻结的 P12N。按“先出一版”策略，只在技术/商务共用面板把当前已加载的非搜索修订稳定分为固定/普通两组，零后端、零游标、零新增请求；尚未加载固定项提前进入第一页和服务端权威固定优先后续另包。
+**下一步**：P12N 快速前端版已完成。下一包先只读审计协作/版本治理剩余价值，不自动把服务端游标级固定优先、多人协作或 Word 版式混入同一任务。
 
 **P12E-B 已完成并推送**：双修订正文差异后端基础，契约=`docs/p12e-revision-pair-body-diff-contract.md`，计划=`docs/plans/2026-07-17-p12e-revision-pair-body-diff-plan.md`，冻结=`00ef081`、实现=`5a5b08a`。只比较同 workspace/project 的两个历史修订，暂不提供前端入口；Grok 仅改四个后端文件并发送 review_request，Codex 独立验收后提交推送。专项/回归/全量 **13/23/50/867 passed**，合并专项 **86 passed**，仅 1 条既有 Starlette/httpx 弃用告警。
 
@@ -417,7 +417,7 @@ P12E-B 真实 failure-first 为 13 项红测：11 项路由缺失 404、1 项同
 
 **P12M 已完成**：契约=`docs/p12m-revision-search-match-reasons-contract.md`，计划=`docs/plans/2026-07-20-p12m-revision-search-match-reasons-plan.md`，冻结=`95b298f`、实现=`cc23542`。修订搜索成功项已增加精确 `matchReasons` 八键，按固定顺序说明名称、可见内容或双命中；技术/商务共用面板显示固定中文标签。真实 failure-first **3 failed**；Grok 搜索专项 **33 passed**、P12M/受影响 history E2E **2/6 passed**。受影响后端首轮 **265 passed / 2 failed** 只暴露两份旧七键测试，获 Codex 明确 test-only 扩围后两条均通过；Codex 独立后端 **1/1/3 passed**、前端 **2/6 passed**，lint/py_compile/静态门通过，未重复后端全量或整仓 318 E2E。候选 20 条、排序、过滤、完整校验、错误/零写和一次 POST 不变；正文片段、高亮、自动搜索、FTS、缓存、跨项目版本、完整时间线及多人协作仍未实现。
 
-**P12N 已冻结待实现**：契约=`docs/p12n-revision-loaded-pinned-first-frontend-contract.md`，计划=`docs/plans/2026-07-20-p12n-revision-loaded-pinned-first-frontend-plan.md`，代码基线=`6081a41`，严格两文件。非 active search 时只对当前已加载 `items` 做 render 期稳定固定/普通分组；pin/unpin 与加载更多成功后立即反映，搜索仍保持服务端顺序。后端、API、esrc 游标、请求数、state/effect 全部冻结；这不是服务端权威第一页固定优先。
+**P12N 已完成**：契约=`docs/p12n-revision-loaded-pinned-first-frontend-contract.md`，计划=`docs/plans/2026-07-20-p12n-revision-loaded-pinned-first-frontend-plan.md`，冻结=`337b401`、实现=`394639a`。严格两文件在非 active search 时对当前已加载 `items` 做 render 期稳定固定/普通分组；pin/unpin 与加载更多成功后立即反映，搜索保持服务端顺序。真实 failure-first **4 failed / 1 passed**；Grok P12N/受影响 history **5/12 passed**，Codex 独立 **5 passed**，lint/build/静态门通过，未跑完整 history、整仓 318 E2E 或后端 pytest。后端、API、esrc 游标和请求数未变；尚未加载固定项提前进入第一页仍未实现。
 
 **P13-A 已完成并推送**：契约=`docs/p13a-task-sse-workspace-auth-contract.md`，计划=`docs/plans/2026-07-17-p13a-task-sse-workspace-auth-plan.md`，冻结=`e8dfa61`、实现=`1509aa2`。SSE 连接前短 Session 复用统一 workspace/成员/bid_writer 解析，流内每轮按 workspace/project/task 再校验；disabled、原生 EventSource、事件/回退不变。真实 failure-first **8 failed / 5 passed**；Codex 一轮 test-only 返修关闭恒真泄漏断言、secret marker 跳过和宽松三参，独立通过 **13/72/918 passed**。首次全量只因 20 分钟外层时限不足终止，40 分钟外层干净重跑为 **918 passed in 1310.97s**。
 ## P12D-B 完成状态（2026-07-17）
