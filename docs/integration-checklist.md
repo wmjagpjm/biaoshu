@@ -1377,3 +1377,9 @@ Codex 独立串行通过 P13-G2 专项/P13-F2 presence/freshness **13/11/17 pass
 完成证据：failure-first=`msg_ee84a231060941049177cce0f05f501a`，真实 **25 failed / 3 passed**；Grok 初版专项/回归 **28/90 passed**。Codex 只读发现无公开 bootstrap tip、未登录与非 GET 宽状态断言两项问题，经 Grok 确认后才授权最小返修；最终 Grok 与 Codex 独立均为专项/回归 **28/90 passed**，`compileall`、diff-check 和严格八文件哈希门通过。
 
 事件只含不透明 eventId、stateVersion、sourceKind、occurredAt；不含快照、正文、章节、actor/client、任务结果或异常原文。无 `after` 时不回放历史，已有事件返回最新 tip 供后续增量读取；游标 stale 固定脱敏 409，事件上限 200/项目，失败事务零事件。未运行后端全量、前端、整仓 E2E、xdist 或并发 pytest；SSE、Last-Event-ID、前端自动刷新、WebSocket、通知、评论审批和强制锁仍未实现。
+
+## P13-H2 editor-state 事件 SSE 与断线重放（已冻结，待实现）
+
+契约=`docs/p13h2-editor-state-event-sse-replay-contract.md`，计划=`docs/plans/2026-07-20-p13h2-editor-state-event-sse-replay-plan.md`，审计基线=`7e5e02e`。严格三文件：H1 事件服务、H1 路由和新 H2 专项；任务 SSE、main/schema/实体/transition、认证公共层、前端与其它测试保持不变。
+
+验收前置边界：无 Last-Event-ID 的已有历史只发公开 tip cursor 锚点，不回放旧 editor-state；有 Last-Event-ID 正序重放保留窗口内后续事件；空表首事件不得丢。SSE id 与四键 data.eventId 相等，心跳仅注释；连接前 stale 是 HTTP 409，连接中 stale 是无 id 固定控制帧。连接前与每轮查询均用已关闭的短 Session，required/活动 workspace/strict bid_writer、X-Workspace-Id、跨项目和请求语法必须精确。不得运行并发 pytest、xdist、后端全量、前端或整仓 E2E；不得提前实现 H3 前端、WebSocket、通知、多任务总线或强制锁。
