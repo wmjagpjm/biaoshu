@@ -4,6 +4,7 @@
 > 基线：`70dfb39bd4ea2b9417b0ed46e652c1d4a0ec7c8d`
 > 分支：仅 `collab/grok-code-codex-review`
 > 测试：pytest 严格串行，禁止 xdist/并发/机械全量
+> 当前进度：Grok 已形成严格七文件实现并发送 `review_request=msg_b176f13020d5470395f70792f811921b`；Codex 尚未独立验收、提交或推送实现。操作级续跑见 `docs/HANDOFF-p13f1-in-progress.md`。
 
 ## 1. 基线与冻结哈希
 

@@ -1,8 +1,10 @@
 # P13-F1 项目在线租约后端基础契约
 
-> 状态：已冻结，待 Grok 实现与 Codex 独立验收
+> 状态：已冻结；Grok 已完成受限实现与自测，待 Codex 独立审查、双确认返修判定和最终验收，**不是已完成功能**
 > 分支：仅 `collab/grok-code-codex-review`，禁止操作 `main`
 > 协作：Grok 负责受限后端实现与自测；Codex 负责规划、范围冻结、审查、双确认返修门、独立验收、中文文档闭环和 Git
+> 在途交接：`docs/HANDOFF-p13f1-in-progress.md`
+> 消息链：task=`msg_31bba4d10d154daca2acab7d3f6ea1e5`，failure-first=`msg_aad9a00220a44195965981cfe82dae22`，review_request=`msg_b176f13020d5470395f70792f811921b`
 
 ## 1. 目标与阶段边界
 
