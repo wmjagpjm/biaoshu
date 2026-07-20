@@ -1102,6 +1102,20 @@ Codex 独立串行通过后端受影响集/全量 **120/1261 passed**，前端 P
 
 Codex 独立串行通过两条兼容回归各 **1 passed**、P12M 后端 **3 passed / 30 deselected**、P12M/既有受影响 history E2E **2/6 passed**，并通过 lint、py_compile、diff-check、精确九文件、空暂存区、哈希和泄漏门。Grok 未执行 Git 写操作，Codex 验收=`msg_935e7f7b28df4a8ab75227d6e124b2f1`。本包未运行后端全量或整仓 318 E2E。
 
+## P12N 已加载修订固定优先前端（已冻结待实现）
+
+契约=`docs/p12n-revision-loaded-pinned-first-frontend-contract.md`，计划=`docs/plans/2026-07-20-p12n-revision-loaded-pinned-first-frontend-plan.md`，代码基线=`6081a41`；严格两文件。
+
+冻结后的联调验收项：
+
+1. 默认/来源筛选/时间筛选的当前已加载修订以 `isPinned === true` 稳定分组，固定项在前，两组内保持服务端原顺序；禁止原地 sort。
+2. pin/unpin 成功即时重排且零额外 GET/search/editor-state；失败保值。加载更多后第二页固定项进入已加载固定组，去重/20 条/游标不变。
+3. active search 完全保持服务端顺序和 P12M `matchReasons` 索引；技术/商务共用，全部动作仍按 revisionId 命中。
+4. 纯 render 派生，零新 state/effect/ref/API/缓存/存储/定时器；A→B 迟到隔离和全局单飞不变。
+5. Grok 只跑 P12N 与分页/固定/搜索受影响 history、lint/build；Codex 独立 P12N 聚焦与静态门。不跑后端、完整 history 或整仓 318 E2E。
+
+明确限制：尚未加载的旧固定修订不会提前进入第一页；服务端 list/page 固定优先、esrc 游标升级、固定分组标题和总数/容量后续独立立项。
+
 ## P12L 检查点固定名额提示前端（已完成）
 
 契约=`docs/p12l-checkpoint-pinned-count-frontend-contract.md`，计划=`docs/plans/2026-07-20-p12l-checkpoint-pinned-count-frontend-plan.md`，代码哈希基线=`5258f84`、契约冻结=`4526832`、启动口径=`d21cfb5`、实现=`cc6bf11`；严格两文件已完成。
