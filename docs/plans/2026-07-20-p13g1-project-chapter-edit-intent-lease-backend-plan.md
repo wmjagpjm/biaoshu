@@ -7,6 +7,7 @@
 > 审计基线：`f0325d0593b0b8c6fc291ee08f646cffe74164fe`
 > 契约：`docs/p13g1-project-chapter-edit-intent-lease-backend-contract.md`
 > 测试：pytest 禁止 xdist/并发分组；只在线程并发用例内部创建独立客户端/会话
+> 完成：冻结=`a0b7c48`，实现=`015ab37`；Codex 独立验收 `53/41/8/1 passed`
 
 ---
 
@@ -135,3 +136,11 @@ git status --short
 5. 疑似问题先走只读双确认，双方确认后才发独立返修 task。
 6. 独立串行运行新专项、必要代表回归、py_compile 和 diff-check；不机械重复全量。
 7. 验收后 Codex 精确暂存七文件，以中文功能提交并推送；再写回文档闭环。
+
+## 9. 实际执行结果
+
+1. 契约冻结=`a0b7c48`，功能实现=`015ab37`。
+2. 有效 failure-first `42 failed / 3 passed`；恢复会话重复 status 不作为纯红测证据。
+3. Grok 首轮专项/代表回归 `45/41/8/1 passed`；第一轮六项只读双确认后，返修聚焦/专项 `17/53 passed`。
+4. Codex 独立专项/P13-F1/认证/editor-state `53/41/8/1 passed`，`py_compile`、diff-check、七文件哈希与精确暂存门通过。
+5. 未运行后端全量、Playwright、前端或 xdist；P13-G1 保持 advisory intent lease，不改变 editor-state PUT。

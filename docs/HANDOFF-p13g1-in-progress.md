@@ -1,8 +1,10 @@
-# P13-G1 在途操作级交接：项目章节编辑意图租约后端
+# P13-G1 完成态操作级交接：项目章节编辑意图租约后端
 
 > 日期：2026-07-20
-> 当前状态：**只读审计与设计已完成，等待本版本冻结提交推送后下发 Grok**
+> 当前状态：**已实现、双确认返修、Codex 独立验收并推送**
 > 审计基线：`f0325d0593b0b8c6fc291ee08f646cffe74164fe`
+> 契约冻结：`a0b7c48bd82c3f177f2fbc5ee0c274ef07e6da6f`
+> 功能实现：`015ab37`（`功能：交付P13G1章节编辑意图租约后端`）
 > 分支：仅 `collab/grok-code-codex-review`，禁止操作 `main`
 > 契约：`docs/p13g1-project-chapter-edit-intent-lease-backend-contract.md`
 > 计划：`docs/plans/2026-07-20-p13g1-project-chapter-edit-intent-lease-backend-plan.md`
@@ -10,26 +12,26 @@
 ## 1. 新会话复制即用
 
 ```text
-继续 biaoshu P13-G1 项目章节编辑意图租约后端。仓库 C:\Users\Administrator\biaoshu，只能使用 collab/grok-code-codex-review，禁止操作 main。
+继续 biaoshu 剩余主线，从 P13-G2 项目章节编辑意图前端提示的只读审计开始。仓库 C:\Users\Administrator\biaoshu，只能使用 collab/grok-code-codex-review，禁止操作 main。
 
 先读 docs/HANDOFF-p13g1-in-progress.md、docs/p13g1-project-chapter-edit-intent-lease-backend-contract.md、docs/plans/2026-07-20-p13g1-project-chapter-edit-intent-lease-backend-plan.md、docs/HANDOFF-p13f2-in-progress.md、docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/integration-checklist.md。
 
 先核对 git status -sb、本地 HEAD、origin/collab/grok-code-codex-review 与 GitHub 实际分支一致。严禁 pull/reset/checkout/stash/rebase/clean、操作 main、git add .、并发 pytest 或沿用 P13-F2 白名单。
 
-P13-G1 只做后端“章节编辑意图租约”，不是硬锁。严格七文件：entities、模型导出、schemas、新 service、新 API、main、新专项测试。不得修改 editor-state PUT、P13-F1/F2、认证、前端、依赖、配置、已有测试或文档。
+P13-G1 已以提交 015ab37 完成，只做后端“章节编辑意图租约”，不是硬锁。P13-G2 尚未冻结，先审计技术标选章、编辑器生命周期、P13-F2 clientId/串行器复用边界，不得直接实现。
 
-Grok 先只写新测试做真实 failure-first，再实现并串行自测。Codex 疑似问题必须先让 Grok 只读确认；双方确认存在后才发新返修 task。Grok 不得暂存、提交、推送或写文档。
+后续仍由 Grok 承担高耗费实现与自测，Codex 独立审查；疑似问题必须先只读双确认，确认后才另发返修 task。Grok 不得暂存、提交、推送或写文档。
 ```
 
 ## 2. Git 与文件真值
 
-审计时仓库干净，本地、远端引用与 GitHub 实际分支均为：
+P13-G1 功能提交后本地与远端分支均为：
 
 ```text
-f0325d0593b0b8c6fc291ee08f646cffe74164fe
+015ab37
 ```
 
-严格白名单基线：
+严格白名单审计基线：
 
 | 文件 | SHA-256 / 状态 |
 |---|---|
@@ -41,6 +43,18 @@ f0325d0593b0b8c6fc291ee08f646cffe74164fe
 | `backend/app/api/project_chapter_edit_leases.py` | 不存在 |
 | `backend/tests/test_p13g1_project_chapter_edit_lease.py` | 不存在 |
 
+最终七文件 SHA-256：
+
+| 文件 | SHA-256 |
+|---|---|
+| `backend/app/models/entities.py` | `BA601387E7061BAD1077D972D5A470E95C72EBA3E17BDE84BE173779B0F85010` |
+| `backend/app/models/__init__.py` | `F5BED56153BC6D8C1F499FA4EBF77955C64C25FAA49532E95A4AC24838447A84` |
+| `backend/app/api/schemas.py` | `28BD4DFB11DD5E7448BAD250860BE0C38079358F6D01D411139C66838D575B30` |
+| `backend/app/services/project_chapter_edit_lease_service.py` | `8949D55BA846D0028E76E1BBF63D34ED80970AC688C1B2D8ABB9DCECC25B7860` |
+| `backend/app/api/project_chapter_edit_leases.py` | `F52DABBCEE4EB8EFF40F02B92E56BAB58CB79FEAC90C02654D5AC497DE5B5CC8` |
+| `backend/app/main.py` | `ED385E5BC020BCB7540ABFF45D690EB4C4C8D65A0CBAAE00323199C671EE1CD8` |
+| `backend/tests/test_p13g1_project_chapter_edit_lease.py` | `865D6235CC5C8E7670DC6EDC02D9D7AE85FBA82E629B719608B139CA21C1457E` |
+
 ## 3. 冻结结论
 
 - 现有技术标章节不是实体表，只存在 `ProjectEditorStateRow.chapters_json`，Schema 允许 list/dict/null；章节 ID 可能由前端或模型生成。
@@ -50,11 +64,17 @@ f0325d0593b0b8c6fc291ee08f646cffe74164fe
 - heartbeat 锁后精确验证当前技术标章节唯一命中；leave 允许章节已删除后清理。
 - 冲突只返回重新校验的安全 holder username，不返回任何内部 ID、digest、正文、标题或时间细节。
 
-## 4. 协作状态
+## 4. 协作与验收状态
 
-当前尚未发送 P13-G1 task。必须先提交并推送本次冻结文档，再让 task 引用实际冻结提交 SHA、七文件白名单和上述基线哈希。
+- 初始 task=`msg_0c9d11a1bdf946c9b8f2f85b68152774`。
+- 有效 failure-first status=`msg_7e89c95cb9e143aab17fe46d92a1a9a0`：`42 failed / 3 passed`；恢复重复 status=`msg_c818b81805b54255895e7d9e50248a28` 不作为纯红测证据。
+- 首轮 review=`msg_5a97ada55378441fa1ed223cf9f74bef`：专项 `45 passed`，P13-F1/认证/editor-state `41/8/1 passed`。
+- Codex question=`msg_cec182e52c6c4775b99ef33eef0cbf60`，Grok 只读确认=`msg_7d6862739de5449082c65350b4536deb`，六项均确认存在。
+- 双确认后返修 task/review=`msg_2e591638e1b94f559cdab1ea3e57c0d6`/`msg_2a7689d2a917465fb0c6f3de486d379a`；Grok 聚焦/专项 `17/53 passed`。
+- Codex result=`msg_18dc76c33b9f47d0a72d754e7578682c`；独立专项/P13-F1/认证/editor-state `53/41/8/1 passed`。
+- 六文件 `py_compile`、diff-check、严格七文件、空暂存与哈希门均通过；未运行后端全量、Playwright、前端或 xdist。
 
-Grok OAuth 已于本会话重新认证成功，默认模型 `grok-4.5`。启动前必须确认没有同一 P13-G1 Grok 进程，禁止重复进程。
+Grok OAuth 可用；命令行需显式继承本机 Clash `HTTP_PROXY/HTTPS_PROXY=http://127.0.0.1:7890`，否则直连 `cli-chat-proxy.grok.com` 可能超时。启动新任务前仍须确认没有同包 Grok 进程。
 
 ## 5. 审查重点
 

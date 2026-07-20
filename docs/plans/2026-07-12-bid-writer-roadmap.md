@@ -390,17 +390,23 @@
 
 **完成状态（2026-07-20）**：契约冻结=`a5709ed`，功能实现=`dfa6bc0`。初始 failure-first `7 failed / 1 passed`；第一轮双确认返修红测 `2 failed / 0 passed`；Grok 最终专项 `11 passed`。Codex 独立串行通过专项/freshness `11/17 passed`、lint/diff-check，build 沿用最终生产改动后的 Grok 成功结果。两轮只读双确认与返修授权完整留痕，最终 result=`msg_f19ceb09650a4f0584e2d4b1d1985fb4`。未运行整仓 318 E2E、后端 pytest 或并发测试。
 
-### P13-G1：项目章节编辑意图租约后端（已冻结，待 Grok 实现）
+### P13-G1：项目章节编辑意图租约后端（已完成并推送）
 
 **目标**：为技术标当前权威章节提供 45 秒短期处理意图；同一章节同一时刻一个活动 holder，其它 client 得到安全用户名冲突，leave 精确释放。
 
 **方案边界**：现有章节只有整包 `chapters_json`，PUT 没有 clientId 或章节差异，因此 G1 明确不是强制锁，也不修改任何写入口。严格七个后端文件新增单表、独立 heartbeat/leave service/API 与专项测试；项目级数据库锁后校验技术标章节唯一命中，clientId 只存 SHA-256，45/15 秒、每用户项目 8 个活动章节。无前端、GET/list、历史、审计、SSE/WebSocket、广播、光标或通知。契约=`docs/p13g1-project-chapter-edit-intent-lease-backend-contract.md`，计划=`docs/plans/2026-07-20-p13g1-project-chapter-edit-intent-lease-backend-plan.md`。
 
-**当前状态（2026-07-20）**：审计基线=`f0325d0`，四个既有文件哈希与三个新文件不存在真值已冻结；尚未下发 Grok，尚无 failure-first、实现或测试结果。
+**完成状态（2026-07-20）**：审计基线=`f0325d0`，契约冻结=`a0b7c48`，功能实现=`015ab37`。有效 failure-first **42 failed / 3 passed**；首轮实现专项/代表回归 **45/41/8/1 passed**。Codex 发现有限 body 与五组反假绿缺口，经只读 question=`msg_cec182e52c6c4775b99ef33eef0cbf60`、确认=`msg_7d6862739de5449082c65350b4536deb` 后才授权返修；Grok 最终聚焦/专项 **17/53 passed**。Codex 独立专项/P13-F1/认证/editor-state **53/41/8/1 passed**，`py_compile`、diff、七文件哈希与精确提交门通过。未跑后端全量、Playwright、前端或 xdist。
+
+### P13-G2：项目章节编辑意图前端提示（待审计与冻结）
+
+**候选目标**：在技术标章节选择与编辑界面接入 P13-G1 heartbeat/leave，并以保守文案显示安全 holder 冲突；仍只表达“近期处理意图”，不得禁用编辑器或冒充强制锁。
+
+**当前状态（2026-07-20）**：尚未完成只读代码审计，尚无冻结契约、白名单、failure-first 或实现。必须先核对技术标选章真值、项目/章节切换、visibility/pagehide、StrictMode、clientId 生命周期和现有 P13-F2 串行器是否可安全复用，再独立立项。
 
 ### P13 后续协作主线（未实现）
 
-账号、workspace、RBAC、CAS、冲突提示与任务 SSE 工作空间鉴权已经存在；P13-E 已完成活动空间切换 UI 与 owner-only 成员只读可见性，P13-F1/F2 已完成项目近期成员，P13-G1 已冻结章节编辑意图租约后端。G1 不是强制锁；前端意图提示、协同光标、事件广播与游标重放、WebSocket、多任务总线、断线恢复、评论/审批/通知仍缺失，必须继续独立拆包。
+账号、workspace、RBAC、CAS、冲突提示与任务 SSE 工作空间鉴权已经存在；P13-E 已完成活动空间切换 UI 与 owner-only 成员只读可见性，P13-F1/F2 已完成项目近期成员，P13-G1 已完成章节编辑意图租约后端。G1 不是强制锁；P13-G2 前端意图提示尚待审计，协同光标、事件广播与游标重放、WebSocket、多任务总线、断线恢复、评论/审批/通知仍缺失，必须继续独立拆包。
 
 阶段 0/1/2、阶段 3 M3-A 至 M3-D、阶段 4 **包 5** 至 **包 8/P8B/P8C/P8D/P8E**、P9A/P9B/P9C/P9D、阶段 5 P10A 至 P10K、**P11A/P11B/P11C 三个真实数据收口包**，以及 **P12A/P12B-A/B/C/D/P12C-A/B/C/P12D-A/B/P12E-A/B/C/P12F-A/B/C/D/P13-A** 均保持已交付。P8E 完整契约见 `docs/p8e-docling-local-helper-contract.md`，实施与独立验收记录见 `docs/plans/2026-07-15-p8e-docling-local-helper-plan.md`。
 
