@@ -3,6 +3,34 @@
 > 目标：验证 health / 项目 / 设置 / revise / editor-state / 响应矩阵 / 本地标讯库 / 资源中心及受控同步 / **中标内容模板** 已闭环。
 > Key **明文**存储与回显（保密机决策）。
 
+## P13-C 当前已载入版本修订来源可见性（已完成）
+
+契约：`docs/p13c-current-revision-source-visibility-contract.md`
+
+计划：`docs/plans/2026-07-20-p13c-current-revision-source-visibility-plan.md`
+
+冻结=`e62ea27`，实现=`6eaa89f`
+
+联调确认：
+
+1. `GET|PUT editor-state` 必出 `currentRevisionSourceKind`，只能为九类固定来源或 `null`；客户端投稿任何来源字段都不能控制结果。
+2. 服务端来源查询只投影最新一条 `state_version/source_kind`，workspace/project 作用域，`created_at DESC,id DESC LIMIT 1`；不读 snapshot、不回扫、不写库。
+3. 最新版本不匹配、坏来源、空账本与并发漂移显示“来源未知”；不能把旧同版本或其它项目/空间来源拼到当前响应。
+4. 技术/商务标题区显示同一套中文来源标签；来源与 P13-B 时间只在合法 `stateVersion` 同响应通过当前会话/写入代次后接受。
+5. 409、网络失败、非法版本、旧项目 GET/PUT 不污染；项目切换清空；不增加额外 GET/PUT、轮询、storage、timer。
+6. 新字段不进入 13 键哈希、CAS、修订快照、写入/裁剪/恢复；无迁移、actor、用户名、presence 或实时最新承诺。
+
+验收：真实 failure-first 后端 **18 failed**、前端 **5 failed**；Grok 后端/前端 **18/11 passed**，lint/build 通过。Codex test-only 返修后独立后端 P13-C+P12C **32 passed**、全状态 **19 passed**、P13-B/C E2E **11 passed**，lint/py_compile/diff-check 通过。未运行后端全量或整仓 E2E。
+
+```powershell
+cd C:\Users\Administrator\biaoshu\backend
+.\.venv\Scripts\python.exe -m pytest -q tests\test_p13c_current_revision_source.py tests\test_p12c_browser_put_revisions.py --tb=short
+.\.venv\Scripts\python.exe -m pytest -q tests\test_editor_state_full_version.py --tb=short
+cd C:\Users\Administrator\biaoshu\frontend
+npx playwright test e2e/editor-state-version-freshness.spec.ts --project=chromium --workers=1 --retries=0
+npm run lint
+```
+
 ## P13-B 已载入编辑版本更新时间可见性（已完成）
 
 契约：`docs/p13b-editor-state-version-freshness-contract.md`

@@ -3,6 +3,7 @@
 > 契约：`docs/p13c-current-revision-source-visibility-contract.md`  
 > 实现者：Grok  
 > 审查、独立验收、文档、提交与推送：Codex
+> 状态：已完成；冻结=`e62ea27`，实现=`6eaa89f`
 
 ## 1. 后端
 
@@ -41,3 +42,11 @@ npm run build
 - 不含迁移、新请求、轮询、storage、actor 或远端实时宣称。
 - Grok 发送 `review_request`，附红测、绿测、受影响测试、lint/build、文件清单和已知限制。
 - Codex 独立验收后提交实现；再更新三份中文文档，提交并推送。
+
+## 5. 实施结果
+
+- 后端只读 helper、必出可空响应字段、九类严格来源与并发保守 `null` 已完成。
+- 技术/商务 hook 与 P13-B 共用合法 `stateVersion` 接受门；共享标题组件显示时间与来源，零新增 HTTP/轮询/storage/timer。
+- 真实 failure-first 后，Grok 通过后端 **18** 与前端 **11**；Codex 发现并关闭两条旧 P12C 响应合同、PRAGMA 污染和 SQL 宽证据。
+- Codex 最终独立通过后端 **32 + 19**、前端 **11**，并通过 lint、py_compile、diff-check 和白名单；未机械重复全量。
+- 精确操作者、实时 presence、远端最新提示、actor 迁移与跨项目协作仍不在本快速版。

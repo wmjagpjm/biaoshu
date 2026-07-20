@@ -1,8 +1,10 @@
 # P13-C 当前已载入版本修订来源可见性契约
 
 > 日期：2026-07-20  
-> 状态：已冻结，等待 Grok 实现  
+> 状态：已完成并通过独立验收
 > 基线：`e836eb0`（P13-B 已闭环）  
+> 冻结：`e62ea27`
+> 实现：`6eaa89f`
 > 分支：`collab/grok-code-codex-review`
 
 ## 1. 目标
@@ -122,3 +124,13 @@
 Grok 先写真实 failure-first 测试并报告红测数量，再实现；只跑 P13-C 专项和直接受影响测试。Codex 独立审查 diff、白名单、测试真实性，并独立运行定点后端与 P13-C E2E；只有定点失败指向共享合同，或出现跨域风险时才扩大测试，不机械重复整仓全量。
 
 Grok 禁止 `git add/commit/push`；Codex 验收通过后使用中文提交信息，更新交接、路线图、联调清单并推送协作分支。
+
+## 7. 完成记录
+
+真实 failure-first：后端 **18 failed / 0 passed**，前端 P13-C **5 failed / 0 passed**。Grok 实现后通过后端 P13-C **18 passed**、P13-B/C E2E **11 passed**、lint 与 build。
+
+Codex 首轮审查实际复跑 P13-C 与 P12C 浏览器 PUT 回归，得到 **30 passed / 2 failed**；两条失败是旧 P12C 合同仍禁止公开 `browser_put`，同时发现损坏来源测试未恢复 SQLite CHECK、SQL 投影证据不够精确。Grok 获准仅修改两份后端测试，生产九文件哈希冻结，关闭旧合同、PRAGMA 污染与 SQL 假证据。
+
+Codex 最终独立串行通过：后端 P13-C + P12C 浏览器 PUT **32 passed**、全状态版本回归 **19 passed**、P13-B/C E2E **11 passed**；lint、py_compile、diff-check、十二文件白名单与空暂存区均通过。未运行后端全量或整仓 E2E。
+
+验收消息：首轮 `msg_93bdc4eeb00a40b89a9161c158dff9c3`；返修 `msg_cf6f31db48e041e4bbbcdcb9cb2ee9ba`；Codex ack=`msg_327169acc63944b89dfa40fe881225b0`。

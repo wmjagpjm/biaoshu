@@ -7,7 +7,7 @@
 
 # 标书制作者能力补全与角色化演进路线图
 
-> **状态**：阶段 0–5 已按下文拆包持续交付；P11A/B/C、P12A 至 P12N 版本治理链、P13-A/P13-B 均已完成。P12M 冻结=`95b298f`、实现=`cc23542`；P12N 冻结=`337b401`、实现=`394639a`；P13-B 冻结=`040d644`、实现=`1d4fe0b`。继续按分级策略避免机械重复后端全量或整仓前端 **318 passed** 基线。
+> **状态**：阶段 0–5 已按下文拆包持续交付；P11A/B/C、P12A 至 P12N 版本治理链、P13-A/P13-B/P13-C 均已完成。P12N 冻结=`337b401`、实现=`394639a`；P13-B 冻结=`040d644`、实现=`1d4fe0b`；P13-C 冻结=`e62ea27`、实现=`6eaa89f`。继续按分级策略避免机械重复后端全量或整仓前端 **318 passed** 基线。
 > **当前分支**：`collab/grok-code-codex-review`
 > **协作方式**：Grok 负责限定范围的实现与测试；Codex 负责范围、审查、验收和提交授权。
 
@@ -335,6 +335,16 @@
 
 **验收**：真实 failure-first **6 failed / 0 passed**；Grok P13-B/技术商务真值 **6/46 passed**，lint/build 通过。Codex 首轮仅退回 E2E 反假绿，关闭死 GET gate、宽泛计数与缺失真实 PUT abort 后独立 P13-B **6 passed（24.7s）**、lint/diff-check 通过。纯前端展示包未运行后端 pytest，不重复整仓 318 E2E。
 
+### P13-C：当前已载入版本修订来源可见性（已完成）
+
+**目标与结果**：`GET|PUT editor-state` 增加必出可空 `currentRevisionSourceKind`；服务端只投影当前项目最新修订的 `state_version/source_kind`，仅在最新版本与响应版本精确匹配且来源属于既有九类时返回。技术/商务工作区复用唯一九类标签，在 P13-B 时间下显示“当前版本来源”，不增加前端请求。
+
+**快速版边界**：无表/列/迁移，无 actor、用户名、设备、IP、presence、轮询、SSE/WebSocket 或“远端实时最新”承诺；不回扫旧同版本，不改变 13 键哈希、修订写入、去重、裁剪、固定、搜索、恢复与 CAS。完整契约=`docs/p13c-current-revision-source-visibility-contract.md`，计划=`docs/plans/2026-07-20-p13c-current-revision-source-visibility-plan.md`，冻结=`e62ea27`、实现=`6eaa89f`。
+
+**验收**：真实 failure-first 后端 **18 failed**、前端 **5 failed**；Grok 后端 P13-C **18 passed**、P13-B/C E2E **11 passed**、lint/build 通过。Codex 定点回归发现两条旧 P12C 合同冲突并退回 test-only，同时关闭 SQLite PRAGMA 污染和 SQL 宽证据；最终独立后端 **32 + 19 passed**、前端 **11 passed**，lint/py_compile/diff-check/白名单通过。未跑后端全量或整仓 E2E。
+
+**下一步口径**：系统已具备可用的版本时间与流程来源快速第一版。精确操作者归因仍需覆盖浏览器、任务、revise、两类解析、融合和两类恢复的 actor 传播与 SQLite 迁移，不能只给浏览器写入贴用户名；先继续审计其它无需外部制品/授权的高收益小包。真实 MinerU/Docling 制品、用户真实语料调优、外部标讯来源与 Word 整章版式仍分别受本机制品、用户语料、合法授权和跨页视觉决策约束，不混入本包。
+
 阶段 0/1/2、阶段 3 M3-A 至 M3-D、阶段 4 **包 5** 至 **包 8/P8B/P8C/P8D/P8E**、P9A/P9B/P9C/P9D、阶段 5 P10A 至 P10K、**P11A/P11B/P11C 三个真实数据收口包**，以及 **P12A/P12B-A/B/C/D/P12C-A/B/C/P12D-A/B/P12E-A/B/C/P12F-A/B/C/D/P13-A** 均保持已交付。P8E 完整契约见 `docs/p8e-docling-local-helper-contract.md`，实施与独立验收记录见 `docs/plans/2026-07-15-p8e-docling-local-helper-plan.md`。
 
 P8D 与 P8E 本机外置解析助手均已完成并推送：P8D 计划=`30d066f`、实现=`e1fe316`、闭环=`38b9318`；P8E 计划=`73b1264`、后端=`79b346e`、助手=`e3f9cc4`。P8E 独立验收为 Docling 46、MinerU 54、后端受影响回归 37、P8C E2E 9、P8B E2E 6 passed；真实 Docling/模型未安装、未验收，自动安装/模型打包/服务端内嵌仍不是已交付能力。
@@ -375,7 +385,7 @@ P8D 与 P8E 本机外置解析助手均已完成并推送：P8D 计划=`30d066f`
 
 **P12E-A 单条修订正文差异预览已完成**：冻结=`5aa205c`、实现=`f9f067e`。只读 GET 返回精确六键和有界章节行差异；前端技术/商务共用按需入口、严格 parser、四意图互斥与 arrived/complete 迟到隔离。Codex 首轮审查复现第 101 个差异章仍进入 difflib，Grok 以真实 **1 failed / 1 passed** 红测返修为 **2 passed**；Codex 独立通过专项/回归/后端全量 **23/27/854**，history/checkpoint/truth/前端全量 **27/51/46/290 passed**。任意历史两两比较、删除、搜索、分页、正文自动恢复和多人协作继续不进入 A 包。
 
-**下一步**：P12N 快速前端版已完成。下一包先只读审计协作/版本治理剩余价值，不自动把服务端游标级固定优先、多人协作或 Word 版式混入同一任务。
+**下一步**：P13-C 快速第一版已完成。下一包继续只读审计剩余主线，优先选择无需外部模型、真实用户语料、来源授权或未决跨页视觉方案的高收益增量；不自动扩成精确操作者、完整多人在线协作或 Word 整章版式。
 
 **P12E-B 已完成并推送**：双修订正文差异后端基础，契约=`docs/p12e-revision-pair-body-diff-contract.md`，计划=`docs/plans/2026-07-17-p12e-revision-pair-body-diff-plan.md`，冻结=`00ef081`、实现=`5a5b08a`。只比较同 workspace/project 的两个历史修订，暂不提供前端入口；Grok 仅改四个后端文件并发送 review_request，Codex 独立验收后提交推送。专项/回归/全量 **13/23/50/867 passed**，合并专项 **86 passed**，仅 1 条既有 Starlette/httpx 弃用告警。
 

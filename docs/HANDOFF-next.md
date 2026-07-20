@@ -1,17 +1,17 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-20（P13-B 已载入编辑版本更新时间可见性快速第一版已完成；下一增量待审计）
+> **交接日期**：2026-07-20（P13-C 当前已载入版本修订来源可见性快速第一版已完成；下一增量待审计）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
 > **协作分支功能基线**：P12F-J-A 冻结=`2f03b8c`、实现=`a7021c4`；P12F-I 冻结=`060191e`、实现=`008e443`；P12F-H 冻结=`0660145`、范围修订=`0db935b`/`aca68b6`、实现=`b4338ba`；P12F-G-B 冻结=`89b5728`、实现=`bb7c4f4`；P12F-G-A 冻结=`c176cb5`、实现=`d2555d4`；P12F-F-B 冻结=`4585388`、实现=`be2fe77`；P12F-F-A 冻结=`b2eed7c`、实现=`e6516e8`；P12F-E-B 冻结=`a31e50e`、实现=`f9127ec`；P12F-E-A 冻结=`af3798a`、实现=`c66b69d`；P12F-D 冻结=`a2acdf3`、实现=`587df9a`；P13-A 冻结=`e8dfa61`、实现=`1509aa2`；P12F-C 冻结=`bb1ae3e`、实现=`fe99f5a`；P12F-B 冻结=`4ddd896`、实现=`c84a94d`；P12F-A 冻结=`e713fb3`、实现=`24f4cf2`；P12E-A 冻结=`5aa205c`、实现=`f9f067e`；P12E-B 冻结=`00ef081`、实现=`5a5b08a`；P12E-C 冻结=`8b40bf4`、实现=`b6a4375`；其余既有功能基线见本文 §11。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
-> **最新增量基线**：P12J-A 已交付检查点固定列/迁移、5 条/10 MiB 配额、单条 PATCH 与固定/安全双保护裁剪；冻结=`9f304da`、实现=`8edebd4`。P12J-B 已交付固定状态八/九键读取与技术/商务共用前端入口；代码哈希基线=`262683e`、冻结=`65fe259`、口径澄清=`1471c31`、实现=`7d1d5c9`。P12K 已交付默认检查点列表固定优先；冻结=`fe0fa08`、启动口径修订=`ff48495`/`6666af6`、实现=`3c3cbf9`。P12L 已交付固定名额提示；契约冻结=`4526832`、启动口径=`d21cfb5`、实现=`cc6bf11`。P12M 已交付修订搜索命中来源标签；冻结=`95b298f`、实现=`cc23542`。
+> **最新增量基线**：P12N 已交付当前已加载修订固定优先；冻结=`337b401`、实现=`394639a`。P13-B 已交付当前客户端接受版本的 UTC 更新时间；冻结=`040d644`、实现=`1d4fe0b`。P13-C 已交付当前版本九类修订流程来源；冻结=`e62ea27`、实现=`6eaa89f`。
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
 > **P12M 完成状态**：冻结=`95b298f`、实现=`cc23542`。首轮七文件实现后，受影响回归准确暴露两份旧七键测试；经 Codex 明确 test-only 扩围后闭环，生产边界未扩大。
 > **P12M 最终生产哈希**：schemas=`76633E2BFF418A9FBBD0DD3AD18164C62496340AB4AD30BCCD7BDE2918DDF39D`；route=`3CC358D8280F3C6579261F88848D986E0A5A929D46D09F81FD378E7A9F23EF0C`；service=`F8D373B8DCCACB5B0921D4F972F0B85B29AAAAF82CFA0BE8E3D08AC2D107C1FA`；前端 API=`CEDCC06FDCB9B0743BEE2A5A019003D19145B2837BBB273226C15E7EFFD45BA3`；面板=`5C41D4A3C2807B1A69DB40D34F22E40A7A664280765A3F8D7C7DFCE3EB25E31D`。
 > **P12N 完成状态**：冻结=`337b401`、实现=`394639a`；严格两文件，只做非搜索态当前已加载修订的前端稳定固定优先，不改后端或游标。最终面板哈希=`FEAD15B6CB4043D1E6A96C1BFF9782A3B1F072A28D6619E375D9B5F07A23FF3B`，history E2E=`617C7481B55A2F7760A36127E5E5DB8C50E193526206D444F13D56AA6F65698F`。
-> **本地状态**：只允许分支 `collab/grok-code-codex-review`；P13-B 实现=`1d4fe0b`，文档闭环提交推送后必须恢复工作区干净且 HEAD/远端一致。
-> **验收基线**：P12K Grok 串行专项/受影响集/后端全量 **12/132/1273 passed**；Codex 独立受影响集 **132 passed**。P12L Grok 聚焦/受影响 checkpoint **5/87 passed**，Codex 独立聚焦 **5 passed**。P12M Grok 搜索专项 **33 passed**、P12M/受影响 history **2/6 passed**；Codex 独立后端定点 **1/1/3 passed**、前端 **2/6 passed**。P12N Grok 聚焦/受影响 **5/12 passed**，Codex 独立 **5 passed**。P12M/P12N 均未跑后端全量或整仓 318 E2E。**所有 pytest 与 Playwright E2E 共用 SQLite 重置库，pytest 禁止 xdist/并发分组，Playwright 必须显式 `--workers=1 --retries=0` 逐条串行运行；按风险分级验收，避免 Grok 与 Codex 重复全量。**
+> **本地状态**：只允许分支 `collab/grok-code-codex-review`；P13-C 实现=`6eaa89f`，文档闭环提交推送后必须恢复工作区干净且 HEAD/远端一致。
+> **验收基线**：P13-B Grok P13-B/真值 **6/46 passed**，Codex 独立 **6 passed**。P13-C Grok 后端/前端 **18/11 passed**；Codex 独立后端 P13-C+P12C/全状态 **32/19 passed**、P13-B/C E2E **11 passed**，lint/build/py_compile 通过。P13-B/C 均未跑后端全量或整仓 318 E2E。**所有 pytest 与 Playwright E2E 共用 SQLite 重置库，pytest 禁止 xdist/并发分组，Playwright 必须显式 `--workers=1 --retries=0` 逐条串行运行；按风险分级验收，避免 Grok 与 Codex 重复全量。**
 
 ---
 
@@ -22,10 +22,10 @@
 工作分支只能是 collab/grok-code-codex-review，禁止直接操作 main；先执行 git status -sb，并核对 HEAD 与 origin/collab/grok-code-codex-review 一致且工作区干净。
 完整阅读 docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/plans/2026-07-13-package-9-delivery-enhancement-plan.md、docs/integration-checklist.md。
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
-当前进度：P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/B、P12E-A/B/C、P12F-A/B/C/D/E-A/E-B/F-A/F-B/G-A/G-B/H/I/J-A/J-B/P12K/P12L/P12M/P12N、P13-A、P9D、P9C-R1、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。P12N 实现=`394639a`；Grok/Codex 聚焦 **5/5 passed**，整仓前端 **318 passed** 仍仅作既有基线。
+当前进度：P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/B、P12E-A/B/C、P12F-A/B/C/D/E-A/E-B/F-A/F-B/G-A/G-B/H/I/J-A/J-B/P12K/P12L/P12M/P12N、P13-A/P13-B/P13-C、P9D、P9C-R1、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。P13-C 实现=`6eaa89f`；整仓前端 **318 passed** 仍仅作既有历史基线。
 当前状态：修订历史已闭合来源、UTC 时间、联合搜索、搜索命中来源标签、游标分页、单条删除、展示名称、固定与保护性裁剪；检查点已有创建、列表、详情、安全恢复、展示名称、单条删除、当前项目显式搜索、固定状态读取/入口、固定/安全双保护裁剪、默认列表固定优先排序与固定名额提示。
-当前执行包：P13-B 已闭环；冻结=`040d644`、实现=`1d4fe0b`。严格六文件、纯前端、零新请求，技术/商务标题区显示当前客户端已接受版本的服务端 UTC 更新时间。
-下一步：确认 P13-B 文档闭环推送且工作区干净，再只读审计 P13-C 精确操作者归因或其它更高收益小包。操作者包必须覆盖全部 editor-state 写入口和 SQLite 迁移，不能只记录浏览器 PUT；presence/SSE/WebSocket、尚未加载固定项提前进入第一页仍是独立后续项。
+当前执行包：P13-C 已闭环；冻结=`e62ea27`、实现=`6eaa89f`。`editor-state` 必出可空当前修订来源，技术/商务标题区复用九类中文标签；零迁移、零新前端请求，不声称操作者或远端实时最新。
+下一步：先确认 P13-C 文档闭环推送且工作区干净，再审计下一个无需外部制品/授权的高收益小包。精确操作者包必须覆盖全部 editor-state 写入口和 SQLite 迁移；presence/SSE/WebSocket、尚未加载固定项提前进入第一页、Word 整章版式、真实解析模型/语料与新增外部来源仍是独立后续项。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -123,6 +123,7 @@
 | 编辑态手动检查点 P12A | `models/entities.py`、`api/editor_state_checkpoints.py`、`services/editor_state_checkpoint_service.py`、`api/schemas.py`、`tests/test_editor_state_checkpoints.py` | **齐** | 服务端权威 13 键标准 JSON、最近 20 条、最小 SQL、完整显式回滚、只读详情；专项 29、后端全量 518 passed |
 | 检查点固定与保护裁剪 P12J-A | `models/entities.py`、`core/database.py`、`services/editor_state_checkpoint_service.py`、`services/editor_state_checkpoint_pin_service.py`、`api/schemas.py`、`api/editor_state_checkpoints.py`、`tests/test_p12j_checkpoint_pin.py` | **齐** | 5 条/10 MiB、原始 Integer 投影、SQLite 原子重建、单条 PATCH、固定行与本轮安全点双保护；专项/回归/全量 23/140/1258 passed |
 | 编辑态全状态版本 P12B-A | `api/projects.py`、`api/schemas.py`、`services/editor_state_service.py`、`services/editor_state_checkpoint_service.py`、`tests/test_editor_state_full_version.py` | **齐** | GET/PUT `stateVersion`、可选 expected CAS、固定最小 409、矩阵冲突优先级；专项 19、后端全量 537 passed |
+| 当前版本协作元数据 P13-B/C | `api/projects.py`、`api/schemas.py`、`services/editor_state_revision_service.py`、`tests/test_p13c_current_revision_source.py` | **齐** | editor-state 必出可空九类当前修订来源；最新两列查询、版本匹配、坏值保守 null，不进入 13 键哈希；P13-C 独立 32+19 passed |
 | 编辑态有限修订与受限恢复 P12C | 后端 `models/entities.py`、revision 三服务、`api/editor_state_revisions.py`、C1/C2 测试；前端 `editor-state-revisions/*`、技术/商务 hooks/pages、C3 E2E | **齐** | 最近 10 条、九类来源、列表五列无正文、按需有界摘要、expected CAS、安全检查点、原子恢复、共享令牌/保存链与迟到隔离；C2 后端 23/121/800，C3 前端 21/51/46/284 passed |
 | 响应矩阵 | `services/editor_state_service.py`、`services/task_service.py`、`api/projects.py`、`api/tasks.py`、`services/export_service.py`、`models/entities.py`；前端 `useTechnicalPlanEditors` / `ResponseMatrixPanel` | **齐/部分** | service/API/导出与乐观锁注释齐；`response_match` 支持 `candidateBatchIndex` 候选分批且只产出待确认建议；前端冲突 UX 与串行分批进度注释齐；`entities.py` 仍按历史文件部分 |
 | 知识库 | `services/knowledge_service.py`、`api/knowledge.py` | **齐** | P9C 版本化离线索引、工作空间隔离、关键词降级；`get_chunk` 供卡片沉淀 |
@@ -155,6 +156,7 @@
 | 技术标工作区 | `technical-plan/pages/TechnicalPlanWorkspace.tsx` | **齐** | ResponseMatrixPanel；串行 `response_match`；编写步 M3-A/M3-B 融合入口；P8B `light/local/ask` 解析决策 |
 | 模板/卡片融合 UI | `technical-plan/components/ContentFuseDialog.tsx`、`lib/contentFuse.ts`、`lib/contentFuseApplications.ts`；E2E `e2e/content-fuse-suggest.spec.ts`、`content-fuse-apply.spec.ts`、`content-fuse-persistent-recovery.spec.ts` | **齐** | M3-A 只读建议；M3-B 双栏预览；M3-D 服务端原子确认、最近 20 批、完整/部分/零恢复、一次消费、固定失败语义与迟到隔离；`test:e2e:fuse` / `fuse-apply` / `fuse-persistent-recovery` |
 | 技术标 hooks | `useProjectPipeline` / `useTechnicalPlanEditors` / `useProjectGuidance` | **齐** | SSE、项目切换隔离、取消终态保护、正文图片上传、responseMatrix；`reloadFromApi` 为 M3-D 提供单次 `Promise<boolean>` 真实重载结果，其他调用方可保持旧静默语义；TaskType 含 content_fuse |
+| 当前版本时间/来源 P13-B/C | `editor-state-collaboration/EditorStateVersionFreshness.tsx`、技术/商务 hooks/pages、`e2e/editor-state-version-freshness.spec.ts` | **齐** | 合法版本同响应接受 UTC 时间与九类流程来源；项目/写入代次隔离，零新请求/轮询/storage；P13-B/C E2E 11 passed |
 | P9D 导出图片告警 | `shared/components/ExportImageWarnings.tsx`、技术标/商务标导出页、`e2e/export-image-warnings.spec.ts` | **齐** | 20 条/240 码点纯文本收敛；双页面不阻断下载；项目绑定与迟到代次隔离；`test:e2e:export-image-warnings` |
 | 响应矩阵 | `technical-plan/lib/responseMatrix.ts`、`hooks/useTechnicalPlanEditors.ts`、`components/ResponseMatrixPanel.tsx`、`pages/TechnicalPlanWorkspace.tsx`；E2E conflict/refresh/suggest-apply/source-pagination/field-merge | **齐** | sourceKey 合并、跨批建议择优、409 字段级三方合并预览、仅矩阵 PUT、双 context E2E |
 | P11A 核心项目真值 | `technical-plan/lib/projectStore.ts`、技术标列表/新建、创建方案、商务标列表/工作区、查重/废标选择器；`e2e/core-project-data-truth.spec.ts` | **齐** | `/api/projects*` 单一真值；真实空态与固定失败；零 mock/localStorage 假成功；项目存储键族与 pending 反假绿；`test:e2e:core-project-data-truth` |
@@ -733,7 +735,17 @@ P13-A 未修改 `deps.py`、中间件、前端、E2E、数据库或任务 schema
 
 契约=`docs/p13b-editor-state-version-freshness-contract.md`，计划=`docs/plans/2026-07-20-p13b-editor-state-version-freshness-plan.md`，冻结=`040d644`、实现=`1d4fe0b`。只改共享展示组件、技术/商务 Hook 与页面、新专项 E2E 六文件；复用 editor-state 既有 `updatedAt` 显示“当前已载入版本”UTC 时间。初始 GET、成功 PUT 和显式重载接受同一响应时间；409/失败/非法版本/迟到 A 不改变当前时间；零新增请求、零持久化、零后端改动。
 
-现有技术/商务工作区已经具备全状态 CAS、409 阻断、保留本地内容和显式重载，因此 P13-B 不重复包装旧冲突功能。精确操作者需要覆盖浏览器、任务、解析回调、融合与恢复等全部写链和 SQLite 迁移，明确留给 P13-C；P13-B 不猜用户、不声称实时或在线。真实 failure-first **6 failed / 0 passed**；Grok P13-B/技术商务真值 **6/46 passed**，Codex test-only 返修后独立 P13-B **6 passed（24.7s）**、lint 通过。未运行后端 pytest 或整仓 318 E2E。
+现有技术/商务工作区已经具备全状态 CAS、409 阻断、保留本地内容和显式重载，因此 P13-B 不重复包装旧冲突功能。P13-B 当时只把协作元数据审计留给下一包；后续 P13-C 选择了无需迁移的九类“流程来源”快速版，精确操作者仍未实现。P13-B 不猜用户、不声称实时或在线。真实 failure-first **6 failed / 0 passed**；Grok P13-B/技术商务真值 **6/46 passed**，Codex test-only 返修后独立 P13-B **6 passed（24.7s）**、lint 通过。未运行后端 pytest 或整仓 318 E2E。
+
+## P13-C 当前已载入版本修订来源可见性（已完成，2026-07-20）
+
+契约=`docs/p13c-current-revision-source-visibility-contract.md`，计划=`docs/plans/2026-07-20-p13c-current-revision-source-visibility-plan.md`，冻结=`e62ea27`、实现=`6eaa89f`。`GET|PUT /api/projects/{projectId}/editor-state` 必出可空 `currentRevisionSourceKind`；服务端只投影当前 workspace/project 最新修订的 `state_version/source_kind`，以 `created_at DESC,id DESC LIMIT 1` 判定，只有与本次响应 `stateVersion` 精确匹配且属于既有九类时才返回，否则保守 `null`。不加载快照、不回扫旧同版本、不写账本。
+
+前端从唯一修订 API 集合复用九类校验和中文标签；技术/商务 hook 与 P13-B 时间使用同一合法版本、项目会话和写入代次接受门，标题区显示“当前版本来源”。项目切换清空，409/失败/非法版本/迟到回调保值或不污染；零新增 HTTP、轮询、storage、timer，不进入 CAS、缓存键或 13 键哈希。
+
+真实 failure-first 为后端 **18 failed**、前端 **5 failed**。Grok 首轮通过后端 **18**、P13-B/C E2E **11**、lint/build；Codex 实际复跑发现旧 P12C 两条来源禁止合同冲突，并退回 test-only 关闭 SQLite PRAGMA 污染与 SQL 宽证据。最终 Codex 独立后端 **32 + 19 passed**、前端 **11 passed**，lint/py_compile/diff-check/十二文件白名单通过；未跑后端全量或整仓 E2E。验收 ack=`msg_327169acc63944b89dfa40fe881225b0`。
+
+本快速版只显示“流程类别”，不显示操作者/设备/IP，不实现 presence、协同光标、广播或远端实时最新。精确操作者仍需 actor 持久化、全部九类写链传播、迁移与隐私/显示决策，必须另包冻结。
 
 ## P12F-D 修订来源筛选完成交接（2026-07-18）
 
