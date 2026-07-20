@@ -3,6 +3,25 @@
 > 目标：验证 health / 项目 / 设置 / revise / editor-state / 响应矩阵 / 本地标讯库 / 资源中心及受控同步 / **中标内容模板** 已闭环。
 > Key **明文**存储与回显（保密机决策）。
 
+## P13-B 已载入编辑版本更新时间可见性（冻结，待实现）
+
+契约：`docs/p13b-editor-state-version-freshness-contract.md`
+计划：`docs/plans/2026-07-20-p13b-editor-state-version-freshness-plan.md`
+
+```powershell
+cd C:\Users\Administrator\biaoshu\frontend
+npx playwright test e2e/editor-state-version-freshness.spec.ts --project=chromium --workers=1 --retries=0
+npx playwright test e2e/technical-editor-state-truth.spec.ts e2e/business-editor-state-truth.spec.ts --project=chromium --workers=1 --retries=0
+npm run lint
+npm run build
+cd C:\Users\Administrator\biaoshu
+git diff --check
+git diff --name-only <P13B冻结SHA>
+git diff --cached --name-only
+```
+
+验收口径：严格六文件；合法无后缀 UTC ISO 固定显示到秒，非法/缺失显示未知；成功 GET/PUT 接受同一响应时间，409/失败/迟到不污染；A→B 立即清空并隔离旧响应；展示功能零额外请求。Grok 不跑整仓 E2E，Codex 不重复后端 pytest 或整仓 318 E2E。
+
 ## 1. 一键启动
 
 ```text
