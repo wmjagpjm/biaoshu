@@ -1,8 +1,10 @@
 # P13-G2 在途操作级交接：项目章节编辑意图前端提示
 
 > 日期：2026-07-20
-> 当前状态：**只读审计与设计已完成，等待冻结提交后下发 Grok**
+> 当前状态：**功能与文档闭环已完成，代码提交 `86abbbf` 已推送**
 > 审计基线：`6dac9da11ace946a06bba6e2588fccd6303e1e83`
+> 契约冻结：`3a74fbb`
+> 功能实现：`86abbbf`
 > 分支：仅 `collab/grok-code-codex-review`，禁止操作 `main`
 > 契约：`docs/p13g2-project-chapter-edit-intent-frontend-contract.md`
 > 计划：`docs/plans/2026-07-20-p13g2-project-chapter-edit-intent-frontend-plan.md`
@@ -10,33 +12,33 @@
 ## 1. 新会话复制即用
 
 ```text
-继续 biaoshu P13-G2 项目章节编辑意图前端提示。仓库 C:\Users\Administrator\biaoshu，只能使用 collab/grok-code-codex-review，禁止操作 main。
+继续 biaoshu 剩余产品主线。P13-G2 项目章节编辑意图前端提示已经完成并推送。仓库 C:\Users\Administrator\biaoshu，只能使用 collab/grok-code-codex-review，禁止操作 main。
 
 先读 docs/HANDOFF-p13g2-in-progress.md、docs/p13g2-project-chapter-edit-intent-frontend-contract.md、docs/plans/2026-07-20-p13g2-project-chapter-edit-intent-frontend-plan.md、docs/HANDOFF-p13g1-in-progress.md、docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/integration-checklist.md。
 
-先核对 git status -sb、本地 HEAD、origin/collab/grok-code-codex-review 与 GitHub 实际分支一致。严禁 pull/reset/checkout/stash/rebase/clean、操作 main、git add .、并发 Playwright 或沿用 P13-G1 后端白名单。
+先核对 git status -sb、本地 HEAD、origin/collab/grok-code-codex-review 与 GitHub 实际分支一致且工作区干净。严禁 pull/reset/checkout/stash/rebase/clean、操作 main、git add .、并发 Playwright 或沿用旧包白名单。
 
-P13-G2 只做技术标 content 步的 advisory 章节处理意图提示，不是硬锁。严格四文件：新 chapter API、新 panel、TechnicalPlanWorkspace 薄挂载、新 E2E。不得修改 P13-F2、共享 api/auth/router、editor Hook、ChapterEditor、CSS、后端、依赖、配置或已有测试。
+P13-G2 已交付技术标 content 步的 advisory 章节处理意图提示，不是硬锁。严格四文件已提交为 86abbbf，Codex 独立专项/直接回归为 13/11/17 passed，lint/build/diff/哈希门通过。
 
-Grok 先只写新 E2E 做真实 failure-first，再实现并串行自测。Codex 疑似问题必须先让 Grok 只读确认；双方确认存在后才发新返修 task。Grok 不得暂存、提交、推送或写文档。
+下一能力包必须先重新只读审计、冻结契约与白名单，再交 Grok 做高耗费 failure-first 和实现。Codex 疑似问题仍须先让 Grok 只读确认；双方确认存在后才发新返修 task。
 ```
 
 ## 2. Git 与文件真值
 
-审计时仓库干净，本地、远端引用与 GitHub 实际分支均为：
+P13-G2 功能提交推送后，本地、远端引用与 GitHub 实际分支均包含：
 
 ```text
-6dac9da11ace946a06bba6e2588fccd6303e1e83
+86abbbf 功能：交付P13G2章节编辑意图前端提示
 ```
 
-严格白名单基线：
+严格白名单最终哈希：
 
 | 文件 | SHA-256 / 状态 |
 |---|---|
-| `frontend/src/features/technical-plan/pages/TechnicalPlanWorkspace.tsx` | `B0904371AFA5587FAAA0ACF0814898A067091CE3EEEF4C6489CC82C89CAA86AB` |
-| `frontend/src/features/editor-state-collaboration/chapterEditIntentApi.ts` | 不存在 |
-| `frontend/src/features/editor-state-collaboration/ChapterEditIntentPanel.tsx` | 不存在 |
-| `frontend/e2e/project-chapter-edit-intent.spec.ts` | 不存在 |
+| `frontend/src/features/technical-plan/pages/TechnicalPlanWorkspace.tsx` | `28FC4A924A440EF826A68B0E93F6809E829AC42867A37995F6B92BFBDB7A0E34` |
+| `frontend/src/features/editor-state-collaboration/chapterEditIntentApi.ts` | `0F21861AC8F985EE453CBC810A71959AF02291611639C84B2B29AAAC31FA3EA8` |
+| `frontend/src/features/editor-state-collaboration/ChapterEditIntentPanel.tsx` | `064D639D67C08886F93FB04E1A3419BCA15AC32CE8F92BD79AA39B2B7992DCE1` |
+| `frontend/e2e/project-chapter-edit-intent.spec.ts` | `364325A90D6AFD59079A2D6E83915A1F6FA07D0F185C1BA278F6B8ADB6158369` |
 
 只读依赖哈希见实施计划，必须保持不变。
 
@@ -51,11 +53,17 @@ Grok 先只写新 E2E 做真实 failure-first，再实现并串行自测。Codex
 
 ## 4. 协作状态
 
-当前尚未发送 P13-G2 task。必须先提交并推送冻结文档，再让 task 引用实际冻结提交 SHA、严格四文件与基线哈希。
+P13-G2 已按 failure-first、实现、自测、Codex 独立审查、双确认返修、最终验收和精确提交完成：
 
-Grok OAuth 可用；启动命令须显式继承本机 Clash `HTTP_PROXY/HTTPS_PROXY=http://127.0.0.1:7890`。启动前确认没有同一 P13-G2 Grok 进程，禁止重复进程。
+- failure-first=`msg_b20b7dbe314943ba806fcf62f37d95c9`，真实 `8 failed / 1 passed`。
+- 第一轮只读双确认=`msg_9fa0bb83f0f348f99eca175567b3983d`。
+- 第二轮宽计数问题只读双确认=`msg_24da16ad88c94f7585de0a34ef88095d`。
+- Grok 最终 review=`msg_7a542b4e3d444c13800cc401141a0d90`，专项 `13 passed`、聚焦关键序列 `7 passed`，lint/diff 通过。
+- Codex 独立静态复核未发现剩余阻断问题，因此未触发第三轮返修。
 
-## 5. 审查重点
+Grok OAuth 已重新认证成功；后续启动仍须显式继承本机 Clash `HTTP_PROXY/HTTPS_PROXY=http://127.0.0.1:7890`，并先确认没有同包重复进程。
+
+## 5. 已验收边界
 
 1. selectedChapter 是有效回退选择，不等于原始 `useState`；面板必须使用页面已返回的 `editors.selectedChapterId`。
 2. API 409 必须严格校验顶层/detail 精确键、固定 code/message 和安全用户名；坏包不得部分展示。
@@ -65,8 +73,17 @@ Grok OAuth 可用；启动命令须显式继承本机 Clash `HTTP_PROXY/HTTPS_PR
 6. conflict/unavailable 不得阻断正文输入、autosave、AI、卡片、图片或 CAS。
 7. clientId/chapterId/holderUsername 隐私门不得过滤掉真实 console 或 fetch body。
 
-## 6. 测试边界
+## 6. 最终测试与提交
 
-Grok：新专项、P13-F2 presence、freshness、必要技术标真值代表节点、lint/build/diff。Codex 独立复跑新专项和必要直接回归。
+Codex 最终独立串行结果：
 
-明确不跑：整仓 318 E2E、后端 pytest、xdist、并发 Playwright 或无关前端 spec。Playwright 固定 `--workers=1 --retries=0`。
+- `project-chapter-edit-intent.spec.ts`：`13 passed (1.5m)`；
+- `project-presence.spec.ts`：`11 passed (28.4s)`；
+- `editor-state-version-freshness.spec.ts`：`17 passed (57.6s)`；
+- `npm run lint`：通过；
+- `npm run build`：通过，仅既有 chunk 大小警告；
+- `git diff --check`、严格四文件、P13-F2 四个只读依赖哈希、空暂存与临时工件清理：通过。
+
+功能提交=`86abbbf`，已推送 `origin/collab/grok-code-codex-review`。未运行整仓 318 E2E、后端 pytest、xdist 或并发 Playwright。
+
+P13-G2 仍只表示近期处理意图，不是强制锁、实时协作或在线状态。协同光标、事件广播/重放、WebSocket、评论、审批、通知与完整多人协作继续拆为独立后续包。

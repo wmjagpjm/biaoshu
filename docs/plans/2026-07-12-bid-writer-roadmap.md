@@ -398,15 +398,15 @@
 
 **完成状态（2026-07-20）**：审计基线=`f0325d0`，契约冻结=`a0b7c48`，功能实现=`015ab37`。有效 failure-first **42 failed / 3 passed**；首轮实现专项/代表回归 **45/41/8/1 passed**。Codex 发现有限 body 与五组反假绿缺口，经只读 question=`msg_cec182e52c6c4775b99ef33eef0cbf60`、确认=`msg_7d6862739de5449082c65350b4536deb` 后才授权返修；Grok 最终聚焦/专项 **17/53 passed**。Codex 独立专项/P13-F1/认证/editor-state **53/41/8/1 passed**，`py_compile`、diff、七文件哈希与精确提交门通过。未跑后端全量、Playwright、前端或 xdist。
 
-### P13-G2：项目章节编辑意图前端提示（已冻结，待 Grok 实现）
+### P13-G2：项目章节编辑意图前端提示（已完成并推送）
 
 **候选目标**：在技术标章节选择与编辑界面接入 P13-G1 heartbeat/leave，并以保守文案显示安全 holder 冲突；仍只表达“近期处理意图”，不得禁用编辑器或冒充强制锁。
 
-**当前状态（2026-07-20）**：审计基线=`6dac9da`。已确认技术标有效选章回退、content-only 挂载、P13-F2 文档 UUID 只读复用、共享 `apiFetch` 不保留 holderUsername 和独立章节队列边界；严格一处页面修改、两个新生产文件与一个新 E2E。尚未下发 Grok，尚无 failure-first、实现或测试结果。契约=`docs/p13g2-project-chapter-edit-intent-frontend-contract.md`，计划=`docs/plans/2026-07-20-p13g2-project-chapter-edit-intent-frontend-plan.md`。
+**完成状态（2026-07-20）**：审计基线=`6dac9da`，契约冻结=`3a74fbb`，功能实现=`86abbbf`。严格四文件交付 content-only 薄挂载、P13-F2 文档 UUID 只读复用、独立章节队列、严格 200/409 parser 与 advisory UI。failure-first=`msg_b20b7dbe314943ba806fcf62f37d95c9`，真实 **8 failed / 1 passed**；两轮只读双确认=`msg_9fa0bb83f0f348f99eca175567b3983d`、`msg_24da16ad88c94f7585de0a34ef88095d`，确认后才返修；Grok 最终 review=`msg_7a542b4e3d444c13800cc401141a0d90`，专项/聚焦关键序列 **13/7 passed**。Codex 独立专项/P13-F2 presence/freshness **13/11/17 passed**，lint/build/diff/严格四文件与八文件哈希门通过。未跑整仓 318 E2E、后端 pytest、xdist 或并发 Playwright。契约=`docs/p13g2-project-chapter-edit-intent-frontend-contract.md`，计划=`docs/plans/2026-07-20-p13g2-project-chapter-edit-intent-frontend-plan.md`。
 
 ### P13 后续协作主线（未实现）
 
-账号、workspace、RBAC、CAS、冲突提示与任务 SSE 工作空间鉴权已经存在；P13-E 已完成活动空间切换 UI 与 owner-only 成员只读可见性，P13-F1/F2 已完成项目近期成员，P13-G1 已完成章节编辑意图租约后端。G1 不是强制锁；P13-G2 前端意图提示已冻结待实现，协同光标、事件广播与游标重放、WebSocket、多任务总线、断线恢复、评论/审批/通知仍缺失，必须继续独立拆包。
+账号、workspace、RBAC、CAS、冲突提示与任务 SSE 工作空间鉴权已经存在；P13-E 已完成活动空间切换 UI 与 owner-only 成员只读可见性，P13-F1/F2 已完成项目近期成员，P13-G1/G2 已完成章节编辑意图租约后端与前端提示。G1/G2 不是强制锁；协同光标、事件广播与游标重放、WebSocket、多任务总线、断线恢复、评论/审批/通知仍缺失，必须继续独立拆包。
 
 阶段 0/1/2、阶段 3 M3-A 至 M3-D、阶段 4 **包 5** 至 **包 8/P8B/P8C/P8D/P8E**、P9A/P9B/P9C/P9D、阶段 5 P10A 至 P10K、**P11A/P11B/P11C 三个真实数据收口包**，以及 **P12A/P12B-A/B/C/D/P12C-A/B/C/P12D-A/B/P12E-A/B/C/P12F-A/B/C/D/P13-A** 均保持已交付。P8E 完整契约见 `docs/p8e-docling-local-helper-contract.md`，实施与独立验收记录见 `docs/plans/2026-07-15-p8e-docling-local-helper-plan.md`。
 

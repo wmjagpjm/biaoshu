@@ -5,6 +5,7 @@
 > 架构：端点专用严格 API + 独立串行生命周期面板 + 技术标 content 薄挂载 + 新 Playwright E2E
 > 技术栈：React、TypeScript、Vite、Playwright、现有内存 Auth/CSRF 与 P13-F2 文档 clientId
 > 审计基线：`6dac9da11ace946a06bba6e2588fccd6303e1e83`
+> 完成状态：契约冻结=`3a74fbb`，功能实现=`86abbbf`，已推送协作分支
 > 契约：`docs/p13g2-project-chapter-edit-intent-frontend-contract.md`
 > 工作区：固定当前协作分支与同一 worktree；该项覆盖通用 plan skill 的新 worktree 建议
 
@@ -113,3 +114,11 @@ git status --short
 5. 审查 E2E 真实施压，排除恒真、宽状态、过滤敏感行与空集合假绿。
 6. 疑似问题先走只读双确认；确认后才授权返修。
 7. 独立串行运行新专项和必要直接回归，lint/diff/白名单/哈希通过后中文提交推送并文档闭环。
+
+## 9. 执行结果
+
+1. failure-first=`msg_b20b7dbe314943ba806fcf62f37d95c9`，真实 **8 failed / 1 passed**。
+2. 两轮审查问题分别由 `msg_9fa0bb83f0f348f99eca175567b3983d`、`msg_24da16ad88c94f7585de0a34ef88095d` 完成只读双确认后返修。
+3. Grok 最终 review=`msg_7a542b4e3d444c13800cc401141a0d90`，新专项 **13 passed**，聚焦关键序列 **7 passed**，lint/diff 通过。
+4. Codex 独立串行通过新专项/P13-F2 presence/freshness **13/11/17 passed**，lint/build/diff/严格四文件/八文件哈希门通过。
+5. 未运行整仓 318 E2E、后端 pytest、xdist 或并发 Playwright；没有把历史基线冒充本包结果。
