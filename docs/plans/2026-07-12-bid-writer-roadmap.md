@@ -365,9 +365,15 @@
 
 **严格边界**：九个生产文件、四个测试文件；无表/列/迁移、用户名快照、身份/成员 API、历史 actor、按 actor 搜索、presence、在线状态、SSE/WebSocket、协同光标/锁、评论、审批或完整审计。
 
+### P13-E：活动工作空间切换与成员只读可见性（已冻结，待实现）
+
+**目标**：复用 P10A 既有 `PUT /auth/active-workspace` 与 owner-only `GET /auth/members`，在权威业务壳提供活动空间选择器，在设置页提供所有者显式加载的脱敏成员只读列表，并消除 required 模式工作空间假值。
+
+**冻结边界**：严格前端六个生产文件加一个 auth-rbac E2E；成功切换按新角色整页重载，失败先 `/auth/me` 对账，避免 UI 与服务端会话空间分叉。成员列表不向非所有者放宽，不显示 userId，不把启用状态冒充在线状态。无后端、router、统一 HTTP 客户端、表/迁移、成员写 UI、存储、轮询、presence 或事件协议。完整契约=`docs/p13e-active-workspace-switch-member-visibility-contract.md`，计划=`docs/plans/2026-07-20-p13e-active-workspace-switch-member-visibility-plan.md`。
+
 ### P13 后续协作主线（未实现）
 
-账号、workspace、RBAC、CAS、冲突提示与任务 SSE 工作空间鉴权已经存在，但真正多人协作仍缺活动空间切换 UI、成员可见性、presence/心跳、协同光标、章节锁/租约、事件广播与游标重放、WebSocket、多任务总线、断线恢复、评论/审批/通知。建议在 P13-D2 后先做不依赖实时协议的工作空间切换与成员可见性，再分别冻结 presence 和事件协议，禁止一次合包。
+账号、workspace、RBAC、CAS、冲突提示与任务 SSE 工作空间鉴权已经存在；P13-E 已冻结活动空间切换 UI 与 owner-only 成员只读可见性。真正多人协作仍缺 presence/心跳、协同光标、章节锁/租约、事件广播与游标重放、WebSocket、多任务总线、断线恢复、评论/审批/通知。P13-E 完成后应分别冻结 presence 和事件协议，禁止一次合包。
 
 阶段 0/1/2、阶段 3 M3-A 至 M3-D、阶段 4 **包 5** 至 **包 8/P8B/P8C/P8D/P8E**、P9A/P9B/P9C/P9D、阶段 5 P10A 至 P10K、**P11A/P11B/P11C 三个真实数据收口包**，以及 **P12A/P12B-A/B/C/D/P12C-A/B/C/P12D-A/B/P12E-A/B/C/P12F-A/B/C/D/P13-A** 均保持已交付。P8E 完整契约见 `docs/p8e-docling-local-helper-contract.md`，实施与独立验收记录见 `docs/plans/2026-07-15-p8e-docling-local-helper-plan.md`。
 
