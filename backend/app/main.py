@@ -36,6 +36,7 @@ from app.api import (
     opportunities,
     opportunity_watch as opportunity_watch_api,
     parse_callback,
+    project_chapter_edit_leases as project_chapter_edit_leases_api,
     project_presence as project_presence_api,
     projects,
     resources,
@@ -71,6 +72,7 @@ from app.models import (  # noqa: F401
     LocalParserCallbackTicketRow,
     LocalUserRow,
     Project,
+    ProjectChapterEditLeaseRow,
     ProjectEditorStateRow,
     ProjectFileRow,
     ProjectPresenceLeaseRow,
@@ -146,6 +148,7 @@ def create_app() -> FastAPI:
     app.include_router(bidder_api.router, prefix="/api")
     app.include_router(projects.router, prefix="/api")
     app.include_router(project_presence_api.router, prefix="/api")
+    app.include_router(project_chapter_edit_leases_api.router, prefix="/api")
     app.include_router(content_fuse_applications_api.router, prefix="/api")
     app.include_router(editor_state_checkpoints_api.router, prefix="/api")
     app.include_router(editor_state_revisions_api.router, prefix="/api")

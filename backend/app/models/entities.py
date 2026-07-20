@@ -1646,3 +1646,68 @@ class ProjectPresenceLeaseRow(Base):
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )
+
+
+class ProjectChapterEditLeaseRow(Base):
+    """
+    模块：P13-G1 项目章节编辑意图租约
+    用途：记录 strict bid_writer 对技术标单章节的短租约（45s）；仅存 client SHA-256 摘要。
+    对接：project_chapter_edit_lease_service；POST .../chapter-edit-lease/heartbeat|leave。
+    二次开发：
+      - 禁止落库或日志原始 clientId；禁止扩展为强制锁/历史/审计/设备识别；
+      - 唯一键 (workspace, project, chapter) 保证单章节单持有者；
+      - 项目/用户/空间删除 CASCADE；过期靠查询过滤与心跳机会清理。
+    """
+
+    __tablename__ = "project_chapter_edit_leases"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "project_id",
+            "chapter_id",
+            name="uq_project_chapter_edit_leases_scope_chapter",
+        ),
+        Index(
+            "ix_pcel_workspace_project_expires",
+            "workspace_id",
+            "project_id",
+            "expires_at",
+        ),
+        Index(
+            "ix_pcel_workspace_project_user_expires",
+            "workspace_id",
+            "project_id",
+            "user_id",
+            "expires_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # 编辑态内部定位键，允许明文；禁止响应/日志外泄
+    chapter_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    user_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("local_users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # 仅存规范 clientId 的 SHA-256 十六进制摘要
+    client_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )

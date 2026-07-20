@@ -2622,3 +2622,95 @@ class ProjectPresenceHeartbeatOut(BaseModel):
     refresh_after_seconds: int = Field(serialization_alias="refreshAfterSeconds")
     members: list[ProjectPresenceMemberOut]
     truncated: bool
+
+
+# ---------- P13-G1 项目章节编辑意图租约 ----------
+
+
+class ProjectChapterEditLeaseBody(BaseModel):
+    """
+    模块：P13-G1 章节编辑意图请求体
+    用途：精确两键 camelCase clientId + chapterId；extra=forbid。
+    对接：POST .../chapter-edit-lease/heartbeat|leave。
+    二次开发：禁止 populate_by_name/snake 别名；禁止 trim/NFKC；路由须手工脱敏 422。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    client_id: str = Field(alias="clientId")
+    chapter_id: str = Field(alias="chapterId")
+
+    @field_validator("client_id")
+    @classmethod
+    def _validate_client_id(cls, value: Any) -> str:
+        """用途：严格 clientId；拒绝非 str、空白包裹、非法字符与长度。"""
+        if type(value) is not str:
+            raise ValueError("invalid_client_id")
+        if not value or value.strip() != value:
+            raise ValueError("invalid_client_id")
+        if len(value) < 22 or len(value) > 64:
+            raise ValueError("invalid_client_id")
+        for ch in value:
+            o = ord(ch)
+            if not (
+                48 <= o <= 57
+                or 65 <= o <= 90
+                or 97 <= o <= 122
+                or ch in ("_", "-")
+            ):
+                raise ValueError("invalid_client_id")
+        return value
+
+    @field_validator("chapter_id")
+    @classmethod
+    def _validate_chapter_id(cls, value: Any) -> str:
+        """
+        用途：严格 chapterId；1..128 Unicode 码点；无首尾空白；
+        拒绝 C0/C1/DEL、U+2028/U+2029 与双向控制。
+        """
+        if type(value) is not str:
+            raise ValueError("invalid_chapter_id")
+        n = len(value)
+        if n < 1 or n > 128:
+            raise ValueError("invalid_chapter_id")
+        if value.strip() != value:
+            raise ValueError("invalid_chapter_id")
+        _bidi = frozenset(
+            {
+                "\u061c",
+                "\u200e",
+                "\u200f",
+                "\u2028",
+                "\u2029",
+                "\u202a",
+                "\u202b",
+                "\u202c",
+                "\u202d",
+                "\u202e",
+                "\u2066",
+                "\u2067",
+                "\u2068",
+                "\u2069",
+            }
+        )
+        for ch in value:
+            o = ord(ch)
+            if o < 0x20 or o == 0x7F or (0x80 <= o <= 0x9F):
+                raise ValueError("invalid_chapter_id")
+            if ch in _bidi:
+                raise ValueError("invalid_chapter_id")
+        return value
+
+
+class ProjectChapterEditLeaseHeartbeatOut(BaseModel):
+    """
+    模块：P13-G1 心跳成功响应
+    用途：精确两键 leaseExpiresAt/refreshAfterSeconds。
+    对接：POST .../chapter-edit-lease/heartbeat 200。
+    二次开发：refreshAfterSeconds 固定 15；禁止导出 digest/leaseId/userId/chapterId。
+    """
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    lease_expires_at: datetime = Field(serialization_alias="leaseExpiresAt")
+    refresh_after_seconds: int = Field(serialization_alias="refreshAfterSeconds")
