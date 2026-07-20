@@ -10,6 +10,7 @@
 > failure-first 状态：`msg_aad9a00220a44195965981cfe82dae22`
 > Grok 最终审查请求：`msg_b05f2bb6294742fe994555b99e44f11b`
 > Codex 最终验收：`msg_5aae77e9c06b436aaa9f46c5747e4648`
+> 后续操作：P13-F2 已独立审计并冻结，当前现场转至 `docs/HANDOFF-p13f2-in-progress.md`
 
 本文保留 P13-F1 从在途实现到双确认返修、独立验收和 Git 闭环的操作级真值。七个实现文件已在 `6164d8c` 提交并推送；后续不得重复执行在途命令或把 P13-F2 混入本包。
 
@@ -463,13 +464,13 @@ Start-Process -FilePath 'C:\Users\Administrator\.grok\bin\grok.exe' `
 
 ## 10. 路线图：接下来仍未实现什么
 
-### 10.1 立即下一步：只读审计并冻结 P13-F2
+### 10.1 当前下一步：按冻结边界实现 P13-F2
 
-P13-F1 已闭环。下一步先审计 P13-F2 所需前端文件、生命周期、迟到隔离与 E2E，形成独立契约、计划、哈希和白名单后再下发实现。
+P13-F1 已闭环；P13-F2 也已完成所需前端文件、生命周期、迟到隔离与 E2E 的只读审计和独立冻结。当前应先读 `docs/HANDOFF-p13f2-in-progress.md`，以实际冻结提交向 Grok 下发严格 failure-first 实现。
 
-### 10.2 下一独立包：P13-F2 前端心跳与安全展示
+### 10.2 当前独立包：P13-F2 前端心跳与安全展示
 
-P13-F2 尚未冻结，不能沿用 F1 文件白名单。建议先只读审计，再冻结：
+P13-F2 不沿用 F1 文件白名单，已冻结为严格四生产加一新 E2E；完整契约见 `docs/p13f2-project-presence-frontend-contract.md`：
 
 - 浏览器页面内存生成随机 clientId；禁止 localStorage、sessionStorage、IndexedDB、URL、日志或外网。
 - 进入技术标/商务标项目后每 15 秒 heartbeat；切项目、卸载或退出时 best-effort leave。

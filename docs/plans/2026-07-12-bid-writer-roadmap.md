@@ -382,9 +382,17 @@
 
 **完成状态（2026-07-20）**：冻结=`78302bc`，实现=`6164d8c`。初始 failure-first **30 failed / 4 passed**；Codex 审查经两轮双确认，关闭默认 422 回显 clientId、SQLite 首次并发与 8-client 边界、部分写 rollback 证据、用户/角色/索引证据，以及锁前时钟导致 TTL/过期真值陈旧。Grok 两轮返修红测为 **16 failed / 5 passed** 与 **2 failed**，最终专项/直接回归 **41/55 passed**；Codex 独立专项/代表回归 **41/3 passed**，七文件编译、差异、白名单与哈希门通过。验收回执=`msg_5aae77e9c06b436aaa9f46c5747e4648`；未跑后端全量、前端或整仓 E2E。
 
+### P13-F2：项目近期成员前端（已冻结，待 Grok 实现）
+
+**目标**：在技术标/商务标项目页以浏览器文档内存 clientId 接入 P13-F1 heartbeat/leave，只在 required strict bid_writer 的可见页面续租，并展示“近期在此项目”的安全用户名快照。
+
+**冻结边界**：严格四生产加一新 E2E；新增共享 API/严格 parser 与共享生命周期面板，两页面只薄挂载。clientId 只在模块内存与 JSON body；heartbeat/leave 文档级串行，StrictMode 去重，成功后 15 秒续租，hidden/项目切换/卸载/pagehide best-effort leave，A→B 迟到隔离。无后端、api/auth/router/editor Hook/CSS/依赖扩围。契约=`docs/p13f2-project-presence-frontend-contract.md`，计划=`docs/plans/2026-07-20-p13f2-project-presence-frontend-plan.md`，在途交接=`docs/HANDOFF-p13f2-in-progress.md`。
+
+**当前状态（2026-07-20）**：只读审计和设计已完成，本版本冻结开工基线=`66f4390`、两既有页面哈希、两新生产文件与一新 E2E 不存在真值。尚未下发 Grok，尚无代码或测试结果；不得写成已实现。
+
 ### P13 后续协作主线（未实现）
 
-账号、workspace、RBAC、CAS、冲突提示与任务 SSE 工作空间鉴权已经存在；P13-E 已完成活动空间切换 UI 与 owner-only 成员只读可见性，P13-F1 已完成后端项目短租约。下一独立包是 P13-F2 前端心跳/展示；协同光标、章节锁/租约、事件广播与游标重放、WebSocket、多任务总线、断线恢复、评论/审批/通知仍缺失，禁止与 F2 合包。
+账号、workspace、RBAC、CAS、冲突提示与任务 SSE 工作空间鉴权已经存在；P13-E 已完成活动空间切换 UI 与 owner-only 成员只读可见性，P13-F1 已完成后端项目短租约，P13-F2 已冻结前端接入边界但尚未实现。协同光标、章节锁/租约、事件广播与游标重放、WebSocket、多任务总线、断线恢复、评论/审批/通知仍缺失，禁止与 F2 合包。
 
 阶段 0/1/2、阶段 3 M3-A 至 M3-D、阶段 4 **包 5** 至 **包 8/P8B/P8C/P8D/P8E**、P9A/P9B/P9C/P9D、阶段 5 P10A 至 P10K、**P11A/P11B/P11C 三个真实数据收口包**，以及 **P12A/P12B-A/B/C/D/P12C-A/B/C/P12D-A/B/P12E-A/B/C/P12F-A/B/C/D/P13-A** 均保持已交付。P8E 完整契约见 `docs/p8e-docling-local-helper-contract.md`，实施与独立验收记录见 `docs/plans/2026-07-15-p8e-docling-local-helper-plan.md`。
 
