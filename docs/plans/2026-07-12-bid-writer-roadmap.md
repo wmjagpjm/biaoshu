@@ -345,11 +345,25 @@
 
 **下一步口径**：系统已具备可用的版本时间与流程来源快速第一版。精确操作者归因拆为连续 P13-D1/D2：D1 先为修订与异步任务建立可信可空 actor 账本，覆盖浏览器、任务、revise、两类解析、融合和两类恢复九条写链；D2 再解析当前版本用户名并接入技术/商务标题区。不得只给浏览器写入贴用户名。D1 契约=`docs/p13d1-editor-state-revision-actor-ledger-contract.md`，计划=`docs/plans/2026-07-20-p13d1-editor-state-revision-actor-ledger-plan.md`。真实 MinerU/Docling 制品、用户真实语料调优、外部标讯来源与 Word 整章版式仍分别受本机制品、用户语料、合法授权和跨页视觉决策约束，不混入本包。
 
-### P13-D1：editor-state 修订操作者可信账本（已冻结，待实现）
+### P13-D1：editor-state 修订操作者可信账本（已实现并返修，待 Codex 最终验收）
 
 **目标**：为 `editor_state_revisions` 与异步 `project_tasks` 增加可空 `actor_user_id`，required 模式只认认证 request state，disabled/旧数据固定未知；九类真实写链在原事务传播 actor。
 
 **关键真实性**：空账本或断链时补入的 `before` 修订 actor 固定 `NULL`，只有真实不同的 `after` 才记录本次 actor；无变化、stale、零恢复和同版本恢复不伪造操作者。P13-D1 不公开用户名或新响应字段，完成后立即推进 P13-D2 展示。
+
+**2026-07-20 在途状态**：冻结=`3132684`。Grok 首轮任务/review=`msg_a0c6083215454410b9a95c3c19c54c02`/`msg_1a838890b3384c4cbbd6b238e37d5ede`，failure-first **16 failed / 0 passed**、首轮专项 **16 passed**；Codex 接受 `business_task_service.py` 必要扩围，但因恒真断言、假 worker、signature-only 传播、缺空账本同状态与迁移回滚真证据退回 test-only。返修任务/review=`msg_6cf099e801f544e69efbe51e6eab6c44`/`msg_de747706fcb64a188eef50d77e29d451`，现专项 **17 passed**、精确 schema **1 passed**。19 个生产文件、1 个既有测试和 1 个新专项仍未暂存/提交/推送；完整操作交接见 `docs/HANDOFF-p13d1-in-progress.md`。
+
+**当前唯一待修测试基础设施问题**：两文件顺序联跑的唯一失败已定位为既有 `test_no_commit_rollback_refresh_project_lock` 未恢复连接级 `PRAGMA ignore_check_constraints`，P13-C 目标用例单独通过。下一步先做最小 test-only 恢复，再由 Codex 独立审查/分级验收；默认不跑后端全量或前端 E2E。未完成验收、实现提交、推送和文档闭环前，P13-D1 仍不得标为完成。
+
+### P13-D2：当前已载入版本操作者用户名展示（待 D1 完成后冻结）
+
+**目标**：在最新修订与当前 `stateVersion` 精确匹配时，把可信 actor 解析为当前版本操作者用户名或 `null`，复用 P13-B/C 的接受门和技术标/商务标标题区，不增加轮询或额外前端请求。
+
+**冻结前必须决定**：用户停用、删除、改名时的展示语义；建议缺失或不可安全解析时保守未知，不公开内部 `actor_user_id`，不把当前会话用户冒充历史 actor。P13-D2 不包含历史列表 actor、按 actor 搜索、presence、在线状态、SSE/WebSocket、协同光标/锁、评论、审批或完整审计。
+
+### P13 后续协作主线（未实现）
+
+账号、workspace、RBAC、CAS、冲突提示与任务 SSE 工作空间鉴权已经存在，但真正多人协作仍缺活动空间切换 UI、成员可见性、presence/心跳、协同光标、章节锁/租约、事件广播与游标重放、WebSocket、多任务总线、断线恢复、评论/审批/通知。建议在 P13-D2 后先做不依赖实时协议的工作空间切换与成员可见性，再分别冻结 presence 和事件协议，禁止一次合包。
 
 阶段 0/1/2、阶段 3 M3-A 至 M3-D、阶段 4 **包 5** 至 **包 8/P8B/P8C/P8D/P8E**、P9A/P9B/P9C/P9D、阶段 5 P10A 至 P10K、**P11A/P11B/P11C 三个真实数据收口包**，以及 **P12A/P12B-A/B/C/D/P12C-A/B/C/P12D-A/B/P12E-A/B/C/P12F-A/B/C/D/P13-A** 均保持已交付。P8E 完整契约见 `docs/p8e-docling-local-helper-contract.md`，实施与独立验收记录见 `docs/plans/2026-07-15-p8e-docling-local-helper-plan.md`。
 

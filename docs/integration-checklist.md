@@ -1199,3 +1199,52 @@ cd C:\Users\Administrator\biaoshu\backend
 Codex 独立结果为 **13/72/918 passed**，仅 1 条既有弃用告警；全量完整重跑耗时 1310.97 秒。真实 failure-first **8 failed / 5 passed**；一轮 test-only 返修删除恒真泄漏断言、secret marker 跳过和宽松三参证据。消息追溯：原任务/review=`msg_7b03139e43024424ab5707426d2b02bf`/`msg_ea83529fa69a42c7a91a88ac775f96d3`，返修 task/review=`msg_b7cb9c7720a646a0976591d5cc4d3baf`/`msg_367b8a5ef9b54e89875bc16ea3b89974`，验收回执=`msg_c1023b623e3e40fea59ba798676d451d`。
 
 本包不包含事件游标/重放、多任务总线、WebSocket、presence、前端工作空间切换 UI、URL token、审计扩展或数据库变更。
+
+## P13-D1 修订操作者可信账本（在途验收清单，2026-07-20）
+
+契约=`docs/p13d1-editor-state-revision-actor-ledger-contract.md`，计划=`docs/plans/2026-07-20-p13d1-editor-state-revision-actor-ledger-plan.md`，详细交接=`docs/HANDOFF-p13d1-in-progress.md`，冻结=`3132684`。当前代码由 Grok 实现并完成一次严格 test-only 返修，但 Codex 尚未最终验收；19 个生产文件、1 个既有测试和 1 个新专项均未暂存、提交或推送。
+
+联调必须确认：
+
+1. 新库/旧 SQLite 最终都有 `editor_state_revisions.actor_user_id` 与 `project_tasks.actor_user_id`，可空、无 FK、无 actor 新索引、旧行 null、重复迁移幂等。
+2. 注入第二个 ALTER 失败后重新连接，两张表均无 actor 残留；迁移函数不自行 commit，外层事务负责回滚。
+3. required 只认 `request.state.auth_db_user_id`；disabled、非法状态与客户端 body/query/header/payload 投稿均不能控制 actor；本地票据只认 `issued_by_user_id`。
+4. 九类 `browser_put/task/revise/callback/local_parser/content_fuse_apply/content_fuse_consume/checkpoint_restore/revision_restore` 均以命名参数把 actor 传到原事务 recorder。
+5. task 创建时把 actor 写入任务行；真实 `_bg_worker` 在 Request/创建 Session 结束后以独立 Session 重载，最终 task 修订 actor 正确。任务 REST/SSE/结果/错误均无 actor。
+6. 补账 before actor 固定 null；真实不同 after 才记录 actor；空账本同状态只补一条 null 行；no-op、stale、零恢复、同版本恢复不伪造 actor。
+7. recorder/flush/裁剪/commit 或各写链故障保持既有完整业务域回滚；actor 不进入 13 键哈希、公开 editor-state、历史列表/详情、日志或浏览器状态。
+8. 19 个生产文件保持 test-only 返修前冻结哈希；`business_task_service.py` 是覆盖四类商务任务的必要扩围，不得回退。
+
+当前已知证据：
+
+- 首轮 failure-first：**16 failed / 0 passed**；首轮绿测：**16 passed**。
+- test-only 返修后 P13-D1 专项：**17 passed**；精确 schema：**1 passed**。
+- `test_editor_state_revisions.py` + P13-C 顺序联跑：**1 failed / 90 passed**；唯一失败不是 actor 断言，而是连接级 PRAGMA 结束守卫。
+- 精确污染前序：`test_no_commit_rollback_refresh_project_lock`；P13-C 目标用例单独 **1 passed**。
+- 最终 Grok review=`msg_de747706fcb64a188eef50d77e29d451`；Grok 未执行任何 Git 写操作。
+
+下一次联调顺序：
+
+```powershell
+cd C:\Users\Administrator\biaoshu\backend
+
+# 先以最小 test-only try/finally 修复前序用例的 PRAGMA 恢复，再验证精确顺序
+.\.venv\Scripts\python.exe -m pytest -q `
+  tests\test_editor_state_revisions.py::test_no_commit_rollback_refresh_project_lock `
+  tests\test_p13c_current_revision_source.py::test_corrupt_latest_source_returns_null_no_500 `
+  --tb=short
+
+# P13-D1 专项与精确 schema；禁止 xdist/并行分组
+.\.venv\Scripts\python.exe -m pytest -q `
+  tests\test_p13d1_revision_actor_ledger.py `
+  tests\test_editor_state_revisions.py::test_table_columns_constraints_indexes_and_fk_cascade `
+  --tb=short
+
+cd ..
+git diff --check
+git diff --cached --name-only
+```
+
+Codex 还需从任务、两类 callback、融合、检查点/修订恢复中各选至少一条真实路径做串行定点回归，并重验 py_compile、生产哈希、精确文件清单、无公开 actor 与空暂存区。只有定点证据显示共享迁移/事务回归才扩大后端测试；本包无前端生产改动，默认不跑 Playwright、lint、build、后端全量或整仓 318 E2E。
+
+验收通过后只由 Codex 中文提交 `功能：完成P13D1修订操作者可信账本` 并推送 `collab/grok-code-codex-review`，再独立更新契约、计划、路线图、主交接和本清单做文档闭环。P13-D2 只能在 D1 工作区干净且远端一致后冻结。
