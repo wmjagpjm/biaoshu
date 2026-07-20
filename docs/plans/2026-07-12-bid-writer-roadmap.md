@@ -420,6 +420,10 @@
 
 **下一步**：只读审计并独立冻结 P13-H3 前端版本提示；仅允许在 H2 SSE 之上接保守解析与提示，不能把正文自动覆盖、评论审批或协同能力合入 H2。
 
+### P13-H3：编辑状态事件前端版本提示（契约已冻结，待实现）
+
+契约=`docs/p13h3-editor-state-event-frontend-contract.md`，计划=`docs/plans/2026-07-21-p13h3-editor-state-event-frontend-plan.md`。只读审计确认 H3 严格限定为共享事件提示组件、技术标/商务标两个薄挂载和一个串行 Playwright 专项。仅在 required、authenticated、活动角色 `bid_writer` 且有项目 ID 时建立 H2 EventSource；严格解析 `cursor`、`editor-state`、`cursor-stale`、`unavailable`，版本变化只显示保守提示，用户明确点击后复用既有真实重载函数。不得自动覆盖正文、PUT editor-state、写 storage/URL/日志，评论审批、通知、协同光标、WebSocket、多任务总线和强制锁继续拆包。
+
 阶段 0/1/2、阶段 3 M3-A 至 M3-D、阶段 4 **包 5** 至 **包 8/P8B/P8C/P8D/P8E**、P9A/P9B/P9C/P9D、阶段 5 P10A 至 P10K、**P11A/P11B/P11C 三个真实数据收口包**，以及 **P12A/P12B-A/B/C/D/P12C-A/B/C/P12D-A/B/P12E-A/B/C/P12F-A/B/C/D/P13-A** 均保持已交付。P8E 完整契约见 `docs/p8e-docling-local-helper-contract.md`，实施与独立验收记录见 `docs/plans/2026-07-15-p8e-docling-local-helper-plan.md`。
 
 P8D 与 P8E 本机外置解析助手均已完成并推送：P8D 计划=`30d066f`、实现=`e1fe316`、闭环=`38b9318`；P8E 计划=`73b1264`、后端=`79b346e`、助手=`e3f9cc4`。P8E 独立验收为 Docling 46、MinerU 54、后端受影响回归 37、P8C E2E 9、P8B E2E 6 passed；真实 Docling/模型未安装、未验收，自动安装/模型打包/服务端内嵌仍不是已交付能力。
