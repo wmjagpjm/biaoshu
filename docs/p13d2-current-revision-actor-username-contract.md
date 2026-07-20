@@ -1,6 +1,6 @@
 # P13-D2 当前已载入版本操作者用户名展示契约
 
-> 状态：已冻结，待 Grok 实现与 Codex 独立验收
+> 状态：已完成并推送；冻结=`4b95ab5`，实现=`44c9196`
 > 日期：2026-07-20
 > 前置：P13-B 当前版本时间、P13-C 当前修订来源、P13-D1 修订操作者可信账本
 > 后续：工作空间切换与成员可见性（须另行冻结）
@@ -100,6 +100,7 @@
 - 新增 `backend/tests/test_p13d2_current_revision_actor_username.py`
 - 受限同步 `backend/tests/test_p13c_current_revision_source.py` 的精确投影/零写合同
 - 扩展 `frontend/e2e/editor-state-version-freshness.spec.ts`
+- 经 Codex 明确授权，机械同步 `backend/tests/test_p13d1_revision_actor_ledger.py`：仅放行精确公开键 `currentRevisionActorUsername`，内部 actor ID 泄漏门保持不变
 
 若旧 P12C 测试只因响应新增合法只读键而失败，须先提交证据并由 Codex 授权 test-only 机械同步；不得预防性修改。禁止修改模型、迁移、身份 API、成员 API、revision 历史 API、样式、配置、依赖或其它业务。
 
@@ -119,3 +120,38 @@
 - 不做 presence、心跳、在线状态、实时协同、光标、章节锁/租约、评论、审批、通知。
 - 不扩 SSE/WebSocket、事件广播、游标重放、多任务总线或断线恢复。
 - 不增加数据库列、索引、外键、迁移、缓存、请求、轮询或依赖。
+
+## 10. 最终实现与验收证据
+
+### 10.1 协作与 failure-first
+
+- 契约/计划冻结提交：`4b95ab5`；实现提交：`44c9196`，均已推送 `collab/grok-code-codex-review`。
+- Grok 初始任务=`msg_440d7e3e83fa4be0a2a835f8c22aacfc`，P13-D1 test-only 扩围授权=`msg_d9e86770a11b46a9a5335fde7d1fb585`，首轮 review=`msg_847dca8b61064346bad66b3cb99c6450`。
+- 后端真实 failure-first 为 **26 failed / 0 passed**，首个业务失败为响应缺少 `currentRevisionActorUsername`。
+- 前端生产改动前没有取得合规 E2E-only red；不得把后续绿测、旧 P13-B/C failure-first 用例或源码存在性检查冒充本包前端红测。
+- Codex 首轮审查未发现生产行为缺陷，但发现 SQL 断言、递归泄漏门、E2E 计数/坏值/迟到隔离证据不足；受限四文件返修 task=`msg_33342a63342c40399ab6f19501b6f5fc`，最终 review=`msg_375ba4a732bf42b8986d21ce2602ba9c`。Grok 全程未暂存、提交或推送。
+
+### 10.2 动态验收
+
+- Grok 最终串行：后端 P13-D2+P13-C **44 passed**；freshness E2E **17 passed**；lint、py_compile、`git diff --check` 通过。初轮生产完成后 build 通过；四文件返修仅改测试与后端 docstring，未重复 build。
+- Codex 独立串行：后端 P13-D2+P13-C **44 passed**；P13-D1 浏览器节点+P12C 浏览器修订 **15 passed**；freshness E2E **17 passed**；lint、py_compile、`git diff --check` 通过。
+- 外部版本化写真实路径定点：内容融合 apply **1 passed**、技术/商务检查点 restore **2 passed**、技术修订 restore **1 passed**。这些用例证明 POST 后唯一 editor-state GET；两 Hook 差异又证明该 GET 的合法版本接受点把时间、来源、操作者三项并列接受，没有 actor 旁路。
+- 未运行后端全量、完整 history/checkpoint/content-fuse 套件或整仓 318 E2E；不得把历史基线冒充本包结果。
+
+### 10.3 最终 SHA-256
+
+| 文件 | SHA-256 |
+|---|---|
+| `backend/app/api/schemas.py` | `FD869254F236B16E94B846E89FFD1A7FB713D96DAA3198796C4BE3CCD9581F25` |
+| `backend/app/api/projects.py` | `91FEAF6BE21342B20EF92AA9BEE7A1601597A75E37387E14B0389CA5ED4CE292` |
+| `backend/app/services/editor_state_revision_service.py` | `ABF9A5BBF68078B92CC118A9A869B1DB697EA9513468F5E17351B539A4525A0F` |
+| `frontend/src/features/editor-state-revisions/editorStateRevisionApi.ts` | `368E1A03D0694F2EB4F9DBEF48190E73306E0CD4FCFF2A7F0D9EAF5B2BC6B07F` |
+| `frontend/src/features/editor-state-collaboration/EditorStateVersionFreshness.tsx` | `02F7CA2816C1E85244732115906411A9B68BCF295F8DCCFBA18233CE0E25A7B1` |
+| `frontend/src/features/technical-plan/hooks/useTechnicalPlanEditors.ts` | `653CE789908844A48D4ADB7EBC87920B49E1CD002FAB597E097498977D0082A9` |
+| `frontend/src/features/technical-plan/pages/TechnicalPlanWorkspace.tsx` | `80553F5A147199EAB87668FEE0932393ABD7D395B829052763D9780DE287D866` |
+| `frontend/src/features/business-bid/hooks/useBusinessBidWorkspace.ts` | `79C8CFBD1D3D85E95B35F8A6524CC0FE61E1EBB32006AE2F841E6CA0DEFACB80` |
+| `frontend/src/features/business-bid/pages/BusinessBidWorkspace.tsx` | `0D648AE6432D2273CE43A91C0CB7E88665CDF8ECBE1268FA9ABE9251EC44F0C5` |
+| `backend/tests/test_p13d2_current_revision_actor_username.py` | `153BA17442BA98FB1FDFEBE6BD37634FC71434EEBFC36EF404B428415602111A` |
+| `backend/tests/test_p13c_current_revision_source.py` | `8A179063314F7094DADF383BC9F4FC0E8500BE2EC063A3B1F9626A1888BB76D7` |
+| `backend/tests/test_p13d1_revision_actor_ledger.py` | `ABF0284FC72F8CCC583B6B0817194595E10F740B51E32B199CB6BD20AC1FA972` |
+| `frontend/e2e/editor-state-version-freshness.spec.ts` | `3755FA46650E477DD1B6DC5F5D8B31EB155A47B92F3B1EB443315252AA2D2124` |

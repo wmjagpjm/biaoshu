@@ -4,6 +4,7 @@
 > 协作：Grok 负责受限实现与自测；Codex 负责规划、范围冻结、审查、独立验收、中文文档闭环和 Git
 > 分支：仅 `collab/grok-code-codex-review`，禁止操作 `main`
 > 测试：pytest 串行；Playwright 固定 `--workers=1 --retries=0`；禁止双方机械重复全量
+> 完成：冻结=`4b95ab5`，实现=`44c9196`；已独立验收并推送协作分支
 
 ## 1. 基线与约束
 
@@ -129,3 +130,11 @@ git status --short
 2. Grok review_request 后，Codex 精确暂存审查通过的实现文件，以中文功能提交并推送。
 3. 最后把真实 failure-first、Grok 绿测、Codex 独立验收、消息 ID、最终文件/哈希、未运行套件和遗留风险写回契约/计划/路线图/交接/联调清单，单独中文闭环提交并推送。
 4. 每次提交前核对分支、`git diff --check`、暂存白名单；完成后核对工作区干净且本地 HEAD 与远端一致。
+
+## 9. 执行结果
+
+1. 严格 9 个生产文件完成，测试范围由初始 3 个扩为 4 个：新增 P13-D2、同步 P13-C、扩展 freshness，并经 Codex 明确授权机械同步 P13-D1 公开键守卫；未改模型、迁移、身份/成员 API、历史 API、配置或依赖。
+2. 后端真实 failure-first **26 failed / 0 passed**；前端没有合规 E2E-only red，已明确记录而未补造。Grok 首轮实现后经 Codex 审查，仅对 3 个测试文件和 service docstring 做受限返修。
+3. Grok 最终后端/前端为 **44/17 passed**；Codex 独立后端核心/受影响回归/前端为 **44/15/17 passed**，并定点通过外部写唯一 GET 路径 **1+2+1 passed**。
+4. lint、py_compile、diff-check、精确文件白名单、冻结哈希、递归 actor ID/敏感字段泄漏门、空暂存区均通过；Grok 初轮 build 通过，Codex 未机械重复。
+5. 未运行后端全量、完整受影响 E2E 套件或整仓 318 E2E。实现由 Codex 以 `功能：完成P13D2当前版本操作者展示` 提交为 `44c9196` 并推送；详细消息、哈希和风险见契约第 10 节。

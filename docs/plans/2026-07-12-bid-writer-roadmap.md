@@ -355,13 +355,15 @@
 
 **最终验收**：Codex 独立专项+精确 schema **18 passed**、PRAGMA 顺序回归 **2 passed**、融合/恢复/本地票据五条代表性真实事务路径 **5 passed**；py_compile、diff-check、19 个生产哈希和精确暂存白名单均通过。顺序污染真实根因是 P13-C 测试跨池连接恢复 PRAGMA，已改为同一显式连接闭环，未改生产或放宽守卫。本包未跑后端全量、Playwright、前端 lint/build 或整仓 E2E。P13-D1 已推送，下一包可冻结 P13-D2。
 
-### P13-D2：当前已载入版本操作者用户名展示（已冻结，待实现）
+### P13-D2：当前已载入版本操作者用户名展示（已完成并推送）
 
 **目标**：在最新修订与当前 `stateVersion` 精确匹配时，把可信 actor 解析为当前版本操作者用户名或 `null`，复用 P13-B/C 的接受门和技术标/商务标标题区，不增加轮询或额外前端请求。
 
-**冻结决策（2026-07-20）**：只看最新修订且版本精确匹配；actor 必须关联到启用用户和同工作区启用成员，用户名还须通过严格安全文本门，否则统一 `null/操作者未知`。用户/成员删除或停用、跨工作区、disabled、旧行与补账 before 均未知；活动成员角色变化仍显示，未来改名采用当前用户名而非历史快照。来源与用户名由一次最新左联表查询独立校验，前端复用 P13-B/C 同门接受和标题区，零额外请求。完整契约=`docs/p13d2-current-revision-actor-username-contract.md`，计划=`docs/plans/2026-07-20-p13d2-current-revision-actor-username-plan.md`。
+**完成状态（2026-07-20）**：冻结=`4b95ab5`，实现=`44c9196`。只看最新修订且版本精确匹配；actor 必须关联到启用用户和同工作区启用成员，用户名还须通过严格安全文本门，否则统一 `null/操作者未知`。来源与用户名由一次最新左联表查询独立校验，前端复用 P13-B/C 同门接受和标题区，零额外请求。完整契约=`docs/p13d2-current-revision-actor-username-contract.md`，计划=`docs/plans/2026-07-20-p13d2-current-revision-actor-username-plan.md`。
 
-**严格边界**：九个生产文件、三个测试文件；无表/列/迁移、用户名快照、身份/成员 API、历史 actor、按 actor 搜索、presence、在线状态、SSE/WebSocket、协同光标/锁、评论、审批或完整审计。先真实 failure-first，再由 Grok 受限实现、Codex 独立验收。
+**最终验收**：后端真实 failure-first **26 failed / 0 passed**；前端没有合规 E2E-only red，未补造。Grok 最终后端/freshness **44/17 passed**；Codex 独立后端核心/受影响回归/freshness **44/15/17 passed**，外部写唯一 GET 代表路径 **1/2/1 passed**，lint、py_compile、diff-check、9 生产+4 测试白名单、哈希与泄漏门通过。初始 task/review=`msg_440d7e3e83fa4be0a2a835f8c22aacfc`/`msg_847dca8b61064346bad66b3cb99c6450`，返修 task/review=`msg_33342a63342c40399ab6f19501b6f5fc`/`msg_375ba4a732bf42b8986d21ce2602ba9c`。未跑后端全量或整仓 318 E2E。
+
+**严格边界**：九个生产文件、四个测试文件；无表/列/迁移、用户名快照、身份/成员 API、历史 actor、按 actor 搜索、presence、在线状态、SSE/WebSocket、协同光标/锁、评论、审批或完整审计。
 
 ### P13 后续协作主线（未实现）
 
