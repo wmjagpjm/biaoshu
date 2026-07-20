@@ -10,7 +10,7 @@
 > **P12M 完成状态**：冻结=`95b298f`、实现=`cc23542`。首轮七文件实现后，受影响回归准确暴露两份旧七键测试；经 Codex 明确 test-only 扩围后闭环，生产边界未扩大。
 > **P12M 最终生产哈希**：schemas=`76633E2BFF418A9FBBD0DD3AD18164C62496340AB4AD30BCCD7BDE2918DDF39D`；route=`3CC358D8280F3C6579261F88848D986E0A5A929D46D09F81FD378E7A9F23EF0C`；service=`F8D373B8DCCACB5B0921D4F972F0B85B29AAAAF82CFA0BE8E3D08AC2D107C1FA`；前端 API=`CEDCC06FDCB9B0743BEE2A5A019003D19145B2837BBB273226C15E7EFFD45BA3`；面板=`5C41D4A3C2807B1A69DB40D34F22E40A7A664280765A3F8D7C7DFCE3EB25E31D`。
 > **P12N 完成状态**：冻结=`337b401`、实现=`394639a`；严格两文件，只做非搜索态当前已加载修订的前端稳定固定优先，不改后端或游标。最终面板哈希=`FEAD15B6CB4043D1E6A96C1BFF9782A3B1F072A28D6619E375D9B5F07A23FF3B`，history E2E=`617C7481B55A2F7760A36127E5E5DB8C50E193526206D444F13D56AA6F65698F`。
-> **本地状态**：只允许分支 `collab/grok-code-codex-review`。P13-G1 冻结=`a0b7c48`、功能=`015ab37` 已推送；本版本闭环 P13-G1，下一包 P13-G2 前端章节编辑意图提示尚待只读审计与冻结。详细记录见 `docs/HANDOFF-p13g1-in-progress.md`。
+> **本地状态**：只允许分支 `collab/grok-code-codex-review`。P13-G1 冻结=`a0b7c48`、功能=`015ab37`、闭环=`6dac9da` 已推送；本版本只读审计并冻结 P13-G2 前端章节编辑意图提示。详细现场见 `docs/HANDOFF-p13g2-in-progress.md`。
 > **验收基线**：P13-B Grok P13-B/真值 **6/46 passed**，Codex 独立 **6 passed**。P13-C Grok 后端/前端 **18/11 passed**；Codex 独立后端 P13-C+P12C/全状态 **32/19 passed**、P13-B/C E2E **11 passed**。P13-D1 Codex 独立专项+schema/PRAGMA 顺序/代表写链 **18/2/5 passed**。P13-D2 Grok 后端/freshness **44/17 passed**；Codex 独立核心/回归/freshness/外部写路径 **44/15/17/4 passed**。P13-E Grok/Codex 独立 P13-E 与完整认证均为 **25/36 passed**。P13-F1 初始 failure-first **30 failed / 4 passed**，两轮返修红测 **16 failed / 5 passed**、**2 failed**；Grok 最终专项/直接回归 **41/55 passed**，Codex 独立专项/代表回归 **41/3 passed**。P13-F2 初始 failure-first **7 failed / 1 passed**、返修红测 **2 failed / 0 passed**；Grok 最终专项 **11 passed**，Codex 独立专项/freshness **11/17 passed**。P13-G1 有效 failure-first **42 failed / 3 passed**；Grok 返修后聚焦/专项 **17/53 passed**，Codex 独立专项/P13-F1/认证/editor-state **53/41/8/1 passed**。**所有 pytest 与 Playwright E2E 共用 SQLite 重置库，pytest 禁止 xdist/并发分组，Playwright 必须显式 `--workers=1 --retries=0` 逐条串行运行；按风险分级验收，避免 Grok 与 Codex 重复全量。**
 
 ---
@@ -20,12 +20,12 @@
 ```text
 继续 biaoshu 标书制作者剩余主线任务。仓库 C:\Users\Administrator\biaoshu，GitHub https://github.com/wmjagpjm/biaoshu.git。
 工作分支只能是 collab/grok-code-codex-review，禁止直接操作 main；先执行 git status -sb，并核对 HEAD 与 origin/collab/grok-code-codex-review 一致且工作区干净。
-完整阅读 docs/HANDOFF-p13g1-in-progress.md、docs/p13g1-project-chapter-edit-intent-lease-backend-contract.md、docs/plans/2026-07-20-p13g1-project-chapter-edit-intent-lease-backend-plan.md、docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/plans/2026-07-13-package-9-delivery-enhancement-plan.md、docs/integration-checklist.md。
+完整阅读 docs/HANDOFF-p13g2-in-progress.md、docs/p13g2-project-chapter-edit-intent-frontend-contract.md、docs/plans/2026-07-20-p13g2-project-chapter-edit-intent-frontend-plan.md、docs/HANDOFF-p13g1-in-progress.md、docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/plans/2026-07-13-package-9-delivery-enhancement-plan.md、docs/integration-checklist.md。
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
 当前进度：P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/B、P12E-A/B/C、P12F-A/B/C/D/E-A/E-B/F-A/F-B/G-A/G-B/H/I/J-A/J-B/P12K/P12L/P12M/P12N、P13-A/P13-B/P13-C/P13-D1/P13-D2/P13-E/P13-F1/P13-F2/P13-G1、P9D、P9C-R1、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成；整仓前端 **318 passed** 仍仅作既有历史基线。
 当前状态：修订历史已闭合来源、UTC 时间、联合搜索、搜索命中来源标签、游标分页、单条删除、展示名称、固定与保护性裁剪；检查点已有创建、列表、详情、安全恢复、展示名称、单条删除、当前项目显式搜索、固定状态读取/入口、固定/安全双保护裁剪、默认列表固定优先排序与固定名额提示。
-最近完成包：P13-G1 项目章节编辑意图租约后端，冻结=`a0b7c48`、功能=`015ab37`；严格七文件与 advisory intent lease 语义均已验收。
-下一步：只读审计并单独冻结 P13-G2 前端章节编辑意图提示。不得把 G1 后端协议冒充强制锁；协同光标、事件广播/重放、WebSocket、评论审批，以及历史/按 actor 搜索仍是独立后续项。
+当前执行包：P13-G2 项目章节编辑意图前端提示，契约=`docs/p13g2-project-chapter-edit-intent-frontend-contract.md`，计划=`docs/plans/2026-07-20-p13g2-project-chapter-edit-intent-frontend-plan.md`，在途交接=`docs/HANDOFF-p13g2-in-progress.md`，审计基线=`6dac9da`。严格四个前端文件，尚未下发 Grok、尚未实现。
+下一步：提交并推送 P13-G2 冻结文档，再通过消息箱让 Grok 真实 failure-first 实现。P13-G2 只做技术标 content 步的 advisory intent 提示，不禁用编辑器、不冒充强制锁；协同光标、事件广播/重放、WebSocket、评论审批，以及历史/按 actor 搜索仍是独立后续项。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
