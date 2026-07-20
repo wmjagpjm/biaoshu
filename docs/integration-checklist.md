@@ -1086,9 +1086,9 @@ Codex 独立串行通过后端受影响集/全量 **120/1261 passed**，前端 P
 
 后续验收采用分级策略：Grok 默认运行专项/受影响集，Codex 独立复核并按迁移、鉴权、共享状态、跨域范围和回归信号决定是否补一次全量；不再让双方机械重复同一全量。所有动态测试仍必须串行，Playwright 继续 `--workers=1 --retries=0`。
 
-## P12L 检查点固定名额提示前端（已冻结待实现）
+## P12L 检查点固定名额提示前端（已完成）
 
-契约=`docs/p12l-checkpoint-pinned-count-frontend-contract.md`，计划=`docs/plans/2026-07-20-p12l-checkpoint-pinned-count-frontend-plan.md`，代码哈希基线=`5258f84`、契约冻结=`4526832`；严格两文件，实现从冻结提交或其后最新干净上游启动。
+契约=`docs/p12l-checkpoint-pinned-count-frontend-contract.md`，计划=`docs/plans/2026-07-20-p12l-checkpoint-pinned-count-frontend-plan.md`，代码哈希基线=`5258f84`、契约冻结=`4526832`、启动口径=`d21cfb5`、实现=`cc6bf11`；严格两文件已完成。
 
 冻结后的联调验收项：
 
@@ -1100,7 +1100,7 @@ Codex 独立串行通过后端受影响集/全量 **120/1261 passed**，前端 P
 6. checkpointId/stateVersion/snapshot/名称/关键词/原始错误/CSRF 不进入新增 DOM 属性、URL、存储、Cookie、console、剪贴板、下载或外网。
 7. Grok 串行运行 P12L 聚焦、一次完整 checkpoint 受影响套件、lint/build；Codex 独立只复跑 P12L 聚焦与静态门。禁止整仓 318 E2E、后端 pytest 和并发 Playwright。
 
-实现尚未开始。面板/E2E 冻结 SHA-256=`CAA78A98C8113C333FF9D559F84FB2270B933D4F224C997F5897BEA5D4083401`/`627ADAC0FD76A1971716608DDAD83B739E9B819D4053BFF2B48B45D90CE987DB`。Grok 只负责测试先行、两文件实现与自测；Codex 负责受限审查、独立聚焦验收、中文文档、提交与推送。
+真实 failure-first **4 failed / 1 passed**；Grok 串行通过 P12L 聚焦/完整 checkpoint 受影响套件 **5/87 passed**，lint/build 通过；Codex 独立聚焦 **5 passed in 16.0s**、lint 和静态门通过。最终 SHA-256：面板=`890621124EB953F8A81BF4E5975E75B76F03A6296089FF682C5DE94A5FF187AE`，E2E=`C8961E30831869659FBC37CD806F95D4ACFA608097CEC2C52DFFD4E6DC72055A`。Codex 验收=`msg_a685c7123a4f4c9fac68481b99a25cec`；Grok 未 Git 写操作，Codex 实现提交=`cc6bf11`。前端整仓 318 与后端全量均未因本包重复运行。
 
 ## P13-A 任务 SSE 工作空间鉴权（已完成）
 
