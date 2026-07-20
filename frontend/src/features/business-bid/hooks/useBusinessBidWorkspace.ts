@@ -1,17 +1,20 @@
 /**
- * 模块：商务标工作区状态（P11B 服务端权威 + P12B 全状态 CAS）
+ * 模块：商务标工作区状态（P11B 服务端权威 + P12B 全状态 CAS + P13-B 版本时间）
  * 用途：分步编辑数据只认 GET|PUT /api/projects/{id}/editor-state；真实空态保持空；
- *       全部 editor-state PUT 携带 expectedStateVersion；同项目串行保存链。
+ *       全部 editor-state PUT 携带 expectedStateVersion；同项目串行保存链；
+ *       P13-B：在合法 stateVersion 被当前会话接受时同步 versionUpdatedAt 供标题区展示。
  * 对接：
  *   - GET|PUT /api/projects/{id}/editor-state（businessQualify/Toc/Quote/Commit、parsedMarkdown）
  *   - POST /api/projects/{id}/artifacts/workspace/revise（stage=business_*）
+ *   - EditorStateVersionFreshness（只读展示，零额外请求）
  * 明确非目标：
  *   - 禁止读写/删除/迁移 biaoshu.businessBid.workspace.*（旧键忽略并保值）
  *   - biaoshu.businessBid.feedback.{projectId} 仅作 AI 反馈历史本地存储，
  *     绝不参与 workspace 水合、API 成功判定或加载失败回退
  *   - 禁止本地计算 stateVersion；禁止版本落盘
+ *   - versionUpdatedAt 禁止参与 CAS/保存队列/缓存键
  * 二次开发：形状保持 BusinessBidWorkspaceState；不得复活 createDemoWorkspace 生产路径；
- *       全状态 409 阻断后仅允许显式全量 GET 恢复。
+ *       全状态 409 阻断后仅允许显式全量 GET 恢复；切项目须立即清空 versionUpdatedAt。
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -85,6 +88,8 @@ type EditorStateApi = {
   businessCommit?: CommitBlock[] | null;
   /** P12B：全状态版本；仅接受 ^esv_[0-9a-f]{32}$ */
   stateVersion?: string | null;
+  /** P13-B：服务端权威更新时间；仅展示，不参与 CAS */
+  updatedAt?: string | null;
 };
 
 /** 用途：读取反馈历史；失败返回 []，不抛原文。 */
@@ -140,6 +145,11 @@ export function useBusinessBidWorkspace(projectId: string) {
   const [apiReady, setApiReady] = useState(false);
   /** 全状态 CAS 冲突/版本未知阻断 */
   const [fullStateConflict, setFullStateConflict] = useState(false);
+  /**
+   * P13-B：当前项目会话已接受的服务端 updatedAt（仅展示）。
+   * 切项目立即清空；仅在合法 stateVersion 被接受时更新。
+   */
+  const [versionUpdatedAt, setVersionUpdatedAt] = useState<string | null>(null);
 
   /** 跳过水合后的下一次防抖 PUT */
   const skipNextSave = useRef(true);
@@ -194,6 +204,14 @@ export function useBusinessBidWorkspace(projectId: string) {
   }, []);
 
   /**
+   * 用途：P13-B 在合法 stateVersion 已被接受后，同步同一响应的 updatedAt 供展示。
+   * 对接：仅 string 原样接受；null/缺失/非字符串记为 null（组件显示未知）。
+   */
+  const acceptVersionUpdatedAt = useCallback((updatedAt: unknown) => {
+    setVersionUpdatedAt(typeof updatedAt === "string" ? updatedAt : null);
+  }, []);
+
+  /**
    * 用途：从 editor-state 刷新当前项目。
    * 成功：水合真实字段、接受合法 stateVersion、清冲突、apiReady=true。
    * 失败：见全状态阻断分支；不抛原文。
@@ -238,6 +256,7 @@ export function useBusinessBidWorkspace(projectId: string) {
       skipNextSave.current = true;
       setWorkspace(fromApi(pid, remote));
       stateVersionRef.current = remote.stateVersion;
+      acceptVersionUpdatedAt(remote.updatedAt);
       setApiReady(true);
       setLoadError(null);
       setSaveError(null);
@@ -264,7 +283,7 @@ export function useBusinessBidWorkspace(projectId: string) {
         setLoading(false);
       }
     }
-  }, [isCurrentSession, projectId]);
+  }, [acceptVersionUpdatedAt, isCurrentSession, projectId]);
 
   // 切项目：立即作废旧会话、清计时器/错误/版本/链，重置空 workspace，再拉真实 GET
   useEffect(() => {
@@ -278,6 +297,8 @@ export function useBusinessBidWorkspace(projectId: string) {
     saveChainRef.current = Promise.resolve();
     skipNextSave.current = true;
     stateVersionRef.current = null;
+    // P13-B：切项目立即清空，禁止短暂显示旧项目时间
+    setVersionUpdatedAt(null);
     fullStateBlockedRef.current = false;
     setApiReady(false);
     setLoadError(null);
@@ -350,6 +371,7 @@ export function useBusinessBidWorkspace(projectId: string) {
           return "invalid_version";
         }
         stateVersionRef.current = saved.stateVersion;
+        acceptVersionUpdatedAt(saved.updatedAt);
         setSaveError(null);
         return "ok";
       } catch (err) {
@@ -364,7 +386,7 @@ export function useBusinessBidWorkspace(projectId: string) {
         return "error";
       }
     },
-    [enterFullStateBlock, isCurrentWriteEpoch],
+    [acceptVersionUpdatedAt, enterFullStateBlock, isCurrentWriteEpoch],
   );
 
   // 防抖入队：真正执行时读取 workspaceRef + stateVersionRef 最新值
@@ -953,6 +975,8 @@ export function useBusinessBidWorkspace(projectId: string) {
     fullStateConflictMessage: fullStateConflict
       ? BUSINESS_EDITOR_STATE_CONFLICT_MESSAGE
       : null,
+    /** P13-B：当前已载入版本的服务端 updatedAt（仅展示） */
+    versionUpdatedAt,
     refreshFromApi,
     createCheckpoint,
     restoreCheckpoint,
