@@ -374,17 +374,17 @@
 
 **完成状态（2026-07-20）**：冻结=`19f0bfe`，实现=`5685441`。真实 failure-first **14 failed / 2 passed**；Grok 最终 P13-E/完整认证 **25/36 passed**、lint/build/diff-check 通过，Codex 独立 **25/36 passed**、lint/diff-check 通过，既有后端三个节点此前 **3 passed**。第二轮活动真值回退/重复 ID 与伪稳定 helper 先由 Codex/Grok 双确认，再以独立授权返修；最终非空空间必须精确 active、重复 ID 整响应拒绝、无首项角色/owner 回退。未跑后端全量或整仓 E2E。
 
-### P13-F1：项目在线租约后端基础（Grok 已实现，待 Codex 独立验收）
+### P13-F1：项目在线租约后端基础（已完成并推送）
 
 **目标**：新增项目级短租约 heartbeat/leave 后端协议，只向同一活动 workspace 的 strict bid_writer 返回当前项目安全用户名与自身标记；原始 clientId 只以 SHA-256 摘要落库，45 秒过期、15 秒建议续租。
 
 **冻结边界**：严格六生产加一新后端测试；required 活动空间、项目与可信 actor 四重作用域，任何 `X-Workspace-Id` 拒绝；同 client 原子续租、8 页面上限、50 人快照、过期过滤/清理、no-store 和脱敏错误。P13-F1 不接前端、不改任务 SSE，不做 WebSocket/广播、协同光标/锁或在线历史。契约=`docs/p13f1-project-presence-lease-backend-contract.md`，计划=`docs/plans/2026-07-20-p13f1-project-presence-lease-backend-plan.md`。
 
-**当前在途状态（2026-07-20）**：冻结文档提交=`78302bc`。Grok task/status/review=`msg_31bba4d10d154daca2acab7d3f6ea1e5`/`msg_aad9a00220a44195965981cfe82dae22`/`msg_b176f13020d5470395f70792f811921b`；真实 failure-first **30 failed / 4 passed**，首个业务失败为 heartbeat 路由 404；Grok 最终专项/直接回归 **34/55 passed**，py_compile/diff-check 通过。严格七文件仍未暂存，Codex 尚未完成独立审查、验收、实现提交或完成态文档闭环，故本包不得写成已完成。详细现场和续跑命令见 `docs/HANDOFF-p13f1-in-progress.md`。
+**完成状态（2026-07-20）**：冻结=`78302bc`，实现=`6164d8c`。初始 failure-first **30 failed / 4 passed**；Codex 审查经两轮双确认，关闭默认 422 回显 clientId、SQLite 首次并发与 8-client 边界、部分写 rollback 证据、用户/角色/索引证据，以及锁前时钟导致 TTL/过期真值陈旧。Grok 两轮返修红测为 **16 failed / 5 passed** 与 **2 failed**，最终专项/直接回归 **41/55 passed**；Codex 独立专项/代表回归 **41/3 passed**，七文件编译、差异、白名单与哈希门通过。验收回执=`msg_5aae77e9c06b436aaa9f46c5747e4648`；未跑后端全量、前端或整仓 E2E。
 
 ### P13 后续协作主线（未实现）
 
-账号、workspace、RBAC、CAS、冲突提示与任务 SSE 工作空间鉴权已经存在；P13-E 已完成活动空间切换 UI 与 owner-only 成员只读可见性。P13-F1 已由 Grok 形成在途后端实现，必须先完成 Codex 独立验收和 Git 闭环；后续仍缺 P13-F2 前端心跳/展示、协同光标、章节锁/租约、事件广播与游标重放、WebSocket、多任务总线、断线恢复、评论/审批/通知；禁止把这些与 F1 合包。
+账号、workspace、RBAC、CAS、冲突提示与任务 SSE 工作空间鉴权已经存在；P13-E 已完成活动空间切换 UI 与 owner-only 成员只读可见性，P13-F1 已完成后端项目短租约。下一独立包是 P13-F2 前端心跳/展示；协同光标、章节锁/租约、事件广播与游标重放、WebSocket、多任务总线、断线恢复、评论/审批/通知仍缺失，禁止与 F2 合包。
 
 阶段 0/1/2、阶段 3 M3-A 至 M3-D、阶段 4 **包 5** 至 **包 8/P8B/P8C/P8D/P8E**、P9A/P9B/P9C/P9D、阶段 5 P10A 至 P10K、**P11A/P11B/P11C 三个真实数据收口包**，以及 **P12A/P12B-A/B/C/D/P12C-A/B/C/P12D-A/B/P12E-A/B/C/P12F-A/B/C/D/P13-A** 均保持已交付。P8E 完整契约见 `docs/p8e-docling-local-helper-contract.md`，实施与独立验收记录见 `docs/plans/2026-07-15-p8e-docling-local-helper-plan.md`。
 

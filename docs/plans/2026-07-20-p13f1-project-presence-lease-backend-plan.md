@@ -4,7 +4,7 @@
 > 基线：`70dfb39bd4ea2b9417b0ed46e652c1d4a0ec7c8d`
 > 分支：仅 `collab/grok-code-codex-review`
 > 测试：pytest 严格串行，禁止 xdist/并发/机械全量
-> 当前进度：Grok 已形成严格七文件实现并发送 `review_request=msg_b176f13020d5470395f70792f811921b`；Codex 尚未独立验收、提交或推送实现。操作级续跑见 `docs/HANDOFF-p13f1-in-progress.md`。
+> 当前进度：**已完成并推送**；实现提交=`6164d8c`。Codex 已完成逐文件审查、两轮双确认返修、独立验收与结果回执，完成态记录见 `docs/HANDOFF-p13f1-in-progress.md`。
 
 ## 1. 基线与冻结哈希
 
@@ -74,3 +74,11 @@ git status --short
 2. Grok review_request 后由 Codex 精确暂存六生产加一测试，以中文功能提交推送。
 3. 写回 failure-first、双确认/返修消息、Grok/Codex 实测、最终哈希、未运行项和风险，再单独中文文档提交推送。
 4. 完成后工作区必须空，本地 HEAD 与远端协作分支一致；P13-F2 重新冻结，不沿用本包白名单。
+
+## 9. 实际完成结果
+
+1. 初始 failure-first **30 failed / 4 passed**；Grok 初始专项/直接回归 **34/55 passed**。
+2. 第一轮 Codex/Grok 双确认关闭 422 clientId 原文回显、SQLite 并发写串行化、rollback 假证据和测试口径四项问题；返修红测 **16 failed / 5 passed**，修后 **19/39/55 passed**。
+3. 第二轮双确认关闭锁前时钟导致 TTL 与过期真值陈旧；返修红测 **2 failed**，修后 **2/41/55 passed**。
+4. Codex 独立完整专项 **41 passed**、代表回归 **3 passed**；七文件编译、差异、白名单、哈希与暂存门通过，验收回执=`msg_5aae77e9c06b436aaa9f46c5747e4648`。
+5. 七文件以中文提交 `6164d8c` 推送协作分支；未运行后端全量、前端或整仓 E2E，未使用 xdist。
