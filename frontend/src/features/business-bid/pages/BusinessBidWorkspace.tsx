@@ -1,14 +1,14 @@
 /**
- * 模块：商务标分步工作区（含 P13-B/C/D2 版本时间、来源与操作者）
+ * 模块：商务标分步工作区（含 P13-B/C/D2 版本展示与 P13-F2 近期成员）
  * 用途：六步流水线；上传/解析/biz_* 生成/导出接 project/task/editor-state；
- *       标题区展示当前已载入版本 UTC 更新时间、修订来源与操作者用户名（共享组件，零额外请求）。
+ *       标题区展示已载入版本 UTC 时间/来源/操作者，以及项目近期成员短租约快照。
  * 对接：useProjectPipeline、useBusinessBidWorkspace、GET project、useWorkspaceParseStrategy、
- *       EditorStateVersionFreshness（testid=business-editor-version-freshness /
- *       business-editor-version-source / business-editor-version-actor）
+ *       EditorStateVersionFreshness（testid=business-editor-version-freshness 等）、
+ *       ProjectPresencePanel（testid=business-project-presence）；presence 不进入 editor Hook。
  * 二次开发：勿大改步骤信息架构；新任务类型扩在 pipeline TaskType；解析入口统一 handleParse。
  *       项目详情只认 GET /api/projects/{id}，禁止 mockBusinessProjects 复活。
  *       P11B：editor-state 加载失败显示固定失败卡，禁止挂步骤/表格/编辑控件。
- *       版本时间/来源/操作者文案不得改称远端最新/实时/在线/最后由；用户名只作文本节点。
+ *       版本/presence 文案不得称远端最新/实时/在线/正在编辑；用户名只作文本节点。
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -45,6 +45,7 @@ import {
 } from "../components/BusinessStepStepper";
 import { useBusinessBidWorkspace } from "../hooks/useBusinessBidWorkspace";
 import { EditorStateVersionFreshness } from "../../editor-state-collaboration/EditorStateVersionFreshness";
+import { ProjectPresencePanel } from "../../editor-state-collaboration/ProjectPresencePanel";
 import { EditorStateCheckpointPanel } from "../../editor-state-checkpoints/EditorStateCheckpointPanel";
 import { EditorStateRevisionPanel } from "../../editor-state-revisions/EditorStateRevisionPanel";
 import type { BusinessBidStepId, QualifyItemStatus } from "../types";
@@ -395,6 +396,10 @@ export function BusinessBidWorkspace() {
             testId="business-editor-version-freshness"
             sourceTestId="business-editor-version-source"
             actorTestId="business-editor-version-actor"
+          />
+          <ProjectPresencePanel
+            projectId={projectId}
+            testId="business-project-presence"
           />
           {fullStateConflict ? (
             <div

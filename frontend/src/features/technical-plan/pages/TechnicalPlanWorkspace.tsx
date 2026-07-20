@@ -1,3 +1,11 @@
+/**
+ * 模块：技术标分步工作区（含 P13-B/C/D2 版本展示与 P13-F2 近期成员）
+ * 用途：技术标流水线工作区；标题区展示已载入版本时间/来源/操作者，以及项目近期成员短租约快照。
+ * 对接：useTechnicalPlanEditors、EditorStateVersionFreshness、ProjectPresencePanel
+ *       （testid=technical-project-presence）；presence 不进入 editor Hook。
+ * 二次开发：禁止改 editor-state 保存/冲突/任务路由；presence 仅薄挂载一次；
+ *       文案不得称在线/实时/正在编辑；不得把 presence 状态灌入两个大型 editor Hook。
+ */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import {
@@ -28,6 +36,7 @@ import { useWorkspaceParseStrategy } from "../../parse-strategy/hooks/useWorkspa
 import { ChapterEditor } from "../components/ChapterEditor";
 import { ContentFuseDialog } from "../components/ContentFuseDialog";
 import { EditorStateVersionFreshness } from "../../editor-state-collaboration/EditorStateVersionFreshness";
+import { ProjectPresencePanel } from "../../editor-state-collaboration/ProjectPresencePanel";
 import { EditorStateCheckpointPanel } from "../../editor-state-checkpoints/EditorStateCheckpointPanel";
 import { EditorStateRevisionPanel } from "../../editor-state-revisions/EditorStateRevisionPanel";
 import { FactsEditor } from "../components/FactsEditor";
@@ -655,6 +664,10 @@ export function TechnicalPlanWorkspace() {
             testId="technical-editor-version-freshness"
             sourceTestId="technical-editor-version-source"
             actorTestId="technical-editor-version-actor"
+          />
+          <ProjectPresencePanel
+            projectId={projectId}
+            testId="technical-project-presence"
           />
           {editors.saveError ? (
             <p
