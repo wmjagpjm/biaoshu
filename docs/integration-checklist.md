@@ -1369,3 +1369,9 @@ Codex 第一轮只读问题/确认/返修 task/review/result=`msg_cec182e52c6c47
 完成证据：冻结=`3a74fbb`，功能=`86abbbf`。failure-first=`msg_b20b7dbe314943ba806fcf62f37d95c9`，真实 **8 failed / 1 passed**；两轮只读双确认=`msg_9fa0bb83f0f348f99eca175567b3983d`、`msg_24da16ad88c94f7585de0a34ef88095d`，确认后才返修。Grok 最终 review=`msg_7a542b4e3d444c13800cc401141a0d90`，专项/聚焦关键序列 **13/7 passed**。
 
 Codex 独立串行通过 P13-G2 专项/P13-F2 presence/freshness **13/11/17 passed**，lint、build、diff-check、严格四文件、八文件 SHA-256 与临时工件清理门通过；build 仅既有 chunk 大小警告。未运行整仓 318 E2E、后端 pytest、xdist 或并发 Playwright。P13-G2 只表示近期处理意图，不是强制锁、实时协作或在线状态。
+
+## P13-H1 editor-state 事件账本与游标后端（已冻结，待实现）
+
+契约=`docs/p13h1-editor-state-event-cursor-backend-contract.md`，计划=`docs/plans/2026-07-20-p13h1-editor-state-event-cursor-backend-plan.md`，审计基线=`83c2c4a`。只读审计确认单任务 SSE 与可删除修订历史均不能直接提供可靠事件游标；本包冻结独立 `editor_state_events` 表和统一 transition 同事务写入，严格 required strict bid_writer 项目级 GET。
+
+验收前置边界：严格八文件；先新专项 failure-first，再实现、受影响 editor-state/认证回归、`py_compile` 与 diff/哈希门。事件只含不透明 eventId、stateVersion、sourceKind、occurredAt；不含快照、正文、章节、actor/client、任务结果或异常原文。游标 stale 固定脱敏 409；事件上限 200/项目，失败事务零事件。不得提前实现 SSE、Last-Event-ID、前端自动刷新、WebSocket、通知、评论审批或强制锁；不得运行并发 pytest、xdist、后端全量或整仓 E2E。
