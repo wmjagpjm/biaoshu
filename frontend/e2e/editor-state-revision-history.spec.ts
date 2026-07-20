@@ -1,6 +1,6 @@
 /**
- * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B / P12F-F-B / P12F-G-B / P12F-H
- *       双工作区修订历史、对比、正文差异、游标分页、来源与时间范围筛选、可见内容搜索、单条删除、单条命名前端 E2E
+ * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B / P12F-F-B / P12F-G-B / P12F-H / P12F-I / P12F-J-B / P12M / P12N
+ *       双工作区修订历史、对比、正文差异、游标分页、来源与时间范围筛选、可见内容搜索、单条删除、单条命名、固定、命中标签、已加载固定优先前端 E2E
  * 用途：技术标/商务标证明默认折叠零请求、按需列表/摘要/对比/正文差异、双修订正文差异、
  *       二次确认 restore、游标页首屏与加载更多、来源筛选、本地时间范围应用/清除、
  *       显式内容搜索 POST、单条删除确认/唯一 DELETE/成功重载/失败保留、
@@ -15017,5 +15017,812 @@ test.describe("P12F-J-B 终态静态自检", () => {
       body.indexOf("await setEditorStateRevisionPin"),
     );
     expect(body.includes("pinRevisionIdRef.current === revisionId")).toBe(true);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// P12N 已加载修订固定优先前端
+// failure-first：页面/列表/目标行真实到达后，因默认混合顺序未固定优先、pin/unpin 不移动、
+// 第二页固定项仍停在末尾而业务失败。禁止白页、请求失败、未加载元素、skip 冒充红测。
+// ---------------------------------------------------------------------------
+
+/**
+ * 用途：读取当前显示顺序下的 displayName（P12N 固定优先身份锚点）。
+ * 约束：仅在 item/name 均已可见后读取；index 仅为显示序。
+ */
+async function readRevisionDisplayNames(
+  page: Page,
+  count: number,
+): Promise<string[]> {
+  const names: string[] = [];
+  for (let i = 0; i < count; i++) {
+    await expect(
+      page.getByTestId(`editor-state-revision-display-name-${i}`),
+    ).toBeVisible();
+    names.push(
+      (
+        await page
+          .getByTestId(`editor-state-revision-display-name-${i}`)
+          .innerText()
+      ).trim(),
+    );
+  }
+  return names;
+}
+
+/**
+ * 用途：读取当前显示顺序下是否展示「已固定」徽章。
+ */
+async function readRevisionPinnedFlags(
+  page: Page,
+  count: number,
+): Promise<boolean[]> {
+  const flags: boolean[] = [];
+  for (let i = 0; i < count; i++) {
+    const n = await page
+      .getByTestId(`editor-state-revision-pinned-badge-${i}`)
+      .count();
+    flags.push(n === 1);
+  }
+  return flags;
+}
+
+/**
+ * 用途：为种子修订写入 isPinned 与 displayName，并同步 details。
+ */
+function markPinnedSeed(
+  state: ProbeState,
+  seeded: RevisionMeta[],
+  flags: boolean[],
+  names: string[],
+): void {
+  for (let i = 0; i < seeded.length; i++) {
+    const pinned = flags[i] === true;
+    const name = names[i] ?? `P12N_${i}`;
+    seeded[i].isPinned = pinned;
+    seeded[i].displayName = name;
+    const detail = state.details[seeded[i].revisionId];
+    if (detail) {
+      detail.isPinned = pinned;
+      detail.displayName = name;
+      state.details[seeded[i].revisionId] = detail;
+    }
+  }
+}
+
+test.describe("P12N 技术标已加载固定优先", () => {
+  test("P12N 技术标：默认混合固定优先；pin/unpin 即时移动与失败保值；加载更多；来源筛选；搜索保持原序与 matchReasons；revisionId 命中", async ({
+    page,
+  }) => {
+    const state = createProbeState("tech");
+    state.authRequired = true;
+
+    // 服务端混合序：U0 P1 U2 P3 U4；期望显示：P1 P3 U0 U2 U4
+    // 前 5 条故意全非 task，便于「任务写入」筛选仅覆盖 more 的 10 条
+    const seeded = seedRevisions(state, TECH_A, 5, [
+      "browser_put",
+      "revise",
+      "callback",
+      "local_parser",
+      "content_fuse_apply",
+    ]);
+    const names5 = ["P12N_U0", "P12N_P1", "P12N_U2", "P12N_P3", "P12N_U4"];
+    markPinnedSeed(state, seeded, [false, true, false, true, false], names5);
+
+    // 额外 10 条供加载更多与来源筛选；more[1]=全局 index 6 固定（落在首屏）
+    const more = seedRevisions(
+      state,
+      TECH_A,
+      10,
+      Array.from({ length: 10 }, () => "task"),
+    );
+    // seedRevisions 覆盖 revisions，需合并并回写 pin/name
+    const all = [...seeded, ...more];
+    for (let i = 0; i < more.length; i++) {
+      const pinned = i === 1;
+      const name = `P12N_M${i}`;
+      more[i].isPinned = pinned;
+      more[i].displayName = name;
+      const d = state.details[more[i].revisionId];
+      if (d) {
+        d.isPinned = pinned;
+        d.displayName = name;
+        state.details[more[i].revisionId] = d;
+      }
+    }
+    // 同步前 5 条 details（seedRevisions 第二次调用不会动 details 已有项）
+    markPinnedSeed(state, seeded, [false, true, false, true, false], names5);
+    state.revisions[TECH_A] = all;
+    expect(all).toHaveLength(15);
+    // more[1] === all[6]
+    expect(all[6].isPinned).toBe(true);
+    expect(all[6].displayName).toBe("P12N_M1");
+    expect(all[6].revisionId).toBe(more[1].revisionId);
+
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+
+    await openWorkspace(page, "tech", TECH_A);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(1);
+    for (let i = 0; i < 10; i++) {
+      await expect(
+        page.getByTestId(`editor-state-revision-item-${i}`),
+      ).toBeVisible();
+    }
+    await expect(page.getByTestId("editor-state-revision-item-10")).toHaveCount(
+      0,
+    );
+    expect(pageHitCount(state, TECH_A)).toBe(1);
+    expect(state.pageLog[0].cursor).toBeNull();
+
+    // ---------- 默认混合：固定优先 + 组内原序 ----------
+    // 首屏服务端序：U0 P1 U2 P3 U4 M0 M1(p) M2 M3 M4
+    // 期望：P1 P3 M1 | U0 U2 U4 M0 M2 M3 M4
+    const expectedDefault = [
+      "P12N_P1",
+      "P12N_P3",
+      "P12N_M1",
+      "P12N_U0",
+      "P12N_U2",
+      "P12N_U4",
+      "P12N_M0",
+      "P12N_M2",
+      "P12N_M3",
+      "P12N_M4",
+    ];
+    expect(await readRevisionDisplayNames(page, 10)).toEqual(expectedDefault);
+    expect(await readRevisionPinnedFlags(page, 10)).toEqual([
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+    ]);
+
+    // ---------- pin 成功：U2 进入固定组末尾；PATCH 精确 1；零 page/search ----------
+    // U2 当前显示 index=4
+    const pageBeforePin = pageHitCount(state, TECH_A);
+    const searchBeforePin = state.searchLog.length;
+    const editorBeforePin = state.editorGetLog.length;
+    const detailBeforePin = state.detailLog.length;
+    const listBeforePin = state.listLog.length;
+    const u2Id = seeded[2].revisionId;
+    await expect(page.getByTestId("editor-state-revision-pin-4")).toHaveText(
+      "固定",
+    );
+    await page.getByTestId("editor-state-revision-pin-4").click();
+    await expect
+      .poll(() => pinCompleteCount(state, TECH_A, u2Id), { timeout: 10_000 })
+      .toBe(1);
+    expect(pinHitCount(state, TECH_A, u2Id)).toBe(1);
+    expect(state.pinLog[0].revisionId).toBe(u2Id);
+    expect(state.pinLog[0].bodyKeys).toEqual(["isPinned"]);
+    expect(state.pinLog[0].isPinned).toBe(true);
+    expect(JSON.parse(state.pinLog[0].postData as string)).toEqual({
+      isPinned: true,
+    });
+    expect(state.pinLog[0].csrfToken).toBe("e2e-csrf");
+    await expect(page.getByTestId("editor-state-revision-status")).toHaveText(
+      MSG_PIN_OK,
+    );
+    // 纯派生：组内保持 items 原序 → 固定组为 P1 U2 P3 M1（U2 插入原位对应槽，非强制视觉末尾）
+    expect(await readRevisionDisplayNames(page, 10)).toEqual([
+      "P12N_P1",
+      "P12N_U2",
+      "P12N_P3",
+      "P12N_M1",
+      "P12N_U0",
+      "P12N_U4",
+      "P12N_M0",
+      "P12N_M2",
+      "P12N_M3",
+      "P12N_M4",
+    ]);
+    expect(pageHitCount(state, TECH_A)).toBe(pageBeforePin);
+    expect(state.searchLog.length).toBe(searchBeforePin);
+    expect(state.editorGetLog.length).toBe(editorBeforePin);
+    expect(state.detailLog.length).toBe(detailBeforePin);
+    expect(state.listLog.length).toBe(listBeforePin);
+
+    // ---------- unpin 成功：P1 回到普通组原始相对位置 ----------
+    const p1Id = seeded[1].revisionId;
+    await page.getByTestId("editor-state-revision-pin-0").click();
+    await expect
+      .poll(() => pinCompleteCount(state, TECH_A, p1Id), { timeout: 10_000 })
+      .toBe(1);
+    expect(state.pinLog[state.pinLog.length - 1].revisionId).toBe(p1Id);
+    expect(state.pinLog[state.pinLog.length - 1].isPinned).toBe(false);
+    await expect(page.getByTestId("editor-state-revision-status")).toHaveText(
+      MSG_PIN_UNPIN_OK,
+    );
+    // items 原序：U0 P1(u) U2(p) P3(p) U4 M0 M1(p) M2 M3 M4
+    // 固定：U2 P3 M1；普通：U0 P1 U4 M0 M2 M3 M4
+    expect(await readRevisionDisplayNames(page, 10)).toEqual([
+      "P12N_U2",
+      "P12N_P3",
+      "P12N_M1",
+      "P12N_U0",
+      "P12N_P1",
+      "P12N_U4",
+      "P12N_M0",
+      "P12N_M2",
+      "P12N_M3",
+      "P12N_M4",
+    ]);
+    expect(pageHitCount(state, TECH_A)).toBe(pageBeforePin);
+    expect(state.searchLog.length).toBe(searchBeforePin);
+
+    // ---------- pin 失败保值：位置与徽章不变 ----------
+    const u0Id = seeded[0].revisionId;
+    state.pinModeByRevisionId[u0Id] = { kind: "http_error", status: 500 };
+    const namesBeforeFail = await readRevisionDisplayNames(page, 10);
+    const pinFailBefore = pinCompleteCount(state, TECH_A, u0Id);
+    await page.getByTestId("editor-state-revision-pin-3").click();
+    await expect
+      .poll(() => pinCompleteCount(state, TECH_A, u0Id), { timeout: 10_000 })
+      .toBe(pinFailBefore + 1);
+    expect(state.pinLog[state.pinLog.length - 1].revisionId).toBe(u0Id);
+    expect(state.pinLog[state.pinLog.length - 1].isPinned).toBe(true);
+    expect(state.pinCompleteLog[state.pinCompleteLog.length - 1].status).toBe(
+      500,
+    );
+    await expect(page.getByTestId("editor-state-revision-status")).toHaveText(
+      MSG_PIN_FAIL,
+    );
+    expect(await readRevisionDisplayNames(page, 10)).toEqual(namesBeforeFail);
+    await expect(
+      page.getByTestId("editor-state-revision-pinned-badge-3"),
+    ).toHaveCount(0);
+    await expect(page.getByTestId("editor-state-revision-pin-3")).toHaveText(
+      "固定",
+    );
+    state.pinModeByRevisionId[u0Id] = { kind: "ok" };
+    expect(pageHitCount(state, TECH_A)).toBe(pageBeforePin);
+    expect(state.searchLog.length).toBe(searchBeforePin);
+
+    // ---------- 加载更多：第二页新固定项进入已加载固定组 ----------
+    // 将 all[14]（M9）标为固定，第二页返回后应进入固定组末尾
+    all[14].isPinned = true;
+    const d14 = state.details[all[14].revisionId];
+    if (d14) {
+      d14.isPinned = true;
+      state.details[all[14].revisionId] = d14;
+    }
+    await expect(
+      page.getByTestId("editor-state-revision-load-more"),
+    ).toBeVisible();
+    const pageBeforeMore = pageHitCount(state, TECH_A);
+    await page.getByTestId("editor-state-revision-load-more").click();
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(2);
+    expect(pageHitCount(state, TECH_A)).toBe(pageBeforeMore + 1);
+    expect(pageHitCountForCursor(state, TECH_A, PAGE_CURSOR_SECOND)).toBe(1);
+    for (let i = 0; i < 15; i++) {
+      await expect(
+        page.getByTestId(`editor-state-revision-item-${i}`),
+      ).toBeVisible();
+    }
+    const afterMore = await readRevisionDisplayNames(page, 15);
+    expect(afterMore.slice(0, 4)).toEqual([
+      "P12N_U2",
+      "P12N_P3",
+      "P12N_M1",
+      "P12N_M9",
+    ]);
+    expect(afterMore.slice(4)).toEqual([
+      "P12N_U0",
+      "P12N_P1",
+      "P12N_U4",
+      "P12N_M0",
+      "P12N_M2",
+      "P12N_M3",
+      "P12N_M4",
+      "P12N_M5",
+      "P12N_M6",
+      "P12N_M7",
+      "P12N_M8",
+    ]);
+    expect(await readRevisionPinnedFlags(page, 15)).toEqual([
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+    ]);
+    expect(state.searchLog.length).toBe(searchBeforePin);
+
+    // ---------- 来源筛选：非搜索态同样固定优先 ----------
+    // task 共 10 条（M0..M9），M1/M9 固定
+    const filter = page.getByTestId("editor-state-revision-source-filter");
+    const pageCompleteBeforeFilter = pageCompleteCount(state, TECH_A);
+    await filter.selectOption({ label: "任务写入" });
+    await expect
+      .poll(() => pageHitCountForSource(state, TECH_A, "task"), {
+        timeout: 10_000,
+      })
+      .toBe(1);
+    await expect
+      .poll(
+        () => pageCompleteCountForSourceCursor(state, TECH_A, "task", null),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    expect(pageCompleteCount(state, TECH_A)).toBe(pageCompleteBeforeFilter + 1);
+    for (let i = 0; i < 10; i++) {
+      await expect(
+        page.getByTestId(`editor-state-revision-item-${i}`),
+      ).toBeVisible();
+    }
+    expect(await readRevisionDisplayNames(page, 10)).toEqual([
+      "P12N_M1",
+      "P12N_M9",
+      "P12N_M0",
+      "P12N_M2",
+      "P12N_M3",
+      "P12N_M4",
+      "P12N_M5",
+      "P12N_M6",
+      "P12N_M7",
+      "P12N_M8",
+    ]);
+    expect(await readRevisionPinnedFlags(page, 10)).toEqual([
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+    ]);
+
+    // 切回全部来源（首屏 10 条 + load-more 按钮）
+    const pageCompleteBeforeAll = pageCompleteCount(state, TECH_A);
+    await filter.selectOption({ label: "全部来源" });
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(pageCompleteBeforeAll + 1);
+    for (let i = 0; i < 10; i++) {
+      await expect(
+        page.getByTestId(`editor-state-revision-item-${i}`),
+      ).toBeVisible();
+    }
+    // 全部来源首屏固定优先
+    expect(await readRevisionDisplayNames(page, 10)).toEqual([
+      "P12N_U2",
+      "P12N_P3",
+      "P12N_M1",
+      "P12N_U0",
+      "P12N_P1",
+      "P12N_U4",
+      "P12N_M0",
+      "P12N_M2",
+      "P12N_M3",
+      "P12N_M4",
+    ]);
+
+    // ---------- active search：保持服务端搜索序与 matchReasons 索引；不固定优先 ----------
+    // 名称均含 P12N_；搜索 "P12N_U" 命中 U0/U2/U4（服务端原序），其中 U2 已固定
+    // 期望显示仍为 U0 U2 U4（非 U2 U0 U4）
+    const searchInput = page.getByTestId("editor-state-revision-search-input");
+    const searchApply = page.getByTestId("editor-state-revision-search-apply");
+    const searchClear = page.getByTestId("editor-state-revision-search-clear");
+    const pageBeforeSearch = pageHitCount(state, TECH_A);
+    const searchBefore = state.searchLog.length;
+    await searchInput.fill("P12N_U");
+    await searchApply.click();
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(
+            state,
+            TECH_A,
+            "P12N_U",
+            null,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    expect(state.searchLog.length).toBe(searchBefore + 1);
+    expect(pageHitCount(state, TECH_A)).toBe(pageBeforeSearch);
+    expect(await readRevisionDisplayNames(page, 3)).toEqual([
+      "P12N_U0",
+      "P12N_U2",
+      "P12N_U4",
+    ]);
+    // U2 仍显示固定徽章，但不重排
+    expect(await readRevisionPinnedFlags(page, 3)).toEqual([
+      false,
+      true,
+      false,
+    ]);
+    // matchReasons 索引对应显示序（名称命中）
+    await expect(
+      page.getByTestId("editor-state-revision-search-match-reasons-0"),
+    ).toHaveText("命中：名称");
+    await expect(
+      page.getByTestId("editor-state-revision-search-match-reasons-1"),
+    ).toHaveText("命中：名称");
+    await expect(
+      page.getByTestId("editor-state-revision-search-match-reasons-2"),
+    ).toHaveText("命中：名称");
+    // 搜索态 pin U0：仍不重排到固定组前
+    const pinSearchBefore = pinCompleteCount(state, TECH_A, u0Id);
+    const pageBeforeSearchPin = pageHitCount(state, TECH_A);
+    await page.getByTestId("editor-state-revision-pin-0").click();
+    await expect
+      .poll(() => pinCompleteCount(state, TECH_A, u0Id), { timeout: 10_000 })
+      .toBe(pinSearchBefore + 1);
+    expect(state.pinLog[state.pinLog.length - 1].revisionId).toBe(u0Id);
+    expect(await readRevisionDisplayNames(page, 3)).toEqual([
+      "P12N_U0",
+      "P12N_U2",
+      "P12N_U4",
+    ]);
+    expect(await readRevisionPinnedFlags(page, 3)).toEqual([true, true, false]);
+    expect(pageHitCount(state, TECH_A)).toBe(pageBeforeSearchPin);
+    expect(state.searchLog.length).toBe(searchBefore + 1);
+
+    // 清除搜索：回到非搜索固定优先
+    const pageCompleteBeforeClear = pageCompleteCount(state, TECH_A);
+    await searchClear.click();
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(pageCompleteBeforeClear + 1);
+    expect(state.searchLog.length).toBe(searchBefore + 1);
+    for (let i = 0; i < 10; i++) {
+      await expect(
+        page.getByTestId(`editor-state-revision-item-${i}`),
+      ).toBeVisible();
+    }
+    // U0 已固定 + U2/P3/M1 固定
+    expect(await readRevisionDisplayNames(page, 10)).toEqual([
+      "P12N_U0",
+      "P12N_U2",
+      "P12N_P3",
+      "P12N_M1",
+      "P12N_P1",
+      "P12N_U4",
+      "P12N_M0",
+      "P12N_M2",
+      "P12N_M3",
+      "P12N_M4",
+    ]);
+
+    expect(state.externalHits).toEqual([]);
+    expect(state.forbiddenHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+    await assertNoIdLeak(page, state, guards.consoleLogs);
+  });
+});
+
+test.describe("P12N 技术标时间筛选固定优先", () => {
+  test.use({ timezoneId: "Asia/Shanghai" });
+
+  test("P12N 技术标：时间筛选态已加载固定优先且组内稳定", async ({ page }) => {
+    const state = createProbeState("tech");
+    state.authRequired = true;
+    const seeded = seedRevisions(state, TECH_A, 5, [
+      "task",
+      "task",
+      "task",
+      "task",
+      "task",
+    ]);
+    // 每分钟一条：00:00 .. 00:04 UTC = 上海 08:00 .. 08:04
+    syncRevisionCreatedAts(state, TECH_A, "2026-07-16T00:00:00.000Z", 1);
+    markPinnedSeed(
+      state,
+      seeded,
+      [false, true, false, true, false],
+      ["P12N_T0", "P12N_T1", "P12N_T2", "P12N_T3", "P12N_T4"],
+    );
+
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+    await openWorkspace(page, "tech", TECH_A);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(1);
+    await expect(page.getByTestId("editor-state-revision-item-0")).toBeVisible();
+
+    // 上海 08:00..08:05 → 全部 5 条
+    const fromInput = page.getByTestId("editor-state-revision-created-from");
+    const beforeInput = page.getByTestId(
+      "editor-state-revision-created-before",
+    );
+    const applyBtn = page.getByTestId("editor-state-revision-time-apply");
+    await fromInput.fill("2026-07-16T08:00");
+    await beforeInput.fill("2026-07-16T08:05");
+    await applyBtn.click();
+    await expect
+      .poll(
+        () =>
+          pageCompleteCountForTimeFilter(
+            state,
+            TECH_A,
+            null,
+            "2026-07-16T00:00:00.000Z",
+            "2026-07-16T00:05:00.000Z",
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    for (let i = 0; i < 5; i++) {
+      await expect(
+        page.getByTestId(`editor-state-revision-item-${i}`),
+      ).toBeVisible();
+    }
+    // 固定优先：T1 T3 | T0 T2 T4
+    expect(await readRevisionDisplayNames(page, 5)).toEqual([
+      "P12N_T1",
+      "P12N_T3",
+      "P12N_T0",
+      "P12N_T2",
+      "P12N_T4",
+    ]);
+    expect(await readRevisionPinnedFlags(page, 5)).toEqual([
+      true,
+      true,
+      false,
+      false,
+      false,
+    ]);
+
+    expect(state.externalHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+  });
+});
+
+test.describe("P12N 商务标共用与 A→B 隔离", () => {
+  test("P12N 商务标：共用固定优先；A→B 迟到 pin 不污染；零泄漏", async ({
+    page,
+  }) => {
+    const state = createProbeState("biz");
+    state.authRequired = true;
+    const seededA = seedRevisions(state, BIZ_A, 4, [
+      "browser_put",
+      "task",
+      "revise",
+      "callback",
+    ]);
+    markPinnedSeed(
+      state,
+      seededA,
+      [false, true, false, true],
+      ["P12N_BA0", "P12N_BA1", "P12N_BA2", "P12N_BA3"],
+    );
+    const seededB = seedRevisions(state, BIZ_B, 3, [
+      "browser_put",
+      "task",
+      "revise",
+    ]);
+    markPinnedSeed(
+      state,
+      seededB,
+      [true, false, false],
+      ["P12N_BB0", "P12N_BB1", "P12N_BB2"],
+    );
+
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+
+    await openWorkspace(page, "biz", BIZ_A);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageCompleteCount(state, BIZ_A), { timeout: 10_000 })
+      .toBe(1);
+    await expect(page.getByTestId("editor-state-revision-item-0")).toBeVisible();
+    expect(await readRevisionDisplayNames(page, 4)).toEqual([
+      "P12N_BA1",
+      "P12N_BA3",
+      "P12N_BA0",
+      "P12N_BA2",
+    ]);
+
+    // A 上 pin BA2 hold，切 B 后释放不得污染 B
+    const ba2Id = seededA[2].revisionId;
+    const gateA = createHoldGate();
+    state.pinModeByRevisionId[ba2Id] = {
+      kind: "hold",
+      gate: gateA,
+      then: "ok",
+    };
+    // BA2 当前显示 index=3
+    await page.getByTestId("editor-state-revision-pin-3").click();
+    await gateA.waitUntilEntered(1);
+    await expect
+      .poll(() => pinHitCount(state, BIZ_A, ba2Id), { timeout: 10_000 })
+      .toBe(1);
+    expect(pinCompleteCount(state, BIZ_A, ba2Id)).toBe(0);
+    await expect(page.getByTestId("editor-state-revision-status")).toHaveText(
+      MSG_PIN_SAVING,
+    );
+
+    await openWorkspace(page, "biz", BIZ_B);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageCompleteCount(state, BIZ_B), { timeout: 10_000 })
+      .toBe(1);
+    await expect(page.getByTestId("editor-state-revision-item-0")).toBeVisible();
+    // B 默认固定优先：BB0 | BB1 BB2
+    expect(await readRevisionDisplayNames(page, 3)).toEqual([
+      "P12N_BB0",
+      "P12N_BB1",
+      "P12N_BB2",
+    ]);
+    const namesBeforeRelease = await readRevisionDisplayNames(page, 3);
+    gateA.release();
+    await expect
+      .poll(() => pinCompleteCount(state, BIZ_A, ba2Id), { timeout: 10_000 })
+      .toBe(1);
+    // B 列表不被 A 的迟到 success 污染
+    expect(await readRevisionDisplayNames(page, 3)).toEqual(namesBeforeRelease);
+    await expect(
+      page.getByTestId("editor-state-revision-pinned-badge-0"),
+    ).toHaveText("已固定");
+    await expect(
+      page.getByTestId("editor-state-revision-pinned-badge-1"),
+    ).toHaveCount(0);
+
+    // B 本项目 pin BB1 即时进入固定组末尾
+    const bb1Id = seededB[1].revisionId;
+    const pageBeforeB = pageHitCount(state, BIZ_B);
+    const searchBeforeB = state.searchLog.length;
+    await page.getByTestId("editor-state-revision-pin-1").click();
+    await expect
+      .poll(() => pinCompleteCount(state, BIZ_B, bb1Id), { timeout: 10_000 })
+      .toBe(1);
+    expect(state.pinLog[state.pinLog.length - 1].revisionId).toBe(bb1Id);
+    expect(await readRevisionDisplayNames(page, 3)).toEqual([
+      "P12N_BB0",
+      "P12N_BB1",
+      "P12N_BB2",
+    ]);
+    expect(await readRevisionPinnedFlags(page, 3)).toEqual([
+      true,
+      true,
+      false,
+    ]);
+    expect(pageHitCount(state, BIZ_B)).toBe(pageBeforeB);
+    expect(state.searchLog.length).toBe(searchBeforeB);
+
+    // 零泄漏
+    expect(page.url()).not.toContain(bb1Id);
+    expect(page.url()).not.toContain(ba2Id);
+    const persist = await page.evaluate(() => ({
+      ls: JSON.stringify(window.localStorage),
+      ss: JSON.stringify(window.sessionStorage),
+      cookie: document.cookie,
+    }));
+    expect(persist.ls).not.toContain(bb1Id);
+    expect(persist.ss).not.toContain(bb1Id);
+    expect(persist.cookie).not.toContain(bb1Id);
+    const consoleBlob = guards.consoleLogs.join("\n");
+    expect(consoleBlob).not.toContain(bb1Id);
+    expect(consoleBlob).not.toContain(ba2Id);
+    expect(consoleBlob).not.toMatch(/csrf/i);
+    expect(state.externalHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+    await assertNoIdLeak(page, state, guards.consoleLogs);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P12N 终态静态自检
+// ---------------------------------------------------------------------------
+test.describe("P12N 终态静态自检", () => {
+  test("P12N marker 后禁止项精确零命中", () => {
+    const selfPath = fileURLToPath(import.meta.url);
+    const sourcePath = path.resolve(selfPath);
+    expect(sourcePath.endsWith("editor-state-revision-history.spec.ts")).toBe(
+      true,
+    );
+    const full = fs.readFileSync(sourcePath, "utf8");
+    const beginMark = "// P12N 已加载修订固定优先前端";
+    const endMark = "// P12N 终态静态自检";
+    const begin = full.indexOf(beginMark);
+    const end = full.indexOf(endMark);
+    expect(begin).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(begin);
+    const block = full.slice(begin, end);
+
+    const count = (re: RegExp): number => {
+      const flags = re.flags.includes("g") ? re.flags : `${re.flags}g`;
+      const matched = block.match(new RegExp(re.source, flags));
+      if (matched === null) return 0;
+      return matched.length;
+    };
+
+    expect(count(/\|\|\s*\[\]/)).toBe(0);
+    expect(count(/\|\|\s*"\{\}"/)).toBe(0);
+    expect(count(/\|\|\s*'\{\}'/)).toBe(0);
+    expect(count(/Math\.min\s*\(/)).toBe(0);
+    expect(count(/toBeTruthy\s*\(/)).toBe(0);
+    expect(count(/toBeFalsy\s*\(/)).toBe(0);
+    expect(count(/toBeDefined\s*\(/)).toBe(0);
+    expect(count(/toBeUndefined\s*\(/)).toBe(0);
+    expect(count(/\.or\s*\(/)).toBe(0);
+    expect(count(/waitForTimeout\s*\(/)).toBe(0);
+    expect(count(/force\s*:\s*true/)).toBe(0);
+    expect(count(/test\.skip\s*[.(]/)).toBe(0);
+    expect(count(/test\.fixme\s*[.(]/)).toBe(0);
+    expect(count(/\)\[0\]\?/)).toBe(0);
+    expect(count(/>=\s*1/)).toBe(0);
+    expect(count(/toBeGreaterThanOrEqual\s*\(/)).toBe(0);
+    expect(count(/toBeGreaterThan\s*\(/)).toBe(0);
+    expect(count(/Promise\.race\s*\(/)).toBe(0);
+    expect(count(/retries\s*:\s*[1-9]/)).toBe(0);
+    expect(count(/sleep\s*\(/)).toBe(0);
+  });
+
+  test("P12N 生产面板纯派生固定优先可执行守卫", () => {
+    const panelPath = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../src/features/editor-state-revisions/EditorStateRevisionPanel.tsx",
+    );
+    expect(fs.existsSync(panelPath)).toBe(true);
+    const src = fs.readFileSync(panelPath, "utf8");
+    // 必须存在纯派生分组符号
+    expect(src.includes("displayItems")).toBe(true);
+    expect(src.includes("pinnedItems")).toBe(true);
+    expect(src.includes("unpinnedItems")).toBe(true);
+    expect(src.includes("isPinned === true")).toBe(true);
+    expect(src.includes("searchActive")).toBe(true);
+    // 列表渲染走 displayItems
+    expect(src.includes("displayItems.map")).toBe(true);
+    // 禁止原地 sort / 新增请求旁路
+    expect(src.includes("items.sort(")).toBe(false);
+    expect(src.includes("displayItems.sort(")).toBe(false);
+    // 顶注释含 P12N
+    expect(src.includes("P12N")).toBe(true);
+
+    // 纯派生段落：searchActive 分支后单次遍历分组
+    const deriveMatch = src.match(
+      /const displayItems = [\s\S]*?return \[\.\.\.pinnedItems, \.\.\.unpinnedItems\];[\s\S]*?\}\)\(\);/,
+    );
+    expect(deriveMatch).not.toBeNull();
+    const derive = deriveMatch![0];
+    expect(derive.includes("if (searchActive) return items")).toBe(true);
+    expect(derive.includes("isPinned === true")).toBe(true);
+    // 派生块内禁止 useState/useEffect/fetch/axios/storage/console/sort
+    expect(derive.includes("useState")).toBe(false);
+    expect(derive.includes("useEffect")).toBe(false);
+    expect(derive.includes("useRef")).toBe(false);
+    expect(derive.includes("fetch(")).toBe(false);
+    expect(derive.includes("axios")).toBe(false);
+    expect(derive.includes("localStorage")).toBe(false);
+    expect(derive.includes("sessionStorage")).toBe(false);
+    expect(derive.includes("console.")).toBe(false);
+    expect(derive.includes(".sort(")).toBe(false);
   });
 });

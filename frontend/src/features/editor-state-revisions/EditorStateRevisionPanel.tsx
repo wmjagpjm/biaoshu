@@ -1,11 +1,12 @@
 /**
- * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B / P12F-F-B / P12F-G-B / P12F-H / P12F-I / P12F-J-B / P12M
+ * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B / P12F-F-B / P12F-G-B / P12F-H / P12F-I / P12F-J-B / P12M / P12N
  *       双工作区共用修订历史折叠面板
  * 用途：默认折叠零请求；展开游标页；可选来源筛选；本地时间范围草稿显式应用/清除；
  *       显式名称或内容联合搜索 POST；搜索结果固定命中来源中文标签；手动加载更多至最多 20 条；
  *       按需摘要；按需与当前对比；按需正文差异；内存双侧选择与双修订正文差异；
  *       内联二次确认后 restore；内联二次确认后单条 DELETE；
- *       内联命名保存/覆盖/清除、单条固定/取消固定（均成功原位更新，失败保值）。
+ *       内联命名保存/覆盖/清除、单条固定/取消固定（均成功原位更新，失败保值）；
+ *       非搜索态对已加载 items 纯派生固定优先显示（组内保持服务端/分页追加原序）。
  * 对接：editorStateRevisionApi（含 page/search/comparison/body-diff/pair/delete/display-name/pin）；
  *       技术/商务 hook 的 restoreRevision 回调。
  * 二次开发：
@@ -20,6 +21,8 @@
  *   - 删除/命名不依赖 editor-state expected version；不得仅因 props.disabled 永久隐藏
  *   - P12F-I 仅改联合搜索固定文案；P12F-J-B 固定状态仅原位更新，不重载历史或 editor-state
  *   - P12M 仅 active search 显示固定「命中：名称/可见内容」；禁止片段/高亮/内部枚举泄漏
+ *   - P12N 仅 render 期纯派生 displayItems；禁止原地 sort/新 state/effect/ref/API/请求/缓存/定时器；
+ *     active search 保持原 items 与 matchReasons 索引；key/handler 仍按 revisionId
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -2070,6 +2073,24 @@ export function EditorStateRevisionPanel({
     filterControlsDisabled ||
     (fromDraft.trim() === "" && beforeDraft.trim() === "");
   const searchActive = appliedSearch != null;
+  /**
+   * P12N：非搜索态对当前已加载 items 纯派生固定优先显示数组。
+   * 约束：单次遍历按 isPinned === true 分固定/普通两组，组内保持服务端/分页追加原序；
+   *       active search 直接复用原 items；禁止原地 sort、新增 state/effect/ref/请求。
+   */
+  const displayItems = (() => {
+    if (searchActive) return items;
+    const pinnedItems: ListItem[] = [];
+    const unpinnedItems: ListItem[] = [];
+    for (const it of items) {
+      if (it.isPinned === true) {
+        pinnedItems.push(it);
+      } else {
+        unpinnedItems.push(it);
+      }
+    }
+    return [...pinnedItems, ...unpinnedItems];
+  })();
 
   return (
     <div
@@ -2564,7 +2585,7 @@ export function EditorStateRevisionPanel({
               gap: 8,
             }}
           >
-            {items.map((item, index) => {
+            {displayItems.map((item, index) => {
               const confirmingRestore = pendingRestoreId === item.revisionId;
               const confirmingDelete = pendingDeleteId === item.revisionId;
               const namingThis = pendingNameId === item.revisionId;
