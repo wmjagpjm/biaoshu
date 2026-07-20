@@ -1086,9 +1086,9 @@ Codex 独立串行通过后端受影响集/全量 **120/1261 passed**，前端 P
 
 后续验收采用分级策略：Grok 默认运行专项/受影响集，Codex 独立复核并按迁移、鉴权、共享状态、跨域范围和回归信号决定是否补一次全量；不再让双方机械重复同一全量。所有动态测试仍必须串行，Playwright 继续 `--workers=1 --retries=0`。
 
-## P12M 修订搜索命中来源标签（已冻结待实现）
+## P12M 修订搜索命中来源标签（已完成）
 
-契约=`docs/p12m-revision-search-match-reasons-contract.md`，计划=`docs/plans/2026-07-20-p12m-revision-search-match-reasons-plan.md`，启动 HEAD=`37a4461`；严格七文件。
+契约=`docs/p12m-revision-search-match-reasons-contract.md`，计划=`docs/plans/2026-07-20-p12m-revision-search-match-reasons-plan.md`，冻结=`95b298f`、实现=`cc23542`；首轮严格七文件，另有两份获 Codex 明确授权的 test-only 兼容测试。
 
 冻结后的联调验收项：
 
@@ -1098,7 +1098,9 @@ Codex 独立串行通过后端受影响集/全量 **120/1261 passed**，前端 P
 4. 搜索一次 POST、顺序、清除/刷新/筛选/项目切换迟到隔离和 URL/storage/Cookie/console 零泄漏保持不变。
 5. Grok 串行运行后端搜索专项/受影响回归、P12M history 聚焦/受影响 E2E、lint/build/py_compile；Codex 独立复跑专项与聚焦，不重复后端全量或整仓 318 E2E。
 
-实现尚未开始。七文件冻结哈希见契约第 6 节；Grok 只负责测试先行、实现与自测，Codex 负责受限审查、独立分级验收、中文文档、提交与推送。
+真实 failure-first **3 failed / 0 passed**。Grok 搜索专项 **33 passed**，P12M/既有受影响 history E2E **2/6 passed**，lint/build/py_compile 通过；受影响后端首轮 **265 passed / 2 failed**，两条失败均为旧 name/pin 测试仍断言 search 七键。Codex 授权 test-only 返修后，两条定点各 **1 passed**，P12M 后端 **3 passed / 30 deselected**。
+
+Codex 独立串行通过两条兼容回归各 **1 passed**、P12M 后端 **3 passed / 30 deselected**、P12M/既有受影响 history E2E **2/6 passed**，并通过 lint、py_compile、diff-check、精确九文件、空暂存区、哈希和泄漏门。Grok 未执行 Git 写操作，Codex 验收=`msg_935e7f7b28df4a8ab75227d6e124b2f1`。本包未运行后端全量或整仓 318 E2E。
 
 ## P12L 检查点固定名额提示前端（已完成）
 

@@ -6,9 +6,9 @@
 
 对接：`list_editor_state_revision_search`、`POST /api/projects/{projectId}/editor-state-revisions/search`、修订历史 API/parser、技术/商务共用修订面板及既有 history E2E。
 
-二次开发：Grok 只能在七文件白名单内先新增真实 failure-first，再实现后端/前端并串行自测；不得暂存、提交或推送。Codex 负责独立规划、受限审查、分级验收、中文文档、提交和协作分支推送。
+二次开发：Grok 首轮只能在七文件白名单内先新增真实 failure-first，再实现后端/前端并串行自测；不得暂存、提交或推送。若受影响回归暴露旧测试口径，必须由 Codex 明确扩围后才可做 test-only 兼容。Codex 负责独立规划、受限审查、分级验收、中文文档、提交和协作分支推送。
 
-状态：2026-07-20 已在干净 HEAD `37a4461` 完成只读审计并冻结待实现。严格七文件冻结哈希见第 6 节；实现启动 HEAD 必须为包含冻结提交的最新干净上游，不得回退或扩围。
+状态：2026-07-20 已完成并由 Codex 提交，冻结=`95b298f`、实现=`cc23542`。首轮生产/专项/E2E 严格七文件；受影响回归精确暴露两份旧测试仍断言 search 七键后，Codex 单独授权两文件 test-only 扩围，生产边界未扩大。
 
 ## 1. 选择理由与边界
 
@@ -49,7 +49,7 @@
 
 所有动态命令逐条串行，Playwright 必须 `--workers=1 --retries=0`。Grok 运行后端搜索专项、后端受影响回归、P12M history 聚焦、既有 history 受影响 E2E、lint/build/py_compile；Codex 独立复跑 P12M 后端专项与 history 聚焦、静态/哈希/差异门，不机械重复后端全量或整仓前端 318。只有跨域风险或聚焦失败才升级范围。
 
-## 6. 严格七文件白名单与冻结哈希
+## 6. 首轮严格七文件白名单与冻结哈希
 
 | 文件 | 冻结 SHA-256 | 允许变化 |
 |---|---|---|
@@ -61,7 +61,7 @@
 | `frontend/src/features/editor-state-revisions/EditorStateRevisionPanel.tsx` | `283386B7EAE16DF9643C95D0C8CD255FA80FCD47EED189746DE0C62CD95A104F` | active search 原因中文标签 |
 | `frontend/e2e/editor-state-revision-history.spec.ts` | `D5C47A8A81667458A4A86C7A98B189B8D9038FC7769B490E6A1F05F90E21AC84` | P12M failure-first、parser/UI/泄漏与迟到隔离证据 |
 
-禁止修改其它后端/前端文件、数据库、依赖、配置、脚本或文档；七文件不足时只能发送 `question`。
+禁止自行修改其它后端/前端文件、数据库、依赖、配置、脚本或文档。首轮受影响回归准确发现 `backend/tests/test_p12f_revision_name.py` 与 `backend/tests/test_p12f_revision_pin.py` 仍把 search 成功项断言为七键；Codex 以任务 `msg_b2f8890512d24f2c8d1dbf43508e373f` 明确授权这两文件做 test-only 八键兼容，list/page/detail 旧键集继续保持。除此之外未扩围。
 
 ## 7. Grok 回执合同
 
@@ -70,3 +70,11 @@
 ## 8. 明确未做
 
 不做正文片段/高亮/评分、自动搜索、防抖、搜索游标、FTS/索引/缓存、跨项目搜索、来源多选、日期预设、批量比较、完整时间线、导出/分享、固定分组/容量、多人协作、presence、SSE/WebSocket、数据库/依赖变更。
+
+## 9. 完成与验收记录
+
+1. Grok 原任务/review=`msg_cd0cc6ff09e94cae98f81d54ded77846`/`msg_30fa964062c745e892d78074e4c283f7`。真实 failure-first 为 P12M 后端 **3 failed / 0 passed**，失败点是搜索成功项仍缺 `matchReasons`，不是路由、收集或环境错误。
+2. Grok 实现后搜索专项 **33 passed**；受影响后端首轮 **265 passed / 2 failed**，两条失败均为旧 name/pin 测试的 search 七键断言。经 Codex 明确扩围后，返修 review=`msg_565054cbdcdf40cb9536d5c21939d3d1`，两条定点各 **1 passed**，P12M 后端 **3 passed / 30 deselected**。Grok 的 P12M/既有受影响 history E2E 为 **2/6 passed**，lint/build/py_compile 通过。
+3. Codex 独立串行复验：两条兼容回归各 **1 passed**，P12M 后端 **3 passed / 30 deselected**；P12M/既有受影响 history E2E **2/6 passed**，均 `workers=1,retries=0`；lint、py_compile、diff-check、精确九文件、空暂存区、哈希与泄漏门通过。验收回执=`msg_935e7f7b28df4a8ab75227d6e124b2f1`。
+4. 最终生产 SHA-256：schemas=`76633E2BFF418A9FBBD0DD3AD18164C62496340AB4AD30BCCD7BDE2918DDF39D`；route=`3CC358D8280F3C6579261F88848D986E0A5A929D46D09F81FD378E7A9F23EF0C`；service=`F8D373B8DCCACB5B0921D4F972F0B85B29AAAAF82CFA0BE8E3D08AC2D107C1FA`；前端 API=`CEDCC06FDCB9B0743BEE2A5A019003D19145B2837BBB273226C15E7EFFD45BA3`；面板=`5C41D4A3C2807B1A69DB40D34F22E40A7A664280765A3F8D7C7DFCE3EB25E31D`。
+5. 本包按分级策略未运行后端全量或整仓前端 318 E2E；不得把既有基线冒充本包结果。

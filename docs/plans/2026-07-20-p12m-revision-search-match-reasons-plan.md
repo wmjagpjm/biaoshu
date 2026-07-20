@@ -1,6 +1,6 @@
 # P12M 修订搜索命中来源标签实施计划
 
-> **状态：2026-07-20 已冻结待实现。** 启动 HEAD=`37a4461`；严格七文件，Grok 负责测试先行、实现及分级自测，Codex 负责审查、独立验收、文档、提交和推送。
+> **状态：2026-07-20 已完成。** 冻结=`95b298f`、实现=`cc23542`；首轮严格七文件，受影响回归后由 Codex 明确扩展两份既有测试做 test-only 兼容。Grok 负责测试先行、实现及分级自测，Codex 已完成审查、独立验收、文档和提交。
 
 **目标：** 当前项目修订搜索成功项新增精确 `matchReasons`，按固定顺序说明命中名称、可见内容或两者；技术标/商务标共用面板显示固定中文标签，零正文/关键词泄漏。
 
@@ -41,3 +41,11 @@
 - 搜索项原因数组严格、稳定、无泄漏，名称/内容/双命中有真实证据；
 - 现有候选窗口、排序、过滤、坏值零写和一次请求合同无回退；
 - 技术/商务共用固定中文标签，严格七文件，Grok 零 Git 写操作；Codex 独立分级验收后才提交。
+
+## 执行结果
+
+1. failure-first：P12M 后端 **3 failed / 0 passed**，生产文件仍为冻结哈希；缺失点为成功项无 `matchReasons`。
+2. 首轮实现完成 search 专属八键、后端固定原因顺序、前端严格 parser 与技术/商务共用标签。Grok 搜索专项 **33 passed**，P12M/受影响 history E2E **2/6 passed**，lint/build/py_compile 通过。
+3. 受影响后端首轮 **265 passed / 2 failed**；失败仅来自 name/pin 两份旧回归仍断言 search 七键。Codex 授权两文件 test-only 扩围后，两条定点各 **1 passed**，P12M 后端 **3 passed / 30 deselected**。
+4. Codex 独立串行复验同样得到后端 **1/1/3 passed**、前端 **2/6 passed**，并通过 lint、py_compile、diff/哈希/空暂存/泄漏门；未机械重复后端全量或整仓 318 E2E。
+5. 消息追溯：原任务/review=`msg_cd0cc6ff09e94cae98f81d54ded77846`/`msg_30fa964062c745e892d78074e4c283f7`；返修 task/review=`msg_b2f8890512d24f2c8d1dbf43508e373f`/`msg_565054cbdcdf40cb9536d5c21939d3d1`；Codex ack=`msg_935e7f7b28df4a8ab75227d6e124b2f1`。

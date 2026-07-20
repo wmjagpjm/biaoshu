@@ -7,7 +7,7 @@
 
 # 标书制作者能力补全与角色化演进路线图
 
-> **状态**：阶段 0–5 已按下文拆包持续交付；P11A/B/C、P12A 至 P12L 版本治理链及 P13-A 均已完成。P12K 冻结=`fe0fa08`、实现=`3c3cbf9`；P12L 实现=`cc6bf11`；Grok 后端全量为 **1273 passed**，P12L checkpoint 受影响套件为 **87 passed**，Codex 独立 P12L 聚焦 **5 passed**，整仓前端沿用已验收 **318 passed** 基线。下一包 P12M 已完成只读审计并冻结，待 Grok 实现。
+> **状态**：阶段 0–5 已按下文拆包持续交付；P11A/B/C、P12A 至 P12M 版本治理链及 P13-A 均已完成。P12K 冻结=`fe0fa08`、实现=`3c3cbf9`；P12L 实现=`cc6bf11`；P12M 冻结=`95b298f`、实现=`cc23542`。P12M 按分级策略只运行专项与受影响聚焦，未重复后端全量或整仓前端 **318 passed** 基线；下一主线包待只读缺口审计后另行冻结。
 > **当前分支**：`collab/grok-code-codex-review`
 > **协作方式**：Grok 负责限定范围的实现与测试；Codex 负责范围、审查、验收和提交授权。
 
@@ -415,7 +415,7 @@ P12E-B 真实 failure-first 为 13 项红测：11 项路由缺失 404、1 项同
 
 **P12L 已完成并推送**：契约=`docs/p12l-checkpoint-pinned-count-frontend-contract.md`，计划=`docs/plans/2026-07-20-p12l-checkpoint-pinned-count-frontend-plan.md`，代码哈希基线=`5258f84`、契约冻结=`4526832`、启动口径=`d21cfb5`、实现=`cc6bf11`，Codex ack=`msg_a685c7123a4f4c9fac68481b99a25cec`。严格两文件在技术标/商务标共用 checkpoint 面板显示默认列表固定条数与 5 条上限，并以既有 E2E 覆盖 pin/unpin/delete/失败/搜索隐藏/项目隔离；数量纯派生且零新增请求。真实 failure-first **4 failed / 1 passed**；Grok 聚焦/受影响 checkpoint **5/87 passed**，Codex 独立聚焦 **5 passed**，lint/build 通过。后端/API、字节容量、分组/重排和其它主线全部冻结。
 
-**P12M 已冻结待实现**：契约=`docs/p12m-revision-search-match-reasons-contract.md`，计划=`docs/plans/2026-07-20-p12m-revision-search-match-reasons-plan.md`，启动 HEAD=`37a4461`，严格七文件。当前项目修订搜索成功项增加精确 `matchReasons` 八键，固定顺序说明名称、可见内容或双命中；技术/商务共用面板显示固定中文标签。候选 20 条、排序、来源/时间过滤、完整校验、错误/零写和一次 POST 不变；正文片段、高亮、自动搜索、FTS、缓存、跨项目版本、完整时间线及多人协作全部冻结。
+**P12M 已完成**：契约=`docs/p12m-revision-search-match-reasons-contract.md`，计划=`docs/plans/2026-07-20-p12m-revision-search-match-reasons-plan.md`，冻结=`95b298f`、实现=`cc23542`。修订搜索成功项已增加精确 `matchReasons` 八键，按固定顺序说明名称、可见内容或双命中；技术/商务共用面板显示固定中文标签。真实 failure-first **3 failed**；Grok 搜索专项 **33 passed**、P12M/受影响 history E2E **2/6 passed**。受影响后端首轮 **265 passed / 2 failed** 只暴露两份旧七键测试，获 Codex 明确 test-only 扩围后两条均通过；Codex 独立后端 **1/1/3 passed**、前端 **2/6 passed**，lint/py_compile/静态门通过，未重复后端全量或整仓 318 E2E。候选 20 条、排序、过滤、完整校验、错误/零写和一次 POST 不变；正文片段、高亮、自动搜索、FTS、缓存、跨项目版本、完整时间线及多人协作仍未实现。
 
 **P13-A 已完成并推送**：契约=`docs/p13a-task-sse-workspace-auth-contract.md`，计划=`docs/plans/2026-07-17-p13a-task-sse-workspace-auth-plan.md`，冻结=`e8dfa61`、实现=`1509aa2`。SSE 连接前短 Session 复用统一 workspace/成员/bid_writer 解析，流内每轮按 workspace/project/task 再校验；disabled、原生 EventSource、事件/回退不变。真实 failure-first **8 failed / 5 passed**；Codex 一轮 test-only 返修关闭恒真泄漏断言、secret marker 跳过和宽松三参，独立通过 **13/72/918 passed**。首次全量只因 20 分钟外层时限不足终止，40 分钟外层干净重跑为 **918 passed in 1310.97s**。
 ## P12D-B 完成状态（2026-07-17）

@@ -1,16 +1,16 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-20（P12L 已闭环；P12M 修订搜索命中来源标签已冻结待实现）
+> **交接日期**：2026-07-20（P12M 修订搜索命中来源标签已完成；下一主线包待只读审计与冻结）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
 > **协作分支功能基线**：P12F-J-A 冻结=`2f03b8c`、实现=`a7021c4`；P12F-I 冻结=`060191e`、实现=`008e443`；P12F-H 冻结=`0660145`、范围修订=`0db935b`/`aca68b6`、实现=`b4338ba`；P12F-G-B 冻结=`89b5728`、实现=`bb7c4f4`；P12F-G-A 冻结=`c176cb5`、实现=`d2555d4`；P12F-F-B 冻结=`4585388`、实现=`be2fe77`；P12F-F-A 冻结=`b2eed7c`、实现=`e6516e8`；P12F-E-B 冻结=`a31e50e`、实现=`f9127ec`；P12F-E-A 冻结=`af3798a`、实现=`c66b69d`；P12F-D 冻结=`a2acdf3`、实现=`587df9a`；P13-A 冻结=`e8dfa61`、实现=`1509aa2`；P12F-C 冻结=`bb1ae3e`、实现=`fe99f5a`；P12F-B 冻结=`4ddd896`、实现=`c84a94d`；P12F-A 冻结=`e713fb3`、实现=`24f4cf2`；P12E-A 冻结=`5aa205c`、实现=`f9f067e`；P12E-B 冻结=`00ef081`、实现=`5a5b08a`；P12E-C 冻结=`8b40bf4`、实现=`b6a4375`；其余既有功能基线见本文 §11。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
-> **最新增量基线**：P12J-A 已交付检查点固定列/迁移、5 条/10 MiB 配额、单条 PATCH 与固定/安全双保护裁剪；冻结=`9f304da`、实现=`8edebd4`。P12J-B 已交付固定状态八/九键读取与技术/商务共用前端入口；代码哈希基线=`262683e`、冻结=`65fe259`、口径澄清=`1471c31`、实现=`7d1d5c9`。P12K 已交付默认检查点列表固定优先；冻结=`fe0fa08`、启动口径修订=`ff48495`/`6666af6`、实现=`3c3cbf9`。P12L 已交付固定名额提示；契约冻结=`4526832`、启动口径=`d21cfb5`、实现=`cc6bf11`。
+> **最新增量基线**：P12J-A 已交付检查点固定列/迁移、5 条/10 MiB 配额、单条 PATCH 与固定/安全双保护裁剪；冻结=`9f304da`、实现=`8edebd4`。P12J-B 已交付固定状态八/九键读取与技术/商务共用前端入口；代码哈希基线=`262683e`、冻结=`65fe259`、口径澄清=`1471c31`、实现=`7d1d5c9`。P12K 已交付默认检查点列表固定优先；冻结=`fe0fa08`、启动口径修订=`ff48495`/`6666af6`、实现=`3c3cbf9`。P12L 已交付固定名额提示；契约冻结=`4526832`、启动口径=`d21cfb5`、实现=`cc6bf11`。P12M 已交付修订搜索命中来源标签；冻结=`95b298f`、实现=`cc23542`。
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **P12M 冻结状态**：代码基线=`37a4461`；修订搜索命中来源标签严格七文件契约/计划已写入本次冻结文档，未开始实现。
-> **P12M 文件基线**：schemas=`8ECBFC2B679329CB4A23E58F7FB1CE919C4BF1E22EFE55FEF1797AFB6508D9DF`；route=`AA6B2E82AD47126C4CEBFFF5351B3C394B81DCBF3D49D24B20D782CE9981F147`；service=`5C126E7B18D081231AABF9C4C7A04672DE5472F2632C015667A70F08C101B438`；前端 API/面板/E2E 哈希见契约第 6 节。
-> **本地状态**：只允许分支 `collab/grok-code-codex-review`；P12L 契约冻结=`4526832`、启动口径=`d21cfb5`、实现=`cc6bf11`、闭环=`37a4461` 已推送。P12M 已在当前干净 HEAD 冻结，推送后才可交 Grok。
-> **验收基线**：P12K Grok 串行专项/受影响集/后端全量 **12/132/1273 passed**；Codex 独立受影响集 **132 passed**。P12L Grok 聚焦/受影响 checkpoint **5/87 passed**，Codex 独立聚焦 **5 passed**；lint/build 通过，未重复受影响套件或整仓 318 E2E。**所有 pytest 与 Playwright E2E 共用 SQLite 重置库，pytest 禁止 xdist/并发分组，Playwright 必须显式 `--workers=1 --retries=0` 逐条串行运行；按风险分级验收，避免 Grok 与 Codex 重复全量。**
+> **P12M 完成状态**：冻结=`95b298f`、实现=`cc23542`。首轮七文件实现后，受影响回归准确暴露两份旧七键测试；经 Codex 明确 test-only 扩围后闭环，生产边界未扩大。
+> **P12M 最终生产哈希**：schemas=`76633E2BFF418A9FBBD0DD3AD18164C62496340AB4AD30BCCD7BDE2918DDF39D`；route=`3CC358D8280F3C6579261F88848D986E0A5A929D46D09F81FD378E7A9F23EF0C`；service=`F8D373B8DCCACB5B0921D4F972F0B85B29AAAAF82CFA0BE8E3D08AC2D107C1FA`；前端 API=`CEDCC06FDCB9B0743BEE2A5A019003D19145B2837BBB273226C15E7EFFD45BA3`；面板=`5C41D4A3C2807B1A69DB40D34F22E40A7A664280765A3F8D7C7DFCE3EB25E31D`。
+> **本地状态**：只允许分支 `collab/grok-code-codex-review`；P12M 实现提交=`cc23542`，文档闭环提交完成并推送后工作区必须恢复干净、HEAD 与远端一致。
+> **验收基线**：P12K Grok 串行专项/受影响集/后端全量 **12/132/1273 passed**；Codex 独立受影响集 **132 passed**。P12L Grok 聚焦/受影响 checkpoint **5/87 passed**，Codex 独立聚焦 **5 passed**。P12M Grok 搜索专项 **33 passed**、P12M/受影响 history **2/6 passed**；Codex 独立后端定点 **1/1/3 passed**、前端 **2/6 passed**。P12M 未跑后端全量或整仓 318 E2E。**所有 pytest 与 Playwright E2E 共用 SQLite 重置库，pytest 禁止 xdist/并发分组，Playwright 必须显式 `--workers=1 --retries=0` 逐条串行运行；按风险分级验收，避免 Grok 与 Codex 重复全量。**
 
 ---
 
@@ -21,10 +21,10 @@
 工作分支只能是 collab/grok-code-codex-review，禁止直接操作 main；先执行 git status -sb，并核对 HEAD 与 origin/collab/grok-code-codex-review 一致且工作区干净。
 完整阅读 docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/plans/2026-07-13-package-9-delivery-enhancement-plan.md、docs/integration-checklist.md。
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
-当前进度：P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/B、P12E-A/B/C、P12F-A/B/C/D/E-A/E-B/F-A/F-B/G-A/G-B/H/I/J-A/J-B/P12K/P12L、P13-A、P9D、P9C-R1、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。P12L 实现=`cc6bf11`；Grok 聚焦/受影响 checkpoint **5/87 passed**，Codex 独立聚焦 **5 passed**，前端整仓 **318 passed** 仍仅作既有基线。
-当前状态：修订历史已闭合来源、UTC 时间、联合搜索、游标分页、单条删除、展示名称、固定与保护性裁剪；检查点已有创建、列表、详情、安全恢复、展示名称、单条删除、当前项目显式搜索、固定状态读取/入口、固定/安全双保护裁剪及默认列表固定优先排序。
-当前执行包：P12M 修订搜索命中来源标签；契约=`docs/p12m-revision-search-match-reasons-contract.md`，计划=`docs/plans/2026-07-20-p12m-revision-search-match-reasons-plan.md`，严格七文件。
-下一步：推送 P12M 冻结提交后，通过消息箱交给已认证 Grok 测试先行实现。Grok 默认跑后端搜索专项/受影响回归与 history 聚焦；Codex 独立复核聚焦，不机械重复全量。正文片段、高亮、自动搜索、FTS、缓存、跨项目版本、完整时间线和多人协作不得扩入。
+当前进度：P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/B、P12E-A/B/C、P12F-A/B/C/D/E-A/E-B/F-A/F-B/G-A/G-B/H/I/J-A/J-B/P12K/P12L/P12M、P13-A、P9D、P9C-R1、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。P12M 实现=`cc23542`；Codex 独立后端定点 **1/1/3 passed**、前端 **2/6 passed**，整仓前端 **318 passed** 仍仅作既有基线。
+当前状态：修订历史已闭合来源、UTC 时间、联合搜索、搜索命中来源标签、游标分页、单条删除、展示名称、固定与保护性裁剪；检查点已有创建、列表、详情、安全恢复、展示名称、单条删除、当前项目显式搜索、固定状态读取/入口、固定/安全双保护裁剪、默认列表固定优先排序与固定名额提示。
+当前执行包：P12M 已闭环；下一主线包尚未冻结，必须先依据路线图和代码现状做只读缺口审计，形成独立契约/计划后再交 Grok。
+下一步：确认 P12M 文档闭环提交已推送且工作区干净，审计剩余主线并冻结最小下一包。继续采用 Grok 专项/受影响验证、Codex 独立聚焦复核的分级策略，不机械重复全量。正文片段、高亮、自动搜索、FTS、缓存、跨项目版本、完整时间线和多人协作不得无契约扩入。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
