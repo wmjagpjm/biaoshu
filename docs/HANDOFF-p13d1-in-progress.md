@@ -1,13 +1,16 @@
-# P13-D1 在途实现交接：修订操作者可信账本
+# P13-D1 历史在途交接：修订操作者可信账本
 
 > 交接日期：2026-07-20
-> 状态：**代码已由 Grok 实现并完成一次 test-only 返修，但尚未通过 Codex 最终验收，尚未暂存、提交或推送**
+> 状态：**已由 Codex 最终验收、提交并推送；本文保留为历史审查记录**
+> 实现提交：`a8982e3`（`功能：完成P13D1修订操作者可信账本`）
 > 冻结基线：`31326840f27a58dcd0e029b0c098eb60b19939d1`（`文档：冻结P13D1修订操作者账本`）
 > 工作分支：`collab/grok-code-codex-review`，严禁操作 `main`
 > 契约：`docs/p13d1-editor-state-revision-actor-ledger-contract.md`
 > 实施计划：`docs/plans/2026-07-20-p13d1-editor-state-revision-actor-ledger-plan.md`
 
-本文是当前未提交代码的操作级交接。长期产品状态、注释规范、启动方式和历史包索引仍以 `docs/HANDOFF-next.md` 为准。两者冲突时，P13-D1 的当前脏工作区状态以本文和实际 `git status` 为准。
+本文记录 P13-D1 提交前的操作级交接，正文中的“未提交/下一步”均为历史现场，不再代表当前状态。最终真值以 `docs/HANDOFF-next.md`、本文件顶部完成状态与实际 `git status` 为准。
+
+最终独立证据：专项+精确 schema **18 passed**、PRAGMA 顺序回归 **2 passed**、五条代表性真实事务路径 **5 passed**，py_compile/diff-check/19 个生产哈希与实现白名单通过。交接原先把 PRAGMA 污染归因给前序测试；复现后确认真实根因是 P13-C 测试跨池连接恢复，已改为同一显式连接闭环。
 
 ---
 

@@ -345,15 +345,15 @@
 
 **下一步口径**：系统已具备可用的版本时间与流程来源快速第一版。精确操作者归因拆为连续 P13-D1/D2：D1 先为修订与异步任务建立可信可空 actor 账本，覆盖浏览器、任务、revise、两类解析、融合和两类恢复九条写链；D2 再解析当前版本用户名并接入技术/商务标题区。不得只给浏览器写入贴用户名。D1 契约=`docs/p13d1-editor-state-revision-actor-ledger-contract.md`，计划=`docs/plans/2026-07-20-p13d1-editor-state-revision-actor-ledger-plan.md`。真实 MinerU/Docling 制品、用户真实语料调优、外部标讯来源与 Word 整章版式仍分别受本机制品、用户语料、合法授权和跨页视觉决策约束，不混入本包。
 
-### P13-D1：editor-state 修订操作者可信账本（已实现并返修，待 Codex 最终验收）
+### P13-D1：editor-state 修订操作者可信账本（已完成并推送）
 
 **目标**：为 `editor_state_revisions` 与异步 `project_tasks` 增加可空 `actor_user_id`，required 模式只认认证 request state，disabled/旧数据固定未知；九类真实写链在原事务传播 actor。
 
 **关键真实性**：空账本或断链时补入的 `before` 修订 actor 固定 `NULL`，只有真实不同的 `after` 才记录本次 actor；无变化、stale、零恢复和同版本恢复不伪造操作者。P13-D1 不公开用户名或新响应字段，完成后立即推进 P13-D2 展示。
 
-**2026-07-20 在途状态**：冻结=`3132684`。Grok 首轮任务/review=`msg_a0c6083215454410b9a95c3c19c54c02`/`msg_1a838890b3384c4cbbd6b238e37d5ede`，failure-first **16 failed / 0 passed**、首轮专项 **16 passed**；Codex 接受 `business_task_service.py` 必要扩围，但因恒真断言、假 worker、signature-only 传播、缺空账本同状态与迁移回滚真证据退回 test-only。返修任务/review=`msg_6cf099e801f544e69efbe51e6eab6c44`/`msg_de747706fcb64a188eef50d77e29d451`，现专项 **17 passed**、精确 schema **1 passed**。19 个生产文件、1 个既有测试和 1 个新专项仍未暂存/提交/推送；完整操作交接见 `docs/HANDOFF-p13d1-in-progress.md`。
+**2026-07-20 完成状态**：冻结=`3132684`，实现=`a8982e3`。Grok 首轮任务/review=`msg_a0c6083215454410b9a95c3c19c54c02`/`msg_1a838890b3384c4cbbd6b238e37d5ede`，failure-first **16 failed / 0 passed**、首轮专项 **16 passed**；Codex 接受 `business_task_service.py` 必要扩围，并因恒真断言、假 worker、signature-only 传播、缺空账本同状态与迁移回滚真证据退回 test-only。返修任务/review=`msg_6cf099e801f544e69efbe51e6eab6c44`/`msg_de747706fcb64a188eef50d77e29d451`，返修后专项 **17 passed**。
 
-**当前唯一待修测试基础设施问题**：两文件顺序联跑的唯一失败已定位为既有 `test_no_commit_rollback_refresh_project_lock` 未恢复连接级 `PRAGMA ignore_check_constraints`，P13-C 目标用例单独通过。下一步先做最小 test-only 恢复，再由 Codex 独立审查/分级验收；默认不跑后端全量或前端 E2E。未完成验收、实现提交、推送和文档闭环前，P13-D1 仍不得标为完成。
+**最终验收**：Codex 独立专项+精确 schema **18 passed**、PRAGMA 顺序回归 **2 passed**、融合/恢复/本地票据五条代表性真实事务路径 **5 passed**；py_compile、diff-check、19 个生产哈希和精确暂存白名单均通过。顺序污染真实根因是 P13-C 测试跨池连接恢复 PRAGMA，已改为同一显式连接闭环，未改生产或放宽守卫。本包未跑后端全量、Playwright、前端 lint/build 或整仓 E2E。P13-D1 已推送，下一包可冻结 P13-D2。
 
 ### P13-D2：当前已载入版本操作者用户名展示（待 D1 完成后冻结）
 
