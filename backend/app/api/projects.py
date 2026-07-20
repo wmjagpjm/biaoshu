@@ -14,7 +14,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_workspace_id, require_strict_bid_writer
+from app.api.deps import get_request_actor_user_id, get_workspace_id, require_strict_bid_writer
 from app.api.schemas import (
     BidWriterTeamMemberOut,
     BidWriterTeamRecommendationOut,
@@ -223,6 +223,7 @@ def get_editor_state(
 def put_editor_state(
     project_id: str,
     body: EditorStateUpdate,
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
     workspace_id: Annotated[str, Depends(get_workspace_id)],
 ) -> EditorStateOut:
@@ -274,11 +275,13 @@ def put_editor_state(
 
     try:
         # P12C-B-A：公开浏览器 PUT 唯一写入修订账本；字面量来源，禁止读客户端字段
+        # P13-D1：actor 仅来自 request.state helper，禁止 body/query/header 投稿
         data = editor_state_service.upsert_editor_state(
             db,
             workspace_id,
             project_id,
             revision_source_kind="browser_put",
+            actor_user_id=get_request_actor_user_id(request),
             **kwargs,
         )
     except ProjectNotFoundError:

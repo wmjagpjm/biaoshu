@@ -10,10 +10,10 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_workspace_id
+from app.api.deps import get_request_actor_user_id, get_workspace_id
 from app.api.schemas import ReviseIn, ReviseOut
 from app.core.database import get_db
 from app.services import editor_state_service, revise_service
@@ -31,6 +31,7 @@ def revise_artifact(
     project_id: str,
     artifact_id: str,
     body: ReviseIn,
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
     workspace_id: Annotated[str, Depends(get_workspace_id)],
 ) -> ReviseOut:
@@ -53,6 +54,7 @@ def revise_artifact(
             target_id=body.target_id,
             target_label=body.target_label,
             expected_state_version=body.expected_state_version,
+            actor_user_id=get_request_actor_user_id(request),
         )
     except ProjectNotFoundError:
         raise HTTPException(status_code=404, detail="项目不存在") from None

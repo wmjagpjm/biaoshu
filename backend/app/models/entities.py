@@ -1360,6 +1360,8 @@ class ProjectTaskRow(Base):
     payload_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # P13-D1：创建任务时服务端捕获的可信操作者；旧行/disabled 为 NULL；不建 FK/索引；API 不暴露
+    actor_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -1573,6 +1575,8 @@ class EditorStateRevisionRow(Base):
     is_pinned: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="0"
     )
+    # P13-D1：真实 after 修订的可信操作者；补账 before/旧行/disabled 固定 NULL；不建 FK/索引
+    actor_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

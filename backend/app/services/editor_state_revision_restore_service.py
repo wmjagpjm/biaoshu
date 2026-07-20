@@ -68,6 +68,8 @@ def restore_editor_state_revision(
     project_id: str,
     revision_id: str,
     expected_state_version: str,
+    *,
+    actor_user_id: str | None = None,
 ) -> dict[str, Any]:
     """
     用途：锁后 CAS + C1 目标重验 + 安全检查点 + 13 键写回 + 条件 revision_restore。
@@ -117,6 +119,7 @@ def restore_editor_state_revision(
             target_snapshot=target_snapshot,
             target_version=target_version,
             source_kind="revision_restore",
+            actor_user_id=actor_user_id,
         )
 
         response = {

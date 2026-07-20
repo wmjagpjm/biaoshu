@@ -199,6 +199,22 @@ def resolve_current_revision_source_kind(
     return source_kind
 
 
+def _validate_actor_user_id(actor_user_id: str | None) -> str | None:
+    """
+    用途：P13-D1 校验可信 actor；仅 None 或非空、无首尾空白、长度 ≤64 的字符串。
+    规则：非法内部调用固定 invalid，由调用方原事务回滚；不得从客户端字段推断。
+    """
+    if actor_user_id is None:
+        return None
+    if not isinstance(actor_user_id, str):
+        _raise_invalid()
+    if not actor_user_id or actor_user_id.strip() != actor_user_id:
+        _raise_invalid()
+    if len(actor_user_id) > 64:
+        _raise_invalid()
+    return actor_user_id
+
+
 def _insert_revision_row(
     db: Session,
     *,
@@ -208,6 +224,7 @@ def _insert_revision_row(
     state_version: str,
     snapshot_bytes: int,
     source_kind: str,
+    actor_user_id: str | None = None,
 ) -> None:
     """用途：插入一条修订并 flush；不 commit/refresh。"""
     row = EditorStateRevisionRow(
@@ -219,6 +236,7 @@ def _insert_revision_row(
         snapshot_bytes=snapshot_bytes,
         source_kind=source_kind,
         is_pinned=False,
+        actor_user_id=actor_user_id,
         created_at=utc_now(),
     )
     db.add(row)
@@ -350,15 +368,18 @@ def record_editor_state_transition(
     before_state: dict[str, Any],
     after_state: dict[str, Any],
     source_kind: str,
+    actor_user_id: str | None = None,
 ) -> dict[str, Any]:
     """
     用途：在调用方已有的同一事务内记录 before→after 自动修订（无提交原语）。
-    对接：未来 P12C-B 各写入者；A 包仅测试调用。
+    对接：九类写链；P13-D1 命名参数 actor_user_id。
     规则：
       1. 固定 source 枚举；非法输入固定内部错误；
-      2. 账本空或最新 != before → 先追加 before；最新 != after → 再追加 after；
-      3. 相邻同版本去重；回到旧版本因与最新不同仍形成新时间点；
-      4. 只 flush；返回仅 added_count 与 final_state_version。
+      2. 写入前先校验 actor（None 或非空无空白 ≤64）；
+      3. 账本空或最新 != before → 先追加 before，actor 固定 NULL；
+      4. 最新 != after → 再追加 after，记录本次可信 actor；
+      5. before==after 空操作不新增有 actor 行；相邻同版本去重；
+      6. 只 flush；返回仅 added_count 与 final_state_version。
     """
     if not isinstance(source_kind, str) or source_kind not in REVISION_SOURCE_KINDS:
         _raise_invalid()
@@ -366,6 +387,9 @@ def record_editor_state_transition(
         _raise_invalid()
     if not isinstance(project_id, str) or not project_id:
         _raise_invalid()
+
+    # actor 必须在任何 revision 插入前校验
+    safe_actor = _validate_actor_user_id(actor_user_id)
 
     # 两态均先完整校验，避免半写入
     before_json, before_ver, before_bytes = _prepare_state_payload(before_state)
@@ -376,6 +400,7 @@ def record_editor_state_transition(
     added = 0
 
     if current_version is None or current_version != before_ver:
+        # 补账 before：发现/补齐既有状态，不代表本次请求创造 → actor 固定 NULL
         _insert_revision_row(
             db,
             workspace_id=workspace_id,
@@ -384,6 +409,7 @@ def record_editor_state_transition(
             state_version=before_ver,
             snapshot_bytes=before_bytes,
             source_kind=source_kind,
+            actor_user_id=None,
         )
         added += 1
         current_version = before_ver
@@ -397,6 +423,7 @@ def record_editor_state_transition(
             state_version=after_ver,
             snapshot_bytes=after_bytes,
             source_kind=source_kind,
+            actor_user_id=safe_actor,
         )
         added += 1
         current_version = after_ver

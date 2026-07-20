@@ -285,6 +285,16 @@ def _finalize_success_writes(
     state.parsed_markdown = md
     state.updated_at = now
 
+    # P13-D1：一次性票据无 Request；唯一可信 actor 为签发者 issued_by_user_id
+    ticket_actor = ticket.issued_by_user_id
+    if not (
+        isinstance(ticket_actor, str)
+        and ticket_actor
+        and ticket_actor.strip() == ticket_actor
+        and len(ticket_actor) <= 64
+    ):
+        ticket_actor = None
+
     task = ProjectTaskRow(
         id=f"task_{secrets.token_hex(8)}",
         project_id=ticket.project_id,
@@ -300,6 +310,7 @@ def _finalize_success_writes(
             },
             ensure_ascii=False,
         ),
+        actor_user_id=ticket_actor,
         created_at=now,
         updated_at=now,
     )
@@ -328,6 +339,7 @@ def _finalize_success_writes(
         before_state=before_state,
         after_state=after_state,
         source_kind="local_parser",
+        actor_user_id=ticket_actor,
     )
     return {
         "ok": True,

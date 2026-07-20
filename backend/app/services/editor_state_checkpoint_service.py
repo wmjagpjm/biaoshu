@@ -725,6 +725,7 @@ def stage_locked_canonical_restore(
     target_snapshot: dict[str, Any],
     target_version: str,
     source_kind: str,
+    actor_user_id: str | None = None,
 ) -> dict[str, Any]:
     """
     用途：已锁定、已验证规范目标后的无提交共享恢复原语。
@@ -733,7 +734,8 @@ def stage_locked_canonical_restore(
       1. 仅允许 source_kind ∈ {checkpoint_restore, revision_restore}；
       2. 从 current_state 构造安全检查点 → 13 键写回 → 结果版本复核；
       3. 仅当 result_version != current 时记 transition；同版本禁止 recorder；
-      4. 保护新安全检查点裁剪到 20；不 commit/rollback/refresh/加锁/查目标。
+      4. 保护新安全检查点裁剪到 20；不 commit/rollback/refresh/加锁/查目标；
+      5. P13-D1：命名 actor_user_id 传入 recorder；安全检查点本身不扩 actor 字段。
     """
     if not isinstance(source_kind, str) or source_kind not in _RESTORE_SOURCE_KINDS:
         raise EditorStateCheckpointError(
@@ -796,6 +798,7 @@ def stage_locked_canonical_restore(
             before_state=current_state,
             after_state=result_state,
             source_kind=source_kind,
+            actor_user_id=actor_user_id,
         )
 
     # 5) 保护新安全记录地裁剪到最多 20
@@ -819,6 +822,8 @@ def restore_editor_state_checkpoint(
     project_id: str,
     checkpoint_id: str,
     expected_state_version: str,
+    *,
+    actor_user_id: str | None = None,
 ) -> dict[str, Any]:
     """
     用途：锁后 CAS + 恢复前安全检查点 + 13 键写回 + 条件修订 + 保护裁剪，一次原子 commit。
@@ -872,6 +877,7 @@ def restore_editor_state_checkpoint(
             target_snapshot=target_snapshot,
             target_version=target_version,
             source_kind="checkpoint_restore",
+            actor_user_id=actor_user_id,
         )
 
         response = {

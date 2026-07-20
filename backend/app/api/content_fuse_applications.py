@@ -14,10 +14,10 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_workspace_id
+from app.api.deps import get_request_actor_user_id, get_workspace_id
 from app.api.schemas import (
     ContentFuseApplicationConsume,
     ContentFuseApplicationConsumeOut,
@@ -79,6 +79,7 @@ def _raise_version_conflict(
 def create_content_fuse_application(
     project_id: str,
     body: ContentFuseApplicationCreate,
+    request: Request,
     response: Response,
     db: Annotated[Session, Depends(get_db)],
     workspace_id: Annotated[str, Depends(get_workspace_id)],
@@ -88,6 +89,7 @@ def create_content_fuse_application(
     对接：ContentFuseDialog 确认写入；服务层 apply_content_fuse_application。
     二次开发：请求强制 taskId/suggestionIds/expectedStateVersion；
       成功后前端须经版本化外部写队列单次重读 editor-state。
+      P13-D1：actor 仅 request-state helper。
     """
     _no_store(response)
     try:
@@ -98,6 +100,7 @@ def create_content_fuse_application(
             task_id=body.task_id,
             suggestion_ids=list(body.suggestion_ids),
             expected_state_version=body.expected_state_version,
+            actor_user_id=get_request_actor_user_id(request),
         )
     except editor_state_service.EditorStateVersionConflict as exc:
         _raise_version_conflict(db, exc)
@@ -154,6 +157,7 @@ def consume_content_fuse_application(
     project_id: str,
     batch_id: str,
     body: ContentFuseApplicationConsume,
+    request: Request,
     response: Response,
     db: Annotated[Session, Depends(get_db)],
     workspace_id: Annotated[str, Depends(get_workspace_id)],
@@ -162,6 +166,7 @@ def consume_content_fuse_application(
     用途：对 active 批次执行一次恢复尝试；完整/部分/零恢复均消费。
     对接：ContentFuseDialog 二次确认恢复。
     二次开发：请求体仅 expectedStateVersion；全状态冲突不消费批次。
+      P13-D1：actor 仅 request-state helper；零恢复不记修订。
     """
     _no_store(response)
     try:
@@ -171,6 +176,7 @@ def consume_content_fuse_application(
             project_id,
             batch_id,
             expected_state_version=body.expected_state_version,
+            actor_user_id=get_request_actor_user_id(request),
         )
     except editor_state_service.EditorStateVersionConflict as exc:
         _raise_version_conflict(db, exc)

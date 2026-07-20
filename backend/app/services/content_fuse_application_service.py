@@ -473,6 +473,7 @@ def apply_content_fuse_application(
     task_id: str,
     suggestion_ids: list[str],
     expected_state_version: str,
+    actor_user_id: str | None = None,
 ) -> dict[str, Any]:
     """
     用途：原子确认所选融合建议；整批成功或零写。
@@ -597,6 +598,7 @@ def apply_content_fuse_application(
         before_state=before_state,
         after_state=after_state,
         source_kind="content_fuse_apply",
+        actor_user_id=actor_user_id,
     )
     new_version = after_state["stateVersion"]
     db.commit()
@@ -659,6 +661,7 @@ def consume_content_fuse_application(
     batch_id: str,
     *,
     expected_state_version: str,
+    actor_user_id: str | None = None,
 ) -> dict[str, Any]:
     """
     用途：对 active 批次执行一次漂移安全恢复；0/部分/全部均消费。
@@ -773,6 +776,7 @@ def consume_content_fuse_application(
             before_state=before_state,
             after_state=after_state,
             source_kind="content_fuse_consume",
+            actor_user_id=actor_user_id,
         )
         new_version = after_state["stateVersion"]
     else:

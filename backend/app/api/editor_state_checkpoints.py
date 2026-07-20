@@ -25,7 +25,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_workspace_id
+from app.api.deps import get_request_actor_user_id, get_workspace_id
 from app.api.schemas import (
     EditorStateCheckpointCreate,
     EditorStateCheckpointDetailOut,
@@ -516,6 +516,7 @@ def restore_editor_state_checkpoint(
     project_id: str,
     checkpoint_id: str,
     body: EditorStateCheckpointRestore,
+    request: Request,
     response: Response,
     db: Annotated[Session, Depends(get_db)],
     workspace_id: Annotated[str, Depends(get_workspace_id)],
@@ -524,6 +525,7 @@ def restore_editor_state_checkpoint(
     用途：原子恢复目标检查点；先写恢复前安全检查点，再覆盖当前 13 键。
     对接：P12B-D1；服务层 restore_editor_state_checkpoint。
     二次开发：body 仅 expectedStateVersion；409 复用全状态冲突协议；成功/业务错误 no-store。
+      P13-D1：actor 仅 request-state helper；同版本恢复不记修订。
     """
     _no_store(response)
     try:
@@ -533,6 +535,7 @@ def restore_editor_state_checkpoint(
             project_id,
             checkpoint_id,
             body.expected_state_version,
+            actor_user_id=get_request_actor_user_id(request),
         )
     except editor_state_service.EditorStateVersionConflict as exc:
         raise HTTPException(

@@ -261,8 +261,9 @@ def test_corrupt_latest_source_returns_null_no_500(client: TestClient):
     ).json()
     ver = _assert_sv(put["stateVersion"])
 
-    # SQLite CHECK 可能拦截非法 source_kind；能写入则测 HTTP 路径，否则测 helper 保守 null
-    wrote_corrupt = False
+    # SQLite CHECK 可能拦截非法 source_kind；能写入则测 HTTP 路径，否则测 helper 保守 null。
+    # 必须用同一条显式连接完成 PRAGMA 开启、提交与恢复；Session.commit 会归还连接，
+    # 随后的 Session.execute 可能换到池中另一条连接，导致原连接残留 PRAGMA=1。
     db = SessionLocal()
     try:
         latest = (
@@ -279,21 +280,30 @@ def test_corrupt_latest_source_returns_null_no_500(client: TestClient):
         )
         assert latest is not None
         rid = latest.id
+    finally:
+        db.close()
 
-        # 关闭约束 → 写坏行并 commit → 立即恢复 0，再走 HTTP GET
-        db.execute(text("PRAGMA ignore_check_constraints = 1"))
+    # 关闭约束 → 写坏行并 commit → 在同一物理连接立即恢复 0。
+    with engine.connect() as conn:
+        conn.execute(text("PRAGMA ignore_check_constraints = 1"))
         try:
-            db.execute(
+            conn.execute(
                 text(
                     "UPDATE editor_state_revisions SET source_kind = :sk WHERE id = :id"
                 ),
                 {"sk": "not_a_real_source", "id": rid},
             )
-            db.commit()
+            conn.commit()
         finally:
-            # 同一连接：成功或异常都必须恢复，禁止污染池连接
-            db.execute(text("PRAGMA ignore_check_constraints = 0"))
+            conn.execute(text("PRAGMA ignore_check_constraints = 0"))
+            pragma_value = conn.execute(
+                text("PRAGMA ignore_check_constraints")
+            ).scalar()
+            assert int(pragma_value) == 0, pragma_value
 
+    wrote_corrupt = False
+    db = SessionLocal()
+    try:
         corrupted = (
             db.query(EditorStateRevisionRow)
             .filter(EditorStateRevisionRow.id == rid)
@@ -310,14 +320,7 @@ def test_corrupt_latest_source_returns_null_no_500(client: TestClient):
             assert "traceback" not in low
             assert "not_a_real_source" not in res.text
     finally:
-        # 防御性：同一连接再恢复/回滚后 close
-        try:
-            db.execute(text("PRAGMA ignore_check_constraints = 0"))
-        finally:
-            try:
-                db.rollback()
-            finally:
-                db.close()
+        db.close()
 
     # 测试结束额外查询 PRAGMA 精确为 0（可能复用池连接）
     db_pragma = SessionLocal()

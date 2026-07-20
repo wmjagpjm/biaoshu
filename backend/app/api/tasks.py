@@ -18,7 +18,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_workspace_id
+from app.api.deps import get_request_actor_user_id, get_workspace_id
 from app.core.config import Settings, get_settings
 from app.core.database import SessionLocal, get_db
 from app.services import task_service
@@ -194,6 +194,7 @@ def cancel_task(
 def create_task(
     project_id: str,
     body: TaskCreate,
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
     workspace_id: Annotated[str, Depends(get_workspace_id)],
     sync: Annotated[
@@ -202,7 +203,9 @@ def create_task(
 ) -> dict:
     """
     用途：默认异步入队；sync=true 同步跑完（pytest / 冒烟）。
+    二次开发：P13-D1 创建时捕获 request actor 写入任务行；worker 只读任务行；响应不暴露 actor。
     """
+    actor_user_id = get_request_actor_user_id(request)
     try:
         if sync:
             task = task_service.create_and_run_task(
@@ -211,6 +214,7 @@ def create_task(
                 project_id,
                 task_type=body.type,
                 payload=body.payload,
+                actor_user_id=actor_user_id,
             )
         else:
             task = task_service.enqueue_task(
@@ -219,6 +223,7 @@ def create_task(
                 project_id,
                 task_type=body.type,
                 payload=body.payload,
+                actor_user_id=actor_user_id,
             )
     except ProjectNotFoundError:
         raise HTTPException(status_code=404, detail="项目不存在") from None

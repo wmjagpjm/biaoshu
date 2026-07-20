@@ -92,7 +92,8 @@ def _upsert_editor_state_for_task(
     对接：parse/analyze/outline/chapter/chapters 真实写点；非 writer 禁止调用。
     二次开发：
       - EditorStateVersionConflict 原样上抛，保持 stale 固定语义；
-      - 其他 upsert 异常脱敏为固定 RuntimeError，from 保留原链供日志，禁止进 REST/SSE。
+      - 其他 upsert 异常脱敏为固定 RuntimeError，from 保留原链供日志，禁止进 REST/SSE；
+      - actor_user_id 须由调用方从任务行命名传入，禁止读 Request/线程全局。
     """
     kwargs.pop("revision_source_kind", None)
     try:
@@ -350,11 +351,13 @@ def create_task_record(
     *,
     task_type: str,
     payload: dict | None = None,
+    actor_user_id: str | None = None,
 ) -> ProjectTaskRow:
     """
     用途：仅创建 pending 任务行，不执行。
     content_fuse：创建阶段做 shape/配额/目标章节 400 校验并写入归一化 payload。
     九类 writer：同事务捕获服务端权威 stateVersion 覆盖内部键，客户端同名投稿被覆盖。
+    P13-D1：actor_user_id 仅服务端覆盖写入任务行；客户端 payload 同名字段无效；API 不暴露。
     """
     if task_type not in ALLOWED_TYPES:
         raise ValueError(f"不支持的任务类型: {task_type}")
@@ -362,16 +365,33 @@ def create_task_record(
     if _has_running_same_type(db, project_id, task_type):
         raise ValueError(f"已有进行中的「{task_type}」任务，请等待完成或稍后重试")
     normalized_payload: dict = dict(payload or {})
+    # 禁止客户端经 payload 控制 actor；同名键从 payload 剔除
+    normalized_payload.pop("actorUserId", None)
+    normalized_payload.pop("actor_user_id", None)
+    normalized_payload.pop("actor", None)
     if task_type == "content_fuse":
         # 仅 shape/配额/目标章；来源可用性留给 worker，避免跨 workspace 探测
         normalized_payload = fuse_context_service.validate_create_payload(
             db, workspace_id, project_id, payload
         )
+        if isinstance(normalized_payload, dict):
+            normalized_payload.pop("actorUserId", None)
+            normalized_payload.pop("actor_user_id", None)
+            normalized_payload.pop("actor", None)
     if task_type in EDITOR_WRITER_TASK_TYPES:
         # 操作开始绑定：服务端权威版本覆盖保留键；禁止 worker 启动时重捕获
         state = editor_state_service.get_editor_state(db, workspace_id, project_id)
         normalized_payload = dict(normalized_payload)
         normalized_payload[_PAYLOAD_EXPECTED_STATE_VERSION] = state["stateVersion"]
+    # 仅接受 None 或规范字符串；非法值保守存 NULL（不抛，避免阻断入队）
+    safe_actor: str | None = None
+    if (
+        isinstance(actor_user_id, str)
+        and actor_user_id
+        and actor_user_id.strip() == actor_user_id
+        and len(actor_user_id) <= 64
+    ):
+        safe_actor = actor_user_id
     task = ProjectTaskRow(
         id=f"task_{secrets.token_hex(8)}",
         project_id=project_id,
@@ -380,6 +400,7 @@ def create_task_record(
         progress=0,
         message="排队中…",
         payload_json=_dumps(normalized_payload),
+        actor_user_id=safe_actor,
         created_at=_now(),
         updated_at=_now(),
     )
@@ -478,10 +499,16 @@ def create_and_run_task(
     *,
     task_type: str,
     payload: dict | None = None,
+    actor_user_id: str | None = None,
 ) -> ProjectTaskRow:
     """用途：同步创建并执行（测试 / sync=1）。"""
     task = create_task_record(
-        db, workspace_id, project_id, task_type=task_type, payload=payload
+        db,
+        workspace_id,
+        project_id,
+        task_type=task_type,
+        payload=payload,
+        actor_user_id=actor_user_id,
     )
     _execute_task(db, workspace_id, task)
     db.refresh(task)
@@ -507,12 +534,18 @@ def enqueue_task(
     *,
     task_type: str,
     payload: dict | None = None,
+    actor_user_id: str | None = None,
 ) -> ProjectTaskRow:
     """
     用途：创建任务并后台线程执行，立即返回 pending/running 快照。
     """
     task = create_task_record(
-        db, workspace_id, project_id, task_type=task_type, payload=payload
+        db,
+        workspace_id,
+        project_id,
+        task_type=task_type,
+        payload=payload,
+        actor_user_id=actor_user_id,
     )
     thread = threading.Thread(
         target=_bg_worker,
@@ -575,6 +608,7 @@ def _run_parse(
         project_id,
         parsed_markdown=md,
         expected_state_version=expected,
+        actor_user_id=getattr(task, "actor_user_id", None),
     )
     update_project(
         db, workspace_id, project_id, status="analyzing", technical_plan_step=1
@@ -654,6 +688,7 @@ def _run_analyze(
         analysis=analysis,
         analysis_overview=analysis.get("overview") or "",
         expected_state_version=expected,
+        actor_user_id=getattr(task, "actor_user_id", None),
     )
     update_project(
         db, workspace_id, project_id, status="analyzing", technical_plan_step=2
@@ -1220,6 +1255,7 @@ def _run_outline(
         chapters=chapters,
         mode="ALIGNED",
         expected_state_version=expected,
+        actor_user_id=getattr(task, "actor_user_id", None),
     )
     update_project(
         db, workspace_id, project_id, status="writing", technical_plan_step=3
@@ -1479,6 +1515,7 @@ def _run_chapter(
         project_id,
         chapters=new_chapters,
         expected_state_version=expected,
+        actor_user_id=getattr(task, "actor_user_id", None),
     )
     update_project(
         db, workspace_id, project_id, status="writing", technical_plan_step=5
@@ -1594,6 +1631,7 @@ def _run_chapters(
             project_id,
             chapters=working,
             expected_state_version=expected,
+            actor_user_id=getattr(task, "actor_user_id", None),
         )
         # 仅推进本任务版本；不得重读“当前权威”绕过外部改动
         next_sv = written.get("stateVersion")

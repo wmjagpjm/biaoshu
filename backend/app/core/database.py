@@ -589,6 +589,66 @@ def migrate_editor_state_revisions_is_pinned(conn) -> None:
     )
 
 
+def migrate_editor_state_revisions_actor_user_id(conn) -> None:
+    """
+    用途：P13-D1 幂等为修订表加 nullable actor_user_id（VARCHAR(64)）。
+    对接：ensure_schema_columns；仅 SQLite 生效。
+    二次开发：
+      - 表不存在时 no-op（create_all 按新 ORM 建列）；
+      - 列已存在立即 no-op；
+      - 禁止 FK/索引；失败必须抛出让外层 begin 回滚；禁止自行 commit。
+    """
+    dialect_name = getattr(getattr(conn, "dialect", None), "name", None)
+    if dialect_name != "sqlite":
+        return
+
+    row = conn.exec_driver_sql(
+        "SELECT name FROM sqlite_master "
+        "WHERE type='table' AND name='editor_state_revisions'"
+    ).fetchone()
+    if row is None:
+        return
+
+    cols = conn.exec_driver_sql("PRAGMA table_info(editor_state_revisions)").fetchall()
+    existing = {r[1] for r in cols if r is not None and len(r) > 1}
+    if "actor_user_id" in existing:
+        return
+
+    conn.exec_driver_sql(
+        "ALTER TABLE editor_state_revisions "
+        "ADD COLUMN actor_user_id VARCHAR(64)"
+    )
+
+
+def migrate_project_tasks_actor_user_id(conn) -> None:
+    """
+    用途：P13-D1 幂等为任务表加 nullable actor_user_id（VARCHAR(64)）。
+    对接：ensure_schema_columns；仅 SQLite 生效。
+    二次开发：
+      - 表不存在时 no-op；列已存在 no-op；
+      - 禁止 FK/索引；失败外层回滚；禁止自行 commit。
+    """
+    dialect_name = getattr(getattr(conn, "dialect", None), "name", None)
+    if dialect_name != "sqlite":
+        return
+
+    row = conn.exec_driver_sql(
+        "SELECT name FROM sqlite_master "
+        "WHERE type='table' AND name='project_tasks'"
+    ).fetchone()
+    if row is None:
+        return
+
+    cols = conn.exec_driver_sql("PRAGMA table_info(project_tasks)").fetchall()
+    existing = {r[1] for r in cols if r is not None and len(r) > 1}
+    if "actor_user_id" in existing:
+        return
+
+    conn.exec_driver_sql(
+        "ALTER TABLE project_tasks ADD COLUMN actor_user_id VARCHAR(64)"
+    )
+
+
 def ensure_schema_columns(target_engine=None) -> None:
     """
     用途：SQLite 个人版轻量加列（create_all 不会改已有表）。
@@ -695,3 +755,6 @@ def ensure_schema_columns(target_engine=None) -> None:
         migrate_editor_state_checkpoints_display_name(conn)
         # P12J-A：检查点 display_name 后幂等加 is_pinned + CHECK；失败阻止启动
         migrate_editor_state_checkpoints_is_pinned(conn)
+        # P13-D1：修订/任务可空 actor_user_id；失败阻止启动（外层事务回滚）
+        migrate_editor_state_revisions_actor_user_id(conn)
+        migrate_project_tasks_actor_user_id(conn)

@@ -23,6 +23,28 @@ from app.services import auth_service
 from app.services.project_service import ensure_default_workspace
 
 
+def get_request_actor_user_id(request: Request) -> str | None:
+    """
+    用途：P13-D1 只读解析当前请求可信操作者 user id。
+    规则：
+      - 仅 AUTH_MODE=required 时读取 request.state.auth_db_user_id；
+      - 必须为非空、无首尾空白、长度 ≤64 的字符串，否则 None；
+      - disabled / 缺失 / 非法类型固定 None，禁止从 body/query/header/Cookie 推断。
+    对接：browser_put、tasks、revise、callback、融合、恢复等九类写入口。
+    """
+    settings = get_settings()
+    if not settings.is_auth_required():
+        return None
+    raw = getattr(request.state, "auth_db_user_id", None)
+    if not isinstance(raw, str):
+        return None
+    if not raw or raw.strip() != raw:
+        return None
+    if len(raw) > 64:
+        return None
+    return raw
+
+
 def get_workspace_id(
     request: Request,
     db: Annotated[Session, Depends(get_db)],

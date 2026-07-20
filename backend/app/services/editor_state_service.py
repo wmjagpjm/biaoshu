@@ -698,6 +698,7 @@ def upsert_editor_state(
     business_quote: Any = ...,
     business_commit: Any = ...,
     revision_source_kind: str | None = None,
+    actor_user_id: str | None = None,
 ) -> dict:
     """
     用途：部分更新；analysis 与 analysis_overview 双写；商务字段合并进 business_json。
@@ -710,6 +711,7 @@ def upsert_editor_state(
       - 可选 revision_source_kind：仅内部写入者传入；存在时强制项目写锁，
         在唯一 commit 前以锁后 before 与本轮 after 原子记入修订账本（P12C-B-A）。
         默认 None，既有任务/revise 等调用不得被误记。
+      - 可选 actor_user_id：P13-D1 命名透传给 recorder；仅服务端可信身份，禁止客户端投稿。
     """
     writing_matrix = response_matrix is not ... and response_matrix is not None
     client_matrix_version = (
@@ -846,6 +848,7 @@ def upsert_editor_state(
                 before_state=current_state,
                 after_state=response,
                 source_kind=revision_source_kind,
+                actor_user_id=actor_user_id,
             )
 
         db.commit()

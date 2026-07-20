@@ -255,6 +255,7 @@ def test_table_columns_constraints_indexes_and_fk_cascade(disabled_client):
         "display_name",
         "is_pinned",
         "created_at",
+        "actor_user_id",
     }
     # P12F-J-A：is_pinned 必须 NOT NULL，DDL 含 0/1 CHECK（存量/新增默认 false）
     col_meta = {

@@ -231,6 +231,7 @@ def revise_artifact(
     target_id: str | None = None,
     target_label: str | None = None,
     expected_state_version: str | None = None,
+    actor_user_id: str | None = None,
 ) -> dict:
     """
     用途：执行一次定向修订（同步）。
@@ -287,6 +288,7 @@ def revise_artifact(
                     project_id,
                     expected_state_version=expected_state_version,
                     revision_source_kind="revise",
+                    actor_user_id=actor_user_id,
                     **kwargs,
                 )
             except editor_state_service.EditorStateVersionConflict:
@@ -311,6 +313,7 @@ def revise_artifact(
                 parsed_markdown=revised.strip(),
                 expected_state_version=expected_state_version,
                 revision_source_kind="revise",
+                actor_user_id=actor_user_id,
             )
         except editor_state_service.EditorStateVersionConflict:
             raise

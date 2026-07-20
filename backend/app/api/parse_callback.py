@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_workspace_id, require_strict_bid_writer
+from app.api.deps import get_request_actor_user_id, get_workspace_id, require_strict_bid_writer
 from app.core.config import Settings, get_settings
 from app.core.database import get_db
 from app.models.entities import Project, ProjectEditorStateRow, ProjectTaskRow
@@ -59,6 +59,7 @@ class ParseCallbackIn(BaseModel):
 def parse_callback(
     project_id: str,
     body: ParseCallbackIn,
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
     workspace_id: Annotated[str, Depends(get_workspace_id)],
     settings: Annotated[Settings, Depends(get_settings)],
@@ -83,6 +84,8 @@ def parse_callback(
         md = f"# 解析结果：{body.filename}\n\n> 来源：{body.source}\n\n" + md
 
     now = datetime.now(timezone.utc)
+    # P13-D1：个人 callback 可信 actor 仅来自 request.state；客户端 body 无效
+    actor_user_id = get_request_actor_user_id(request)
     try:
         # 共用锁后原语：版本不匹配抛冲突；不自行 commit
         # 保存同一次锁返回的权威 before，供提交前修订账本使用
@@ -113,6 +116,7 @@ def parse_callback(
                 },
                 ensure_ascii=False,
             ),
+            actor_user_id=actor_user_id,
             created_at=now,
             updated_at=now,
         )
@@ -137,6 +141,7 @@ def parse_callback(
             before_state=before_state,
             after_state=new_state,
             source_kind="callback",
+            actor_user_id=actor_user_id,
         )
         db.commit()
     except editor_state_service.EditorStateVersionConflict as exc:

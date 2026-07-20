@@ -246,6 +246,7 @@ def run_biz_qualify(
         project_id,
         business_qualify=items,
         expected_state_version=expected_state_version,
+        actor_user_id=getattr(task, "actor_user_id", None),
     )
     update_project(
         db, workspace_id, project_id, status="writing", technical_plan_step=2
@@ -310,6 +311,7 @@ def run_biz_toc(
         project_id,
         business_toc=items,
         expected_state_version=expected_state_version,
+        actor_user_id=getattr(task, "actor_user_id", None),
     )
     update_project(
         db, workspace_id, project_id, status="writing", technical_plan_step=3
@@ -374,6 +376,7 @@ def run_biz_quote(
         project_id,
         business_quote=quote,
         expected_state_version=expected_state_version,
+        actor_user_id=getattr(task, "actor_user_id", None),
     )
     update_project(
         db, workspace_id, project_id, status="writing", technical_plan_step=4
@@ -436,6 +439,7 @@ def run_biz_commit(
         project_id,
         business_commit=blocks,
         expected_state_version=expected_state_version,
+        actor_user_id=getattr(task, "actor_user_id", None),
     )
     update_project(
         db, workspace_id, project_id, status="writing", technical_plan_step=5
