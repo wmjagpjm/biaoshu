@@ -1,6 +1,6 @@
 # P12L 检查点固定名额提示前端实施计划
 
-> **状态：2026-07-20 已冻结待实现。** 启动 HEAD=`5258f84`；严格两文件为共用 checkpoint 面板与既有 checkpoint E2E。Grok 负责测试先行、实现及分级自测，Codex 负责审查、独立聚焦验收、文档、提交和推送。
+> **状态：2026-07-20 已冻结待实现。** 代码哈希基线=`5258f84`，契约冻结=`4526832`，实现启动 HEAD=`4526832`；严格两文件为共用 checkpoint 面板与既有 checkpoint E2E。Grok 负责测试先行、实现及分级自测，Codex 负责审查、独立聚焦验收、文档、提交和推送。
 
 **目标：** 技术标/商务标默认检查点列表显示 `已固定 X 条（最多 5 条）`；既有 pin/unpin/delete/list 状态变化即时重算，搜索态隐藏，零新增请求和零后端变化。
 
@@ -8,7 +8,7 @@
 
 ## 任务 1：核验冻结基线
 
-1. 核对分支为 `collab/grok-code-codex-review`，HEAD/上游均为 `5258f84`，工作区干净且无其它 Playwright/pytest/Grok 进程。
+1. 核对分支为 `collab/grok-code-codex-review`，HEAD/上游均为最新冻结提交 `4526832`，工作区干净且无其它 Playwright/pytest/Grok 进程；`5258f84` 只表示两文件哈希审计来源，不得回退。
 2. 复算面板/E2E 冻结哈希，阅读 P12J-B/P12K 契约、面板 list/search/pin/delete 状态链与 checkpoint 探针。
 3. 任一脏文件、哈希、进程或范围偏差先发送 `status/question`，不得覆盖。
 

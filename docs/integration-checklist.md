@@ -1088,7 +1088,7 @@ Codex 独立串行通过后端受影响集/全量 **120/1261 passed**，前端 P
 
 ## P12L 检查点固定名额提示前端（已冻结待实现）
 
-契约=`docs/p12l-checkpoint-pinned-count-frontend-contract.md`，计划=`docs/plans/2026-07-20-p12l-checkpoint-pinned-count-frontend-plan.md`，启动 HEAD=`5258f84`；严格两文件。
+契约=`docs/p12l-checkpoint-pinned-count-frontend-contract.md`，计划=`docs/plans/2026-07-20-p12l-checkpoint-pinned-count-frontend-plan.md`，代码哈希基线=`5258f84`、契约冻结=`4526832`；严格两文件，实现从冻结提交或其后最新干净上游启动。
 
 冻结后的联调验收项：
 

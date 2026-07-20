@@ -918,7 +918,7 @@ Codex 审查后下发 test-only 返修 task/review=`msg_b1b3d1fb809c4a579ed35dfd
 
 ## P12L 检查点固定名额提示前端（已冻结待实现，2026-07-20）
 
-契约=`docs/p12l-checkpoint-pinned-count-frontend-contract.md`，计划=`docs/plans/2026-07-20-p12l-checkpoint-pinned-count-frontend-plan.md`，启动 HEAD=`5258f84`。严格两文件：`frontend/src/features/editor-state-checkpoints/EditorStateCheckpointPanel.tsx` 与 `frontend/e2e/editor-state-checkpoint-restore.spec.ts`；冻结 SHA-256 分别为 `CAA78A98C8113C333FF9D559F84FB2270B933D4F224C997F5897BEA5D4083401`、`627ADAC0FD76A1971716608DDAD83B739E9B819D4053BFF2B48B45D90CE987DB`。
+契约=`docs/p12l-checkpoint-pinned-count-frontend-contract.md`，计划=`docs/plans/2026-07-20-p12l-checkpoint-pinned-count-frontend-plan.md`，代码哈希基线=`5258f84`、契约冻结=`4526832`；实现启动 HEAD 必须为冻结提交或包含它的最新干净上游。严格两文件：`frontend/src/features/editor-state-checkpoints/EditorStateCheckpointPanel.tsx` 与 `frontend/e2e/editor-state-checkpoint-restore.spec.ts`；冻结 SHA-256 分别为 `CAA78A98C8113C333FF9D559F84FB2270B933D4F224C997F5897BEA5D4083401`、`627ADAC0FD76A1971716608DDAD83B739E9B819D4053BFF2B48B45D90CE987DB`。
 
 唯一用户变化是技术标/商务标默认检查点列表在加载完成后显示 `已固定 X 条（最多 5 条）`。数量只从严格解析后的 `items` 以 `isPinned === true` 纯派生；pin/unpin/delete/默认重载随现有状态即时重算，零新增请求。active search 必须隐藏，避免把搜索子集冒充项目总数；5/5 时仍让服务端处理第 6 条 PATCH，不新增本地权限或配额校验。
 
