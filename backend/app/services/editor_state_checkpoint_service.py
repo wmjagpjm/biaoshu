@@ -488,9 +488,11 @@ def list_editor_state_checkpoints(
     project_id: str,
 ) -> dict[str, Any]:
     """
-    用途：固定最近 20 条元数据列表；SQL 显式八列投影（含原始 is_pinned），不含 snapshot_json。
+    用途：固定优先的最近最多 20 条元数据列表；SQL 显式八列投影（含原始 is_pinned），不含 snapshot_json。
     对接：GET /api/projects/{projectId}/editor-state-checkpoints。
-    二次开发：完整物化并校验全部最多 20 条固定值；任一非法整次 corrupt。
+    二次开发：
+      - ORDER BY 精确 is_pinned DESC, created_at DESC, id DESC；固定组/普通组内仍时间与 ID 倒序；
+      - 完整物化并校验全部最多 20 条固定值；任一非法整次 corrupt；禁止 Python 排序或触碰 search。
     """
     _require_project(db, workspace_id, project_id, lock=False)
     try:
@@ -513,6 +515,7 @@ def list_editor_state_checkpoints(
                     EditorStateCheckpointRow.project_id == project_id,
                 )
                 .order_by(
+                    type_coerce(EditorStateCheckpointRow.is_pinned, Integer).desc(),
                     EditorStateCheckpointRow.created_at.desc(),
                     EditorStateCheckpointRow.id.desc(),
                 )
