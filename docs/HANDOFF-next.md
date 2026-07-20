@@ -1,14 +1,14 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-19（P12J-B 已闭环；P12K 默认列表固定优先已冻结待实现）
+> **交接日期**：2026-07-20（P12K 默认列表固定优先已闭环；下一包待只读审计与冻结）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
 > **协作分支功能基线**：P12F-J-A 冻结=`2f03b8c`、实现=`a7021c4`；P12F-I 冻结=`060191e`、实现=`008e443`；P12F-H 冻结=`0660145`、范围修订=`0db935b`/`aca68b6`、实现=`b4338ba`；P12F-G-B 冻结=`89b5728`、实现=`bb7c4f4`；P12F-G-A 冻结=`c176cb5`、实现=`d2555d4`；P12F-F-B 冻结=`4585388`、实现=`be2fe77`；P12F-F-A 冻结=`b2eed7c`、实现=`e6516e8`；P12F-E-B 冻结=`a31e50e`、实现=`f9127ec`；P12F-E-A 冻结=`af3798a`、实现=`c66b69d`；P12F-D 冻结=`a2acdf3`、实现=`587df9a`；P13-A 冻结=`e8dfa61`、实现=`1509aa2`；P12F-C 冻结=`bb1ae3e`、实现=`fe99f5a`；P12F-B 冻结=`4ddd896`、实现=`c84a94d`；P12F-A 冻结=`e713fb3`、实现=`24f4cf2`；P12E-A 冻结=`5aa205c`、实现=`f9f067e`；P12E-B 冻结=`00ef081`、实现=`5a5b08a`；P12E-C 冻结=`8b40bf4`、实现=`b6a4375`；其余既有功能基线见本文 §11。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
-> **最新增量基线**：P12J-A 已交付检查点固定列/迁移、5 条/10 MiB 配额、单条 PATCH 与固定/安全双保护裁剪；冻结=`9f304da`、实现=`8edebd4`。P12J-B 已交付固定状态八/九键读取与技术/商务共用前端入口；代码哈希基线=`262683e`、冻结=`65fe259`、口径澄清=`1471c31`、实现=`7d1d5c9`。
+> **最新增量基线**：P12J-A 已交付检查点固定列/迁移、5 条/10 MiB 配额、单条 PATCH 与固定/安全双保护裁剪；冻结=`9f304da`、实现=`8edebd4`。P12J-B 已交付固定状态八/九键读取与技术/商务共用前端入口；代码哈希基线=`262683e`、冻结=`65fe259`、口径澄清=`1471c31`、实现=`7d1d5c9`。P12K 已交付默认检查点列表固定优先；冻结=`fe0fa08`、启动口径修订=`ff48495`/`6666af6`、实现=`3c3cbf9`。
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
-> **本地状态**：只允许分支 `collab/grok-code-codex-review`；P12J-B 实现=`7d1d5c9`、闭环=`90cfd58` 已推送。P12K 代码审计基线=`90cfd58`、契约冻结=`fe0fa08`，严格两文件；启动实现时以最新冻结提交为 HEAD。
-> **验收基线**：P12J-B Codex 独立后端受影响集/全量 **120/1261 passed**；前端 P12J-B/checkpoint/history/技术/商务 **6/82/61/28/18 passed**。整仓前端沿用已验收 **318 passed** 基线且未冒充重跑结果；仅保留既有 pytest 弃用告警和 build 大 chunk 提示。**所有 pytest 与 Playwright E2E 共用 SQLite 重置库，pytest 禁止 xdist/并发分组，Playwright 必须显式 `--workers=1 --retries=0` 逐条串行运行。**
+> **本地状态**：只允许分支 `collab/grok-code-codex-review`；P12K 实现=`3c3cbf9` 已推送，中文闭环文档正在本次提交。下一包尚未冻结，不得直接实现。
+> **验收基线**：P12K Grok 串行专项/受影响集/后端全量 **12/132/1273 passed**；Codex 独立受影响集 **132 passed**，未重复 Grok 已完成的全量。前端沿用 P12J-B checkpoint **82 passed** 与整仓 **318 passed** 基线，未冒充本包重跑。**所有 pytest 与 Playwright E2E 共用 SQLite 重置库，pytest 禁止 xdist/并发分组，Playwright 必须显式 `--workers=1 --retries=0` 逐条串行运行；按风险分级验收，避免 Grok 与 Codex 重复全量。**
 
 ---
 
@@ -19,10 +19,10 @@
 工作分支只能是 collab/grok-code-codex-review，禁止直接操作 main；先执行 git status -sb，并核对 HEAD 与 origin/collab/grok-code-codex-review 一致且工作区干净。
 完整阅读 docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/plans/2026-07-13-package-9-delivery-enhancement-plan.md、docs/integration-checklist.md。
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
-当前进度：P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/B、P12E-A/B/C、P12F-A/B/C/D/E-A/E-B/F-A/F-B/G-A/G-B/H/I/J-A/J-B、P12G、P12H、P12I、P12J-A/P12J-B、P13-A、P9D、P9C-R1、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。P12J-B 冻结=`65fe259`、实现=`7d1d5c9`；后端/前端有效基线为 1261/318 passed。
-当前状态：修订历史已闭合来源、UTC 时间、联合搜索、游标分页、单条删除、展示名称、固定与保护性裁剪；检查点已有创建、列表、详情、安全恢复、展示名称、单条删除、当前项目显式搜索、固定状态读取/入口及固定/安全双保护裁剪。
-当前执行包：P12K 检查点固定优先默认列表已冻结；契约=`docs/p12k-checkpoint-pinned-first-list-contract.md`，计划=`docs/plans/2026-07-19-p12k-checkpoint-pinned-first-list-plan.md`，严格两文件。
-下一步：推送冻结提交后，通过消息箱让已认证 Grok 先只新增 P12K 专项形成真实 failure-first，再只改 checkpoint service 默认列表排序；Codex 只做受限审查、独立串行验收和 Git 闭环。搜索、前端当前列表、配额/裁剪、分页、跨项目版本、完整时间线和多人协作不得扩入。
+当前进度：P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/B、P12E-A/B/C、P12F-A/B/C/D/E-A/E-B/F-A/F-B/G-A/G-B/H/I/J-A/J-B、P12G、P12H、P12I、P12J-A/P12J-B/P12K、P13-A、P9D、P9C-R1、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成。P12K 冻结=`fe0fa08`、实现=`3c3cbf9`；后端有效全量证据为 Grok **1273 passed**，Codex 独立受影响集 **132 passed**，前端沿用 **318 passed** 基线。
+当前状态：修订历史已闭合来源、UTC 时间、联合搜索、游标分页、单条删除、展示名称、固定与保护性裁剪；检查点已有创建、列表、详情、安全恢复、展示名称、单条删除、当前项目显式搜索、固定状态读取/入口、固定/安全双保护裁剪及默认列表固定优先排序。
+当前执行包：无；P12K 已闭环，下一包必须先按路线图做只读审计、明确最小用户价值和冻结边界。
+下一步：审计剩余主线，形成下一包契约与计划后再通过消息箱交给已认证 Grok。Grok 默认只跑专项/受影响集；Codex 按风险决定是否补一次全量，禁止双方机械重复全量。分页、跨项目版本、完整时间线和多人协作等大边界不得顺手扩入。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -904,13 +904,17 @@ Codex 最终独立串行通过专项/受影响回归/后端全量 **23/140/1258 
 
 Codex 独立串行通过后端 **120/1261 passed**、前端 **6/82/61/28/18 passed**，lint/build/py_compile/diff/严格十一文件/空暂存区/最终哈希通过。Grok 返修自测曾出现一次既有 history 双击元素 detached（**1 failed / 44 passed / 16 did not run**），未改代码重跑及 Codex 独立首轮均 **61 passed**，保留为非阻断稳定性风险。整仓前端 318 基线未重复运行或冒充；固定排序/分组、批量、容量展示、分页/游标、跨项目版本、完整时间线和多人协作仍未实现。
 
-## P12K 检查点固定优先默认列表（已冻结待实现，2026-07-19）
+## P12K 检查点固定优先默认列表（已完成并推送，2026-07-20）
 
-契约=`docs/p12k-checkpoint-pinned-first-list-contract.md`，计划=`docs/plans/2026-07-19-p12k-checkpoint-pinned-first-list-plan.md`，代码审计基线=`90cfd58`、契约冻结=`fe0fa08`。只读审计确认严格两文件：`backend/app/services/editor_state_checkpoint_service.py` 与新建 `backend/tests/test_p12k_checkpoint_pinned_first_list.py`；生产冻结 SHA-256=`20A0FBACFE20DF4D6FE0157B2DF6F41436EDAC5B298F6D2174803E7A66CF4DC3`。
+契约=`docs/p12k-checkpoint-pinned-first-list-contract.md`，计划=`docs/plans/2026-07-19-p12k-checkpoint-pinned-first-list-plan.md`，代码审计基线=`90cfd58`、契约冻结=`fe0fa08`、启动口径修订=`ff48495`/`6666af6`、实现=`3c3cbf9`。严格两文件：`backend/app/services/editor_state_checkpoint_service.py` 与新建 `backend/tests/test_p12k_checkpoint_pinned_first_list.py`。
 
 唯一生产变化是默认 list ORDER BY 增加原始固定列倒序，形成固定组优先、组内 `created_at DESC,id DESC`。search 继续最新 20 条纯时间/ID 倒序，旧固定第 21 条不得挤入候选；P12J-B 当前列表固定后只原位更新，下一次默认 GET 才重排。表/迁移/API/Schema/pin service/配额/裁剪、所有写路径、前端与 E2E 均冻结。
 
-Grok 必须先只新增测试取得真实业务红测，再改一个生产文件；pytest 全部逐条串行，完成后只发 `review_request`，不得暂存、提交或推送。Codex 独立验收专项、六文件受影响集、后端全量、py_compile/diff/两文件/哈希门后才可提交。
+Grok 初始 task/review=`msg_24d08a0202954060b4c4ab3b0a35942d`/`msg_131b165976c64b2fb05ceb0792122a5c`。真实 failure-first **8 failed / 4 passed**，首个业务失败是旧固定项仍排在新普通项之后；另一个隔离用例最初因测试夹具 `Workspace` 构造 `TypeError` 失败，生产修改前已先修正，未冒充业务红测。首轮实现通过专项/受影响集/后端全量 **12/132/1273 passed**，全量耗时 **1674.75 秒**。
+
+Codex 审查后下发 test-only 返修 task/review=`msg_b1b3d1fb809c4a579ed35dfd9a875615`/`msg_4e2f742d8ac2469fad123e367922f6fa`，补齐 PATCH 不触发默认列表投影以及 list/search ORDER BY 精确序列证据；生产哈希保持不变。Codex 独立串行通过六文件受影响集 **132 passed in 106.74s**，并通过 py_compile、diff-check、严格两文件、空暂存区、SQL/AST 和最终哈希门；遵循分级验收策略，没有重复 Grok 已跑的 1273 条全量。验收确认=`msg_3048a39db0c04969978a7e2dd7ea0c60`。
+
+最终 SHA-256：生产服务=`8C08B546E0DB8FA00FE4D6E15FB93A23650F15FA12C42E23EC100ED6EA7E371E`，专项测试=`49A6FEA0F2C08FF44E9E7CC57FC216A967B03EFCF6DA6ED78624DDC573821591`。Grok 未暂存、提交或推送；前端未修改、未运行 Playwright，沿用 checkpoint **82** 与整仓 **318 passed** 基线。固定分组标题、批量固定、容量展示、分页/游标、跨项目检查点、完整时间线和多人协作仍未实现；下一包尚未冻结。
 
 ## P12F-I 修订名称与可见内容联合搜索完成交接（2026-07-19）
 

@@ -1069,20 +1069,22 @@ Grok 初始任务/review=`msg_b78f8a9474cd470bbd1507aa141ba6c4`/`msg_b86ca88d69b
 
 Codex 独立串行通过后端受影响集/全量 **120/1261 passed**，前端 P12J-B/checkpoint/history/技术/商务 **6/82/61/28/18 passed**；py_compile、lint、build、diff-check、严格十一文件、空暂存区、最终哈希与静态门均通过。Grok 返修自测的 history 首轮曾有一次既有双击确认元素 detached：**1 failed / 44 passed / 16 did not run**；未改代码重跑和 Codex 独立首轮均 **61 passed**，记为非阻断稳定性风险。整仓前端沿用 **318 passed** 基线，未冒充本包重跑。
 
-## P12K 检查点固定优先默认列表（已冻结待实现）
+## P12K 检查点固定优先默认列表（已完成）
 
-契约=`docs/p12k-checkpoint-pinned-first-list-contract.md`，计划=`docs/plans/2026-07-19-p12k-checkpoint-pinned-first-list-plan.md`，代码审计基线=`90cfd58`、契约冻结=`fe0fa08`；严格两文件。
+契约=`docs/p12k-checkpoint-pinned-first-list-contract.md`，计划=`docs/plans/2026-07-19-p12k-checkpoint-pinned-first-list-plan.md`，代码审计基线=`90cfd58`、契约冻结=`fe0fa08`、启动口径修订=`ff48495`/`6666af6`、实现=`3c3cbf9`；严格两文件。
 
-冻结后的联调验收项：
+完成后的联调验收项：
 
 1. 默认 GET 列表精确 `is_pinned DESC,created_at DESC,id DESC`；固定组优先，组内时间/ID 稳定倒序，仍最多 20 条八键元数据且 SQL 不读正文。
 2. PATCH 固定/取消后，下一次默认 GET 分别上移/回归时间位置；PATCH 不自动 GET，P12J-B 当前列表仍原位更新，前端零修改。
 3. search 继续最新 20 条 `created_at DESC,id DESC`；旧固定第 21 条即使命中也不进入候选，多项结果不改为固定优先。
 4. 原始非法 `is_pinned=2` 仍固定 corrupt/no-store/五域零写；其它项目/空间不参与列表或排序。
 5. 表/迁移/模型/Schema/API/pin service/配额/裁剪/create/detail/search/restore/name/delete/修订/前端/依赖全部冻结。
-6. pytest 逐条串行；最终通过 P12K 专项、六文件受影响集、后端全量、py_compile、diff-check、精确两文件、空暂存区、最终哈希和 list/search 独立 AST/SQL 门。本包不运行 Playwright，沿用 checkpoint **82** 与整仓 **318 passed** 基线。
+6. pytest 逐条串行；Grok 通过 P12K 专项/六文件受影响集/后端全量 **12/132/1273 passed**，Codex 独立通过六文件受影响集 **132 passed in 106.74s**，并完成 py_compile、diff-check、精确两文件、空暂存区、最终哈希和 list/search 独立 AST/SQL 门。本包不运行 Playwright，沿用 checkpoint **82** 与整仓 **318 passed** 基线。
 
-实现尚未开始。Grok 只负责两文件测试先行、实现和自测并发送 `review_request`；Codex 负责独立审查、验收、中文文档、提交与推送。
+真实 failure-first **8 failed / 4 passed**，首个业务失败为旧固定项仍排在新普通项之后；测试夹具 `Workspace` 构造错误在生产修改前先修正，不计作业务红测。Grok 初始 task/review=`msg_24d08a0202954060b4c4ab3b0a35942d`/`msg_131b165976c64b2fb05ceb0792122a5c`，test-only 返修 task/review=`msg_b1b3d1fb809c4a579ed35dfd9a875615`/`msg_4e2f742d8ac2469fad123e367922f6fa`，Codex 验收=`msg_3048a39db0c04969978a7e2dd7ea0c60`。最终哈希：生产服务=`8C08B546E0DB8FA00FE4D6E15FB93A23650F15FA12C42E23EC100ED6EA7E371E`，专项测试=`49A6FEA0F2C08FF44E9E7CC57FC216A967B03EFCF6DA6ED78624DDC573821591`。
+
+后续验收采用分级策略：Grok 默认运行专项/受影响集，Codex 独立复核并按迁移、鉴权、共享状态、跨域范围和回归信号决定是否补一次全量；不再让双方机械重复同一全量。所有动态测试仍必须串行，Playwright 继续 `--workers=1 --retries=0`。
 
 ## P13-A 任务 SSE 工作空间鉴权（已完成）
 
