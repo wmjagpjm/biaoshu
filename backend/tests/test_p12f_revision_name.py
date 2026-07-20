@@ -65,6 +65,9 @@ _META_KEYS_SEVEN = frozenset(
         "isPinned",
     }
 )
+# P12M：搜索成功项精确八键（七键元数据 + matchReasons）
+_SEARCH_ITEM_KEYS = _META_KEYS_SEVEN | {"matchReasons"}
+_MATCH_REASON_ORDER = ("displayName", "visibleContent")
 
 # 契约 §3/§4 名称专用错误
 _CODE_NAME_INVALID = "editor_state_revision_display_name_invalid"
@@ -312,6 +315,30 @@ def _assert_meta_seven(item: dict, *, forbid_echo: str | None = None) -> None:
     assert type(item["isPinned"]) is bool
     if forbid_echo:
         assert forbid_echo not in json.dumps(item, ensure_ascii=False)
+
+
+def _assert_match_reasons(reasons: object) -> None:
+    """用途：P12M 严格校验 matchReasons 非空、无重复、固定枚举与固定顺序。"""
+    assert isinstance(reasons, list), reasons
+    assert 1 <= len(reasons) <= 2, reasons
+    assert len(reasons) == len(set(reasons)), reasons
+    for r in reasons:
+        assert type(r) is str, r
+        assert r in _MATCH_REASON_ORDER, r
+    if len(reasons) == 2:
+        assert reasons == list(_MATCH_REASON_ORDER), reasons
+    if len(reasons) == 1:
+        assert reasons[0] in _MATCH_REASON_ORDER, reasons
+
+
+def _assert_search_item_eight(item: dict, *, is_pinned: bool | None = None) -> None:
+    """用途：搜索成功项精确八键；list/page 仍走七键。"""
+    assert set(item.keys()) == _SEARCH_ITEM_KEYS, item.keys()
+    meta = {k: item[k] for k in _META_KEYS_SEVEN}
+    _assert_meta_seven(meta)
+    _assert_match_reasons(item["matchReasons"])
+    if is_pinned is not None:
+        assert item["isPinned"] is is_pinned
 
 
 def _bootstrap(role: str = auth_service.ROLE_BID_WRITER):
@@ -1532,6 +1559,10 @@ def test_execute_flush_commit_failures_rollback(disabled_client):
 
 
 def test_list_page_search_detail_seven_keys_and_null_default(disabled_client):
+    """
+    用途：list/page 精确七键；search 精确八键（P12M matchReasons）；
+      detail 八键含 snapshot；默认 displayName=null、isPinned=false。
+    """
     client = disabled_client
     pid = _create_project(client, name="七键读取")
     rows = _seed_revisions(pid, ["k0", "k1", "k2"])
@@ -1555,17 +1586,18 @@ def test_list_page_search_detail_seven_keys_and_null_default(disabled_client):
         _assert_meta_seven(it)
         assert it["isPinned"] is False
 
-    # 搜索命中集合按既有正文匹配，不依赖 displayName
+    # 搜索命中集合按既有正文匹配，不依赖 displayName；P12M 成功项精确八键
     res_search = client.post(
         _search_url(pid),
         json={"query": "章节k0"},
     )
     assert res_search.status_code == 200, res_search.text
     sbody = res_search.json()
-    assert "items" in sbody
+    assert set(sbody.keys()) == {"items"}
+    assert len(sbody["items"]) >= 1
     for it in sbody["items"]:
-        _assert_meta_seven(it)
-        assert it["isPinned"] is False
+        _assert_search_item_eight(it, is_pinned=False)
+        assert it["matchReasons"] == ["visibleContent"]
 
     res_detail = client.get(_detail_url(pid, rid0))
     assert res_detail.status_code == 200, res_detail.text
@@ -1576,6 +1608,9 @@ def test_list_page_search_detail_seven_keys_and_null_default(disabled_client):
     _assert_meta_seven(meta_only)
     assert d["displayName"] is None
     assert d["isPinned"] is False
+    assert "snapshot" in d
+    assert set(d.keys()) == _META_KEYS_SEVEN | {"snapshot"}
+    assert "matchReasons" not in d
 
     # 保存名称后七键回显；固定状态不变
     res_set = _patch_name(client, pid, rid0, "展示名")

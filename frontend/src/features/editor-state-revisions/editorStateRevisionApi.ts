@@ -71,6 +71,22 @@ const META_KEYS = [
   "isPinned",
 ] as const;
 
+/** P12M：搜索成功项精确八键（七键 + matchReasons） */
+const SEARCH_ITEM_KEYS = [
+  "revisionId",
+  "stateVersion",
+  "snapshotBytes",
+  "sourceKind",
+  "createdAt",
+  "displayName",
+  "isPinned",
+  "matchReasons",
+] as const;
+
+/** P12M：命中原因固定枚举与顺序 */
+const MATCH_REASON_ORDER = ["displayName", "visibleContent"] as const;
+const MATCH_REASON_SET = new Set<string>(MATCH_REASON_ORDER);
+
 /** 详情精确八键（七键元数据 + snapshot） */
 const DETAIL_KEYS = [
   "revisionId",
@@ -339,11 +355,26 @@ export type EditorStateRevisionSearchQuery = {
 };
 
 /**
- * 模块：可见内容搜索响应（P12F-F-B）
- * 约束：顶层精确 {items}；最多 20；revisionId 唯一；无 nextCursor。
+ * 模块：P12M 搜索命中原因
+ * 约束：仅 displayName / visibleContent；固定顺序。
+ */
+export type EditorStateRevisionMatchReason =
+  (typeof MATCH_REASON_ORDER)[number];
+
+/**
+ * 模块：搜索成功项（P12M 八键）
+ * 约束：七键元数据 + 非空 matchReasons；list/page 不得伪造该键。
+ */
+export type EditorStateRevisionSearchItem = EditorStateRevisionMeta & {
+  matchReasons: EditorStateRevisionMatchReason[];
+};
+
+/**
+ * 模块：可见内容搜索响应（P12F-F-B / P12M）
+ * 约束：顶层精确 {items}；最多 20；revisionId 唯一；无 nextCursor；项为八键。
  */
 export type EditorStateRevisionSearchResult = {
-  items: EditorStateRevisionMeta[];
+  items: EditorStateRevisionSearchItem[];
 };
 
 /**
@@ -988,6 +1019,65 @@ export function assertValidSearchQuery(value: unknown): asserts value is string 
 }
 
 /**
+ * 用途：严格解析 matchReasons；非数组/空/重复/未知/乱序/非原生字符串均失败。
+ */
+export function parseMatchReasons(
+  raw: unknown,
+): EditorStateRevisionMatchReason[] {
+  if (!Array.isArray(raw)) {
+    throw new Error("revision_search_invalid");
+  }
+  if (raw.length < 1 || raw.length > 2) {
+    throw new Error("revision_search_invalid");
+  }
+  const reasons: EditorStateRevisionMatchReason[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (typeof item !== "string") {
+      throw new Error("revision_search_invalid");
+    }
+    if (!MATCH_REASON_SET.has(item)) {
+      throw new Error("revision_search_invalid");
+    }
+    if (seen.has(item)) {
+      throw new Error("revision_search_invalid");
+    }
+    seen.add(item);
+    reasons.push(item as EditorStateRevisionMatchReason);
+  }
+  // 固定顺序：双命中必须 displayName 在前；单命中允许任一
+  if (reasons.length === 2) {
+    if (
+      reasons[0] !== "displayName" ||
+      reasons[1] !== "visibleContent"
+    ) {
+      throw new Error("revision_search_invalid");
+    }
+  }
+  return reasons;
+}
+
+/**
+ * 用途：严格解析搜索成功项；精确八键 + matchReasons 约束。
+ */
+export function parseRevisionSearchItem(
+  raw: unknown,
+): EditorStateRevisionSearchItem {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("revision_search_invalid");
+  }
+  const o = raw as Record<string, unknown>;
+  if (!hasExactKeys(o, SEARCH_ITEM_KEYS)) {
+    throw new Error("revision_search_invalid");
+  }
+  // 复用七键元数据校验：先剥 matchReasons 再走 parseRevisionMeta
+  const { matchReasons: rawReasons, ...metaRaw } = o;
+  const meta = parseRevisionMeta(metaRaw);
+  const matchReasons = parseMatchReasons(rawReasons);
+  return { ...meta, matchReasons };
+}
+
+/**
  * 用途：严格解析搜索响应；顶层精确 items；最多 20；页内 ID 唯一；禁止 nextCursor 等额外键。
  */
 export function parseRevisionSearchResult(
@@ -1006,7 +1096,7 @@ export function parseRevisionSearchResult(
   if (o.items.length > MAX_SEARCH_ITEMS) {
     throw new Error("revision_search_invalid");
   }
-  const items = o.items.map((item) => parseRevisionMeta(item));
+  const items = o.items.map((item) => parseRevisionSearchItem(item));
   const seen = new Set<string>();
   for (const meta of items) {
     if (seen.has(meta.revisionId)) {

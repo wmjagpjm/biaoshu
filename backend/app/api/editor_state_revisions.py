@@ -20,7 +20,8 @@
   - 未知查询参数不得改变固定排序/上限/来源全集/正文不可搜索边界；
   - 静态 /page 与 /search 必须注册在动态 /{revision_id} 之前；页大小服务端固定 10；
   - page 扩展可选 query 别名 sourceKind/createdFrom/createdBefore；旧列表路由完全不变；
-  - search 仅 POST body 承载关键词；list/page/search 七键含 displayName/isPinned；detail 八键含 snapshot；
+  - search 仅 POST body 承载关键词；list/page 七键含 displayName/isPinned；
+    search 八键另含 matchReasons；detail 八键含 snapshot；
   - comparison/body-diff 只读，禁止写库/锁/审计；
   - P12E-B 双修订 body-diff 两侧均经 C1 校验，禁止读取当前 editor-state；
   - DELETE 必须无 query 且 body 严格零长度；成功固定空 204；
@@ -57,6 +58,8 @@ from app.api.schemas import (
     EditorStateRevisionRestore,
     EditorStateRevisionRestoreOut,
     EditorStateRevisionSearch,
+    EditorStateRevisionSearchItemOut,
+    EditorStateRevisionSearchOut,
 )
 from app.core.database import get_db
 from app.services import (
@@ -343,6 +346,20 @@ def _meta_out(data: dict) -> EditorStateRevisionMetaOut:
     )
 
 
+def _search_item_out(data: dict) -> EditorStateRevisionSearchItemOut:
+    """用途：搜索 service dict → 八键响应（含固定 matchReasons）。"""
+    return EditorStateRevisionSearchItemOut(
+        revision_id=data["revision_id"],
+        state_version=data["state_version"],
+        snapshot_bytes=data["snapshot_bytes"],
+        source_kind=data["source_kind"],
+        created_at=data["created_at"],
+        display_name=data["display_name"],
+        is_pinned=data["is_pinned"],
+        match_reasons=data["match_reasons"],
+    )
+
+
 @router.get(
     "/{project_id}/editor-state-revisions",
     response_model=EditorStateRevisionListOut,
@@ -414,7 +431,7 @@ def list_editor_state_revisions_page(
 
 @router.post(
     "/{project_id}/editor-state-revisions/search",
-    response_model=EditorStateRevisionListOut,
+    response_model=EditorStateRevisionSearchOut,
 )
 async def search_editor_state_revisions(
     project_id: str,
@@ -422,15 +439,16 @@ async def search_editor_state_revisions(
     response: Response,
     db: Annotated[Session, Depends(get_db)],
     workspace_id: Annotated[str, Depends(get_workspace_id)],
-) -> EditorStateRevisionListOut:
+) -> EditorStateRevisionSearchOut:
     """
-    用途：在最新 20 条候选修订中按可见字段字面搜索；仅返回五键元数据。
-    对接：P12F-F-A；editor_state_revision_history_service.list_editor_state_revision_search。
+    用途：在最新 20 条候选修订中按名称/可见字段字面搜索；返回八键含 matchReasons。
+    对接：P12F-F-A / P12M；editor_state_revision_history_service.list_editor_state_revision_search。
     二次开发：
       - 必须静态注册在 /{revision_id} 之前；
       - 请求体手工安全解析 + extra=forbid Schema；值由 service 判型；
       - 外壳失败固定 422 脱敏，禁止默认 Pydantic 回显 input；
-      - 成功/业务错误 no-store；不反射 query/正文/ID；不写库。
+      - 成功/业务错误 no-store；不反射 query/正文/ID；不写库；
+      - 不得复用 list 七键模型；matchReasons 顺序与枚举由 service 保证。
     """
     _no_store(response)
     body = _parse_search_body(await _read_search_json_object(request))
@@ -448,8 +466,8 @@ async def search_editor_state_revisions(
         )
     except EditorStateRevisionHistoryError as exc:
         _raise_history_error(exc)
-    return EditorStateRevisionListOut(
-        items=[_meta_out(item) for item in data["items"]]
+    return EditorStateRevisionSearchOut(
+        items=[_search_item_out(item) for item in data["items"]]
     )
 
 

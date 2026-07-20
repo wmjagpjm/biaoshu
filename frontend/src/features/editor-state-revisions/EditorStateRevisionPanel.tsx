@@ -1,9 +1,10 @@
 /**
- * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B / P12F-F-B / P12F-G-B / P12F-H / P12F-I / P12F-J-B
+ * 模块：P12C-C3 / P12D-B / P12E-A / P12E-C / P12F-C / P12F-D / P12F-E-B / P12F-F-B / P12F-G-B / P12F-H / P12F-I / P12F-J-B / P12M
  *       双工作区共用修订历史折叠面板
  * 用途：默认折叠零请求；展开游标页；可选来源筛选；本地时间范围草稿显式应用/清除；
- *       显式名称或内容联合搜索 POST；手动加载更多至最多 20 条；按需摘要；按需与当前对比；按需正文差异；
- *       内存双侧选择与双修订正文差异；内联二次确认后 restore；内联二次确认后单条 DELETE；
+ *       显式名称或内容联合搜索 POST；搜索结果固定命中来源中文标签；手动加载更多至最多 20 条；
+ *       按需摘要；按需与当前对比；按需正文差异；内存双侧选择与双修订正文差异；
+ *       内联二次确认后 restore；内联二次确认后单条 DELETE；
  *       内联命名保存/覆盖/清除、单条固定/取消固定（均成功原位更新，失败保值）。
  * 对接：editorStateRevisionApi（含 page/search/comparison/body-diff/pair/delete/display-name/pin）；
  *       技术/商务 hook 的 restoreRevision 回调。
@@ -14,10 +15,11 @@
  *   - 摘要、比较、正文差异、双修订差异、恢复确认、删除确认、命名同一时刻只保留一个当前意图；交叉作废
  *   - 时间/搜索草稿与已应用值分离；来源/刷新/恢复/删除/加载更多只读已应用范围
  *   - 固定中文脱敏；禁止 console/存储/URL/Cookie/剪贴板/下载/轮询/外网
- *   - 无创建/批量删除/自动搜索/自动分页/预取；双修订选择仅内存；游标仅内存 + 规定 API 查询
+ *   - 无 dig/批量删除/自动搜索/自动分页/预取；双修订选择仅内存；游标仅内存 + 规定 API 查询
  *   - 搜索态无加载更多；关键词仅输入控件值 + React 内存 + 一次 POST body
  *   - 删除/命名不依赖 editor-state expected version；不得仅因 props.disabled 永久隐藏
  *   - P12F-I 仅改联合搜索固定文案；P12F-J-B 固定状态仅原位更新，不重载历史或 editor-state
+ *   - P12M 仅 active search 显示固定「命中：名称/可见内容」；禁止片段/高亮/内部枚举泄漏
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -44,8 +46,10 @@ import {
   type BodyDiffOp,
   type EditorStateRevisionBodyDiff,
   type EditorStateRevisionComparison,
+  type EditorStateRevisionMatchReason,
   type EditorStateRevisionMeta,
   type EditorStateRevisionPairBodyDiff,
+  type EditorStateRevisionSearchItem,
   type EditorStateRevisionSummary,
   type RevisionSourceKind,
 } from "./editorStateRevisionApi";
@@ -181,7 +185,31 @@ export type EditorStateRevisionPanelProps = {
   restoreRevision: (revisionId: string) => Promise<RevisionRestoreOutcome>;
 };
 
-type ListItem = EditorStateRevisionMeta;
+/** 列表/页七键；搜索态八键（含 matchReasons） */
+type ListItem = EditorStateRevisionMeta | EditorStateRevisionSearchItem;
+
+/**
+ * 用途：matchReasons → 固定中文标签；不渲染枚举原值/query/正文。
+ */
+function formatMatchReasonsLabel(
+  reasons: readonly EditorStateRevisionMatchReason[],
+): string {
+  const hasName = reasons.includes("displayName");
+  const hasContent = reasons.includes("visibleContent");
+  if (hasName && hasContent) return "命中：名称、可见内容";
+  if (hasName) return "命中：名称";
+  return "命中：可见内容";
+}
+
+function hasSearchMatchReasons(
+  item: ListItem,
+): item is EditorStateRevisionSearchItem {
+  return (
+    "matchReasons" in item &&
+    Array.isArray(item.matchReasons) &&
+    item.matchReasons.length > 0
+  );
+}
 
 /**
  * 用途：渲染两侧六项摘要行（仅数字与固定中文，无内部键）。
@@ -2587,6 +2615,13 @@ export function EditorStateRevisionPanel({
                         data-testid={`editor-state-revision-pinned-badge-${index}`}
                       >
                         已固定
+                      </span>
+                    ) : null}
+                    {searchActive && hasSearchMatchReasons(item) ? (
+                      <span
+                        data-testid={`editor-state-revision-search-match-reasons-${index}`}
+                      >
+                        {formatMatchReasonsLabel(item.matchReasons)}
                       </span>
                     ) : null}
                   </div>

@@ -1353,13 +1353,13 @@ def list_editor_state_revision_search(
     created_before: Any = None,
 ) -> dict[str, Any]:
     """
-    用途：在最新 20 条元数据候选中做名称与可见内容联合搜索；只返回七键元数据。
+    用途：在最新 20 条元数据候选中做名称与可见内容联合搜索；返回八键（含 match_reasons）。
     对接：POST .../editor-state-revisions/search。
     二次开发：
       - 顺序：项目存在 → 来源 → 时间 → 关键词；
       - SQL 八列（含 display_name + 原始 is_pinned + snapshot）+ workspace/project + 可选来源/时间；
       - 先完整校验全部候选再匹配；坏行/预算超限整次 corrupt；
-      - 匹配条件显式为 name_match or snapshot_match；双命中只 append 一次；
+      - 匹配条件显式为 name_match or snapshot_match；两侧均求值后按固定顺序生成 match_reasons；
       - 禁止 OFFSET/COUNT/LIKE/JSON SQL/N+1/补扫第 21 条/写操作/名称短路校验。
     """
     _require_project_id(db, workspace_id, project_id)
@@ -1443,6 +1443,13 @@ def list_editor_state_revision_search(
         # 两侧均先求值：禁止 name_match 短路跳过快照提取预算校验
         name_match = _display_name_matches_query(meta["display_name"], needle)
         snapshot_match = _snapshot_matches_query(snapshot, needle)
-        if name_match or snapshot_match:
-            items.append(meta)
+        if not (name_match or snapshot_match):
+            continue
+        # P12M：固定枚举与顺序 displayName → visibleContent；不返回正文/关键词
+        match_reasons: list[str] = []
+        if name_match:
+            match_reasons.append("displayName")
+        if snapshot_match:
+            match_reasons.append("visibleContent")
+        items.append({**meta, "match_reasons": match_reasons})
     return {"items": items}

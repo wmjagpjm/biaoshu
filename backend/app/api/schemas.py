@@ -2082,6 +2082,48 @@ class EditorStateRevisionSearch(BaseModel):
     created_before: Any = Field(default=None, alias="createdBefore")
 
 
+# P12M：搜索命中原因仅允许两枚举；响应 camelCase 原值，禁止 snake_case
+EditorStateRevisionMatchReason = Literal["displayName", "visibleContent"]
+
+
+class EditorStateRevisionSearchItemOut(BaseModel):
+    """
+    模块：P12M 修订搜索成功项
+    用途：精确八键（七键元数据 + matchReasons）；仅搜索路由使用。
+    对接：POST .../editor-state-revisions/search 的 items[]。
+    二次开发：
+      - matchReasons 非空、无重复、固定顺序 displayName → visibleContent；
+      - list/page 继续 EditorStateRevisionMetaOut 七键，不得复用本模型。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    revision_id: str = Field(serialization_alias="revisionId")
+    state_version: str = Field(serialization_alias="stateVersion")
+    snapshot_bytes: int = Field(serialization_alias="snapshotBytes")
+    source_kind: str = Field(serialization_alias="sourceKind")
+    created_at: datetime = Field(serialization_alias="createdAt")
+    display_name: str | None = Field(serialization_alias="displayName")
+    is_pinned: bool = Field(serialization_alias="isPinned")
+    match_reasons: list[EditorStateRevisionMatchReason] = Field(
+        serialization_alias="matchReasons",
+        min_length=1,
+        max_length=2,
+    )
+
+
+class EditorStateRevisionSearchOut(BaseModel):
+    """
+    模块：P12M 修订搜索响应
+    用途：顶层精确 {items}；items 为搜索专属八键。
+    对接：POST .../editor-state-revisions/search。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    items: list[EditorStateRevisionSearchItemOut]
+
+
 class EditorStateRevisionDetailOut(BaseModel):
     """
     模块：P12C-C1 / P12F-H / P12F-J-B 修订历史详情

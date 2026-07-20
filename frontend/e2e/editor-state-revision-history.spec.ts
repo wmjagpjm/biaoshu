@@ -195,6 +195,13 @@ type RevisionMeta = {
   isPinned: boolean;
 };
 
+/** P12M：搜索成功项专属；list/page 不得附带 */
+type RevisionSearchMatchReason = "displayName" | "visibleContent";
+
+type RevisionSearchMeta = RevisionMeta & {
+  matchReasons: RevisionSearchMatchReason[];
+};
+
 type RevisionDetail = RevisionMeta & {
   snapshot: Record<string, unknown>;
 };
@@ -1064,24 +1071,31 @@ function buildDefaultSearchPayload(
   sourceKind: string | null,
   createdFrom: string | null,
   createdBefore: string | null,
-): { items: RevisionMeta[] } {
+): { items: RevisionSearchMeta[] } {
   const allRaw = state.revisions[projectId] || [];
   const needle = query.normalize("NFKC").toLocaleLowerCase();
-  const filtered = allRaw.filter((it) => {
-    if (sourceKind != null && it.sourceKind !== sourceKind) return false;
+  const items: RevisionSearchMeta[] = [];
+  for (const it of allRaw) {
+    if (sourceKind != null && it.sourceKind !== sourceKind) continue;
     if (!matchesCreatedAtRange(it.createdAt, createdFrom, createdBefore)) {
-      return false;
+      continue;
     }
     const detail = state.details[it.revisionId];
     const contentHit = probeSnapshotContainsQuery(detail?.snapshot, query);
-    // P12F-I：名称与内容联合；null 名称只走内容；同修订只 append 一次（filter 自然去重）
+    // P12F-I：名称与内容联合；null 名称只走内容；同修订只 append 一次
     const nameRaw = it.displayName;
     const nameHit =
       typeof nameRaw === "string" &&
       nameRaw.normalize("NFKC").toLocaleLowerCase().includes(needle);
-    return nameHit || contentHit;
-  });
-  return { items: filtered.slice(0, 20) };
+    if (!nameHit && !contentHit) continue;
+    // P12M：完整求两侧后固定顺序拼 matchReasons
+    const matchReasons: RevisionSearchMatchReason[] = [];
+    if (nameHit) matchReasons.push("displayName");
+    if (contentHit) matchReasons.push("visibleContent");
+    items.push({ ...it, matchReasons });
+    if (items.length >= 20) break;
+  }
+  return { items };
 }
 
 /** 用途：统计某项目 page 到达次数 */
@@ -9752,10 +9766,13 @@ function stampSearchableMarker(
 }
 
 /**
- * 用途：构造严格合法七键 search item，供 parser 坏响应/21 条边界注入。
- * 约束：revisionId/stateVersion 使用探针同款 esr_/esv_ 外壳；不依赖列表种子。
+ * 用途：构造严格合法八键 search item，供 parser 坏响应/21 条边界注入。
+ * 约束：revisionId/stateVersion 使用探针同款 esr_/esv_ 外壳；默认仅 visibleContent。
  */
-function makeValidSearchMeta(n: number): RevisionMeta {
+function makeValidSearchMeta(
+  n: number,
+  matchReasons: RevisionSearchMatchReason[] = ["visibleContent"],
+): RevisionSearchMeta {
   return {
     revisionId: seedRevisionId(n),
     stateVersion: seedStateVersion(n),
@@ -9764,6 +9781,7 @@ function makeValidSearchMeta(n: number): RevisionMeta {
     createdAt: "2026-07-16T10:00:00.000Z",
     displayName: null,
     isPinned: false,
+    matchReasons,
   };
 }
 
@@ -13625,6 +13643,430 @@ test.describe("P12F-I 终态静态自检", () => {
   });
 });
 
+
+// ---------------------------------------------------------------------------
+// P12M 修订搜索命中来源标签前端
+// failure-first：列表/搜索已加载后，因缺 matchReasons 标签或严格 parser 失败。
+// ---------------------------------------------------------------------------
+
+const LABEL_MATCH_NAME = "命中：名称";
+const LABEL_MATCH_CONTENT = "命中：可见内容";
+const LABEL_MATCH_BOTH = "命中：名称、可见内容";
+
+test.describe("P12M 技术标搜索命中来源标签", () => {
+  test("P12M 技术标：名称/内容/双命中固定标签；严格 parser；清除隐藏；零泄漏零额外请求", async ({
+    page,
+  }) => {
+    const state = createProbeState("tech");
+    const NAME_ONLY = "P12M_TECH_NAME_ONLY";
+    const CONTENT_ONLY = "P12M_TECH_CONTENT_ONLY";
+    const BOTH = "P12M_TECH_BOTH";
+    const LEAK_Q = "P12M_TECH_LEAK_Q";
+    const seeded = seedRevisions(
+      state,
+      TECH_A,
+      4,
+      ["task", "revise", "callback", "task"],
+    );
+    // 仅名称
+    seeded[0].displayName = NAME_ONLY;
+    if (state.details[seeded[0].revisionId]) {
+      state.details[seeded[0].revisionId].displayName = NAME_ONLY;
+    }
+    // 仅内容
+    stampSearchableMarker(state, seeded[1].revisionId, CONTENT_ONLY, "tech");
+    // 双命中
+    seeded[2].displayName = `name-${BOTH}`;
+    if (state.details[seeded[2].revisionId]) {
+      state.details[seeded[2].revisionId].displayName = `name-${BOTH}`;
+    }
+    stampSearchableMarker(state, seeded[2].revisionId, BOTH, "tech");
+    // 泄漏探针：名称含敏感字面
+    seeded[3].displayName = LEAK_Q;
+    if (state.details[seeded[3].revisionId]) {
+      state.details[seeded[3].revisionId].displayName = LEAK_Q;
+    }
+
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+
+    await openWorkspace(page, "tech", TECH_A);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(1);
+    await expect(page.getByTestId("editor-state-revision-item-0")).toBeVisible();
+    // 非搜索态：零 matchReasons 节点
+    await expect(
+      page.getByTestId("editor-state-revision-search-match-reasons-0"),
+    ).toHaveCount(0);
+
+    const searchInput = page.getByTestId("editor-state-revision-search-input");
+    const searchApply = page.getByTestId("editor-state-revision-search-apply");
+    const searchClear = page.getByTestId("editor-state-revision-search-clear");
+
+    // 仅名称 → 命中：名称
+    const pageBeforeName = state.pageLog.length;
+    await searchInput.fill(NAME_ONLY);
+    await searchApply.click();
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(
+            state,
+            TECH_A,
+            NAME_ONLY,
+            null,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    expect(state.searchLog.length).toBe(1);
+    expect(state.pageLog.length).toBe(pageBeforeName);
+    expect(state.searchLog[0].body).toEqual({ query: NAME_ONLY });
+    await expect(
+      page.getByTestId("editor-state-revision-search-match-reasons-0"),
+    ).toHaveText(LABEL_MATCH_NAME);
+    await expect(page.getByTestId("editor-state-revision-item-1")).toHaveCount(
+      0,
+    );
+    // 禁止渲染内部枚举原值 / 关键词到标签旁
+    const nameLabel = await page
+      .getByTestId("editor-state-revision-search-match-reasons-0")
+      .innerText();
+    expect(nameLabel).not.toContain("displayName");
+    expect(nameLabel).not.toContain("visibleContent");
+    expect(nameLabel).not.toContain(NAME_ONLY);
+
+    // 仅内容
+    await searchClear.click();
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(2);
+    await searchInput.fill(CONTENT_ONLY);
+    await searchApply.click();
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(
+            state,
+            TECH_A,
+            CONTENT_ONLY,
+            null,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-search-match-reasons-0"),
+    ).toHaveText(LABEL_MATCH_CONTENT);
+
+    // 双命中固定顺序中文
+    await searchInput.fill(BOTH);
+    await searchApply.click();
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(state, TECH_A, BOTH, null, null, null),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-search-match-reasons-0"),
+    ).toHaveText(LABEL_MATCH_BOTH);
+    const bothLabel = await page
+      .getByTestId("editor-state-revision-search-match-reasons-0")
+      .innerText();
+    expect(bothLabel).toBe(LABEL_MATCH_BOTH);
+    expect(bothLabel.indexOf("名称")).toBeLessThan(bothLabel.indexOf("可见内容"));
+
+    // 清除：标签消失；回到 page；无自动 search
+    const searchBeforeClear = state.searchLog.length;
+    await searchClear.click();
+    await expect
+      .poll(() => pageCompleteCount(state, TECH_A), { timeout: 10_000 })
+      .toBe(3);
+    expect(state.searchLog.length).toBe(searchBeforeClear);
+    await expect(
+      page.getByTestId("editor-state-revision-search-match-reasons-0"),
+    ).toHaveCount(0);
+    await expect(page.getByTestId("editor-state-revision-item-0")).toBeVisible();
+
+    // 严格 parser：缺/额外/未知/重复/乱序 matchReasons 固定失败，不回退 page
+    const validBase = makeValidSearchMeta(9401, ["displayName"]);
+    const parserCases: Array<{ query: string; body: unknown }> = [
+      {
+        query: "P12M_PARSER_MISS_REASONS",
+        body: {
+          items: [
+            {
+              revisionId: seedRevisionId(9402),
+              stateVersion: seedStateVersion(9402),
+              snapshotBytes: 12,
+              sourceKind: "task",
+              createdAt: "2026-07-16T10:00:00.000Z",
+              displayName: null,
+              isPinned: false,
+            },
+          ],
+        },
+      },
+      {
+        query: "P12M_PARSER_EXTRA_KEY",
+        body: {
+          items: [{ ...makeValidSearchMeta(9403), leaked: "x" }],
+        },
+      },
+      {
+        query: "P12M_PARSER_UNKNOWN",
+        body: {
+          items: [makeValidSearchMeta(9404, ["displayName" as RevisionSearchMatchReason])].map(
+            (it) => ({ ...it, matchReasons: ["titleField"] }),
+          ),
+        },
+      },
+      {
+        query: "P12M_PARSER_DUP",
+        body: {
+          items: [
+            {
+              ...makeValidSearchMeta(9405),
+              matchReasons: ["displayName", "displayName"],
+            },
+          ],
+        },
+      },
+      {
+        query: "P12M_PARSER_ORDER",
+        body: {
+          items: [
+            {
+              ...makeValidSearchMeta(9406),
+              matchReasons: ["visibleContent", "displayName"],
+            },
+          ],
+        },
+      },
+      {
+        query: "P12M_PARSER_EMPTY",
+        body: {
+          items: [{ ...validBase, matchReasons: [] }],
+        },
+      },
+    ];
+    for (const c of parserCases) {
+      state.searchResponseByQuery[c.query] = c.body;
+      const pageBeforeBad = state.pageLog.length;
+      await searchInput.fill(c.query);
+      await searchApply.click();
+      await expect
+        .poll(
+          () =>
+            searchCompleteCountForFilter(
+              state,
+              TECH_A,
+              c.query,
+              null,
+              null,
+              null,
+            ),
+          { timeout: 10_000 },
+        )
+        .toBe(1);
+      expect(state.pageLog.length).toBe(pageBeforeBad);
+      await expect(
+        page.getByTestId("editor-state-revision-list-error"),
+      ).toHaveText(MSG_SEARCH_FAIL);
+      await expect(
+        page.getByTestId("editor-state-revision-search-match-reasons-0"),
+      ).toHaveCount(0);
+      await expect(page.getByTestId("editor-state-revision-item-0")).toHaveCount(
+        0,
+      );
+      const errText = await page
+        .getByTestId("editor-state-revision-list-error")
+        .innerText();
+      expect(errText).not.toContain(c.query);
+      expect(errText).not.toContain("displayName");
+      expect(errText).not.toContain("visibleContent");
+      expect(errText).not.toContain("matchReasons");
+    }
+    for (const c of parserCases) {
+      delete state.searchResponseByQuery[c.query];
+    }
+
+    // 成功路径零 ID/内部值泄漏
+    await searchInput.fill(LEAK_Q);
+    await searchApply.click();
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(state, TECH_A, LEAK_Q, null, null, null),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-search-match-reasons-0"),
+    ).toHaveText(LABEL_MATCH_NAME);
+    const reasonText = await page
+      .getByTestId("editor-state-revision-search-match-reasons-0")
+      .innerText();
+    expect(reasonText).not.toContain(seeded[3].revisionId);
+    expect(reasonText).not.toContain("displayName");
+    const url = page.url();
+    expect(url).not.toContain(LEAK_Q);
+    expect(url).not.toContain("matchReasons");
+    const ls = await page.evaluate(() => JSON.stringify(localStorage));
+    const ss = await page.evaluate(() => JSON.stringify(sessionStorage));
+    expect(ls).not.toContain(LEAK_Q);
+    expect(ss).not.toContain(LEAK_Q);
+    expect(state.externalHits).toEqual([]);
+    expect(state.forbiddenHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+    await assertNoIdLeak(page, state, guards.consoleLogs);
+  });
+});
+
+test.describe("P12M 商务标共用命中标签与迟到隔离", () => {
+  test("P12M 商务标：共用标签；A→B 隔离；筛选迟到不污染；零额外请求", async ({
+    page,
+  }) => {
+    const state = createProbeState("biz");
+    const NAME_ONLY = "P12M_BIZ_NAME_ONLY";
+    const BOTH = "P12M_BIZ_BOTH";
+    const seededA = seedRevisions(state, BIZ_A, 2, ["callback", "task"]);
+    seededA[0].displayName = NAME_ONLY;
+    if (state.details[seededA[0].revisionId]) {
+      state.details[seededA[0].revisionId].displayName = NAME_ONLY;
+    }
+    seededA[1].displayName = `name-${BOTH}`;
+    if (state.details[seededA[1].revisionId]) {
+      state.details[seededA[1].revisionId].displayName = `name-${BOTH}`;
+    }
+    stampSearchableMarker(state, seededA[1].revisionId, BOTH, "biz");
+
+    const seededB = seedRevisions(state, BIZ_B, 1, ["task"]);
+    seededB[0].displayName = "P12M_BIZ_B_OTHER";
+    if (state.details[seededB[0].revisionId]) {
+      state.details[seededB[0].revisionId].displayName = "P12M_BIZ_B_OTHER";
+    }
+
+    const guards = await installRuntimeErrorGuards(page);
+    await installRoutes(page, state);
+
+    await openWorkspace(page, "biz", BIZ_A);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageCompleteCount(state, BIZ_A), { timeout: 10_000 })
+      .toBe(1);
+
+    const searchInput = page.getByTestId("editor-state-revision-search-input");
+    const searchApply = page.getByTestId("editor-state-revision-search-apply");
+
+    await searchInput.fill(NAME_ONLY);
+    await searchApply.click();
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(
+            state,
+            BIZ_A,
+            NAME_ONLY,
+            null,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-search-match-reasons-0"),
+    ).toHaveText(LABEL_MATCH_NAME);
+
+    // 双命中
+    await searchInput.fill(BOTH);
+    await searchApply.click();
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(state, BIZ_A, BOTH, null, null, null),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-search-match-reasons-0"),
+    ).toHaveText(LABEL_MATCH_BOTH);
+
+    // A→B 项目切换：搜索态重置；无 matchReasons 残留
+    const searchBeforeSwitch = state.searchLog.length;
+    await openWorkspace(page, "biz", BIZ_B);
+    await expandRevisionPanel(page);
+    await expect
+      .poll(() => pageCompleteCount(state, BIZ_B), { timeout: 10_000 })
+      .toBe(1);
+    expect(state.searchLog.length).toBe(searchBeforeSwitch);
+    await expect(
+      page.getByTestId("editor-state-revision-search-match-reasons-0"),
+    ).toHaveCount(0);
+    await expect(page.getByTestId("editor-state-revision-search-input")).toHaveValue(
+      "",
+    );
+    await expect(
+      page.getByTestId("editor-state-revision-search-active"),
+    ).toHaveCount(0);
+
+    // B 上搜索：精确 1 次 POST；标签正确
+    await searchInput.fill("P12M_BIZ_B_OTHER");
+    await searchApply.click();
+    await expect
+      .poll(
+        () =>
+          searchCompleteCountForFilter(
+            state,
+            BIZ_B,
+            "P12M_BIZ_B_OTHER",
+            null,
+            null,
+            null,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    expect(
+      state.searchLog.filter((h) => h.projectId === BIZ_B).length,
+    ).toBe(1);
+    await expect(
+      page.getByTestId("editor-state-revision-search-match-reasons-0"),
+    ).toHaveText(LABEL_MATCH_NAME);
+
+    // 刷新：仍 search POST 精确 +1；零 page
+    const pageBeforeRefresh = state.pageLog.filter(
+      (h) => h.projectId === BIZ_B,
+    ).length;
+    const searchBeforeRefresh = searchHitCount(state, BIZ_B);
+    await page.getByTestId("editor-state-revision-refresh").click();
+    await expect
+      .poll(() => searchHitCount(state, BIZ_B), { timeout: 10_000 })
+      .toBe(searchBeforeRefresh + 1);
+    expect(
+      state.pageLog.filter((h) => h.projectId === BIZ_B).length,
+    ).toBe(pageBeforeRefresh);
+    await expect(
+      page.getByTestId("editor-state-revision-search-match-reasons-0"),
+    ).toHaveText(LABEL_MATCH_NAME);
+
+    expect(state.externalHits).toEqual([]);
+    expect(state.forbiddenHits).toEqual([]);
+    expect(guards.pageErrors).toEqual([]);
+    expect(await guards.readUnhandled()).toEqual([]);
+    await assertNoIdLeak(page, state, guards.consoleLogs);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // P12F-J-B 修订固定状态前端（三用例互不 serial 跳过）

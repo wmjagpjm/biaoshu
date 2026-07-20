@@ -1,15 +1,16 @@
 """
-模块：P12F-F-A / P12F-I 修订可见内容与名称联合搜索后端专项测试
+模块：P12F-F-A / P12F-I / P12M 修订可见内容与名称联合搜索后端专项测试
 用途：验收 POST .../editor-state-revisions/search 的关键词规范、字段白名单、
-  有界 20 候选窗、七列 SQL、来源/时间复用、损坏/权限/五域零写与 GET 兼容；
-  以及 P12F-I 合法 display_name 与可见内容联合匹配、去重、先验后搜与 20/21 边界。
+  有界 20 候选窗、八列 SQL、来源/时间复用、损坏/权限/五域零写与 GET 兼容；
+  以及 P12F-I 合法 display_name 与可见内容联合匹配、去重、先验后搜与 20/21 边界；
+  以及 P12M 搜索成功项精确 matchReasons（displayName/visibleContent 固定顺序）。
 对接：POST /api/projects/{projectId}/editor-state-revisions/search；
   editor_state_revision_history_service；api.editor_state_revisions；schemas。
 二次开发：
   - 禁止 mock SQLite、宽泛状态码、固定 sleep、反射关键词/正文假绿；
-  - 红测必须证明业务语义缺失（名称唯一命中期望 1 实际 0），而非收集/导入/语法/环境失败；
+  - 红测必须证明业务语义缺失（名称唯一命中期望 1 实际 0 / 缺 matchReasons），而非收集/导入/语法/环境失败；
   - 字段白名单以“允许标记命中、禁止标记零命中”成对证明，不得只断言响应无正文；
-  - P12F-I 禁止恒真 OR、宽状态、`>=1`、truthy、条件断言、空集合来源与只扫源码冒充运行时。
+  - P12F-I / P12M 禁止恒真 OR、宽状态、`>=1`、truthy、条件断言、空集合来源与只扫源码冒充运行时。
 """
 
 from __future__ import annotations
@@ -57,6 +58,20 @@ _META_KEYS = frozenset(
         "isPinned",
     }
 )
+# P12M：搜索成功项精确八键（七键元数据 + matchReasons）
+_SEARCH_ITEM_KEYS = frozenset(
+    {
+        "revisionId",
+        "stateVersion",
+        "snapshotBytes",
+        "sourceKind",
+        "createdAt",
+        "displayName",
+        "isPinned",
+        "matchReasons",
+    }
+)
+_MATCH_REASON_ORDER = ("displayName", "visibleContent")
 _SEARCH_TOP = frozenset({"items"})
 _LIST_TOP = frozenset({"items"})
 _PAGE_TOP = frozenset({"items", "nextCursor"})
@@ -887,17 +902,32 @@ def _assert_auth_gate_error(
                 assert part not in blob, f"不应回显: {part!r}"
 
 
+def _assert_match_reasons(reasons: object) -> None:
+    """用途：P12M 严格校验 matchReasons 非空、无重复、固定枚举与固定顺序。"""
+    assert isinstance(reasons, list), reasons
+    assert 1 <= len(reasons) <= 2, reasons
+    assert len(reasons) == len(set(reasons)), reasons
+    for r in reasons:
+        assert type(r) is str, r
+        assert r in _MATCH_REASON_ORDER, r
+    if len(reasons) == 2:
+        assert reasons == list(_MATCH_REASON_ORDER), reasons
+    if len(reasons) == 1:
+        assert reasons[0] in _MATCH_REASON_ORDER, reasons
+
+
 def _assert_search_shape(body: dict, *, max_items: int = 20) -> None:
     assert set(body.keys()) == _SEARCH_TOP, body.keys()
     assert isinstance(body["items"], list)
     assert len(body["items"]) <= max_items
     for item in body["items"]:
-        assert set(item.keys()) == _META_KEYS
+        assert set(item.keys()) == _SEARCH_ITEM_KEYS, item.keys()
         assert _REVISION_ID_RE.fullmatch(item["revisionId"])
         assert _STATE_VERSION_RE.fullmatch(item["stateVersion"])
         assert isinstance(item["snapshotBytes"], int)
         assert item["sourceKind"] in _NINE_SOURCES
         assert type(item["isPinned"]) is bool
+        _assert_match_reasons(item["matchReasons"])
         assert "snapshot" not in item
         assert "nextCursor" not in item
         assert "matchedFields" not in item
@@ -905,6 +935,9 @@ def _assert_search_shape(body: dict, *, max_items: int = 20) -> None:
         assert "score" not in item
         assert "query" not in item
         assert "projectId" not in item
+        assert "visibleContent" not in item
+        assert "display_name" not in item
+        assert "match_reasons" not in item
 
 
 def _assert_search_ok(res, *, max_items: int = 20) -> dict:
@@ -1007,7 +1040,7 @@ def test_allow_fields_tech_and_business_each_hit(disabled_client):
         body = _assert_search_ok(res)
         ids = [it["revisionId"] for it in body["items"]]
         assert ids == [row["id"]], f"字段 {key} 标记 {marker} 未精确命中: {ids}"
-        assert set(body["items"][0].keys()) == _META_KEYS
+        assert set(body["items"][0].keys()) == _SEARCH_ITEM_KEYS
         assert body["items"][0]["sourceKind"] == "task"
         assert marker not in res.text
         assert _SECRET not in res.text
@@ -2425,7 +2458,7 @@ def test_search_route_exists_exact_success(disabled_client):
     res = _search(client, pid, {"query": "章节route"})
     body = _assert_search_ok(res)
     assert [it["revisionId"] for it in body["items"]] == [row["id"]]
-    assert set(body["items"][0].keys()) == _META_KEYS
+    assert set(body["items"][0].keys()) == _SEARCH_ITEM_KEYS
 
 
 # ---------- P12F-I 名称与可见内容联合搜索 ----------
@@ -2499,8 +2532,9 @@ def test_p12fi_name_only_hit_returns_exact_single_meta(disabled_client):
     )
     assert len(body["items"]) == 1
     item = body["items"][0]
-    assert set(item.keys()) == _META_KEYS
+    assert set(item.keys()) == _SEARCH_ITEM_KEYS
     assert item["displayName"] == name_only
+    assert item["matchReasons"] == ["displayName"]
     assert item["stateVersion"] == row_name["state_version"]
     assert item["sourceKind"] == "task"
     assert row_content["id"] not in ids
@@ -2572,8 +2606,11 @@ def test_p12fi_name_content_union_dedup_and_desc_order(disabled_client):
     assert by_id[r2["id"]]["displayName"] == f"only-{shared}"
     assert by_id[r1["id"]]["displayName"] == f"name-{shared}"
     assert by_id[r0["id"]]["displayName"] is None
+    assert by_id[r2["id"]]["matchReasons"] == ["displayName"]
+    assert by_id[r1["id"]]["matchReasons"] == ["displayName", "visibleContent"]
+    assert by_id[r0["id"]]["matchReasons"] == ["visibleContent"]
     for it in body["items"]:
-        assert set(it.keys()) == _META_KEYS
+        assert set(it.keys()) == _SEARCH_ITEM_KEYS
 
 
 def test_p12fi_null_and_nonmatch_name_keep_content_and_nfkc(disabled_client):
@@ -2850,7 +2887,8 @@ def test_p12fi_combo_isolation_sql_six_keys_zero_write(disabled_client):
     )
     assert [it["revisionId"] for it in body["items"]] == [r_task["id"]]
     assert body["items"][0]["displayName"] == f"{marker}_task"
-    assert set(body["items"][0].keys()) == _META_KEYS
+    assert set(body["items"][0].keys()) == _SEARCH_ITEM_KEYS
+    assert body["items"][0]["matchReasons"] == ["displayName"]
     assert r_rev["id"] not in [it["revisionId"] for it in body["items"]]
     assert r_old["id"] not in [it["revisionId"] for it in body["items"]]
     assert r_other["id"] not in [it["revisionId"] for it in body["items"]]
@@ -3019,3 +3057,192 @@ def test_search_corrupt_is_pinned_candidate_fixed_500_zero_write(disabled_client
     assert miss_row["id"] not in res.text
     assert _raw_is_pinned_map(pid) == pins_before
     assert _domain_snapshot(pid) == domain_before
+
+
+# ---------- P12M 搜索命中来源标签 ----------
+
+
+def test_p12m_name_content_both_match_reasons_exact(disabled_client):
+    """
+    用途：仅名称 / 仅可见内容 / 双命中 精确返回固定 matchReasons；未命中不入选。
+    failure-first：实现前缺 matchReasons 或键集非八键 → 真实业务红测。
+    """
+    client = disabled_client
+    pid = _create_project(client, name="P12M命中原因")
+    shared = "P12M_REASON_MARK"
+    base = datetime(2026, 7, 19, 8, 0, 0, tzinfo=timezone.utc)
+
+    # 仅可见内容
+    r_content = _seed_state(
+        pid,
+        _state_with_version(
+            chapters=[
+                {"id": "c", "title": f"t-{shared}", "preview": "p", "body": "b"}
+            ]
+        ),
+        created_at=base + timedelta(seconds=0),
+        revision_id="esr_" + "a0" + "0" * 30,
+    )
+    # 双命中
+    r_both = _seed_state(
+        pid,
+        _state_with_version(
+            chapters=[
+                {
+                    "id": "c",
+                    "title": f"body-{shared}",
+                    "preview": "p",
+                    "body": "b",
+                }
+            ]
+        ),
+        created_at=base + timedelta(seconds=1),
+        revision_id="esr_" + "a1" + "0" * 30,
+    )
+    _set_display_name(r_both["id"], f"name-{shared}")
+    # 仅名称
+    r_name = _seed_state(
+        pid,
+        _plain_state("m2"),
+        created_at=base + timedelta(seconds=2),
+        revision_id="esr_" + "a2" + "0" * 30,
+    )
+    _set_display_name(r_name["id"], f"only-{shared}")
+    # 未命中
+    r_miss = _seed_state(
+        pid,
+        _plain_state("m3"),
+        created_at=base + timedelta(seconds=3),
+        revision_id="esr_" + "a3" + "0" * 30,
+    )
+    _set_display_name(r_miss["id"], "NOMATCH_P12M")
+
+    before = _domain_snapshot(pid)
+    body = _assert_search_ok(_search(client, pid, {"query": shared}))
+    ids = [it["revisionId"] for it in body["items"]]
+    assert ids == [r_name["id"], r_both["id"], r_content["id"]]
+    assert r_miss["id"] not in ids
+    by_id = {it["revisionId"]: it for it in body["items"]}
+    assert by_id[r_name["id"]]["matchReasons"] == ["displayName"]
+    assert by_id[r_both["id"]]["matchReasons"] == [
+        "displayName",
+        "visibleContent",
+    ]
+    assert by_id[r_content["id"]]["matchReasons"] == ["visibleContent"]
+    for it in body["items"]:
+        assert set(it.keys()) == _SEARCH_ITEM_KEYS
+        _assert_match_reasons(it["matchReasons"])
+        assert "snippet" not in it
+        assert "score" not in it
+        assert "matchedFields" not in it
+    # 零写；禁止片段/分数/snake_case 原因键/快照正文
+    assert _domain_snapshot(pid) == before
+    assert _SECRET not in str(body)
+    blob = str(body)
+    assert "match_reasons" not in blob
+    assert "snippet" not in blob
+    assert "score" not in blob
+    assert "matchedFields" not in blob
+
+
+def test_p12m_candidate_window_and_filters_keep_match_reasons(disabled_client):
+    """
+    用途：第 21 条名称命中仍不入选；来源/时间过滤后仍带精确 matchReasons；空结果顶层仅 items。
+    """
+    client = disabled_client
+    pid = _create_project(client, name="P12M窗与过滤")
+    base = datetime(2026, 7, 1, 0, 0, 0, tzinfo=timezone.utc)
+    mark20 = "P12M_WIN20_NAME"
+    mark21 = "P12M_WIN21_NAME"
+    for i in range(21):
+        # i=1（自新往旧第 20）固定为 task，便于来源过滤精确命中
+        sk = "task" if i in (0, 1) else ("task" if i % 2 == 0 else "revise")
+        row = _seed_state(
+            pid,
+            _plain_state(f"mw{i:02d}"),
+            created_at=base + timedelta(seconds=i),
+            revision_id=f"esr_{i:032x}",
+            source_kind=sk,
+        )
+        if i == 1:
+            _set_display_name(row["id"], mark20)
+        elif i == 0:
+            _set_display_name(row["id"], mark21)
+
+    hit20 = _assert_search_ok(_search(client, pid, {"query": mark20}))
+    assert [it["revisionId"] for it in hit20["items"]] == [f"esr_{1:032x}"]
+    assert hit20["items"][0]["matchReasons"] == ["displayName"]
+
+    miss21 = _assert_search_ok(_search(client, pid, {"query": mark21}))
+    assert miss21["items"] == []
+    assert set(miss21.keys()) == _SEARCH_TOP
+
+    # 仅 revise 源：mark20 在 task 行 → 空
+    empty_src = _assert_search_ok(
+        _search(client, pid, {"query": mark20, "sourceKind": "revise"})
+    )
+    assert empty_src["items"] == []
+
+    # 时间窗 + task 命中 mark20
+    filtered = _assert_search_ok(
+        _search(
+            client,
+            pid,
+            {
+                "query": mark20,
+                "sourceKind": "task",
+                "createdFrom": "2026-07-01T00:00:00.000Z",
+                "createdBefore": "2026-08-01T00:00:00.000Z",
+            },
+        )
+    )
+    assert [it["revisionId"] for it in filtered["items"]] == [f"esr_{1:032x}"]
+    assert filtered["items"][0]["matchReasons"] == ["displayName"]
+
+
+def test_p12m_bad_candidate_zero_write_and_list_seven_keys(disabled_client):
+    """
+    用途：坏候选整次 corrupt 且零写；list 仍七键无 matchReasons；搜索一次 POST 零写。
+    """
+    client = disabled_client
+    needle = "P12M_CORRUPT_NAME"
+    pid = _create_project(client, name="P12M坏候选")
+    good = _seed_state(
+        pid,
+        _plain_state("g"),
+        created_at=datetime(2026, 7, 19, 10, 0, 0, tzinfo=timezone.utc),
+        revision_id="esr_" + "b1" + "0" * 30,
+    )
+    _set_display_name(good["id"], needle)
+    bad = _seed_state(
+        pid,
+        _plain_state("b"),
+        created_at=datetime(2026, 7, 19, 11, 0, 0, tzinfo=timezone.utc),
+        revision_id="esr_" + "b2" + "0" * 30,
+    )
+    _set_display_name(bad["id"], "")
+    before = _domain_snapshot(pid)
+    res = _search(client, pid, {"query": needle})
+    _assert_fixed_error(
+        res,
+        500,
+        _CODE_CORRUPT,
+        message=_MSG_CORRUPT,
+        forbid_parts=[good["id"], bad["id"], needle, "matchReasons"],
+    )
+    assert _domain_snapshot(pid) == before
+
+    # 成功搜索路径零写 + list 七键不得出现 matchReasons（独立干净项目）
+    pid2 = _create_project(client, name="P12M零写成功")
+    r = _seed_state(pid2, _plain_state("z"), revision_id="esr_" + "b3" + "0" * 30)
+    _set_display_name(r["id"], "P12M_ZERO_WRITE_OK")
+    before2 = _domain_snapshot(pid2)
+    listed = client.get(_list_url(pid2))
+    assert listed.status_code == 200, listed.text
+    lbody = listed.json()
+    for it in lbody["items"]:
+        assert set(it.keys()) == _META_KEYS
+        assert "matchReasons" not in it
+    ok = _assert_search_ok(_search(client, pid2, {"query": "P12M_ZERO_WRITE_OK"}))
+    assert ok["items"][0]["matchReasons"] == ["displayName"]
+    assert _domain_snapshot(pid2) == before2

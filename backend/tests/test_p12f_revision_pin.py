@@ -62,6 +62,9 @@ _META_KEYS_SEVEN = frozenset(
         "isPinned",
     }
 )
+# P12M：搜索成功项精确八键（七键元数据 + matchReasons）
+_SEARCH_ITEM_KEYS = _META_KEYS_SEVEN | {"matchReasons"}
+_MATCH_REASON_ORDER = ("displayName", "visibleContent")
 
 _CODE_PIN_LIMIT = "editor_state_revision_pin_limit"
 _MSG_PIN_LIMIT = "固定修订已达上限"
@@ -315,6 +318,28 @@ def _assert_meta_seven(item: dict, *, is_pinned: bool | None = None) -> None:
     assert type(item["isPinned"]) is bool
     if is_pinned is not None:
         assert item["isPinned"] is is_pinned
+
+
+def _assert_match_reasons(reasons: object) -> None:
+    """用途：P12M 严格校验 matchReasons 非空、无重复、固定枚举与固定顺序。"""
+    assert isinstance(reasons, list), reasons
+    assert 1 <= len(reasons) <= 2, reasons
+    assert len(reasons) == len(set(reasons)), reasons
+    for r in reasons:
+        assert type(r) is str, r
+        assert r in _MATCH_REASON_ORDER, r
+    if len(reasons) == 2:
+        assert reasons == list(_MATCH_REASON_ORDER), reasons
+    if len(reasons) == 1:
+        assert reasons[0] in _MATCH_REASON_ORDER, reasons
+
+
+def _assert_search_item_eight(item: dict, *, is_pinned: bool | None = None) -> None:
+    """用途：搜索成功项精确八键；list/page 仍走七键。"""
+    assert set(item.keys()) == _SEARCH_ITEM_KEYS, item.keys()
+    meta = {k: item[k] for k in _META_KEYS_SEVEN}
+    _assert_meta_seven(meta, is_pinned=is_pinned)
+    _assert_match_reasons(item["matchReasons"])
 
 
 def _bootstrap(role: str = auth_service.ROLE_BID_WRITER):
@@ -1094,7 +1119,10 @@ def test_patch_required_roles_csrf(required_client):
 
 
 def test_list_page_search_detail_seven_keys_after_pin(disabled_client):
-    """用途：pin 后 list/page/search/detail 精确七键；目标 isPinned=true，其它 false。"""
+    """
+    用途：pin 后 list/page 精确七键；search 精确八键（P12M matchReasons）；
+      detail 八键含 snapshot；目标 isPinned=true，其它 false。
+    """
     client = disabled_client
     pid = _create_project(client, name="七键固定读取")
     rows = _seed_revisions(pid, ["s0", "s1"])
@@ -1116,9 +1144,14 @@ def test_list_page_search_detail_seven_keys_after_pin(disabled_client):
 
     search = client.post(_search_url(pid), json={"query": "章节"})
     assert search.status_code == 200, search.text
-    for item in search.json()["items"]:
+    sbody = search.json()
+    assert set(sbody.keys()) == {"items"}
+    assert len(sbody["items"]) >= 1
+    for item in sbody["items"]:
         want = item["revisionId"] == rid
-        _assert_meta_seven(item, is_pinned=want)
+        _assert_search_item_eight(item, is_pinned=want)
+        # 默认 displayName=null，关键词命中可见内容
+        assert item["matchReasons"] == ["visibleContent"]
 
     detail = client.get(_detail_url(pid, rid))
     assert detail.status_code == 200, detail.text
@@ -1127,6 +1160,7 @@ def test_list_page_search_detail_seven_keys_after_pin(disabled_client):
     _assert_meta_seven(meta_only, is_pinned=True)
     assert "snapshot" in body
     assert set(body.keys()) == _META_KEYS_SEVEN | {"snapshot"}
+    assert "matchReasons" not in body
 
 
 def _raw_is_pinned_map(project_id: str) -> dict[str, int]:
