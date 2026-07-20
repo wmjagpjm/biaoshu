@@ -122,4 +122,4 @@ git status --short
 
 pagehide leave 仍进入模块级 Promise 队列，可能被挂起 heartbeat 延迟。契约同时要求所有 presence 写串行，服务端 45 秒过期为最终兜底，因此双方接受为残余风险，不阻断 P13-F2。
 
-P13-F2 白名单已失效。下一步只读审计新的多人协作能力包；协同光标、章节锁、事件广播/重放、WebSocket、评论、审批和在线历史仍未实现，必须独立冻结，禁止从本包直接扩围。
+P13-F2 白名单已失效。下一包已只读审计为 P13-G1“项目章节编辑意图租约后端”，契约=`docs/p13g1-project-chapter-edit-intent-lease-backend-contract.md`，计划=`docs/plans/2026-07-20-p13g1-project-chapter-edit-intent-lease-backend-plan.md`，在途交接=`docs/HANDOFF-p13g1-in-progress.md`。P13-G1 不是强制锁；协同光标、事件广播/重放、WebSocket、评论、审批和在线历史仍未实现。
