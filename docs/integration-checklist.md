@@ -1372,7 +1372,7 @@ Codex 独立串行通过 P13-G2 专项/P13-F2 presence/freshness **13/11/17 pass
 
 ## P13-H1 editor-state 事件账本与游标后端（已完成，随本记录提交）
 
-契约=`docs/p13h1-editor-state-event-cursor-backend-contract.md`，计划=`docs/plans/2026-07-20-p13h1-editor-state-event-cursor-backend-plan.md`，审计基线=`83c2c4a`，冻结=`da2537a`。严格八文件交付独立 `editor_state_events` 表和统一 transition 真实 after 同事务写入，以及 required strict bid_writer 项目级 GET。
+契约=`docs/p13h1-editor-state-event-cursor-backend-contract.md`，计划=`docs/plans/2026-07-20-p13h1-editor-state-event-cursor-backend-plan.md`，审计基线=`83c2c4a`，冻结=`da2537a`，实现=`4255823`。严格八文件交付独立 `editor_state_events` 表和统一 transition 真实 after 同事务写入，以及 required strict bid_writer 项目级 GET。
 
 完成证据：failure-first=`msg_ee84a231060941049177cce0f05f501a`，真实 **25 failed / 3 passed**；Grok 初版专项/回归 **28/90 passed**。Codex 只读发现无公开 bootstrap tip、未登录与非 GET 宽状态断言两项问题，经 Grok 确认后才授权最小返修；最终 Grok 与 Codex 独立均为专项/回归 **28/90 passed**，`compileall`、diff-check 和严格八文件哈希门通过。
 

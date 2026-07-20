@@ -410,7 +410,7 @@
 
 ### P13-H1：editor-state 事件账本与游标后端（已完成，随本记录提交）
 
-**完成状态（2026-07-20）**：基线=`83c2c4a`，冻结=`da2537a`。严格八文件交付独立 `editor_state_events` 表，在真实 after 修订插入时同事务追加脱敏事件，并提供 required strict bid_writer 项目级游标 GET；无 `after` 不回放历史，已有事件时公开最新 tip 供后续增量读取。failure-first 真实 **25 failed / 3 passed**；Codex 发现的 bootstrap tip 与宽状态断言问题经 Grok 只读确认后才最小返修。Grok 最终专项/回归 **28/90 passed**，Codex 独立专项/editor-state 与 P13-D1 回归 **28/90 passed**，compileall 与 diff-check 通过。严格八文件、无前端、无 SSE、无 WebSocket、无通知、无强制锁。契约=`docs/p13h1-editor-state-event-cursor-backend-contract.md`，计划=`docs/plans/2026-07-20-p13h1-editor-state-event-cursor-backend-plan.md`。
+**完成状态（2026-07-20）**：基线=`83c2c4a`，冻结=`da2537a`，实现=`4255823`。严格八文件交付独立 `editor_state_events` 表，在真实 after 修订插入时同事务追加脱敏事件，并提供 required strict bid_writer 项目级游标 GET；无 `after` 不回放历史，已有事件时公开最新 tip 供后续增量读取。failure-first 真实 **25 failed / 3 passed**；Codex 发现的 bootstrap tip 与宽状态断言问题经 Grok 只读确认后才最小返修。Grok 最终专项/回归 **28/90 passed**，Codex 独立专项/editor-state 与 P13-D1 回归 **28/90 passed**，compileall 与 diff-check 通过。严格八文件、无前端、无 SSE、无 WebSocket、无通知、无强制锁。契约=`docs/p13h1-editor-state-event-cursor-backend-contract.md`，计划=`docs/plans/2026-07-20-p13h1-editor-state-event-cursor-backend-plan.md`。
 
 **下一步**：先只读审计并独立冻结 P13-H2，只允许在 H1 事件账本之上接 SSE `Last-Event-ID` 与断线重放；P13-H3 才能接前端版本提示。评论、审批、协同光标、多任务事件总线仍不得合包。
 
