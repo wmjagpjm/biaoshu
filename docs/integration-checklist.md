@@ -1250,4 +1250,18 @@ git diff --cached --name-only
 
 本包没有前端生产改动，最终未运行 Playwright、lint、build、后端全量或整仓 318 E2E；不得把历史基线冒充本包重跑结果。后续只有出现共享迁移/事务回归证据时才扩大测试。
 
-P13-D1 已由 Codex 中文提交并推送。完成本次文档闭环、确认工作区干净且本地 HEAD 与远端一致后，可单独冻结 P13-D2。
+P13-D1 已由 Codex 中文提交并推送；P13-D2 已在独立契约与计划中冻结，待实现与验收。
+
+## P13-D2 当前已载入版本操作者用户名展示（已冻结，待验收）
+
+契约=`docs/p13d2-current-revision-actor-username-contract.md`，计划=`docs/plans/2026-07-20-p13d2-current-revision-actor-username-plan.md`。
+
+联调验收项：
+
+1. `GET|PUT editor-state` 200 必出 `currentRevisionActorUsername`；只在最新修订与响应版本精确匹配、actor 用户和同工作区成员均启用、用户名通过安全文本门时返回原名，否则精确 null。
+2. disabled、旧行、补账 before、actor 空、用户/成员缺失或停用、仅其它工作区成员全部未知；活动成员角色变更不抹除归因，未来改名按当前用户名展示，不伪造历史快照。
+3. 来源与用户名由同一次 `LIMIT 1` 最新修订查询独立校验；禁止回扫、加载 snapshot/口令/会话、泄漏 actor ID，GET 继续零写。
+4. 技术标/商务标标题区分别以 `technical-editor-version-actor`、`business-editor-version-actor` 显示“当前版本操作者”；未知固定“操作者未知”，用户名只作 React 文本。
+5. 用户名与时间/来源共用合法版本、session/write epoch 接受门；项目切换同拍清空，旧项目迟到 success/catch/finally 不污染，409/失败保值，合法新版本的坏用户名更新为未知。
+6. 外部写只允许既有唯一 editor-state GET 更新元数据；零新增请求、轮询、timer、SSE/WebSocket、存储、URL、Cookie、console 或外网泄漏。
+7. 先真实 failure-first；pytest 串行，Playwright 固定 `--workers=1 --retries=0`。Grok 跑专项与直接回归，Codex 独立审查验收，不机械重复全量。
