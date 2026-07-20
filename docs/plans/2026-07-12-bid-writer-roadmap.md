@@ -7,7 +7,7 @@
 
 # 标书制作者能力补全与角色化演进路线图
 
-> **状态**：阶段 0–5 已按下文拆包持续交付；P11A/B/C、P12A 至 P12K 版本治理链及 P13-A 均已完成。P12K 冻结=`fe0fa08`、实现=`3c3cbf9`；Grok 后端全量为 **1273 passed**，Codex 独立受影响集 **132 passed**，整仓前端沿用已验收 **318 passed** 基线。下一包尚未冻结，须先做只读审计。
+> **状态**：阶段 0–5 已按下文拆包持续交付；P11A/B/C、P12A 至 P12K 版本治理链及 P13-A 均已完成。P12K 冻结=`fe0fa08`、实现=`3c3cbf9`；Grok 后端全量为 **1273 passed**，Codex 独立受影响集 **132 passed**，整仓前端沿用已验收 **318 passed** 基线。下一包 P12L 已完成只读审计，严格两文件只做默认列表固定名额提示。
 > **当前分支**：`collab/grok-code-codex-review`
 > **协作方式**：Grok 负责限定范围的实现与测试；Codex 负责范围、审查、验收和提交授权。
 
@@ -365,7 +365,7 @@ P8D 与 P8E 本机外置解析助手均已完成并推送：P8D 计划=`30d066f`
 
 **P12E-A 单条修订正文差异预览已完成**：冻结=`5aa205c`、实现=`f9f067e`。只读 GET 返回精确六键和有界章节行差异；前端技术/商务共用按需入口、严格 parser、四意图互斥与 arrived/complete 迟到隔离。Codex 首轮审查复现第 101 个差异章仍进入 difflib，Grok 以真实 **1 failed / 1 passed** 红测返修为 **2 passed**；Codex 独立通过专项/回归/后端全量 **23/27/854**，history/checkpoint/truth/前端全量 **27/51/46/290 passed**。任意历史两两比较、删除、搜索、分页、正文自动恢复和多人协作继续不进入 A 包。
 
-**下一步**：基于剩余主线做只读审计，选择新的最小用户价值包并重新冻结契约/计划；当前不得直接实现。优先评估检查点固定分组/容量反馈、分页价值、跨项目版本与完整时间线之间的收益和权限边界。Grok 默认承担实现及专项/受影响集；Codex 独立审查并按风险至多补一次全量，禁止双方机械重复全量。多人协作、presence、SSE/WebSocket 等跨域能力必须单独规划。
+**下一步**：执行已冻结的 P12L。Grok 先在既有 checkpoint E2E 中形成“默认列表已加载但固定名额提示缺失”的真实 failure-first，再只改共用面板；Codex 独立审查并仅复跑 P12L 聚焦。P12L 不重复整仓 318 E2E、不运行后端全量；字节容量、固定分组/重排、分页、跨项目版本、完整时间线与多人协作继续独立规划。
 
 **P12E-B 已完成并推送**：双修订正文差异后端基础，契约=`docs/p12e-revision-pair-body-diff-contract.md`，计划=`docs/plans/2026-07-17-p12e-revision-pair-body-diff-plan.md`，冻结=`00ef081`、实现=`5a5b08a`。只比较同 workspace/project 的两个历史修订，暂不提供前端入口；Grok 仅改四个后端文件并发送 review_request，Codex 独立验收后提交推送。专项/回归/全量 **13/23/50/867 passed**，合并专项 **86 passed**，仅 1 条既有 Starlette/httpx 弃用告警。
 
@@ -412,6 +412,8 @@ P12E-B 真实 failure-first 为 13 项红测：11 项路由缺失 404、1 项同
 **P12J-B 已完成并推送**：契约=`docs/p12j-checkpoint-pinning-frontend-contract.md`，计划=`docs/plans/2026-07-19-p12j-checkpoint-pinning-frontend-plan.md`，代码哈希基线=`262683e`、冻结=`65fe259`、口径澄清=`1471c31`、实现=`7d1d5c9`。严格十一文件把 create/list/search 七键、detail 八键升级为含 `isPinned` 的八/九键，后端三处原始 Integer 投影拒绝非法固定值；共用 checkpoint API/面板交付严格 parser、一键 PATCH、badge、全局单飞、全部操作互斥、active search 原位更新和 A→B success/catch/finally 隔离。真实 failure-first **6 failed**；Codex 独立串行通过后端 **120/1261 passed**、前端 **6/82/61/28/18 passed** 及 lint/build/py_compile/diff/哈希门。Grok 曾遇到一次既有 history 双击元素 detached，未改代码与 Codex 独立复验均 **61 passed**，作为非阻断稳定性风险保留。表/迁移/pin service/配额/裁剪、页面/hook/共享请求层及其它主线保持冻结。
 
 **P12K 已完成并推送**：契约=`docs/p12k-checkpoint-pinned-first-list-contract.md`，计划=`docs/plans/2026-07-19-p12k-checkpoint-pinned-first-list-plan.md`，代码审计基线=`90cfd58`、契约冻结=`fe0fa08`、启动口径修订=`ff48495`/`6666af6`、实现=`3c3cbf9`，Codex ack=`msg_3048a39db0c04969978a7e2dd7ea0c60`。严格两文件把默认 GET 列表改为 `is_pinned DESC,created_at DESC,id DESC`；search 继续最新 20 条 `created_at DESC,id DESC`，前端当前列表仍只原位更新、下一次默认 GET 才重排。failure-first **8 failed / 4 passed**；Grok 串行通过专项/受影响集/全量 **12/132/1273 passed**，Codex 独立受影响集 **132 passed** 并通过编译、diff、哈希与 SQL/AST 门，按分级策略未重复全量。表/迁移/Schema/API/pin service/配额/裁剪/前端和其它主线全部保持冻结。
+
+**P12L 已冻结待实现**：契约=`docs/p12l-checkpoint-pinned-count-frontend-contract.md`，计划=`docs/plans/2026-07-20-p12l-checkpoint-pinned-count-frontend-plan.md`，启动 HEAD=`5258f84`。严格两文件只在技术标/商务标共用 checkpoint 面板显示默认列表固定条数与 5 条上限，并以既有 E2E 覆盖 pin/unpin/delete/失败/搜索隐藏/项目隔离；数量纯派生且零新增请求。Grok 只跑 P12L 聚焦、一次 checkpoint 受影响套件、lint/build；Codex 只复跑聚焦，不重复整仓 E2E。后端/API、字节容量、分组/重排和其它主线全部冻结。
 
 **P13-A 已完成并推送**：契约=`docs/p13a-task-sse-workspace-auth-contract.md`，计划=`docs/plans/2026-07-17-p13a-task-sse-workspace-auth-plan.md`，冻结=`e8dfa61`、实现=`1509aa2`。SSE 连接前短 Session 复用统一 workspace/成员/bid_writer 解析，流内每轮按 workspace/project/task 再校验；disabled、原生 EventSource、事件/回退不变。真实 failure-first **8 failed / 5 passed**；Codex 一轮 test-only 返修关闭恒真泄漏断言、secret marker 跳过和宽松三参，独立通过 **13/72/918 passed**。首次全量只因 20 分钟外层时限不足终止，40 分钟外层干净重跑为 **918 passed in 1310.97s**。
 ## P12D-B 完成状态（2026-07-17）

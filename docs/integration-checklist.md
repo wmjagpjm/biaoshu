@@ -1086,6 +1086,22 @@ Codex 独立串行通过后端受影响集/全量 **120/1261 passed**，前端 P
 
 后续验收采用分级策略：Grok 默认运行专项/受影响集，Codex 独立复核并按迁移、鉴权、共享状态、跨域范围和回归信号决定是否补一次全量；不再让双方机械重复同一全量。所有动态测试仍必须串行，Playwright 继续 `--workers=1 --retries=0`。
 
+## P12L 检查点固定名额提示前端（已冻结待实现）
+
+契约=`docs/p12l-checkpoint-pinned-count-frontend-contract.md`，计划=`docs/plans/2026-07-20-p12l-checkpoint-pinned-count-frontend-plan.md`，启动 HEAD=`5258f84`；严格两文件。
+
+冻结后的联调验收项：
+
+1. 技术标/商务标共用面板在默认列表加载完成、非搜索、无错误时显示精确 `已固定 X 条（最多 5 条）`；空成功列表为 0，首次/刷新加载中及错误态隐藏。
+2. X 只由严格 items 中 `isPinned === true` 纯派生，合法 0..5；禁止新增 state/effect/API/缓存、truthy 宽判或字节容量推算。
+3. pin/unpin 成功随既有原位更新加减；固定项删除成功减一、普通项删除不变；所有失败保留原数量且零 list/search/editor-state 旁路。
+4. 5/5 时普通项固定按钮仍可发起精确一次 PATCH，由服务端保持权威；失败后仍 5/5，不在前端复制配额校验。
+5. active search 始终隐藏提示，搜索 pin 仍隐藏；清除搜索按既有一次 GET 后才显示默认列表数量。项目切换、折叠、卸载及 A→B 迟到 success/catch/finally 不得污染。
+6. checkpointId/stateVersion/snapshot/名称/关键词/原始错误/CSRF 不进入新增 DOM 属性、URL、存储、Cookie、console、剪贴板、下载或外网。
+7. Grok 串行运行 P12L 聚焦、一次完整 checkpoint 受影响套件、lint/build；Codex 独立只复跑 P12L 聚焦与静态门。禁止整仓 318 E2E、后端 pytest 和并发 Playwright。
+
+实现尚未开始。面板/E2E 冻结 SHA-256=`CAA78A98C8113C333FF9D559F84FB2270B933D4F224C997F5897BEA5D4083401`/`627ADAC0FD76A1971716608DDAD83B739E9B819D4053BFF2B48B45D90CE987DB`。Grok 只负责测试先行、两文件实现与自测；Codex 负责受限审查、独立聚焦验收、中文文档、提交与推送。
+
 ## P13-A 任务 SSE 工作空间鉴权（已完成）
 
 冻结=`e8dfa61`，实现=`1509aa2`。required 模式继续由认证中间件负责无会话 401；SSE 路由连接前短 Session 复用统一 `get_workspace_id`，因此 finance/hr/bidder 固定 `role_forbidden`，非成员显式头固定 `workspace_forbidden`，无头原生 EventSource 使用会话 `activeWorkspaceId`。disabled 仍支持默认空间与合法显式头。
