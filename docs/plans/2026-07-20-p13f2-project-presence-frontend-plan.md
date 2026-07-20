@@ -5,6 +5,7 @@
 > 开工基线：`66f4390999bd9da750a439bc13d0ec7627a7f9e9`
 > 分支：仅 `collab/grok-code-codex-review`，禁止操作 `main`
 > 测试：Playwright 固定 `--workers=1 --retries=0`；禁止并发或机械全量
+> 完成：功能提交=`dfa6bc04d21b6919d722e25d86920f39678916f1`，Codex result=`msg_f19ceb09650a4f0584e2d4b1d1985fb4`
 
 ## 1. 目标、架构与技术栈
 
@@ -111,3 +112,11 @@ git status --short
 3. Codex 独立审查、双确认返修（如有）、验收后，精确暂存五代码/测试文件，以中文功能提交推送。
 4. 写回真实测试、消息 ID、最终哈希、未运行项与风险，单独中文文档闭环提交推送。
 5. 完成后工作区为空，本地 HEAD、远端引用和 GitHub 实际分支一致；后续协作能力重新冻结，不沿用本包白名单。
+
+## 11. 实际执行记录
+
+1. 初始 Grok task=`msg_c4b8c3db2b844373a2d9473e2cada9ab`，真实 failure-first `7 failed / 1 passed`，初版专项/freshness `8/17 passed`。
+2. Codex 第一轮审查提出八项问题，Grok 在 `msg_e09a746f34af4c6cbff56a0e7119e0fd` 全部只读确认；独立返修 task=`msg_dce02edef2f64cbb8c869cf8c38fb496`，红测 `2 failed / 0 passed`，返修后专项/freshness `10/17 passed`。
+3. Codex 第二轮发现 console 过滤真实 UUID 与 hidden 延迟生成证据缺口，Grok 在 `msg_4bc81573d30d4f80ada262a540cb81ba` 确认；E2E-only task=`msg_534a0dc70d9e4ff7ae53e9a54d7f7d0b`，最终聚焦/完整 `3/11 passed`。
+4. Codex 独立审查无新增问题，串行专项/freshness `11/17 passed`，lint/diff-check 通过；build 沿用最终生产改动后的 Grok 成功结果。
+5. 精确五文件中文提交 `dfa6bc0` 已推送；未运行整仓 318 E2E、后端 pytest 或并发测试。测试产物已清理，P13-F2 白名单关闭。
