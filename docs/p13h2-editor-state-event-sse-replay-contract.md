@@ -1,9 +1,10 @@
 # P13-H2 editor-state 事件 SSE 与断线重放契约
 
-> 状态：已只读审计并冻结，待 Grok failure-first 与受限实现
+> 状态：已实现、经 Codex 独立验收并完成双确认返修，已提交并推送
 > 日期：2026-07-20
 > 审计基线：`7e5e02efb9e4c460b5e71ab7a05f41290e8c35fb`
 > 前置：P13-H1 事件账本与项目级 GET 游标（冻结=`da2537a`、实现=`4255823`）
+> 实现提交：`c19bf94`
 > 分支：仅 `collab/grok-code-codex-review`，禁止操作 `main`
 
 ## 1. 目标与诚实语义
@@ -98,6 +99,14 @@ data: {"eventId":"ese_<同一ID>","stateVersion":"esv_<64位小写十六进制>"
 
 严格禁止宽状态断言、仅非零计数、源码字符串冒充行为、直接插入事件表作为主要成功证据、睡眠后不校验顺序、跳过测试或把测试超时当成断线重放证据。
 
-## 9. 后续明确拆分
+## 9. 完成记录
+
+failure-first=`msg_f51300735be6483a9a2570cff2fc899e`，仅新专项真实 **14 failed / 1 passed**，首个业务失败为 stream 端点精确 404。Grok 初版 review=`msg_a8de94440fde4c3b8009733b9d3b8130`，专项/代表回归 **15/46 passed**。
+
+Codex 独立审查发现 H2 复用 scope 的未使用 `get_db` 会让 request-scope Session 贯穿长连接，且原测试没有覆盖该依赖；只读 question=`msg_681a4b8bc9194df98dab55c36b4aa93b`，Grok 确认=`msg_101ba01ec2cc48868a7f8ad0b8dfad07`，双方确认后才授权最小返修=`msg_85dcfc97c8424b9f987cc9ba682c071d`。
+
+返修后 Grok review=`msg_6b14f9acb648420c8e89e35cd1a94b67`；Codex 独立通过 H2 专项 **15 passed**（28.80 秒）、H1/P13-A/任务 SSE 代表回归 **46 passed**（34.69 秒）、compileall 与 staged diff-check。最终路由 SHA-256=`A53C3AF562157514A94017D4F72E42802380A11454B84D7EFC1F50C4095DC081`，事件服务冻结=`C641410386A97BA1BCA9B71F2F0753ACAC31B3D14557CB983B8702EBF0CEA42B`，专项=`1CB9B2C18D261533FA5563CCE388E7EC42838317B77584EF9AA76D6154A2722B`。未运行后端全量、前端、整仓 E2E、xdist 或并发 pytest。
+
+## 10. 后续明确拆分
 
 P13-H3 才能让技术标/商务标页面建立 EventSource、严格解析 `cursor`/`editor-state`/控制帧，并在版本变化时显示保守提示或按用户动作读取既有 editor-state。跨标签自动覆盖、正文合并、评论审批、通知、协同光标、WebSocket、多任务总线和强制锁仍不在 H2/H3。

@@ -414,11 +414,11 @@
 
 **下一步**：先只读审计并独立冻结 P13-H2，只允许在 H1 事件账本之上接 SSE `Last-Event-ID` 与断线重放；P13-H3 才能接前端版本提示。评论、审批、协同光标、多任务事件总线仍不得合包。
 
-### P13-H2：editor-state 事件 SSE 与断线重放（已冻结，待 Grok 实现）
+### P13-H2：editor-state 事件 SSE 与断线重放（已完成并推送）
 
-**只读审计与冻结状态（2026-07-20）**：基线=`7e5e02e`。严格三文件，只在 H1 路由/服务增加项目级 SSE 与新专项，不复用或修改单任务 SSE。无 Last-Event-ID 且已有历史时先发公开 tip 的 cursor 锚点，不回放旧 editor-state；有 Last-Event-ID 时按 H1 `(occurred_at,id)` 顺序重放仍保留的后续事件。连接前使用短 Session 返回精确 HTTP 错误，流内每轮短 Session；空表首事件、51 条跨页、断线重连、stale 两阶段、鉴权和隐私必须先红后绿。无前端、WebSocket、通知、多任务总线或强制锁。契约=`docs/p13h2-editor-state-event-sse-replay-contract.md`，计划=`docs/plans/2026-07-20-p13h2-editor-state-event-sse-replay-plan.md`。
+**完成状态（2026-07-20）**：基线=`7e5e02e`，功能=`c19bf94`。严格三文件，只在 H1 路由/服务增加项目级 SSE 与新专项，不复用或修改单任务 SSE。无 Last-Event-ID 且已有历史时先发公开 tip 的 cursor 锚点，不回放旧 editor-state；有 Last-Event-ID 时按 H1 `(occurred_at,id)` 顺序重放仍保留的后续事件。failure-first **14 failed / 1 passed**；Codex 发现 request-scope `get_db` 问题，经 Grok 确认后最小返修；Codex 独立专项/代表回归 **15/46 passed**，compileall 与 diff-check 通过。无前端、WebSocket、通知、多任务总线或强制锁。契约=`docs/p13h2-editor-state-event-sse-replay-contract.md`，计划=`docs/plans/2026-07-20-p13h2-editor-state-event-sse-replay-plan.md`。
 
-**下一步**：Grok 先只创建 H2 新专项做真实 failure-first，再受限实现与串行自测；Codex 独立审查。P13-H3 前端版本提示继续独立冻结，不能提前合入 H2。
+**下一步**：只读审计并独立冻结 P13-H3 前端版本提示；仅允许在 H2 SSE 之上接保守解析与提示，不能把正文自动覆盖、评论审批或协同能力合入 H2。
 
 阶段 0/1/2、阶段 3 M3-A 至 M3-D、阶段 4 **包 5** 至 **包 8/P8B/P8C/P8D/P8E**、P9A/P9B/P9C/P9D、阶段 5 P10A 至 P10K、**P11A/P11B/P11C 三个真实数据收口包**，以及 **P12A/P12B-A/B/C/D/P12C-A/B/C/P12D-A/B/P12E-A/B/C/P12F-A/B/C/D/P13-A** 均保持已交付。P8E 完整契约见 `docs/p8e-docling-local-helper-contract.md`，实施与独立验收记录见 `docs/plans/2026-07-15-p8e-docling-local-helper-plan.md`。
 

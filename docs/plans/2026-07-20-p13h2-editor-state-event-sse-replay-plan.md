@@ -1,6 +1,8 @@
 # P13-H2 editor-state 事件 SSE 与断线重放实施计划
 
 > **执行要求：** Grok 必须使用 `executing-plans` 工作流逐项执行，先红后绿；Codex 独立审查、验收和提交。
+>
+> **完成状态：** 已实现、经 Codex 独立验收并完成双确认返修，功能提交=`c19bf94`，待文档闭环提交。
 
 **目标：** 在 P13-H1 项目事件账本上提供严格 Cookie 鉴权、Last-Event-ID 重放和无历史回放的项目级 SSE。
 
@@ -77,3 +79,9 @@ git diff --check
 5. 检查测试不使用直接事件插表、宽状态、仅计数、源码扫描、无意义 sleep、skip/xfail 或 monkeypatch 掉核心行为。
 6. 疑似问题先发只读 question，Grok 独立确认后才可下发最小返修授权；确认前禁止修改。
 7. 通过后精确暂存三文件，中文提交并推送；再更新契约、计划、交接、路线图和联调清单。
+
+## 7. 完成记录
+
+failure-first=`msg_f51300735be6483a9a2570cff2fc899e`：**14 failed / 1 passed**，首个业务失败为未实现端点 404。Grok 初版 review=`msg_a8de94440fde4c3b8009733b9d3b8130`：专项/代表回归 **15/46 passed**。Codex 发现 request-scope `get_db` 真实贯穿 StreamingResponse 且原测试无法覆盖；question=`msg_681a4b8bc9194df98dab55c36b4aa93b`，Grok 确认=`msg_101ba01ec2cc48868a7f8ad0b8dfad07`，返修授权=`msg_85dcfc97c8424b9f987cc9ba682c071d`。
+
+返修后 Codex 独立通过专项 **15 passed**、H1/P13-A/任务 SSE 代表回归 **46 passed**、compileall 与 staged diff-check；Grok review=`msg_6b14f9acb648420c8e89e35cd1a94b67`。功能提交=`c19bf94`；未运行后端全量、前端、整仓 E2E、xdist 或并发 pytest。

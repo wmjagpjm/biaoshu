@@ -1378,8 +1378,10 @@ Codex 独立串行通过 P13-G2 专项/P13-F2 presence/freshness **13/11/17 pass
 
 事件只含不透明 eventId、stateVersion、sourceKind、occurredAt；不含快照、正文、章节、actor/client、任务结果或异常原文。无 `after` 时不回放历史，已有事件返回最新 tip 供后续增量读取；游标 stale 固定脱敏 409，事件上限 200/项目，失败事务零事件。未运行后端全量、前端、整仓 E2E、xdist 或并发 pytest；SSE、Last-Event-ID、前端自动刷新、WebSocket、通知、评论审批和强制锁仍未实现。
 
-## P13-H2 editor-state 事件 SSE 与断线重放（已冻结，待实现）
+## P13-H2 editor-state 事件 SSE 与断线重放（已完成并推送）
 
-契约=`docs/p13h2-editor-state-event-sse-replay-contract.md`，计划=`docs/plans/2026-07-20-p13h2-editor-state-event-sse-replay-plan.md`，审计基线=`7e5e02e`。严格三文件：H1 事件服务、H1 路由和新 H2 专项；任务 SSE、main/schema/实体/transition、认证公共层、前端与其它测试保持不变。
+契约=`docs/p13h2-editor-state-event-sse-replay-contract.md`，计划=`docs/plans/2026-07-20-p13h2-editor-state-event-sse-replay-plan.md`，审计基线=`7e5e02e`，功能=`c19bf94`。严格三文件：H1 事件服务、H1 路由和新 H2 专项；任务 SSE、main/schema/实体/transition、认证公共层、前端与其它测试保持不变。
 
-验收前置边界：无 Last-Event-ID 的已有历史只发公开 tip cursor 锚点，不回放旧 editor-state；有 Last-Event-ID 正序重放保留窗口内后续事件；空表首事件不得丢。SSE id 与四键 data.eventId 相等，心跳仅注释；连接前 stale 是 HTTP 409，连接中 stale 是无 id 固定控制帧。连接前与每轮查询均用已关闭的短 Session，required/活动 workspace/strict bid_writer、X-Workspace-Id、跨项目和请求语法必须精确。不得运行并发 pytest、xdist、后端全量、前端或整仓 E2E；不得提前实现 H3 前端、WebSocket、通知、多任务总线或强制锁。
+完成证据：failure-first=`msg_f51300735be6483a9a2570cff2fc899e`，真实 **14 failed / 1 passed**；Codex 发现 request-scope `get_db` 会贯穿 SSE，question=`msg_681a4b8bc9194df98dab55c36b4aa93b`，Grok 确认=`msg_101ba01ec2cc48868a7f8ad0b8dfad07`，返修授权=`msg_85dcfc97c8424b9f987cc9ba682c071d`。返修后 Codex 独立专项/代表回归 **15/46 passed**，compileall、diff-check、严格三文件哈希门通过。
+
+无 Last-Event-ID 的已有历史只发公开 tip cursor 锚点，不回放旧 editor-state；有 Last-Event-ID 正序重放保留窗口内后续事件；空表首事件不得丢。SSE id 与四键 data.eventId 相等，心跳仅注释；连接前 stale 是 HTTP 409，连接中 stale 是无 id 固定控制帧。连接前与每轮查询均用已关闭的短 Session，stream scope 不再触发 request-scope `get_db`；required/活动 workspace/strict bid_writer、X-Workspace-Id、跨项目和请求语法必须精确。未运行后端全量、前端、整仓 E2E、xdist 或并发 pytest；H3 前端、WebSocket、通知、多任务总线或强制锁仍未实现。
