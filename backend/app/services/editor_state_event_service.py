@@ -1,14 +1,15 @@
 """
-模块：P13-H1 editor-state 事件只读查询服务
+模块：P13-H1/H2 editor-state 事件只读查询服务
 用途：在 workspace/project 作用域内按游标正序读取脱敏事件；
   after 缺失不回放历史，但已有事件时返回当前 tip 作为 next_cursor；
-  游标失效固定 stale。
+  游标失效固定 stale；H2 另提供流页原语与 tip/游标预检。
 对接：api.editor_state_events；EditorStateEventRow；Project。
 二次开发：
   - 禁止从修订表补洞；禁止返回 snapshot/actor/client/内部 ID；
   - 仅 flush 调用方事务外只读；limit 固定 1..50；
   - after 必须 ese_ + 32 位小写十六进制；
-  - tip 取 (occurred_at DESC, id DESC) 最新一条合法 ese_ ID。
+  - tip 取 (occurred_at DESC, id DESC) 最新一条合法 ese_ ID；
+  - 流页 after=None 仅表示空水位起点，按最早保留事件正序读取。
 """
 
 from __future__ import annotations
@@ -225,5 +226,155 @@ def list_editor_state_events(
     return {
         "items": items,
         "next_cursor": next_cursor,
+        "has_more": has_more,
+    }
+
+
+def _latest_tip_id(
+    db: Session, workspace_id: str, project_id: str
+) -> str | None:
+    """用途：当前项目保留窗口内最新事件 ID；无事件返回 None。"""
+    tip = db.execute(
+        select(EditorStateEventRow.id)
+        .where(
+            EditorStateEventRow.workspace_id == workspace_id,
+            EditorStateEventRow.project_id == project_id,
+        )
+        .order_by(
+            EditorStateEventRow.occurred_at.desc(),
+            EditorStateEventRow.id.desc(),
+        )
+        .limit(1)
+    ).first()
+    if tip is None:
+        return None
+    return str(tip.id)
+
+
+def precheck_editor_state_event_stream(
+    db: Session,
+    workspace_id: str,
+    project_id: str,
+    *,
+    last_event_id: str | None,
+) -> tuple[str | None, bool]:
+    """
+    用途：连接前短 Session 预检项目与可选 Last-Event-ID。
+    返回：(watermark, send_cursor_anchor)
+      - 有 last_event_id：校验仍保留后作为水位，不发锚点；
+      - 无 header 且有 tip：水位=tip，需先发 cursor 锚点；
+      - 无 header 且空表：水位=None，从空起点等待。
+    """
+    if not isinstance(workspace_id, str) or not workspace_id:
+        _raise_not_found()
+    _require_project(db, workspace_id, project_id)
+
+    if last_event_id is not None:
+        safe = _normalize_after(last_event_id)
+        assert safe is not None
+        cursor = db.execute(
+            select(EditorStateEventRow.id).where(
+                EditorStateEventRow.workspace_id == workspace_id,
+                EditorStateEventRow.project_id == project_id,
+                EditorStateEventRow.id == safe,
+            )
+        ).first()
+        if cursor is None:
+            _raise_stale()
+        return safe, False
+
+    tip = _latest_tip_id(db, workspace_id, project_id)
+    if tip is None:
+        return None, False
+    return tip, True
+
+
+def list_editor_state_event_stream_page(
+    db: Session,
+    workspace_id: str,
+    project_id: str,
+    *,
+    after: str | None,
+    limit: Any = None,
+) -> dict[str, Any]:
+    """
+    用途：H2 流内短 Session 读取一页保留事件（正序）。
+    - after 有值：返回其后最多 limit 条；未知/裁剪/跨项目统一 409；
+    - after 为 None：仅空水位起点，从最早保留事件读取（路由已预检空表）。
+    返回：{items, has_more}；items 为服务层 snake 四键；调用方以最后实际发送 eventId 推进水位。
+    """
+    if not isinstance(workspace_id, str) or not workspace_id:
+        _raise_not_found()
+    _require_project(db, workspace_id, project_id)
+    safe_limit = _normalize_limit(limit if limit is not None else MAX_LIMIT)
+
+    if after is None:
+        rows = list(
+            db.execute(
+                select(EditorStateEventRow)
+                .where(
+                    EditorStateEventRow.workspace_id == workspace_id,
+                    EditorStateEventRow.project_id == project_id,
+                )
+                .order_by(
+                    EditorStateEventRow.occurred_at.asc(),
+                    EditorStateEventRow.id.asc(),
+                )
+                .limit(safe_limit + 1)
+            )
+            .scalars()
+            .all()
+        )
+        has_more = len(rows) > safe_limit
+        page = rows[:safe_limit]
+        return {
+            "items": [_item_dict(r) for r in page],
+            "has_more": has_more,
+        }
+
+    safe_after = _normalize_after(after)
+    assert safe_after is not None
+    cursor = db.execute(
+        select(
+            EditorStateEventRow.id,
+            EditorStateEventRow.occurred_at,
+        ).where(
+            EditorStateEventRow.workspace_id == workspace_id,
+            EditorStateEventRow.project_id == project_id,
+            EditorStateEventRow.id == safe_after,
+        )
+    ).first()
+    if cursor is None:
+        _raise_stale()
+
+    cursor_at = cursor.occurred_at
+    cursor_id = str(cursor.id)
+    rows = list(
+        db.execute(
+            select(EditorStateEventRow)
+            .where(
+                EditorStateEventRow.workspace_id == workspace_id,
+                EditorStateEventRow.project_id == project_id,
+                or_(
+                    EditorStateEventRow.occurred_at > cursor_at,
+                    and_(
+                        EditorStateEventRow.occurred_at == cursor_at,
+                        EditorStateEventRow.id > cursor_id,
+                    ),
+                ),
+            )
+            .order_by(
+                EditorStateEventRow.occurred_at.asc(),
+                EditorStateEventRow.id.asc(),
+            )
+            .limit(safe_limit + 1)
+        )
+        .scalars()
+        .all()
+    )
+    has_more = len(rows) > safe_limit
+    page = rows[:safe_limit]
+    return {
+        "items": [_item_dict(r) for r in page],
         "has_more": has_more,
     }
