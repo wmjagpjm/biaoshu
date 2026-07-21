@@ -248,3 +248,155 @@ export async function checkApiHealth(force = false): Promise<HealthCache> {
 export function getCachedApiHealth(): HealthCache {
   return healthCache;
 }
+
+/** DOCX 精确主 MIME（可带参数，如 charset） */
+const DOCX_MIME_MAIN =
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+/**
+ * 用途：严格校验可作浏览器保存名的 DOCX 文件名；非法则拒绝（不清洗）。
+ * 对接：Content-Disposition 解析结果与 task.result.filename 共用同一规则。
+ * 二次开发：禁止把 ../evil|name?.docx 等危险串洗成可用名。
+ */
+export function isSafeDocxDownloadFilename(name: string): boolean {
+  if (typeof name !== "string") return false;
+  if (!name || name.length > 260) return false;
+  if (!/\.docx$/i.test(name)) return false;
+  // 禁止重复扩展名
+  if (/\.docx\.docx$/i.test(name)) return false;
+  const base = name.slice(0, name.length - ".docx".length);
+  if (!base) return false;
+  // 码点长度（基础名）
+  if ([...base].length > 100) return false;
+  // 首尾空白/尾点不允许（后端已收敛；前端拒绝未收敛候选）
+  if (base !== base.trim() || /[. ]$/.test(base)) return false;
+  // 路径分隔/Windows 非法字符/C0+DEL+C1（U+007F–U+009F）；允许 A..B 等合法双点
+  if (/[\u0000-\u001f\u007f-\u009f<>:"/\\|?*]/.test(base)) return false;
+  // 整名保留设备名（大小写不敏感）必须已带尾 _
+  const reserved = new Set([
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    ...Array.from({ length: 9 }, (_, i) => `COM${i + 1}`),
+    ...Array.from({ length: 9 }, (_, i) => `LPT${i + 1}`),
+  ]);
+  if (reserved.has(base.toUpperCase())) return false;
+  return true;
+}
+
+/**
+ * 用途：安全解析 Content-Disposition 的 filename* / filename；失败返回 null。
+ * 规则：filename* 优先；仅接受可严格校验的结果，绝不回传 detail/path。
+ */
+export function parseContentDispositionFilename(
+  header: string | null | undefined,
+): string | null {
+  if (!header || typeof header !== "string") return null;
+  try {
+    const star = header.match(/filename\*\s*=\s*([^;]+)/i);
+    if (star) {
+      let raw = star[1].trim().replace(/^"|"$/g, "");
+      // 仅接受 charset'lang'value 形态（常见 UTF-8''...）
+      const m = raw.match(/^([^']*)''(.+)$/);
+      if (!m) return null;
+      const decoded = decodeURIComponent(m[2]);
+      return isSafeDocxDownloadFilename(decoded) ? decoded : null;
+    }
+    const quoted = header.match(/filename\s*=\s*"([^"]+)"/i);
+    if (quoted) {
+      const name = quoted[1];
+      return isSafeDocxDownloadFilename(name) ? name : null;
+    }
+    const plain = header.match(/filename\s*=\s*([^;]+)/i);
+    if (plain) {
+      const name = plain[1].trim().replace(/^"|"$/g, "");
+      return isSafeDocxDownloadFilename(name) ? name : null;
+    }
+  } catch {
+    /* 解析失败：视为不可用 */
+  }
+  return null;
+}
+
+function isDocxContentType(contentType: string | null): boolean {
+  if (!contentType) return false;
+  const main = contentType.split(";")[0].trim().toLowerCase();
+  return main === DOCX_MIME_MAIN;
+}
+
+export type DocxBinaryDownload = {
+  blob: Blob;
+  /** 响应头安全解析后的文件名；不可用则为 null */
+  filename: string | null;
+};
+
+/**
+ * 用途：同源二进制 GET 下载 DOCX（credentials=same-origin）。
+ * 约束：GET 零 CSRF、零 Cookie 读取、零 query 敏感值；非 2xx 不读 body；
+ *       仅接受精确 DOCX 主 MIME（可带参数）与非空 Blob。
+ * 对接：useProjectPipeline.downloadExport。
+ * 二次开发：失败不得向 UI 泄漏 detail/path/正文。
+ */
+export async function apiFetchDocxBlob(
+  path: string,
+  init?: { signal?: AbortSignal },
+): Promise<DocxBinaryDownload> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      method: "GET",
+      credentials: "same-origin",
+      signal: init?.signal,
+    });
+  } catch (err) {
+    if (
+      err instanceof DOMException &&
+      (err.name === "AbortError" || err.name === "TimeoutError")
+    ) {
+      throw err;
+    }
+    const e = new Error("download_failed");
+    e.name = "DocxDownloadError";
+    throw e;
+  }
+
+  if (!res.ok) {
+    // 非 2xx：禁止读 text/json，避免 detail 进入调用链
+    const e = new Error("download_failed");
+    e.name = "DocxDownloadError";
+    throw e;
+  }
+
+  if (!isDocxContentType(res.headers.get("content-type"))) {
+    const e = new Error("download_failed");
+    e.name = "DocxDownloadError";
+    throw e;
+  }
+
+  let blob: Blob;
+  try {
+    blob = await res.blob();
+  } catch (err) {
+    if (
+      err instanceof DOMException &&
+      (err.name === "AbortError" || err.name === "TimeoutError")
+    ) {
+      throw err;
+    }
+    const e = new Error("download_failed");
+    e.name = "DocxDownloadError";
+    throw e;
+  }
+
+  if (!blob || blob.size <= 0) {
+    const e = new Error("download_failed");
+    e.name = "DocxDownloadError";
+    throw e;
+  }
+
+  const headerName = parseContentDispositionFilename(
+    res.headers.get("content-disposition"),
+  );
+  return { blob, filename: headerName };
+}

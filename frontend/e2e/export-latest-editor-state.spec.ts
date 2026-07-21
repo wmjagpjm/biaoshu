@@ -3,6 +3,7 @@
  * 用途：证明技术/商务导出点击必须先完成最新 editor-state PUT；失败/冲突/无改动/双击/切项目可判定。
  * 对接：Playwright chromium；本机后端 8010 / 前端 5174；真实页面编辑控件 + route 屏障。
  * 二次开发：禁止 waitForTimeout/setTimeout/sleep、skip/fixme、宽松 or、读生产源码、外网与真实业务数据。
+ * V1-F：成功一次下载 / 迟到零下载观察点改为 Playwright download 事件；禁止 window.open 成功分支。
  */
 import {
   expect,
@@ -439,6 +440,41 @@ async function installEditorStatePutBarrier(
   });
 }
 
+/** 用途：V1-F 合成 DOCX 字节，供 stubSuccess 后的下载 GET。 */
+const V1E_DOCX_BYTES = Buffer.from(
+  "PK\u0003\u0004" + "V1E_SYNTH_DOCX_" + "z".repeat(180),
+  "binary",
+);
+
+function v1eStoredName(projectId: string): string {
+  // 8 hex 形态；用 projectId 派生保证同项目稳定、跨项目可区分
+  const hex = projectId.replace(/[^a-fA-F0-9]/g, "").padEnd(8, "0").slice(0, 8);
+  return `export_${hex}.docx`;
+}
+
+/**
+ * 用途：为 stubSuccess 导出安装同源下载 GET 桩，使 Blob/anchor 协议可触发真实 download 事件。
+ */
+async function installExportDownloadStub(page: Page): Promise<void> {
+  await page.route("**/api/projects/**/export/download/**", async (route: Route) => {
+    const req = route.request();
+    if (req.method().toUpperCase() !== "GET") {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType:
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      headers: {
+        "Content-Disposition": 'attachment; filename="v1e-stub.docx"',
+        "Cache-Control": "no-store",
+      },
+      body: V1E_DOCX_BYTES,
+    });
+  });
+}
+
 /** 用途：记录/可选挂起/桩成功 export 任务 POST；按 project 归属计数。 */
 async function installExportTaskBarrier(
   page: Page,
@@ -489,7 +525,7 @@ async function installExportTaskBarrier(
       await opts.gate.wait();
     }
     if (opts?.stubSuccess) {
-      const storedName = `v1e-stub-${pid}.docx`;
+      const storedName = v1eStoredName(pid);
       await route.fulfill({
         status: 201,
         contentType: "application/json",
@@ -506,6 +542,7 @@ async function installExportTaskBarrier(
             size: 1024,
             mode: opts.resultMode ?? "technical",
             imageWarnings: opts.imageWarnings ?? [],
+            filename: "v1e-stub.docx",
           },
         }),
       });
@@ -592,7 +629,7 @@ async function waitS2PutBeforeExport(
 
 /**
  * 用途：释放 export 成功响应后观察 window.open 是否新增；超时无新增返回 false。
- * 对接：A2 迟到下载隔离；事件驱动 waitForFunction，禁止 sleep。
+ * 对接：A2 反回归——禁止 window.open 回流；事件驱动 waitForFunction，禁止 sleep。
  */
 async function openCallsIncreased(
   page: Page,
@@ -612,6 +649,25 @@ async function openCallsIncreased(
   } catch {
     return false;
   }
+}
+
+/**
+ * 用途：观察 browser download 是否新增；超时无新增返回 false。
+ * 对接：V1-F A2 迟到零下载主观察点。
+ */
+async function downloadEventsIncreased(
+  page: Page,
+  getCount: () => number,
+  baseline: number,
+  timeoutMs = 5_000,
+): Promise<boolean> {
+  if (getCount() > baseline) return true;
+  try {
+    await page.waitForEvent("download", { timeout: timeoutMs });
+  } catch {
+    return getCount() > baseline;
+  }
+  return getCount() > baseline;
 }
 
 async function softNavigate(
@@ -956,6 +1012,10 @@ test.describe("V1-E 导出前最新编辑态落盘", () => {
     const name = "E2E V1E 技术标无改动";
     const projectId = await seedTechnical(request, name, ANCHOR.techNoEdit);
     const ledger = createLedger();
+    const browserDownloads: string[] = [];
+    page.on("download", (d) => {
+      browserDownloads.push(d.suggestedFilename());
+    });
 
     await installOpenStub(page);
     await installNetworkGuard(page, ledger);
@@ -964,12 +1024,14 @@ test.describe("V1-E 导出前最新编辑态落盘", () => {
       projectId,
       stubSuccess: true,
     });
+    await installExportDownloadStub(page);
 
     await page.goto(`/technical-plan/${projectId}/export`);
     await expect(page.getByRole("heading", { name })).toBeVisible({
       timeout: 20_000,
     });
     await expect(page.getByText("准备导出 Word")).toBeVisible();
+    const downloadWait = page.waitForEvent("download", { timeout: 20_000 });
     await page.getByRole("button", { name: /生成并下载 Word/ }).click();
 
     await expect
@@ -979,6 +1041,10 @@ test.describe("V1-E 导出前最新编辑态落盘", () => {
       putsFor(ledger, projectId).length,
       "无本地修改不得额外 editor-state PUT",
     ).toBe(0);
+    // V1-F：成功一次真实 download；禁止 window.open
+    await downloadWait;
+    expect(browserDownloads.length).toBe(1);
+    expect(await getOpenCalls(page)).toEqual([]);
     expect(ledger.externalHits).toEqual([]);
     await assertNoSensitiveStorage(page);
   });
@@ -990,6 +1056,10 @@ test.describe("V1-E 导出前最新编辑态落盘", () => {
     const name = "E2E V1E 商务标无改动";
     const projectId = await seedBusiness(request, name, ANCHOR.bizNoEdit);
     const ledger = createLedger();
+    const browserDownloads: string[] = [];
+    page.on("download", (d) => {
+      browserDownloads.push(d.suggestedFilename());
+    });
 
     await installOpenStub(page);
     await installNetworkGuard(page, ledger);
@@ -998,18 +1068,23 @@ test.describe("V1-E 导出前最新编辑态落盘", () => {
       projectId,
       stubSuccess: true,
     });
+    await installExportDownloadStub(page);
 
     await page.goto(`/business-bid/${projectId}/export`);
     await expect(page.getByRole("heading", { name })).toBeVisible({
       timeout: 20_000,
     });
     await expect(page.getByText("准备导出商务标 Word")).toBeVisible();
+    const downloadWait = page.waitForEvent("download", { timeout: 20_000 });
     await page.getByRole("button", { name: /生成并下载 Word/ }).click();
 
     await expect
       .poll(() => exportsFor(ledger, projectId).length, { timeout: 20_000 })
       .toBe(1);
     expect(putsFor(ledger, projectId).length).toBe(0);
+    await downloadWait;
+    expect(browserDownloads.length).toBe(1);
+    expect(await getOpenCalls(page)).toEqual([]);
     expect(ledger.externalHits).toEqual([]);
   });
 
@@ -1237,6 +1312,10 @@ test.describe("V1-E 导出前最新编辑态落盘", () => {
     const putSeen = new Promise<void>((r) => {
       putSeenResolve = r;
     });
+    const browserDownloads: string[] = [];
+    page.on("download", (d) => {
+      browserDownloads.push(d.suggestedFilename());
+    });
 
     await installOpenStub(page);
     await installNetworkGuard(page, ledger);
@@ -1249,6 +1328,7 @@ test.describe("V1-E 导出前最新编辑态落盘", () => {
       projectId,
       stubSuccess: true,
     });
+    await installExportDownloadStub(page);
 
     await openTechnicalContent(page, projectId, name);
     await page.getByLabel("正文：V1E章节").fill(`${ANCHOR.techDouble}\n`);
@@ -1256,6 +1336,7 @@ test.describe("V1-E 导出前最新编辑态落盘", () => {
 
     const btn = page.getByRole("button", { name: /生成并下载 Word/ });
     const orderPromise = waitPutBeforeExport(page, projectId, putSeen);
+    const downloadWait = page.waitForEvent("download", { timeout: 25_000 });
     // 快速双击：同一 HTMLButtonElement 在同一浏览器任务内连续 click 两次；禁止 force
     await btn.evaluate((el) => {
       const button = el as HTMLButtonElement;
@@ -1280,6 +1361,10 @@ test.describe("V1-E 导出前最新编辑态落盘", () => {
       { puts: putsFor(ledger, projectId).length, exports: exportsFor(ledger, projectId).length },
       "释放后精确计数仍为单飞 {puts:1,exports:1}",
     ).toEqual({ puts: 1, exports: 1 });
+    // V1-F：同一导出精确一次 download 事件
+    await downloadWait;
+    expect(browserDownloads.length).toBe(1);
+    expect(await getOpenCalls(page)).toEqual([]);
   });
 
   test("项目A保存挂起后切B：迟到完成不得在B创建 export/下载", async ({
@@ -1388,6 +1473,8 @@ test.describe("V1-E 导出前最新编辑态落盘", () => {
         if (rec.projectId === projectA) exportASeenResolve();
       },
     });
+    // 若迟到路径误下载，提供 DOCX 以便 download 事件可观测
+    await installExportDownloadStub(page);
 
     await page.goto(`/technical-plan/${projectA}/export`);
     await expect(page.getByRole("heading", { name: nameA })).toBeVisible({
@@ -1416,15 +1503,32 @@ test.describe("V1-E 导出前最新编辑态落盘", () => {
     const downloadsBefore = downloads.length;
     const exportsBBefore = exportsFor(ledger, projectB).length;
 
+    // 释放前建立 201 同步：status=201 + export 任务 POST + projectA
+    const export201A = page.waitForResponse(
+      (res) =>
+        res.status() === 201 &&
+        isExportTaskPost(res.request()) &&
+        projectIdFromApiUrl(res.request().url()) === projectA,
+    );
     exportGateA.release();
-    const openIncreased = await openCallsIncreased(page, opensBefore, 5_000);
+    await export201A;
+    // V1-F 主观察点：browser download 零新增
+    const downloadIncreased = await downloadEventsIncreased(
+      page,
+      () => downloads.length,
+      downloadsBefore,
+      5_000,
+    );
+    expect(
+      downloadIncreased,
+      "释放 A 成功响应后 download 事件必须精确零新增",
+    ).toBe(false);
+    expect(downloads.length).toBe(downloadsBefore);
+    // 反回归：亦不得回流 window.open
+    const openIncreased = await openCallsIncreased(page, opensBefore, 2_000);
     expect(openIncreased, "释放 A 成功响应后 window.open 必须精确零新增").toBe(
       false,
     );
-    expect(
-      downloads.length,
-      "释放 A 成功响应后 download 事件必须精确零新增",
-    ).toBe(downloadsBefore);
     expect(await getOpenCalls(page)).toHaveLength(opensBefore);
 
     // B 告警/提示不被 A 污染
@@ -1445,7 +1549,7 @@ test.describe("V1-E 导出前最新编辑态落盘", () => {
     await assertNoSensitiveStorage(page);
   });
 
-  test("A2 商务标：export 持有后软切 B，direct window.open 零新增且零污染", async ({
+  test("A2 商务标：export 持有后软切 B，零 download 且零污染", async ({
     page,
     request,
   }) => {
@@ -1477,6 +1581,7 @@ test.describe("V1-E 导出前最新编辑态落盘", () => {
         if (rec.projectId === projectA) exportASeenResolve();
       },
     });
+    await installExportDownloadStub(page);
 
     await page.goto(`/business-bid/${projectA}/export`);
     await expect(page.getByRole("heading", { name: nameA })).toBeVisible({
@@ -1503,17 +1608,32 @@ test.describe("V1-E 导出前最新编辑态落盘", () => {
     const downloadsBefore = downloads.length;
     const exportsBBefore = exportsFor(ledger, projectB).length;
 
-    // 独立证明商务链 direct window.open 不发生，不得复用技术标结果
+    // 独立证明商务链迟到 success 零 download，不得复用技术标结果
+    // 释放前建立 201 同步：status=201 + export 任务 POST + projectA
+    const export201A = page.waitForResponse(
+      (res) =>
+        res.status() === 201 &&
+        isExportTaskPost(res.request()) &&
+        projectIdFromApiUrl(res.request().url()) === projectA,
+    );
     exportGateA.release();
-    const openIncreased = await openCallsIncreased(page, opensBefore, 5_000);
+    await export201A;
+    const downloadIncreased = await downloadEventsIncreased(
+      page,
+      () => downloads.length,
+      downloadsBefore,
+      5_000,
+    );
+    expect(
+      downloadIncreased,
+      "商务 A2：释放 A 成功响应后 download 事件必须精确零新增",
+    ).toBe(false);
+    expect(downloads.length).toBe(downloadsBefore);
+    const openIncreased = await openCallsIncreased(page, opensBefore, 2_000);
     expect(
       openIncreased,
-      "商务 A2：释放 A 成功响应后 direct window.open 必须精确零新增",
+      "商务 A2：释放 A 成功响应后 window.open 必须精确零新增",
     ).toBe(false);
-    expect(
-      downloads.length,
-      "商务 A2：download 事件必须精确零新增",
-    ).toBe(downloadsBefore);
     const opensAfter = await getOpenCalls(page);
     expect(opensAfter).toHaveLength(opensBefore);
     expect(

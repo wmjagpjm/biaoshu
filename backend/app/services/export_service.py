@@ -1255,6 +1255,52 @@ def _apply_template_styles(doc, cfg: dict) -> None:
                 pass
 
 
+# Windows 保留设备名（整名大小写不敏感）；人读文件名若命中则尾加 _
+_WINDOWS_RESERVED_BASENAMES = frozenset(
+    {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *{f"COM{i}" for i in range(1, 10)},
+        *{f"LPT{i}" for i in range(1, 10)},
+    }
+)
+# Windows 非法路径字符
+_WINDOWS_ILLEGAL_FILENAME_CHARS = frozenset('<>:"/\\|?*')
+
+
+def build_safe_docx_filename(project_name: str | None) -> str:
+    """
+    用途：唯一安全人读 DOCX 文件名收敛；任务 result.filename 与下载 Content-Disposition 共用。
+    规则：去控制字符与 <>:"/\\|?* → 去首尾空白/尾点空格 → 循环去重复 .docx →
+          基础名最多 100 码点 → 保留名尾加 _ → 空回退「标书」→ 单次 .docx。
+    对接：build_docx_bytes 返回值；export 下载路由 FileResponse.filename。
+    二次开发：不得用手拼未转义头；磁盘/URL 仍用 export_*.docx 随机 storedName。
+    """
+    raw = project_name if isinstance(project_name, str) else ""
+    cleaned_chars: list[str] = []
+    for ch in raw:
+        code = ord(ch)
+        # 移除 C0 控制字符、DEL 与 C1（U+007F–U+009F，含 TAB/NEL）；不扩大到 Cf 等
+        if code < 32 or 127 <= code <= 159:
+            continue
+        if ch in _WINDOWS_ILLEGAL_FILENAME_CHARS:
+            continue
+        cleaned_chars.append(ch)
+    base = "".join(cleaned_chars).strip().rstrip(" .")
+    # 循环剥除重复 .docx（大小写不敏感），并收敛尾点/空格
+    while base.lower().endswith(".docx"):
+        base = base[: -len(".docx")].rstrip(" .")
+    if len(base) > 100:
+        base = base[:100].rstrip(" .")
+    if not base:
+        base = "标书"
+    if base.upper() in _WINDOWS_RESERVED_BASENAMES:
+        base = f"{base}_"
+    return f"{base}.docx"
+
+
 def build_docx_bytes(
     db: Session,
     workspace_id: str,
@@ -1377,7 +1423,8 @@ def build_docx_bytes(
         )
         buf = io.BytesIO()
         doc.save(buf)
-        filename = f"{title}.docx".replace("/", "_").replace("\\", "_")
+        # 人读名仅由权威 project.name 收敛；封面/正文 title 保持原样
+        filename = build_safe_docx_filename(project.name)
         return buf.getvalue(), filename
 
     overview = (state.analysis_overview if state else None) or ""
@@ -1573,5 +1620,6 @@ def build_docx_bytes(
 
     buf = io.BytesIO()
     doc.save(buf)
-    filename = f"{title}.docx".replace("/", "_").replace("\\", "_")
+    # 人读名仅由权威 project.name 收敛；封面/正文 title 保持原样
+    filename = build_safe_docx_filename(project.name)
     return buf.getvalue(), filename

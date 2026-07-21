@@ -14,8 +14,20 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { apiFetch, apiUploadFile, getApiBase } from "../../../shared/lib/api";
+import {
+  apiFetch,
+  apiFetchDocxBlob,
+  apiUploadFile,
+  getApiBase,
+  isSafeDocxDownloadFilename,
+} from "../../../shared/lib/api";
 import { applySafeStatusProjection } from "./projectTaskStatus";
+
+/** 磁盘/路径定位用 storedName：仅 export_<8hex>.docx */
+const STORED_NAME_RE = /^export_[0-9a-f]{8}\.docx$/i;
+/** 下载失败固定脱敏文案；禁止拼接 detail/path/storedName */
+const DOWNLOAD_FAIL_UI = "下载失败，请重试";
+const FALLBACK_DOCX_NAME = "标书.docx";
 
 export type PipelineTask = {
   id: string;
@@ -273,6 +285,10 @@ export function useProjectPipeline(projectId: string) {
   } | null>(null);
   /** I4：当前 status GET 的 AbortController；切换/卸载时 abort */
   const reconcileAbortRef = useRef<AbortController | null>(null);
+  /** V1-F：下载世代；项目切换/卸载/新下载递增，作废旧响应与 click */
+  const downloadGenRef = useRef(0);
+  /** V1-F：当前下载 GET 的 AbortController；旧 finally 不得清新 controller */
+  const downloadAbortRef = useRef<AbortController | null>(null);
 
   /** 取消在途 status 对账并推进世代（旧 finally 不得清新请求） */
   const abortReconcileInflight = useCallback(() => {
@@ -289,14 +305,25 @@ export function useProjectPipeline(projectId: string) {
     }
   }, []);
 
+  /**
+   * 用途：项目切换/卸载时作废下载代次与 session 归属。
+   * 说明：仅推进 downloadGen，默认不 abort 在途 GET——
+   *       abort 不能替代 click 前围栏；挂起 GET 释放 200 后仍须零 click/零 setError。
+   *       新一次 downloadExport 启动时才会 abort 旧 controller。
+   */
+  const invalidateDownloadGeneration = useCallback(() => {
+    downloadGenRef.current += 1;
+  }, []);
+
   useEffect(() => {
     const session = ++projectSessionRef.current;
     lastTaskRef.current = null;
     setLastTask(null);
     setBusy(false);
     setError(null);
-    // 项目切换：取消旧 status fetch
+    // 项目切换：取消旧 status fetch；下载仅作废代次（不 abort 挂起响应）
     abortReconcileInflight();
+    invalidateDownloadGeneration();
     return () => {
       // 先作废旧回调，再关闭流，避免旧项目的异步收尾覆盖新项目状态。
       taskRunRef.current += 1;
@@ -304,10 +331,11 @@ export function useProjectPipeline(projectId: string) {
         projectSessionRef.current += 1;
       }
       abortReconcileInflight();
+      invalidateDownloadGeneration();
       taskStreamRef.current?.close();
       taskStreamRef.current = null;
     };
-  }, [projectId, abortReconcileInflight]);
+  }, [projectId, abortReconcileInflight, invalidateDownloadGeneration]);
 
   const refreshFiles = useCallback(async () => {
     if (!projectId) return;
@@ -526,15 +554,130 @@ export function useProjectPipeline(projectId: string) {
     }
   }, [projectId, refreshTasks]);
 
+  /**
+   * 用途：export success 后同源 Blob 下载；忽略 downloadPath；项目/session 围栏。
+   * 返回 true 表示已在当前会话触发 anchor click（可写成功 tip）。
+   * 对接：apiFetchDocxBlob；技术/商务导出页 await 本函数。
+   * 二次开发：禁止 window.open/data/base64/storage；失败仅固定中文，不反转任务 success。
+   */
   const downloadExport = useCallback(
-    (task: PipelineTask) => {
-      const stored = task.result?.storedName as string | undefined;
-      if (!stored) {
-        setError("导出结果中无文件名");
-        return;
+    async (task: PipelineTask): Promise<boolean> => {
+      const runProjectId = projectId;
+      const sessionAtStart = projectSessionRef.current;
+
+      const stillCurrent = () =>
+        activeProjectIdRef.current === runProjectId &&
+        projectSessionRef.current === sessionAtStart;
+
+      const failCurrent = () => {
+        if (stillCurrent()) {
+          setError(DOWNLOAD_FAIL_UI);
+        }
+        return false;
+      };
+
+      if (!runProjectId || task.status !== "success") {
+        return failCurrent();
       }
-      const path = `/projects/${encodeURIComponent(projectId)}/export/download/${encodeURIComponent(stored)}`;
-      window.open(`${getApiBase()}${path}`, "_blank");
+      const result = task.result;
+      if (!result || typeof result !== "object" || Array.isArray(result)) {
+        return failCurrent();
+      }
+      const stored = (result as { storedName?: unknown }).storedName;
+      if (typeof stored !== "string" || !STORED_NAME_RE.test(stored)) {
+        return failCurrent();
+      }
+      // 完全忽略 downloadPath；路径仅由当前 projectId + storedName 构造
+      const path = `/projects/${encodeURIComponent(runProjectId)}/export/download/${encodeURIComponent(stored)}`;
+
+      const gen = ++downloadGenRef.current;
+      const prevAc = downloadAbortRef.current;
+      downloadAbortRef.current = null;
+      if (prevAc) {
+        try {
+          prevAc.abort();
+        } catch {
+          /* ignore */
+        }
+      }
+      const ac = new AbortController();
+      downloadAbortRef.current = ac;
+
+      let objectUrl: string | null = null;
+      try {
+        const { blob, filename: headerName } = await apiFetchDocxBlob(path, {
+          signal: ac.signal,
+        });
+
+        // await 后复核：项目切换/卸载/代次作废 → 零 click、零 setError
+        if (ac.signal.aborted || downloadGenRef.current !== gen) {
+          return false;
+        }
+        if (!stillCurrent()) {
+          return false;
+        }
+
+        let saveName: string | null =
+          headerName && isSafeDocxDownloadFilename(headerName)
+            ? headerName
+            : null;
+        if (!saveName) {
+          const taskFilename = (result as { filename?: unknown }).filename;
+          if (
+            typeof taskFilename === "string" &&
+            isSafeDocxDownloadFilename(taskFilename)
+          ) {
+            saveName = taskFilename;
+          }
+        }
+        if (!saveName) {
+          saveName = FALLBACK_DOCX_NAME;
+        }
+
+        objectUrl = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = objectUrl;
+        anchor.download = saveName;
+        anchor.rel = "noopener";
+        anchor.style.display = "none";
+        document.body.appendChild(anchor);
+
+        // click 前再围栏：abort 不能替代本检查
+        if (
+          ac.signal.aborted ||
+          downloadGenRef.current !== gen ||
+          !stillCurrent()
+        ) {
+          anchor.remove();
+          return false;
+        }
+
+        anchor.click();
+        anchor.remove();
+        return true;
+      } catch (err) {
+        const aborted =
+          ac.signal.aborted ||
+          (err instanceof DOMException && err.name === "AbortError") ||
+          (err instanceof Error && err.name === "AbortError");
+        if (aborted || downloadGenRef.current !== gen || !stillCurrent()) {
+          return false;
+        }
+        setError(DOWNLOAD_FAIL_UI);
+        return false;
+      } finally {
+        if (objectUrl) {
+          try {
+            URL.revokeObjectURL(objectUrl);
+          } catch {
+            /* ignore */
+          }
+        }
+        // 仅清理本代次 controller；旧 finally 不得清新 controller
+        if (downloadAbortRef.current === ac) {
+          downloadAbortRef.current = null;
+        }
+      }
     },
     [projectId],
   );

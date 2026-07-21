@@ -3,6 +3,7 @@
  * 用途：验收技术标/商务标导出成功后展示 result.imageWarnings 且继续本机下载；收敛与清空边界。
  * 对接：Playwright chromium；后端 8010 / 前端 5174；export 任务 result.imageWarnings。
  * 二次开发：主路径走真实本机 export；非法结构仅受控桩；禁止外网、固定 sleep、并行 worker。
+ * V1-F：成功/迟到零下载观察点改为 Playwright download 事件；window.open 必须精确 0。
  */
 import {
   expect,
@@ -48,7 +49,7 @@ async function getOpenCalls(page: Page): Promise<string[]> {
 
 /**
  * 用途：释放 export 成功响应后观察 window.open 是否新增；超时无新增返回 false。
- * 对接：V1-E 迟到 success 零下载；事件驱动 waitForFunction，禁止 sleep。
+ * 对接：反回归——新协议禁止 window.open；事件驱动 waitForFunction，禁止 sleep。
  */
 async function openCallsIncreased(
   page: Page,
@@ -68,6 +69,25 @@ async function openCallsIncreased(
   } catch {
     return false;
   }
+}
+
+/**
+ * 用途：观察 browser download 事件是否新增；超时无新增返回 false。
+ * 对接：V1-F 迟到 success 零下载主观察点。
+ */
+async function downloadEventsIncreased(
+  page: Page,
+  getCount: () => number,
+  baseline: number,
+  timeoutMs = 5_000,
+): Promise<boolean> {
+  if (getCount() > baseline) return true;
+  try {
+    await page.waitForEvent("download", { timeout: timeoutMs });
+  } catch {
+    return getCount() > baseline;
+  }
+  return getCount() > baseline;
 }
 
 /** 用途：网络捕获与外网阻断；业务请求默认继续真实后端。 */
@@ -213,18 +233,6 @@ async function assertNoSensitiveStorage(page: Page) {
   }
 }
 
-function isLocalApiUrl(url: string): boolean {
-  try {
-    const u = new URL(url, "http://127.0.0.1:5174");
-    return (
-      (u.hostname === "127.0.0.1" || u.hostname === "localhost") &&
-      u.pathname.includes("/export/download/")
-    );
-  } catch {
-    return false;
-  }
-}
-
 /**
  * 用途：在同一文档内软切换 technical-plan 路由参数。
  * 避免 page.goto 整页卸载中止飞行中的 export，从而复现迟到污染竞态。
@@ -241,8 +249,15 @@ async function softNavigateTechnicalPlan(
   }, url);
 }
 
+/** 用途：合成非空 DOCX 字节，供受控下载 GET 桩。 */
+const P9D_DOCX_BYTES = Buffer.from(
+  "PK\u0003\u0004" + "P9D_SYNTH_DOCX_" + "y".repeat(180),
+  "binary",
+);
+
 /**
  * 用途：对 export 任务 POST 返回受控成功结果（仅边缘结构用例）；其它请求 continue。
+ * V1-F：storedName 必须为 export_*.docx 形态，以便统一下载 GET 路径校验。
  */
 async function stubExportTaskSuccess(
   page: Page,
@@ -250,7 +265,8 @@ async function stubExportTaskSuccess(
   imageWarnings: unknown,
   opts?: { storedName?: string },
 ): Promise<void> {
-  const storedName = opts?.storedName ?? "p9d-stub-export.docx";
+  // 契约：受控夹具 storedName 必须为 export_<8hex>.docx 真实生成形态
+  const storedName = opts?.storedName ?? "export_a1b2c3d0.docx";
   await page.route("**/api/projects/**/tasks**", async (route: Route) => {
     const req = route.request();
     const method = req.method().toUpperCase();
@@ -300,6 +316,38 @@ async function stubExportTaskSuccess(
   });
 }
 
+/**
+ * 用途：为受控 export 成功后的同源下载 GET 返回合成 DOCX（V1-F Blob 协议）。
+ */
+async function stubExportDownloadDocx(
+  page: Page,
+  projectId: string,
+  storedName: string,
+): Promise<void> {
+  await page.route("**/api/projects/**/export/download/**", async (route: Route) => {
+    const req = route.request();
+    if (req.method().toUpperCase() !== "GET") {
+      await route.continue();
+      return;
+    }
+    const url = req.url();
+    if (!url.includes(projectId) || !url.includes(storedName)) {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType:
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      headers: {
+        "Content-Disposition": `attachment; filename="p9d-stub.docx"`,
+        "Cache-Control": "no-store",
+      },
+      body: P9D_DOCX_BYTES,
+    });
+  });
+}
+
 test.describe("P9D 导出图片告警", () => {
   test("技术标真实 export：显示后端告警且继续本机下载", async ({
     page,
@@ -311,6 +359,10 @@ test.describe("P9D 导出图片告警", () => {
     );
     await installOpenStub(page);
     const net = await installNetworkGuard(page);
+    const browserDownloads: string[] = [];
+    page.on("download", (d) => {
+      browserDownloads.push(d.suggestedFilename());
+    });
 
     await page.goto(`/technical-plan/${projectId}/export`);
     await expect(
@@ -318,8 +370,10 @@ test.describe("P9D 导出图片告警", () => {
     ).toBeVisible({ timeout: 20_000 });
     await expect(page.getByText("准备导出 Word")).toBeVisible();
 
+    const downloadWait = page.waitForEvent("download", { timeout: 45_000 });
     await page.getByRole("button", { name: /生成并下载 Word/ }).click();
 
+    // P9D 契约：图片告警必须先于下载完成展示
     const warningRegion = page.getByRole("region", { name: "导出图片告警" });
     await expect(warningRegion).toBeVisible({ timeout: 45_000 });
     await expect(warningRegion.getByText(EXPECTED_WARNING_SNIPPET)).toBeVisible();
@@ -327,14 +381,11 @@ test.describe("P9D 导出图片告警", () => {
       warningRegion.getByText("Word 已生成并继续下载，请在文档中检查降级位置"),
     ).toBeVisible();
 
-    await expect
-      .poll(async () => (await getOpenCalls(page)).length, { timeout: 15_000 })
-      .toBeGreaterThanOrEqual(1);
-    const opens = await getOpenCalls(page);
-    expect(opens.every(isLocalApiUrl)).toBe(true);
-    expect(opens.some((u) => u.includes(`/projects/${projectId}/export/download/`))).toBe(
-      true,
-    );
+    const download = await downloadWait;
+    expect(browserDownloads.length).toBeGreaterThanOrEqual(1);
+    expect(download.suggestedFilename().toLowerCase()).toContain("docx");
+    // V1-F：禁止 window.open 作为成功下载分支
+    expect(await getOpenCalls(page)).toEqual([]);
     expect(net.externalHits).toEqual([]);
     await assertNoSensitiveStorage(page);
   });
@@ -349,6 +400,10 @@ test.describe("P9D 导出图片告警", () => {
     );
     await installOpenStub(page);
     const net = await installNetworkGuard(page);
+    const browserDownloads: string[] = [];
+    page.on("download", (d) => {
+      browserDownloads.push(d.suggestedFilename());
+    });
 
     await page.goto(`/business-bid/${projectId}/export`);
     await expect(
@@ -356,20 +411,17 @@ test.describe("P9D 导出图片告警", () => {
     ).toBeVisible({ timeout: 20_000 });
     await expect(page.getByText("准备导出商务标 Word")).toBeVisible();
 
+    const downloadWait = page.waitForEvent("download", { timeout: 45_000 });
     await page.getByRole("button", { name: /生成并下载 Word/ }).click();
 
     const warningRegion = page.getByRole("region", { name: "导出图片告警" });
     await expect(warningRegion).toBeVisible({ timeout: 45_000 });
     await expect(warningRegion.getByText(EXPECTED_WARNING_SNIPPET)).toBeVisible();
 
-    await expect
-      .poll(async () => (await getOpenCalls(page)).length, { timeout: 15_000 })
-      .toBeGreaterThanOrEqual(1);
-    const opens = await getOpenCalls(page);
-    expect(opens.every(isLocalApiUrl)).toBe(true);
-    expect(opens.some((u) => u.includes(`/projects/${projectId}/export/download/`))).toBe(
-      true,
-    );
+    const download = await downloadWait;
+    expect(browserDownloads.length).toBeGreaterThanOrEqual(1);
+    expect(download.suggestedFilename().toLowerCase()).toContain("docx");
+    expect(await getOpenCalls(page)).toEqual([]);
     expect(net.externalHits).toEqual([]);
     await assertNoSensitiveStorage(page);
   });
@@ -399,6 +451,10 @@ test.describe("P9D 导出图片告警", () => {
 
     await installOpenStub(page);
     const net = await installNetworkGuard(page);
+    const browserDownloads: string[] = [];
+    page.on("download", (d) => {
+      browserDownloads.push(d.suggestedFilename());
+    });
 
     // 单码点串重复，确保 Array.from 码点数远超 240
     const longWarning = `${"长".repeat(300)}告警中文与emoji🚀尾`;
@@ -417,13 +473,18 @@ test.describe("P9D 导出图片告警", () => {
       ...many,
     ];
 
-    await stubExportTaskSuccess(page, projectId, mixed);
+    const storedMixed = "export_a1b2c3d1.docx";
+    await stubExportTaskSuccess(page, projectId, mixed, {
+      storedName: storedMixed,
+    });
+    await stubExportDownloadDocx(page, projectId, storedMixed);
 
     await page.goto(`/technical-plan/${projectId}/export`);
     await expect(
       page.getByRole("heading", { name: "E2E P9D 结构收敛" }),
     ).toBeVisible({ timeout: 20_000 });
 
+    const download1 = page.waitForEvent("download", { timeout: 20_000 });
     await page.getByRole("button", { name: /生成并下载 Word/ }).click();
 
     const warningRegion = page.getByRole("region", { name: "导出图片告警" });
@@ -443,24 +504,27 @@ test.describe("P9D 导出图片告警", () => {
     expect(longText.includes("🚀尾")).toBe(false);
     expect(longText.startsWith("长")).toBe(true);
 
-    await expect
-      .poll(async () => (await getOpenCalls(page)).length)
-      .toBeGreaterThanOrEqual(1);
+    await download1;
+    expect(browserDownloads.length).toBe(1);
+    expect(await getOpenCalls(page)).toEqual([]);
 
     // 下一成功导出无告警 → 清空
     await page.unroute("**/api/projects/**/tasks**");
+    await page.unroute("**/api/projects/**/export/download/**");
+    const storedClean = "export_a1b2c3d2.docx";
     await stubExportTaskSuccess(page, projectId, undefined, {
-      storedName: "p9d-stub-clean.docx",
+      storedName: storedClean,
     });
-    // 再装一层 open stub 计数延续（init 已生效）
+    await stubExportDownloadDocx(page, projectId, storedClean);
+    const download2 = page.waitForEvent("download", { timeout: 20_000 });
     await page.getByRole("button", { name: /生成并下载 Word/ }).click();
     await expect(page.getByRole("region", { name: "导出图片告警" })).toHaveCount(
       0,
       { timeout: 20_000 },
     );
-    await expect
-      .poll(async () => (await getOpenCalls(page)).length)
-      .toBeGreaterThanOrEqual(2);
+    await download2;
+    expect(browserDownloads.length).toBe(2);
+    expect(await getOpenCalls(page)).toEqual([]);
 
     expect(net.externalHits).toEqual([]);
     await assertNoSensitiveStorage(page);
@@ -470,7 +534,7 @@ test.describe("P9D 导出图片告警", () => {
     page,
     request,
   }) => {
-    // V1-E 后续语义：A 的 export success 迟到响应不得污染 B 告警，且不得触发 window.open 下载
+    // V1-E/V1-F：A 的 export success 迟到响应不得污染 B 告警，且不得触发 download
     const projectA = await seedTechnicalInvalidImage(
       request,
       "E2E P9D 迟到隔离A",
@@ -496,9 +560,14 @@ test.describe("P9D 导出图片告警", () => {
 
     await installOpenStub(page);
     const net = await installNetworkGuard(page);
+    const browserDownloads: string[] = [];
+    page.on("download", (d) => {
+      browserDownloads.push(d.url());
+    });
 
     const LATE_WARNING = "项目A迟到告警标记_UNIQUE_P9D_LATE";
-    const storedNameA = "p9d-late-a.docx";
+    // 合法且可区分的 8hex 夹具（非 p9dlatea 等非法 token）
+    const storedNameA = "export_a1b2c3da.docx";
     const aDownloadMarker = `/projects/${projectA}/export/download/${storedNameA}`;
     let releaseExportA!: () => void;
     const exportAHeld = new Promise<void>((resolve) => {
@@ -554,6 +623,8 @@ test.describe("P9D 导出图片告警", () => {
         }),
       });
     });
+    // 若迟到路径误发起下载 GET，也返回 DOCX，以便用 download 事件证明违规
+    await stubExportDownloadDocx(page, projectA, storedNameA);
 
     await page.goto(`/technical-plan/${projectA}/export`);
     await expect(
@@ -576,8 +647,9 @@ test.describe("P9D 导出图片告警", () => {
     );
     await expect(page.getByText(LATE_WARNING)).toHaveCount(0);
 
-    // release 前记录 opensBefore 与 A downloadPath marker；建立响应同步
+    // release 前记录 download/open 基线；建立响应同步
     const opensBefore = (await getOpenCalls(page)).length;
+    const downloadsBefore = browserDownloads.length;
     const lateSuccessResponse = page.waitForResponse(
       async (res) => {
         if (res.status() !== 201) return false;
@@ -605,20 +677,32 @@ test.describe("P9D 导出图片告警", () => {
       { timeout: 15_000 },
     );
 
-    // 释放 A 的迟到 success 并证明响应已交付；其后必须零 window.open
+    // 释放 A 的迟到 success 并证明响应已交付；其后必须零 download / 零 window.open
     releaseExportA();
     await lateSuccessResponse;
 
-    const openIncreased = await openCallsIncreased(page, opensBefore, 5_000);
+    const downloadIncreased = await downloadEventsIncreased(
+      page,
+      () => browserDownloads.length,
+      downloadsBefore,
+      5_000,
+    );
+    expect(
+      downloadIncreased,
+      "V1-F：A export success 迟到交付后 browser download 必须精确零新增",
+    ).toBe(false);
+    expect(browserDownloads.length).toBe(downloadsBefore);
+
+    const openIncreased = await openCallsIncreased(page, opensBefore, 2_000);
     expect(
       openIncreased,
-      "V1-E：A export success 迟到交付后 window.open 必须精确零新增",
+      "V1-F：迟到路径亦禁止 window.open 回流",
     ).toBe(false);
     const calls = await getOpenCalls(page);
     expect(calls.length).toBe(opensBefore);
     expect(
       calls.some((u) => u.includes(aDownloadMarker)),
-      "V1-E：A downloadPath marker 不得出现在 window.open 记录中",
+      "V1-F：A downloadPath marker 不得出现在 window.open 记录中",
     ).toBe(false);
 
     // 迟到 success 已交付后，B 仍零告警且仍在 B 页

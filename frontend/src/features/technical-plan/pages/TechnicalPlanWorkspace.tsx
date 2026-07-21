@@ -1849,8 +1849,7 @@ export function TechnicalPlanWorkspace() {
                       ) {
                         return;
                       }
-                      setTaskTip("Word 已生成，正在下载…");
-                      // 契约：成功且代次仍匹配时先写告警，再始终继续既有下载；
+                      // 契约：成功且代次仍匹配时先写 P9D 告警，再 await 下载；
                       // 旧任务迟到不得写告警/下载，避免污染新项目页面
                       if (exportImageWarningGenRef.current === gen) {
                         setExportImageWarningState({
@@ -1860,7 +1859,20 @@ export function TechnicalPlanWorkspace() {
                           ),
                         });
                       }
-                      pipeline.downloadExport(t);
+                      const downloaded = await pipeline.downloadExport(t);
+                      // 下载判定结束后再核围栏；成功 tip 仅在本会话 click 触发后写入
+                      const afterDl = exportPrepareTokenRef.current;
+                      if (
+                        !afterDl ||
+                        afterDl.projectId !== startedProjectId ||
+                        afterDl.token !== myToken ||
+                        currentProjectIdRef.current !== startedProjectId
+                      ) {
+                        return;
+                      }
+                      if (downloaded) {
+                        setTaskTip("Word 已生成，正在下载…");
+                      }
                     }
                   } catch {
                     /* */

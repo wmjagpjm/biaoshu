@@ -33,7 +33,6 @@ import {
   ExportImageWarnings,
   normalizeExportImageWarnings,
 } from "../../../shared/components/ExportImageWarnings";
-import { getApiBase } from "../../../shared/lib/api";
 import type { Project } from "../../../shared/types/workspace";
 import {
   ParseStrategyChoiceDialog,
@@ -1233,9 +1232,8 @@ export function BusinessBidWorkspace() {
                         }
                         if (remote) setProject(remote);
                       }
-                      const path = t.result?.downloadPath as string | undefined;
-                      // 契约：成功且代次仍匹配时先写告警，再继续既有下载；
-                      // 旧任务迟到不得写告警/下载，避免污染新项目页面
+                      // 契约：成功且代次仍匹配时先写 P9D 告警，再 await 统一 downloadExport；
+                      // 旧任务迟到不得写告警/下载；禁止 downloadPath/window.open 旁路
                       if (exportImageWarningGenRef.current === gen) {
                         setExportImageWarningState({
                           projectId: startedProjectId,
@@ -1244,10 +1242,7 @@ export function BusinessBidWorkspace() {
                           ),
                         });
                       }
-                      if (path) {
-                        const base = getApiBase().replace(/\/$/, "");
-                        window.open(`${base}${path}`, "_blank");
-                      }
+                      await pipeline.downloadExport(t);
                     }
                   } finally {
                     // 必须同时核对 current project + started project + myToken；

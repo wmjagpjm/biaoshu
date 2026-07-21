@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_workspace_id
 from app.core.config import Settings, get_settings
 from app.core.database import get_db
+from app.services.export_service import build_safe_docx_filename
 from app.services.project_service import ProjectNotFoundError, get_project
 
 router = APIRouter(prefix="/projects", tags=["export"])
@@ -29,9 +30,10 @@ def download_export(
 ):
     """
     用途：下载 exports 目录下的 docx（stored_name 仅允许 export_*.docx）。
+    Content-Disposition 人读名取下载时权威 project.name，经 build_safe_docx_filename 收敛。
     """
     try:
-        get_project(db, workspace_id, project_id)
+        project = get_project(db, workspace_id, project_id)
     except ProjectNotFoundError:
         raise HTTPException(status_code=404, detail="项目不存在") from None
 
@@ -41,8 +43,10 @@ def download_export(
     path = Path(settings.upload_dir) / project_id / "exports" / name
     if not path.is_file():
         raise HTTPException(status_code=404, detail="导出文件不存在，请先执行 export 任务")
+    # 磁盘仍按随机 basename；FileResponse 交给 Starlette 编码人读 filename
+    human_name = build_safe_docx_filename(project.name)
     return FileResponse(
         path,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        filename=name,
+        filename=human_name,
     )
