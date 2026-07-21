@@ -418,11 +418,13 @@
 
 **完成状态（2026-07-20）**：基线=`7e5e02e`，功能=`c19bf94`。严格三文件，只在 H1 路由/服务增加项目级 SSE 与新专项，不复用或修改单任务 SSE。无 Last-Event-ID 且已有历史时先发公开 tip 的 cursor 锚点，不回放旧 editor-state；有 Last-Event-ID 时按 H1 `(occurred_at,id)` 顺序重放仍保留的后续事件。failure-first **14 failed / 1 passed**；Codex 发现 request-scope `get_db` 问题，经 Grok 确认后最小返修；Codex 独立专项/代表回归 **15/46 passed**，compileall 与 diff-check 通过。无前端、WebSocket、通知、多任务总线或强制锁。契约=`docs/p13h2-editor-state-event-sse-replay-contract.md`，计划=`docs/plans/2026-07-20-p13h2-editor-state-event-sse-replay-plan.md`。
 
-**下一步**：只读审计并独立冻结 P13-H3 前端版本提示；仅允许在 H2 SSE 之上接保守解析与提示，不能把正文自动覆盖、评论审批或协同能力合入 H2。
+**完成后边界**：P13-H3 已在 H2 SSE 之上完成保守解析与提示；不得把正文自动覆盖、评论审批或协同能力并入 H2/H3，后续包仍须独立只读审计和冻结。
 
-### P13-H3：编辑状态事件前端版本提示（契约已冻结，待实现）
+### P13-H3：编辑状态事件前端版本提示（已完成，未知命名事件边界另包）
 
-契约=`docs/p13h3-editor-state-event-frontend-contract.md`，计划=`docs/plans/2026-07-21-p13h3-editor-state-event-frontend-plan.md`。只读审计确认 H3 严格限定为共享事件提示组件、技术标/商务标两个薄挂载和一个串行 Playwright 专项。仅在 required、authenticated、活动角色 `bid_writer` 且有项目 ID 时建立 H2 EventSource；严格解析 `cursor`、`editor-state`、`cursor-stale`、`unavailable`，版本变化只显示保守提示，用户明确点击后复用既有真实重载函数。不得自动覆盖正文、PUT editor-state、写 storage/URL/日志，评论审批、通知、协同光标、WebSocket、多任务总线和强制锁继续拆包。
+契约=`docs/p13h3-editor-state-event-frontend-contract.md`，计划=`docs/plans/2026-07-21-p13h3-editor-state-event-frontend-plan.md`。H3 交付共享事件提示组件、技术标/商务标两个薄挂载和一个串行 Playwright 专项。仅在 required、authenticated、活动角色 `bid_writer` 且有项目 ID 时建立 H2 EventSource；严格解析 cursor/editor-state（含重复键、UTC 日历和默认 message）、控制帧与网络错误，版本变化只显示保守提示，用户明确点击后复用既有真实重载函数；技术/商务页面级失败旗标均有项目代次守卫。原生 EventSource 未注册命名事件不可观测，已由真实 SSE 边界用例记录，若需覆盖必须另行冻结协议。不得自动覆盖正文、PUT editor-state、写 storage/URL/日志，评论审批、通知、协同光标、WebSocket、多任务总线和强制锁继续拆包。
+
+完成回执：Grok 初始实现=`msg_52e843e975874aafad57b902885a3112`，A-D 返修=`msg_e9809e17435c494589e7cf1f13b8262a`，F/G/H 双确认返修=`msg_898315bea44b4cfca1435744b0cd920f`；Codex 独立 H3 `15 passed`、freshness `17 passed`、lint/build/diff-check 全通过，功能提交=`40aacc7`。
 
 阶段 0/1/2、阶段 3 M3-A 至 M3-D、阶段 4 **包 5** 至 **包 8/P8B/P8C/P8D/P8E**、P9A/P9B/P9C/P9D、阶段 5 P10A 至 P10K、**P11A/P11B/P11C 三个真实数据收口包**，以及 **P12A/P12B-A/B/C/D/P12C-A/B/C/P12D-A/B/P12E-A/B/C/P12F-A/B/C/D/P13-A** 均保持已交付。P8E 完整契约见 `docs/p8e-docling-local-helper-contract.md`，实施与独立验收记录见 `docs/plans/2026-07-15-p8e-docling-local-helper-plan.md`。
 

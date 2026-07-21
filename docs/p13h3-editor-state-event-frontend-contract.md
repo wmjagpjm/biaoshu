@@ -1,6 +1,6 @@
 # P13-H3 编辑状态事件前端版本提示契约
 
-> 状态：契约冻结；经 failure-first 双确认后最小扩为六文件，待 Grok 实现与 Codex 独立验收
+> 状态：实现已完成；原生 EventSource 未注册命名事件不可观测边界已记录，协议扩展另包裁定
 > 日期：2026-07-21
 > 前置：P13-H2 项目级 editor-state SSE（实现=`c19bf94`）
 > 分支：仅 `collab/grok-code-codex-review`，禁止操作 `main`
@@ -28,7 +28,9 @@
 - `cursor`：只作为浏览器重连水位，不显示、不写状态版本。
 - `editor-state`：严格验证 `event.lastEventId`、data 的 `eventId/stateVersion/sourceKind/occurredAt`；`event.lastEventId` 与 data.eventId 必须同为合法 `ese_` ID，stateVersion 必须为 `esv_` 加 32 位小写十六进制，sourceKind 只能为 H2/H1 九类来源，occurredAt 必须为 UTC 毫秒 `...Z`。
 - `cursor-stale`、`unavailable`：关闭连接，显示固定不可用提示。
-- 其它事件、缺字段、重复字段、解析异常或网络错误：按不可用处理并关闭连接，不展示后端原文。
+- 默认 `message`、缺字段、重复字段、解析异常或网络错误：按不可用处理并关闭连接，不展示后端原文。
+
+原生 `EventSource` 只向同名 `addEventListener` 投递带 `event:` 的命名事件，没有通配监听；未注册命名事件不会进入 `onmessage`，客户端无法观察或关闭该连接。H3 保持原生 `EventSource` 与 H2 命名事件协议，不改用 `fetch` 流或猜测性 monkey patch；该不可观测边界由专项真实 SSE 用例记录，后续若要覆盖任意未知命名事件，必须另行冻结协议和实现包。
 
 收到合法 `editor-state` 且 stateVersion 与当前已载入版本不同，显示固定提示“检测到远端版本变化，请确认后重新载入”。相同版本、cursor 或非法帧不显示刷新提示。提示只保留内存状态，不写正文、URL、storage、Cookie、console 或日志。
 
@@ -62,4 +64,12 @@
 
 ## 6. 验收重点
 
-专项必须覆盖：认证/RBAC/disabled 门控、首次 cursor 不提示、合法新版本提示、相同版本忽略、四字段严格 parser、控制帧/坏帧/网络错误固定不可用、用户确认单次刷新成功/失败、项目 A→B 关闭与迟到隔离、无 storage/URL/正文写入、EventSource `withCredentials` 和精确 URL。Playwright 固定 Chromium、`--workers=1 --retries=0` 串行运行；另跑既有 freshness 专项代表用例、lint、build、diff-check，不跑整仓 E2E 或并发测试。
+专项必须覆盖：认证/RBAC/disabled 门控、首次 cursor 不提示、合法新版本提示、相同版本忽略、cursor/editor-state 四字段严格 parser（含重复键和合法字符串对照）、控制帧/默认 `message`/坏帧/网络错误固定不可用、用户确认单次刷新成功/失败、技术/商务项目 A→B 关闭与迟到隔离、无 storage/URL/正文写入、EventSource `withCredentials` 和精确 URL，并记录未注册命名事件不可观测边界。Playwright 固定 Chromium、`--workers=1 --retries=0` 串行运行；另跑既有 freshness 专项、lint、build、diff-check，不跑整仓 E2E 或并发测试。
+
+## 7. 实现与验收回执
+
+- Grok 初始实现回执：`msg_52e843e975874aafad57b902885a3112`；Codex 首轮只读问题：`msg_e1363c19078d422fa33e6df925346b31`；Grok 五项确认：`msg_cb44e9eb820044219411705642779060`。
+- 第一轮返修授权：`msg_13ffc440e2cf4b05bf26ad59fa2e6574`；回执：`msg_e9809e17435c494589e7cf1f13b8262a`。A-D 已修，E 保留为原生边界。
+- 第二轮 F/G 确认：`msg_4b1db4d34b6744ec9185a53a1af8bd6e`；H 确认：`msg_ac39ea4388364d70b3dd7eb8f2510852`；返修授权：`msg_8b9b65bd31d34cabbd6545644ecbf8e2`；Grok 回执：`msg_898315bea44b4cfca1435744b0cd920f`。
+- Codex 独立串行验收：H3 `15 passed`、freshness `17 passed`、lint/build/diff-check 全通过；未运行整仓 E2E、后端全量或并发测试。
+- 功能提交：`40aacc7`（严格六文件，中文提交信息）。

@@ -1,6 +1,6 @@
 # P13-H3 编辑状态事件前端版本提示实施计划
 
-> 状态：契约冻结；failure-first 双确认后白名单最小扩为六文件，待实现
+> 状态：实现与独立验收完成；未注册命名事件边界已记录，协议扩展另包处理
 > 契约：`docs/p13h3-editor-state-event-frontend-contract.md`
 > 分支：`collab/grok-code-codex-review`
 
@@ -19,7 +19,7 @@
 - 每个 EventSource 流必须由 route mock 实际发出帧，并断言 `withCredentials`、精确 URL、关闭次数和展示文本。
 - 刷新按钮必须用真实页面回调计数；确认前零 editor-state GET，确认后精确一次。
 - A→B 场景保持 A 流门控并发送迟到帧，断言 B 无旧提示、无旧刷新。
-- 非法 JSON、错误字段、未知 event、控制帧和网络错误都必须断言固定不可用文本，且不出现后端 detail、ID 或正文。
+- 非法 JSON、重复键、错误字段、默认 `message`、控制帧和网络错误都必须断言固定不可用文本，且不出现后端 detail、ID 或正文；未注册命名事件另以真实 SSE 稳定窗口记录原生不可观测边界，不冒充已修复。
 - 所有测试串行；禁止 `sleep` 作为完成证据、禁止并发 Playwright、禁止整仓重复测试。
 
 ## 3. failure-first 与范围修订记录
@@ -40,3 +40,7 @@ git diff --cached --name-only
 ```
 
 不运行后端全量、整仓 E2E、xdist 或并发 pytest；只有出现共享认证/编辑器接口回归证据时才扩大范围。
+
+## 5. 完成回执
+
+第一轮 Grok 实现回执=`msg_52e843e975874aafad57b902885a3112`，Codex 发现五项缺口后经 `msg_cb44e9eb820044219411705642779060` 双确认，返修回执=`msg_e9809e17435c494589e7cf1f13b8262a`。第二轮重复键与两页面迟到旗标经 `msg_4b1db4d34b6744ec9185a53a1af8bd6e`、`msg_ac39ea4388364d70b3dd7eb8f2510852` 双确认，返修回执=`msg_898315bea44b4cfca1435744b0cd920f`。Codex 独立串行结果为 H3 `15 passed`、freshness `17 passed`、lint/build/diff-check 全通过；功能提交=`40aacc7`。E 仅保留原生 EventSource 不可观测边界，协议扩展不得并入本包。
