@@ -219,3 +219,153 @@ def list_project_task_events(
         "next_cursor": next_cursor,
         "has_more": has_more,
     }
+
+
+def _latest_tip_id(
+    db: Session, workspace_id: str, project_id: str
+) -> str | None:
+    """用途：当前项目保留窗口内最新事件 ID；无事件返回 None。"""
+    tip = db.execute(
+        select(ProjectTaskEventRow.id)
+        .where(
+            ProjectTaskEventRow.workspace_id == workspace_id,
+            ProjectTaskEventRow.project_id == project_id,
+        )
+        .order_by(
+            ProjectTaskEventRow.occurred_at.desc(),
+            ProjectTaskEventRow.id.desc(),
+        )
+        .limit(1)
+    ).first()
+    if tip is None:
+        return None
+    return str(tip.id)
+
+
+def precheck_project_task_event_stream(
+    db: Session,
+    workspace_id: str,
+    project_id: str,
+    *,
+    last_event_id: str | None,
+) -> tuple[str | None, bool]:
+    """
+    用途：连接前短 Session 预检项目与可选 Last-Event-ID。
+    返回：(watermark, send_cursor_anchor)
+      - 有 last_event_id：校验仍保留后作为水位，不发锚点；
+      - 无 header 且有 tip：水位=tip，需先发 cursor 锚点；
+      - 无 header 且空表：水位=None，从空起点等待。
+    """
+    if not isinstance(workspace_id, str) or not workspace_id:
+        _raise_not_found()
+    _require_project(db, workspace_id, project_id)
+
+    if last_event_id is not None:
+        safe = _normalize_after(last_event_id)
+        assert safe is not None
+        cursor = db.execute(
+            select(ProjectTaskEventRow.id).where(
+                ProjectTaskEventRow.workspace_id == workspace_id,
+                ProjectTaskEventRow.project_id == project_id,
+                ProjectTaskEventRow.id == safe,
+            )
+        ).first()
+        if cursor is None:
+            _raise_stale()
+        return safe, False
+
+    tip = _latest_tip_id(db, workspace_id, project_id)
+    if tip is None:
+        return None, False
+    return tip, True
+
+
+def list_project_task_event_stream_page(
+    db: Session,
+    workspace_id: str,
+    project_id: str,
+    *,
+    after: str | None,
+    limit: Any = None,
+) -> dict[str, Any]:
+    """
+    用途：I2 流内短 Session 读取一页保留事件（正序）。
+    - after 有值：返回其后最多 limit 条；未知/裁剪/跨项目统一 409；
+    - after 为 None：空水位起点，从最早保留事件读取。
+    返回：{items, has_more}；items 为服务层 snake 六键。
+    """
+    if not isinstance(workspace_id, str) or not workspace_id:
+        _raise_not_found()
+    _require_project(db, workspace_id, project_id)
+    safe_limit = _normalize_limit(limit if limit is not None else MAX_LIMIT)
+
+    if after is None:
+        rows = list(
+            db.execute(
+                select(ProjectTaskEventRow)
+                .where(
+                    ProjectTaskEventRow.workspace_id == workspace_id,
+                    ProjectTaskEventRow.project_id == project_id,
+                )
+                .order_by(
+                    ProjectTaskEventRow.occurred_at.asc(),
+                    ProjectTaskEventRow.id.asc(),
+                )
+                .limit(safe_limit + 1)
+            )
+            .scalars()
+            .all()
+        )
+        has_more = len(rows) > safe_limit
+        page = rows[:safe_limit]
+        return {
+            "items": [_item_dict(r) for r in page],
+            "has_more": has_more,
+        }
+
+    safe_after = _normalize_after(after)
+    assert safe_after is not None
+    cursor = db.execute(
+        select(
+            ProjectTaskEventRow.id,
+            ProjectTaskEventRow.occurred_at,
+        ).where(
+            ProjectTaskEventRow.workspace_id == workspace_id,
+            ProjectTaskEventRow.project_id == project_id,
+            ProjectTaskEventRow.id == safe_after,
+        )
+    ).first()
+    if cursor is None:
+        _raise_stale()
+
+    cursor_at = cursor.occurred_at
+    cursor_id = str(cursor.id)
+    rows = list(
+        db.execute(
+            select(ProjectTaskEventRow)
+            .where(
+                ProjectTaskEventRow.workspace_id == workspace_id,
+                ProjectTaskEventRow.project_id == project_id,
+                or_(
+                    ProjectTaskEventRow.occurred_at > cursor_at,
+                    and_(
+                        ProjectTaskEventRow.occurred_at == cursor_at,
+                        ProjectTaskEventRow.id > cursor_id,
+                    ),
+                ),
+            )
+            .order_by(
+                ProjectTaskEventRow.occurred_at.asc(),
+                ProjectTaskEventRow.id.asc(),
+            )
+            .limit(safe_limit + 1)
+        )
+        .scalars()
+        .all()
+    )
+    has_more = len(rows) > safe_limit
+    page = rows[:safe_limit]
+    return {
+        "items": [_item_dict(r) for r in page],
+        "has_more": has_more,
+    }
