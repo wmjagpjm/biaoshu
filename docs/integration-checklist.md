@@ -1495,3 +1495,19 @@ Codex 独立串行通过 P13-G2 专项/P13-F2 presence/freshness **13/11/17 pass
 闭环注释复核遵守双确认门：question=`msg_23c3424d6b154f43af2921b09fdac9a1`，Grok 确认=`msg_e918277a10164ad5adcc6a829708d7c0`，确认后 task=`msg_e9993fc7aa49409f80764846f87ba16a`，review_request=`msg_86824ed8031e4673a6a59f881ae47777`。最终仅修正技术/商务两页顶部四字段注释，运行代码与测试未变。
 
 I4 不提供任务结果自动展示、正文自动刷新、通知、评论审批、协同光标、WebSocket、强制锁、多人任务列表或历史时间线。下一包必须按本机/内网实际可用优先级重新只读审计并冻结，先评估任务结果与正文安全刷新、导出/版式、解析器部署、稳定启动和备份恢复，不得直接扩展 I4。
+
+## V1-C 本机解析运行时预检（已完成并推送）
+
+契约=`docs/v1c-local-parser-runtime-preflight-contract.md`，计划=`docs/plans/2026-07-21-v1c-local-parser-runtime-preflight-plan.md`，冻结=`6e7aafb`，实现=`21d3213`。严格三文件新增标准库 `runtime_preflight.py`、专项测试并更新助手 README；默认 MinerU，Docling 为可选第二解析器。
+
+联调验收项：
+
+1. `--dry-run` 与 `--synthetic-check` 互斥且必选；engine 只接受精确 `mineru|docling`，Docling 必须 artifacts，MinerU 禁止该参数。
+2. dry-run 只解析安全 CLI/目录并在内存验证命令形态；零 TEMP 样本、零 Popen、零票据、零 getpass、零 HTTP/回调，成功明确 `runtimeVerified=false`。
+3. synthetic-check 仅在 `biaoshu-parser-preflight-*` 生成最小 OpenXML DOCX，输入输出均在该根，复用既有离线 runner/唯一 Markdown 门并要求 `SYNTH_BID_SAMPLE_V1`；所有失败与中断清理根。
+4. stdout 仅六键 JSON；固定诊断码/退出码，不含路径、argv、正文、锚点、异常类名或第三方输出。
+5. 不自动安装、下载、联网或读取真实标书/数据库/uploads/密钥；真实合成门只能由用户/管理员另行明确授权。
+
+验收证据：Grok B 原始 failure-first=`msg_df22e0b8ec6240cb904a12ff46496411`，真实 `0 passed / 1 import error / 24 did-not-run`。测试 B1-B7 逐项双确认后关闭；A1 精确枚举由 `msg_f70cf412d5074e629326fefdb7463857`/`msg_97548e7f2fea4232ae5d1b4f62a4d4ec` 确认，B 红测=`msg_f7c9605aaef7402abe33763b494dd68a`，A 返修=`msg_44e4f19c9c7c4accac86d9507ff0692c`。Codex 独立新专项/MinerU/Docling **26/54/46 passed**，`py_compile`、diff-check、严格三文件、空暂存和哈希门通过；当前本机真实 dry-run固定 `cli_missing`/2，未运行真实 synthetic-check。
+
+下一包重新只读审计 lightweight DOCX 表格/标题结构及合成 PDF/DOCX 内容完整性；真实 CLI/模型安装、真实标书样本和 V2/V3 能力继续后置。

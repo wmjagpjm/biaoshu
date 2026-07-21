@@ -7,7 +7,7 @@
 
 # V1-C 本机解析运行时预检契约
 
-> **状态：冻结前草案。** 冻结提交后才允许 Grok 在独立 worktree 写测试或实现。
+> **状态：已完成、独立验收并推送。** 冻结=`6e7aafb`，实现=`21d3213`。
 > **分支：** 仅 `collab/grok-code-codex-review`，严禁操作 `main`。
 > **基线：** V1-B 闭环提交 `8c92228`；本机审计时 `mineru`、`docling`、`docling-tools` 均不存在。
 
@@ -167,3 +167,12 @@ backend\.venv\Scripts\python.exe tools\local-parser\runtime_preflight.py --engin
 V1-C 完成必须同时满足：严格三文件实现、专项与两个既有助手回归通过、当前机器缺 CLI 诚实失败、Codex 独立静态审查和验收、中文提交推送、五份生产文档闭环。
 
 V1-C 完成后，下一包优先处理 lightweight DOCX 表格/标题结构和真实 PDF/DOCX 兜底质量，再进入标书内容制作与 Word 整章导出。真实解析器安装与授权样本 E2E 仍是现场管理员动作，不得由 Agent 夜间自动执行。
+
+## 12. 实际完成证据
+
+- Grok A/B 审计一致确认本机无 `mineru`、`docling`、`docling-tools`；审计回执=`msg_c0cc46b16eda49658fa39f7f7134a95a` / `msg_f69e01e47a0a4d8eac19dc11352686fb`。
+- 原始 failure-first=`msg_df22e0b8ec6240cb904a12ff46496411`：生产脚本不存在，`0 passed / 1 import error / 24 did-not-run`。测试 B1-B7 均按 Codex question、Grok 确认、Codex task 后返修，未篡改原始红测。
+- A1 精确 engine 枚举问题按 `msg_f70cf412d5074e629326fefdb7463857` / `msg_97548e7f2fea4232ae5d1b4f62a4d4ec` 双确认；新增红测为其余 `25 passed`、两个空白包围 subTest 失败，生产返修=`msg_82edfb16b4534366b6a5f1d820af4fba`，最终回执=`msg_44e4f19c9c7c4accac86d9507ff0692c`。
+- Codex 独立串行通过新专项/MinerU/Docling `26/54/46 passed`，`py_compile`、`git diff --check`、严格三文件、空暂存与 SHA-256 门通过。
+- 当前机器真实 `--engine mineru --dry-run` 返回 `diagnosticCode=cli_missing`、退出码 2；这是正确生产真值。未运行真实 `--synthetic-check`，未安装或下载 CLI/模型。
+- 最终 SHA-256：README=`164740CFBCE0556D523683FF21B6BFBB95512160D4828601A685AAB60665A5DA`；runtime=`2B4A74AF57FF166865067369E2AAE0B6B220E3ACDFF1F743819CB9A4D6A7AD3F`；test=`1CA561C44F19E88C6F5A19A1231432BD05ABCC40143DC74A24085CEFCC158299`。

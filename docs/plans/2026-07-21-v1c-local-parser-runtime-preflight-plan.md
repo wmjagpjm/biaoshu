@@ -7,6 +7,7 @@
 
 # V1-C 本机解析运行时预检实施计划
 
+> **状态：已完成。** 冻结=`6e7aafb`，实现=`21d3213`；Grok 未执行 Git 写入，Codex 已独立验收并推送。
 > **执行要求：** 使用 `executing-plans` 逐项执行；任何契约疑点先停止并通过消息箱确认。
 
 **目标：** 在不安装解析器、不读取业务数据、不签票或回调的前提下，为 MinerU 默认路径和 Docling 可选路径提供诚实静态预检与显式合成样本运行门。
@@ -140,3 +141,11 @@ backend\.venv\Scripts\python.exe tools\local-parser\runtime_preflight.py --engin
 3. 标书制作主流程与 Word 整章导出。
 
 真实 MinerU/Docling 安装、模型下载和授权业务样本 E2E 等用户醒后另行明确授权。
+
+## 实际完成记录
+
+1. Grok B 原始 failure-first 为 `0 passed / 1 import error / 24 did-not-run`；B1-B7 测试缺口全部按双确认门关闭，最终测试文件 26 项。
+2. Grok A 首轮实现后新专项/MinerU/Docling 为 `25/54/46 passed`；Codex 独立得到相同数字并发现 A1 空白包围 engine 被 `.strip()` 放行。
+3. A1 先由 Grok B 增加真实红测：既有 25 项通过、两个 subTest 失败；再由 Grok A production-only 收紧。Codex 最终独立新专项 `26 passed`。
+4. `py_compile`、diff-check、严格三文件与哈希门通过；实现提交=`21d3213`，已推送 `collab/grok-code-codex-review`。
+5. 当前本机 `mineru --dry-run` 诚实返回 `cli_missing`/2；真实合成门、CLI/模型安装下载和业务样本 E2E 均未执行。
