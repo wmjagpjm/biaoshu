@@ -478,6 +478,12 @@ Codex 最终串行验收：后端 I4 + I1 + I2 + P13-A **81 passed**，前端 I4
 
 实现=`5b4ad39`。最终六文件严格落地，Codex 独立串行专项 `60 passed`，PS1 BOM/解析、Python `compileall` 与 diff-check 均通过。双确认返修关闭监听枚举失败假成功、严格快照类型、空格路径、复制期同大小变化、祖先 junction、wildcard/双栈 foreign 漏检和 PowerShell 5.1 中文失败乱码。下一包优先只读审计并冻结 **V1-B 离线恢复与回滚演练**；V2/V3 继续后置。
 
+### V1-B：离线恢复与回滚演练（已冻结，待实现）
+
+契约=`docs/v1b-offline-restore-rollback-contract.md`，计划=`docs/plans/2026-07-21-v1b-offline-restore-rollback-plan.md`。Codex 与 Grok A/B 只读审计确认：V1-A 的 `biaoshu-offline-backup-v1` 只是 manifest 格式，不能证明数据兼容；v1 又没有根状态，直接按 files 恢复会形成旧数据库与新文件树混合态。
+
+V1-B 因此把新备份升级为严格 v2，增加独立 `biaoshu-data-v1` 兼容标识和六根四态；v1 禁止自动覆盖。恢复必须显式停机、自动生成恢复前 v2 备份，以同卷 staging+journal 完成逐根切换、提交前自动回滚和崩溃重入。严格六文件代码/测试白名单，不改 backend/frontend/数据库模式；全部测试仅用临时假仓。V1 阶段继续优先完成自动化解析、内容生产、导出交付、稳定启停与数据安全；V2/V3 目标保留但不抢跑。
+
 阶段 0/1/2、阶段 3 M3-A 至 M3-D、阶段 4 **包 5** 至 **包 8/P8B/P8C/P8D/P8E**、P9A/P9B/P9C/P9D、阶段 5 P10A 至 P10K、**P11A/P11B/P11C 三个真实数据收口包**，以及 **P12A/P12B-A/B/C/D/P12C-A/B/C/P12D-A/B/P12E-A/B/C/P12F-A/B/C/D/P13-A** 均保持已交付。P8E 完整契约见 `docs/p8e-docling-local-helper-contract.md`，实施与独立验收记录见 `docs/plans/2026-07-15-p8e-docling-local-helper-plan.md`。
 
 P8D 与 P8E 本机外置解析助手均已完成并推送：P8D 计划=`30d066f`、实现=`e1fe316`、闭环=`38b9318`；P8E 计划=`73b1264`、后端=`79b346e`、助手=`e3f9cc4`。P8E 独立验收为 Docling 46、MinerU 54、后端受影响回归 37、P8C E2E 9、P8B E2E 6 passed；真实 Docling/模型未安装、未验收，自动安装/模型打包/服务端内嵌仍不是已交付能力。

@@ -26,6 +26,19 @@
 
 实现=`5b4ad39`。最终 Codex 独立专项 `60 passed / 0 failed / 0 errors / 0 skipped`；两个 PS1 均为 UTF-8 BOM 且解析 0 错误，Python `compileall` 与 diff-check 通过。验收仅使用临时假仓、假 SQLite、假文件树和纯监听注入，未真实停机或备份主仓数据。下一包为 V1-B 离线恢复与回滚演练，必须重新只读审计并冻结覆盖/回滚边界。
 
+## V1-B 离线恢复与回滚演练（已冻结，待实现）
+
+契约=`docs/v1b-offline-restore-rollback-contract.md`，计划=`docs/plans/2026-07-21-v1b-offline-restore-rollback-plan.md`。本包先把新备份升级为严格 v2，再提供只接受精确数据兼容版本的完整离线恢复。
+
+1. `schema_version=biaoshu-offline-backup-v2` 只表示包格式，`data_compatibility_version=biaoshu-data-v1` 独立表示可自动恢复的数据代际；v1 固定拒绝覆盖，`git_head` 不作兼容闸。
+2. `roots` 必须精确记录六个根的 `present/empty/absent/not_included`；完整恢复按状态替换、置空或移除，只有 `semantic_models=not_included` 保留 live。
+3. 恢复前必须显式停机、全量校验 manifest/物理文件/哈希/SQLite/junction/default path，并自动创建恢复前 v2 备份；任一步失败零 live 变更。
+4. 同卷 staging、持久 journal、逐根 intent/result、提交前逆序回滚和崩溃重入必须有全根哈希地图证据，不能用 exit code 或目录存在冒充原子恢复。
+5. 根 bat/UTF-8 BOM PowerShell 必须要求精确中文确认，不自动选择最近备份、不自动停机、不提供 skip/force。
+6. 验收仅使用临时假仓、假 SQLite、假 `.env`、注入服务探针和故障点；禁止读取、备份或恢复主仓真实业务数据。
+
+只读审计与双确认已完成：A review=`msg_af63265fc30b48bb8e6473af1a2ba3c4`、确认=`msg_0423e8b43c5846948c4da28ce0192635`；B review=`msg_64563cdc769b420dbb2aa2710d1cd40b`、确认=`msg_058bfb59096643bf9831e91779424a46`。双方均确认“格式版本冒充数据兼容”和“缺根保留导致混合态”风险存在，确认阶段零文件修改。
+
 ## P13-C 当前已载入版本修订来源可见性（已完成）
 
 契约：`docs/p13c-current-revision-source-visibility-contract.md`
