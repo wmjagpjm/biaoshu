@@ -1,10 +1,11 @@
 /**
- * 模块：商务标分步工作区（含 P13-B/C/D2/H3 版本展示、P13-F2 近期成员、P13-I3/I4 任务事件提示）
+ * 模块：商务标分步工作区（含 P13-B/C/D2/H3 版本展示、P13-F2 近期成员、P13-I3/I4 任务事件提示、V1-G 任务成功刷新围栏）
  * 用途：六步流水线；上传/解析/biz_* 生成/导出接 project/task/editor-state；
  *       标题区展示已载入版本 UTC 时间/来源/操作者，以及项目近期成员短租约快照；
  *       薄挂载 EditorStateEventUpdatePanel 做远端版本变化提示；
  *       薄挂载 ProjectTaskEventPanel 做项目任务事件安全提示（不自动请求详情）；
- *       P13-I4 经 onSafeTaskEvent 接入 useProjectPipeline.reconcileCurrentTaskStatus，仅做当前任务安全状态对账。
+ *       P13-I4 经 onSafeTaskEvent 接入 useProjectPipeline.reconcileCurrentTaskStatus，仅做当前任务安全状态对账；
+ *       V1-G：runBizTask 以 startedProjectId+generation 门禁 success 后 refresh/步进/setProject。
  * 对接：useProjectPipeline（含 reconcileCurrentTaskStatus）、useBusinessBidWorkspace、GET project、
  *       useWorkspaceParseStrategy、EditorStateVersionFreshness（testid=business-editor-version-freshness 等）、
  *       ProjectPresencePanel（testid=business-project-presence）、
@@ -15,6 +16,7 @@
  *       P11B：editor-state 加载失败显示固定失败卡，禁止挂步骤/表格/编辑控件。
  *       版本/presence 文案不得称远端最新/实时/在线/正在编辑；用户名只作文本节点。
  *       任务事件安全对账仅限 reconcileCurrentTaskStatus，不自动拉详情；presence 提示不进入 editor Hook。
+ *       禁止修改 useProjectPipeline/I4/SSE；export 保持独立围栏，不得并回 runBizTask 副作用链。
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -131,6 +133,11 @@ export function BusinessBidWorkspace() {
    */
   const currentProjectIdRef = useRef(projectId);
   currentProjectIdRef.current = projectId;
+  /**
+   * V1-G：任务成功刷新代次（纯内存）。
+   * 项目切换与每次 runBizTask 启动均推进，锁 A→B→A 与同项目旧 run。
+   */
+  const taskRefreshGenerationRef = useRef(0);
   /** V1-E：导出准备进行态（与 pipeline.busy 共同禁用按钮） */
   const [exportPreparing, setExportPreparing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -190,8 +197,16 @@ export function BusinessBidWorkspace() {
   // P13-H3：项目切换清空事件重载失败旗标，禁止旧失败文案污染新项目
   useEffect(() => {
     setEventReloadFailed(false);
+    // V1-G：切项目推进任务刷新代次，旧 success 不得 refresh/写步进/覆盖 project
+    taskRefreshGenerationRef.current += 1;
   }, [projectId]);
 
+  /**
+   * 模块：runBizTask
+   * 用途：商务 parse/biz_* 统一任务入口；V1-G 以 startedProjectId+generation 门禁 success 后副作用。
+   * 对接：pipeline.runTask；refreshFromApi；updateProjectAsync/getProjectAsync/setProject。
+   * 二次开发：export 保持独立围栏，禁止并回本 helper；stale 返回真实 task，不得改写 status。
+   */
   const runBizTask = useCallback(
     async (
       type:
@@ -203,28 +218,52 @@ export function BusinessBidWorkspace() {
         | "export",
       payload?: Record<string, unknown>,
     ) => {
+      const startedProjectId = currentProjectIdRef.current;
+      const startedGeneration = ++taskRefreshGenerationRef.current;
+      const isCurrentOwner = () =>
+        Boolean(startedProjectId) &&
+        currentProjectIdRef.current === startedProjectId &&
+        taskRefreshGenerationRef.current === startedGeneration;
+
       const t = await pipeline.runTask(type, payload);
+      // runTask 后复核：已切项目或同项目新代次则零 refresh/tip/step/project 副作用
+      if (!isCurrentOwner()) {
+        return t;
+      }
       if (t.status === "success") {
+        // 同项目 refresh 失败仍保持既有 P11：任务 success 不反转，后续步进逻辑继续
         await refreshFromApi();
+        if (!isCurrentOwner()) {
+          return t;
+        }
         const step = STEP_BY_TASK[type];
         if (step) {
-          const patched = await updateProjectAsync(projectId, {
+          const patched = await updateProjectAsync(startedProjectId, {
             technicalPlanStep: step,
           });
+          if (!isCurrentOwner()) {
+            return t;
+          }
           if (patched) {
             setProject(patched);
           } else {
-            const remote = await getProjectAsync(projectId);
+            const remote = await getProjectAsync(startedProjectId);
+            if (!isCurrentOwner()) {
+              return t;
+            }
             if (remote) setProject(remote);
           }
         } else {
-          const remote = await getProjectAsync(projectId);
+          const remote = await getProjectAsync(startedProjectId);
+          if (!isCurrentOwner()) {
+            return t;
+          }
           if (remote) setProject(remote);
         }
       }
       return t;
     },
-    [pipeline, projectId, refreshFromApi],
+    [pipeline, refreshFromApi],
   );
 
   /**

@@ -301,8 +301,10 @@ export function useBusinessBidWorkspace(projectId: string) {
 
   /**
    * 用途：从 editor-state 刷新当前项目。
+   * V1-G：入口先校验闭包项目/会话仍当前，失效则零 writeEpoch/timer/loading/GET 并返回 false。
    * 成功：水合真实字段、接受合法 stateVersion、清冲突、apiReady=true。
    * 失败：见全状态阻断分支；不抛原文。
+   * 二次开发：silent 检查点恢复语义不得改；初始 GET/P11 冲突失败卡保持既有。
    */
   const refreshFromApi = useCallback(async (options?: { silent?: boolean }): Promise<boolean> => {
     const pid = projectId;
@@ -310,7 +312,15 @@ export function useBusinessBidWorkspace(projectId: string) {
       setLoading(false);
       return false;
     }
+    // V1-G：入口早退——闭包项目已非当前活跃项目/会话时，零 writeEpoch/timer/loading/GET。
+    // 捕获入口 session；与 active 不一致说明切项目后旧闭包迟到，直接 false。
     const session = sessionRef.current;
+    if (
+      activeProjectRef.current !== pid ||
+      !isCurrentSession(session, pid)
+    ) {
+      return false;
+    }
     const silent = options?.silent === true;
     // 同项目重载：递增写入代次并清未发送 timer
     writeEpochRef.current += 1;

@@ -1,16 +1,18 @@
 /**
- * 模块：技术标分步工作区（含 P13-B/C/D2/H3 版本、P13-F2 近期成员、P13-G2 章节意图、P13-I3/I4 任务事件提示）
+ * 模块：技术标分步工作区（含 P13-B/C/D2/H3 版本、P13-F2 近期成员、P13-G2 章节意图、P13-I3/I4 任务事件提示、V1-G 任务成功刷新围栏）
  * 用途：技术标流水线工作区；标题区展示版本与项目近期成员；content 步展示章节处理意图提示；
  *       薄挂载 EditorStateEventUpdatePanel 做远端版本变化提示；
  *       薄挂载 ProjectTaskEventPanel 做项目任务事件安全提示（不自动请求详情）；
- *       P13-I4 经 onSafeTaskEvent 接入 useProjectPipeline.reconcileCurrentTaskStatus，仅做当前任务安全状态对账。
+ *       P13-I4 经 onSafeTaskEvent 接入 useProjectPipeline.reconcileCurrentTaskStatus，仅做当前任务安全状态对账；
+ *       V1-G：parse/analyze/outline/chapters/chapter 经统一 task-success-reload 门禁，锁迟到 success 副作用。
  * 对接：useTechnicalPlanEditors、useProjectPipeline.reconcileCurrentTaskStatus、EditorStateVersionFreshness、
  *       ProjectPresencePanel（testid=technical-project-presence）、ChapterEditIntentPanel
  *       （testid=technical-chapter-edit-intent，仅 content 薄挂载）、
  *       EditorStateEventUpdatePanel（testid=technical-editor-state-event-update）、
  *       ProjectTaskEventPanel（testid=technical-project-task-event-update，onSafeTaskEvent）。
  * 二次开发：禁止改 editor-state 保存/冲突/任务路由；presence/意图/任务事件提示仅薄挂载；
- *       任务事件安全对账仅限 reconcileCurrentTaskStatus，不自动拉详情、不进 editor Hook；意图不是强制锁。
+ *       任务事件安全对账仅限 reconcileCurrentTaskStatus，不自动拉详情、不进 editor Hook；意图不是强制锁；
+ *       禁止修改 useProjectPipeline/I4/SSE 返回语义；content_fuse/response_match/export 不得并入 V1-G helper。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
@@ -292,6 +294,11 @@ export function TechnicalPlanWorkspace() {
    */
   const currentProjectIdRef = useRef(projectId);
   currentProjectIdRef.current = projectId;
+  /**
+   * V1-G：任务成功刷新代次（纯内存）。
+   * 项目切换与每次受控 writer 任务启动均推进，锁 A→B→A 与同项目旧 run。
+   */
+  const taskRefreshGenerationRef = useRef(0);
   /** V1-E：导出准备进行态（与 pipeline.busy 共同禁用按钮） */
   const [exportPreparing, setExportPreparing] = useState(false);
   /** 代次：项目切换、重入智能建议或取消后，丢弃迟到的串行批结果 */
@@ -304,6 +311,8 @@ export function TechnicalPlanWorkspace() {
     // V1-E：显式作废旧导出准备令牌；不得只 setExportPreparing(false)
     exportPrepareTokenRef.current = null;
     setExportPreparing(false);
+    // V1-G：切项目推进任务刷新代次，旧 success 不得触发重载/写 tip
+    taskRefreshGenerationRef.current += 1;
   }, [projectId]);
 
   const exportImageWarnings =
@@ -312,23 +321,63 @@ export function TechnicalPlanWorkspace() {
       : [];
 
   /**
+   * 模块：runWriterTaskWithSuccessReload
+   * 用途：V1-G 统一任务成功后编辑态重载入口；parse/analyze/outline/chapters/chapter 共用。
+   * 对接：pipeline.runTask；editors.reloadFromApi；taskTip。
+   * 二次开发：content_fuse/response_match/export 禁止并入；门失败静默返回真实 task，不得改写 status。
+   */
+  const runWriterTaskWithSuccessReload = useCallback(
+    async (
+      type: "parse" | "analyze" | "outline" | "chapters" | "chapter",
+      payload: Record<string, unknown> | undefined,
+      buildTip: (task: {
+        status: string;
+        message: string;
+        result?: Record<string, unknown> | null;
+      }) => string,
+    ) => {
+      const startedProjectId = currentProjectIdRef.current;
+      if (!startedProjectId) return null;
+      const startedGeneration = ++taskRefreshGenerationRef.current;
+      const isCurrentOwner = () =>
+        currentProjectIdRef.current === startedProjectId &&
+        taskRefreshGenerationRef.current === startedGeneration;
+      try {
+        const t = await pipeline.runTask(type, payload);
+        // runTask 后复核：项目已切或同项目新任务代次已推进则零 reload/tip
+        if (!isCurrentOwner()) {
+          return t;
+        }
+        if (t.status === "success") {
+          const ok = await editors.reloadFromApi({ blocking: true });
+          // reload 后再次复核：仅当前且重载成功才写 tip
+          if (!isCurrentOwner()) {
+            return t;
+          }
+          if (ok) {
+            setTaskTip(buildTip(t));
+          }
+        }
+        return t;
+      } catch {
+        /* error 已在 pipeline */
+        return null;
+      }
+    },
+    [pipeline, editors],
+  );
+
+  /**
    * 模块：runLightweightParse
-   * 用途：以 engine=lightweight 创建 parse 任务并刷新编辑态。
-   * 对接：pipeline.runTask；editors.reloadFromApi。
+   * 用途：以 engine=lightweight 创建 parse 任务并经 V1-G 围栏刷新编辑态。
+   * 对接：runWriterTaskWithSuccessReload("parse")。
    * 二次开发：禁止传入 local/ask/mineru 等引擎名。
    */
   const runLightweightParse = useCallback(async () => {
-    try {
-      const t = await pipeline.runTask("parse", { engine: "lightweight" });
-      if (t.status === "success") {
-        const ok = await editors.reloadFromApi({ blocking: true });
-        if (ok) setTaskTip("解析完成，请查看右侧预览");
-      }
-    } catch {
-      /* error 已在 pipeline */
-    }
-  }, [pipeline, editors]);
-
+    await runWriterTaskWithSuccessReload("parse", { engine: "lightweight" }, () =>
+      "解析完成，请查看右侧预览",
+    );
+  }, [runWriterTaskWithSuccessReload]);
   /**
    * 模块：goLocalParser
    * 用途：跳转本地回传页并携带编码后的项目 ID。
@@ -1289,23 +1338,11 @@ export function TechnicalPlanWorkspace() {
                   className="btn btn-primary btn-sm"
                   disabled={pipeline.busy}
                   onClick={() => {
-                    void (async () => {
-                      try {
-                        const t = await pipeline.runTask("analyze");
-                        if (t.status === "success") {
-                          const ok = await editors.reloadFromApi({
-                            blocking: true,
-                          });
-                          if (ok) {
-                            setTaskTip(
-                              t.message || "招标分析已写入结构化结果",
-                            );
-                          }
-                        }
-                      } catch {
-                        /* */
-                      }
-                    })();
+                    void runWriterTaskWithSuccessReload(
+                      "analyze",
+                      undefined,
+                      (t) => t.message || "招标分析已写入结构化结果",
+                    );
                   }}
                 >
                   <RefreshCw size={14} /> {pipeline.busy ? "分析中…" : "AI 招标分析"}
@@ -1475,26 +1512,12 @@ export function TechnicalPlanWorkspace() {
               className="btn btn-primary btn-sm"
               disabled={pipeline.busy}
               onClick={() => {
-                void (async () => {
-                  try {
-                    const t = await pipeline.runTask("outline");
-                    if (t.status === "success") {
-                      const ok = await editors.reloadFromApi({
-                        blocking: true,
-                      });
-                      if (ok) {
-                        const cite = formatKbCitationsTip(t);
-                        setTaskTip(
-                          cite
-                            ? `大纲与章节列表已生成 · ${cite}`
-                            : "大纲与章节列表已生成",
-                        );
-                      }
-                    }
-                  } catch {
-                    /* */
-                  }
-                })();
+                void runWriterTaskWithSuccessReload("outline", undefined, (t) => {
+                  const cite = formatKbCitationsTip(t);
+                  return cite
+                    ? `大纲与章节列表已生成 · ${cite}`
+                    : "大纲与章节列表已生成";
+                });
               }}
             >
               {pipeline.busy ? "生成中…" : "AI 生成大纲"}
@@ -1645,27 +1668,17 @@ export function TechnicalPlanWorkspace() {
               className="btn btn-soft btn-sm"
               disabled={pipeline.busy}
               onClick={() => {
-                void (async () => {
-                  try {
-                    const t = await pipeline.runTask("chapters", {
-                      onlyEmpty: true,
-                    });
-                    if (t.status === "success") {
-                      const ok = await editors.reloadFromApi({
-                        blocking: true,
-                      });
-                      if (ok) {
-                        const cite = formatKbCitationsTip(t);
-                        setTaskTip(
-                          `全书空章生成完成（${String(t.result?.generated ?? "")} 章）` +
-                            (cite ? ` · ${cite}` : ""),
-                        );
-                      }
-                    }
-                  } catch {
-                    /* */
-                  }
-                })();
+                void runWriterTaskWithSuccessReload(
+                  "chapters",
+                  { onlyEmpty: true },
+                  (t) => {
+                    const cite = formatKbCitationsTip(t);
+                    return (
+                      `全书空章生成完成（${String(t.result?.generated ?? "")} 章）` +
+                      (cite ? ` · ${cite}` : "")
+                    );
+                  },
+                );
               }}
             >
               {pipeline.busy ? "批量生成中…" : "生成全部空章节"}
@@ -1675,27 +1688,19 @@ export function TechnicalPlanWorkspace() {
               className="btn btn-primary btn-sm"
               disabled={pipeline.busy || !selectedChapter}
               onClick={() => {
-                void (async () => {
-                  try {
-                    const t = await pipeline.runTask("chapter", {
-                      chapterId: selectedChapter?.id,
-                    });
-                    if (t.status === "success") {
-                      const ok = await editors.reloadFromApi({
-                        blocking: true,
-                      });
-                      if (ok) {
-                        const cite = formatKbCitationsTip(t);
-                        setTaskTip(
-                          `章节已生成：${selectedChapter?.title ?? ""}` +
-                            (cite ? ` · ${cite}` : ""),
-                        );
-                      }
-                    }
-                  } catch {
-                    /* */
-                  }
-                })();
+                // 闭包捕获点击时章节，避免任务完成后 selected 已变仍写对 tip
+                const chapterTitle = selectedChapter?.title ?? "";
+                void runWriterTaskWithSuccessReload(
+                  "chapter",
+                  { chapterId: selectedChapter?.id },
+                  (t) => {
+                    const cite = formatKbCitationsTip(t);
+                    return (
+                      `章节已生成：${chapterTitle}` +
+                      (cite ? ` · ${cite}` : "")
+                    );
+                  },
+                );
               }}
             >
               <Play size={14} /> {pipeline.busy ? "生成中…" : "AI 生成本章"}

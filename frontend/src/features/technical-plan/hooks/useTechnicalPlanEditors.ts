@@ -1137,16 +1137,26 @@ export function useTechnicalPlanEditors(projectId: string) {
 
   /**
    * 用途：任务成功后 / 显式重试 从服务端重新拉取 editor-state（单次 GET）。
+   * V1-G：入口先校验闭包项目/会话仍当前，失效则零 writeEpoch/timer/loading/GET 并返回 false。
    * 返回 true：GET 成功且已完成 setState/版本/冲突态更新；
    * 返回 false：失败时设置固定 loadError、apiReady=false、重置空态；不抛原文。
    * @param options.blocking 为 true 时置 loading（页面普通任务）；M3-D 无参调用保持 false，避免卸载对话框。
    * 二次开发：ContentFuseDialog 必须据返回值判定刷新成败；页面可在 false 时不提示“已刷新”。
+   *       不得改 silent 语义（本函数无 silent）；初始 GET/P11 冲突失败卡保持既有。
    */
   const reloadFromApi = useCallback(
     async (options?: { blocking?: boolean }): Promise<boolean> => {
       const requestProjectId = projectId;
       if (!requestProjectId) return false;
+      // V1-G：入口早退——闭包项目已非当前活跃项目/会话时，零 writeEpoch/timer/loading/GET。
+      // 捕获入口 session；与 active 不一致说明切项目后旧闭包迟到，直接 false。
       const requestSession = projectSessionRef.current;
+      if (
+        activeProjectIdRef.current !== requestProjectId ||
+        !isCurrentEditorSession(requestProjectId, requestSession)
+      ) {
+        return false;
+      }
       // 同项目重载：递增写入代次并清未发送 timer；旧代次回调不得覆盖新 GET
       writeEpochRef.current += 1;
       if (saveTimer.current) {
