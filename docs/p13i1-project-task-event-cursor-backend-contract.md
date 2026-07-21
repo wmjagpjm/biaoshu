@@ -1,6 +1,6 @@
 # P13-I1 项目任务事件游标后端契约
 
-> 状态：首轮实现与独立初验完成；两条漏审任务写链已由 Codex/Grok 双确认，十文件范围修订待返修
+> 状态：两轮实现审查完成；认证错误 no-store 与三项反假绿缺口已双确认，十一文件范围修订待返修
 > 日期：2026-07-21
 > 前置：P13-A 任务 SSE 工作空间鉴权、P13-H1/H2 editor-state 事件账本与 SSE
 > 分支：仅 `collab/grok-code-codex-review`，禁止操作 `main`
@@ -18,6 +18,7 @@
 3. `project_tasks` 会被任务查询和未来清理复用，不能把任务行当事件日志；事件必须独立表并有项目级保留上限。
 4. 任务 `message/error/result/payload` 可能含文件名、路径、模型或业务正文，事件 API 只允许固定状态元数据。
 5. 生产代码另有两条绕过 `task_service` 的真实任务创建链：个人 `parse_callback` 与一次性票据 `local_parser_ticket_service` 均直接创建 `success/100` 的 parse 任务并对外返回 taskId；若不在同一事务写事件，项目任务总线会永久漏掉这些任务。
+6. required 模式未登录请求在路由前由 `AuthMiddleware` 返回 401；公共 `_error_response` 若不设置 no-store，路由内的响应头逻辑不可达，因此必须把该统一认证错误出口纳入本包最小范围。
 
 ## 3. 严格作用域
 
@@ -88,7 +89,7 @@
 - `items` 按 `(occurred_at ASC, id ASC)` 返回，最多 `limit` 条；无结果返回空数组、`nextCursor=null`、`hasMore=false`。
 - `after` 指向已保留事件时只返回其后的事件；指向已裁剪、未知、跨项目或跨 workspace 的事件固定返回脱敏 409 `project_task_event_cursor_stale`，不得猜测位置或从任务表补洞。
 - 无 `after` 且已有事件时返回空 `items`、`hasMore=false`，并把当前最新事件 ID 作为 bootstrap `nextCursor`；有 `after` 时只有 `hasMore=true` 才返回页尾游标。
-- 成功和业务错误均 `Cache-Control: no-store`；禁止返回项目/空间内部 ID、actor、client、message、error、result、payload 或 SQL/异常原文。
+- 成功和业务错误均 `Cache-Control: no-store`；包括 `AuthMiddleware` 在路由前返回的 401/403/503 认证错误，禁止用条件断言豁免缺失响应头；禁止返回项目/空间内部 ID、actor、client、message、error、result、payload 或 SQL/异常原文。
 - 不支持 POST/PUT/PATCH/DELETE、SSE、`Last-Event-ID`、WebSocket 或 query token。
 
 ## 6. 失败优先与验收
@@ -97,16 +98,17 @@
 
 1. 创建、进度、成功、失败、取消、版本冲突失败和进程中断真实写链各产生预期事件；相同状态/进度不重复，旧 worker 不污染取消终态。
 2. 个人 `parse_callback` 与一次性票据公开回传必须通过真实 HTTP/服务写链各产生且只产生一条 `success/100` 事件；响应 taskId 与事件 taskId 精确一致，禁止测试直接插入事件冒充覆盖。
-3. 事件与任务更新、200 条裁剪绑定同一事务；两条直接终态回传也必须覆盖 flush/commit 故障，证明任务、事件及同事务业务写入均不残留。
+3. 事件与任务更新、200 条裁剪绑定同一事务；两条直接终态回传必须分别覆盖事件 flush 故障与最终 commit 故障，commit 钩子内先证明对应事件已进入同一 Session，失败后任务、事件及同事务业务写入均不残留；票据仍可重试。
 4. 精确响应键、字段格式、顺序、limit 1/50、空结果和连续分页；首次 bootstrap tip 不回放旧历史。
-5. 游标指向保留事件可继续读取；裁剪、伪造、跨项目和跨 workspace 游标固定 409，不回显输入。
-6. 未登录、非 `bid_writer`、非活动 workspace、任意 workspace 头、跨项目统一固定拒绝。
-7. 响应无 message/error/result/payload/actor/client/异常原文，成功和错误均 no-store。
-8. 既有个人 callback、一次性票据、单任务 SSE、任务创建/取消、P13-H1/H2、P13-F1/F2、P13-G1/G2 与认证代表回归保持通过。
+5. 游标指向保留事件可继续读取；必须保存真实早期事件 ID、触发 200 条裁剪并确认该行已删除后，再证明裁剪游标固定 409；伪造和跨项目游标同样固定 409 且不回显。
+6. 必须创建真实第二 workspace、第二空间项目并通过 `task_service` 产生事件；活动空间 A 查询 B 项目固定 404，A 项目使用 B 游标固定 409，均不回显输入。
+7. 未登录、非 `bid_writer`、非活动 workspace、任意 workspace 头、跨项目统一固定拒绝；未登录 401 必须无条件断言 no-store。
+8. 响应无 message/error/result/payload/actor/client/异常原文，成功和错误均 no-store。
+9. 既有个人 callback、一次性票据、认证、单任务 SSE、任务创建/取消、P13-H1/H2、P13-F1/F2、P13-G1/G2 代表回归保持通过。
 
 严格禁止宽状态断言、仅非零计数、假事务、测试直接写事件表、绕过真实任务写点、把 `project_tasks` 当事件日志或把敏感任务快照投影到事件。
 
-## 7. 严格十文件白名单
+## 7. 严格十一文件白名单
 
 1. `backend/app/models/entities.py`：新增事件实体。
 2. `backend/app/models/__init__.py`：导出实体。
@@ -115,11 +117,12 @@
 5. `backend/app/services/local_parser_ticket_service.py`：一次性票据回传直接终态任务的同事务事件写入。
 6. `backend/app/services/project_task_event_service.py`：严格游标查询服务。
 7. `backend/app/api/schemas.py`：新增精确响应模型。
-8. `backend/app/api/project_task_events.py`：只读路由、参数和脱敏错误映射。
-9. `backend/app/main.py`：注册实体与路由。
-10. `backend/tests/test_p13i1_project_task_events.py`：failure-first、真实回传、事务、作用域、游标和隐私专项。
+8. `backend/app/api/auth_middleware.py`：统一认证错误响应固定 `Cache-Control: no-store`。
+9. `backend/app/api/project_task_events.py`：只读路由、参数和脱敏错误映射。
+10. `backend/app/main.py`：注册实体与路由。
+11. `backend/tests/test_p13i1_project_task_events.py`：failure-first、真实回传、事务、作用域、游标和隐私专项。
 
-禁止修改前端、共享 `api.py`、auth/router、既有单任务 SSE 路由、配置、依赖、迁移脚本和其它测试。Grok 不得写文档、暂存、提交、推送或清理产物。
+禁止修改前端、共享 `api.py`、认证路由与服务、既有单任务 SSE 路由、配置、依赖、迁移脚本和其它测试；`auth_middleware.py` 仅允许为统一 `_error_response` 增加 no-store，不得改公开路径、认证、会话或 CSRF 语义。Grok 不得写文档、暂存、提交、推送或清理产物。
 
 ## 8. 后续明确拆分
 
