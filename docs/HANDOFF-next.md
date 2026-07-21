@@ -1,18 +1,20 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-21（P13-E、P13-F1、P13-F2、P13-G1、P13-G2、P13-H1、P13-H2、P13-H3、P13-I1、P13-I2、P13-I3 均已完成验收）
+> **交接日期**：2026-07-21（P13-E、P13-F1、P13-F2、P13-G1、P13-G2、P13-H1、P13-H2、P13-H3、P13-I1、P13-I2、P13-I3、P13-I4 均已完成验收）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
+> **版本优先级**：保留全部现有进度、提交、验收与生产文档；当前只推进 **V1 本机/内网可实际使用版**。V2 为团队深度协作，V3 为公网 SaaS 与规模化生产；V1 未形成可发布基线前不得抢跑 V2/V3。
 > **协作分支功能基线**：P12F-J-A 冻结=`2f03b8c`、实现=`a7021c4`；P12F-I 冻结=`060191e`、实现=`008e443`；P12F-H 冻结=`0660145`、范围修订=`0db935b`/`aca68b6`、实现=`b4338ba`；P12F-G-B 冻结=`89b5728`、实现=`bb7c4f4`；P12F-G-A 冻结=`c176cb5`、实现=`d2555d4`；P12F-F-B 冻结=`4585388`、实现=`be2fe77`；P12F-F-A 冻结=`b2eed7c`、实现=`e6516e8`；P12F-E-B 冻结=`a31e50e`、实现=`f9127ec`；P12F-E-A 冻结=`af3798a`、实现=`c66b69d`；P12F-D 冻结=`a2acdf3`、实现=`587df9a`；P13-A 冻结=`e8dfa61`、实现=`1509aa2`；P12F-C 冻结=`bb1ae3e`、实现=`fe99f5a`；P12F-B 冻结=`4ddd896`、实现=`c84a94d`；P12F-A 冻结=`e713fb3`、实现=`24f4cf2`；P12E-A 冻结=`5aa205c`、实现=`f9f067e`；P12E-B 冻结=`00ef081`、实现=`5a5b08a`；P12E-C 冻结=`8b40bf4`、实现=`b6a4375`；其余既有功能基线见本文 §11。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
 > **最新增量基线**：P12N 已交付当前已加载修订固定优先；冻结=`337b401`、实现=`394639a`。P13-B 已交付当前客户端接受版本的 UTC 更新时间；冻结=`040d644`、实现=`1d4fe0b`。P13-C 已交付当前版本九类修订流程来源；冻结=`e62ea27`、实现=`6eaa89f`。P13-D1 已交付修订操作者可信账本；冻结=`3132684`、实现=`a8982e3`。P13-D2 已交付当前版本操作者用户名展示；冻结=`4b95ab5`、实现=`44c9196`。P13-E 已交付活动工作空间切换与成员只读可见性；冻结=`19f0bfe`、实现=`5685441`、闭环=`70dfb39`。P13-F1 已交付项目在线租约后端基础；冻结=`78302bc`、实现=`6164d8c`。P13-F2 已交付项目近期成员前端；冻结=`a5709ed`、实现=`dfa6bc0`。P13-G1 已交付项目章节编辑意图租约后端；冻结=`a0b7c48`、实现=`015ab37`。P13-G2 已交付技术标章节编辑意图前端提示；冻结=`3a74fbb`、实现=`86abbbf`。P13-H1 已交付 editor-state 事件账本与游标后端；冻结=`da2537a`、实现=`4255823`。P13-H2 已交付 editor-state SSE 重放；功能=`c19bf94`。P13-H3 已交付编辑状态事件前端版本提示；功能=`40aacc7`，未知命名事件边界另包。P13-I1 已交付项目任务事件游标后端；功能=`f0d6d75`。P13-I2 已交付项目任务事件 SSE 与断线重放；冻结=`525d059`、功能=`03fb90e`。
 > **最新增量基线补充**：P13-I3 已交付项目任务事件前端安全提示；冻结=`5c63890`、功能=`c6dbe2e`。Grok B 独立 worktree 已完成并合并，Codex 独立 I3/H3/freshness 为 `5/15/17 passed`；failure-first 为 `1 failed / 1 passed / 3 did not run`。问题确认后才返修，question=`msg_6a19689c036540b09eac00d65bbb58a7`，确认=`msg_5ebe466f38f9404b8294f42c630c6f8a`，返修 task=`msg_98272242fe8741a086c96f460e2f90ed`，最终 review=`msg_bfe30b3e23574d6291f33b9a88baddde`，result=`msg_81187e032a1245d5b566f9238a7959ab`。
+> **最新增量基线补充**：P13-I4 已交付项目任务状态安全对账；冻结=`9d2cc27`、后端=`2ccfd0f`、前端=`ef6fe54`、注释修正=`7554d5d`。相同 eventId 使用最近 200 条 FIFO 去重，状态 GET 由 `AbortController` 保持在途单飞，项目/任务切换与卸载取消旧请求，迟到 active 响应不得覆盖 SSE 终态；只更新 `status/progress` 并保留 `message/result/error`。`projectTaskStatus.ts` 是双方确认后唯一扩展白名单，生产 `window` 探针与动态 API import 均被审查拒绝并撤回。
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
 > **P12M 完成状态**：冻结=`95b298f`、实现=`cc23542`。首轮七文件实现后，受影响回归准确暴露两份旧七键测试；经 Codex 明确 test-only 扩围后闭环，生产边界未扩大。
 > **P12M 最终生产哈希**：schemas=`76633E2BFF418A9FBBD0DD3AD18164C62496340AB4AD30BCCD7BDE2918DDF39D`；route=`3CC358D8280F3C6579261F88848D986E0A5A929D46D09F81FD378E7A9F23EF0C`；service=`F8D373B8DCCACB5B0921D4F972F0B85B29AAAAF82CFA0BE8E3D08AC2D107C1FA`；前端 API=`CEDCC06FDCB9B0743BEE2A5A019003D19145B2837BBB273226C15E7EFFD45BA3`；面板=`5C41D4A3C2807B1A69DB40D34F22E40A7A664280765A3F8D7C7DFCE3EB25E31D`。
 > **P12N 完成状态**：冻结=`337b401`、实现=`394639a`；严格两文件，只做非搜索态当前已加载修订的前端稳定固定优先，不改后端或游标。最终面板哈希=`FEAD15B6CB4043D1E6A96C1BFF9782A3B1F072A28D6619E375D9B5F07A23FF3B`，history E2E=`617C7481B55A2F7760A36127E5E5DB8C50E193526206D444F13D56AA6F65698F`。
-> **本地状态**：只允许分支 `collab/grok-code-codex-review`。P13-H1/H2/H3、P13-I1、P13-I2 均已完成并推送；P13-I3 已完成实现与独立验收（功能=`c6dbe2e`），本次文档闭环后推送。独立 worktree `C:\Users\Administrator\biaoshu-p13i3-grok` 的实现已合并，不再视为在途；后续包必须重新建立独立 worktree 和测试数据库。
-> **验收基线**：P13-B Grok P13-B/真值 **6/46 passed**，Codex 独立 **6 passed**。P13-C Grok 后端/前端 **18/11 passed**；Codex 独立后端 P13-C+P12C/全状态 **32/19 passed**、P13-B/C E2E **11 passed**。P13-D1 Codex 独立专项+schema/PRAGMA 顺序/代表写链 **18/2/5 passed**。P13-D2 Grok 后端/freshness **44/17 passed**；Codex 独立核心/回归/freshness/外部写路径 **44/15/17/4 passed**。P13-E Grok/Codex 独立 P13-E 与完整认证均为 **25/36 passed**。P13-F1 初始 failure-first **30 failed / 4 passed**，两轮返修红测 **16 failed / 5 passed**、**2 failed**；Grok 最终专项/直接回归 **41/55 passed**，Codex 独立专项/代表回归 **41/3 passed**。P13-F2 初始 failure-first **7 failed / 1 passed**、返修红测 **2 failed / 0 passed**；Grok 最终专项 **11 passed**，Codex 独立专项/freshness **11/17 passed**。P13-G1 有效 failure-first **42 failed / 3 passed**；Grok 返修后聚焦/专项 **17/53 passed**，Codex 独立专项/P13-F1/认证/editor-state **53/41/8/1 passed**。P13-G2 failure-first **8 failed / 1 passed**；Grok 最终专项/聚焦关键序列 **13/7 passed**，Codex 独立专项/P13-F2/freshness **13/11/17 passed**。P13-H1 failure-first **25 failed / 3 passed**；Grok 最终专项/回归 **28/90 passed**，Codex 独立专项/editor-state 与 P13-D1 回归 **28/90 passed**。P13-H3 Codex 独立 H3 **15 passed**、freshness **17 passed**。P13-I2 failure-first **15 failed / 0 passed**；Codex 双确认返修后独立专项/代表回归 **17/125 passed**，合计 **142 passed**，lint/build 不适用，`compileall`/diff-check 通过。**同一 worktree 的 pytest 禁止 xdist/并发分组；不同 worktree 也必须使用独立 SQLite 目录。Playwright 必须显式 `--workers=1 --retries=0` 串行；按风险分级验收，避免重复全量。**
+> **本地状态**：只允许分支 `collab/grok-code-codex-review`。P13-H1/H2/H3、P13-I1/I2/I3 均已完成并推送；P13-I4 已完成实现与独立验收，代码提交=`2ccfd0f`/`ef6fe54`、注释修正=`7554d5d`，本次文档闭环后统一推送。A/B worktree 实现已合并，不再视为在途；后续包必须重新建立独立 worktree 和测试数据库。
+> **验收基线**：P13-B Grok P13-B/真值 **6/46 passed**，Codex 独立 **6 passed**。P13-C Grok 后端/前端 **18/11 passed**；Codex 独立后端 P13-C+P12C/全状态 **32/19 passed**、P13-B/C E2E **11 passed**。P13-D1 Codex 独立专项+schema/PRAGMA 顺序/代表写链 **18/2/5 passed**。P13-D2 Grok 后端/freshness **44/17 passed**；Codex 独立核心/回归/freshness/外部写路径 **44/15/17/4 passed**。P13-E Grok/Codex 独立 P13-E 与完整认证均为 **25/36 passed**。P13-F1 初始 failure-first **30 failed / 4 passed**，两轮返修红测 **16 failed / 5 passed**、**2 failed**；Grok 最终专项/直接回归 **41/55 passed**，Codex 独立专项/代表回归 **41/3 passed**。P13-F2 初始 failure-first **7 failed / 1 passed**、返修红测 **2 failed / 0 passed**；Grok 最终专项 **11 passed**，Codex 独立专项/freshness **11/17 passed**。P13-G1 有效 failure-first **42 failed / 3 passed**；Grok 返修后聚焦/专项 **17/53 passed**，Codex 独立专项/P13-F1/认证/editor-state **53/41/8/1 passed**。P13-G2 failure-first **8 failed / 1 passed**；Grok 最终专项/聚焦关键序列 **13/7 passed**，Codex 独立专项/P13-F2/freshness **13/11/17 passed**。P13-H1 failure-first **25 failed / 3 passed**；Grok 最终专项/回归 **28/90 passed**，Codex 独立专项/editor-state 与 P13-D1 回归 **28/90 passed**。P13-H3 Codex 独立 H3 **15 passed**、freshness **17 passed**。P13-I2 failure-first **15 failed / 0 passed**；Codex 双确认返修后独立专项/代表回归 **17/125 passed**，合计 **142 passed**。P13-I4 Codex 独立后端 I4+I1+I2+P13-A **81 passed**、前端 I4+I3+H3+freshness **45 passed**，lint/build/`compileall`/diff-check 通过；未运行后端全量或整仓 **318 E2E**。**同一 worktree 的 pytest 禁止 xdist/并发分组；不同 worktree 也必须使用独立 SQLite 目录。Playwright 必须显式 `--workers=1 --retries=0` 串行；按风险分级验收，避免重复全量。**
 
 ---
 
@@ -21,12 +23,12 @@
 ```text
 继续 biaoshu 标书制作者剩余主线任务。仓库 C:\Users\Administrator\biaoshu，GitHub https://github.com/wmjagpjm/biaoshu.git。
 工作分支只能是 collab/grok-code-codex-review，禁止直接操作 main；先执行 git status -sb，并核对 HEAD 与 origin/collab/grok-code-codex-review 一致且工作区干净。
-完整阅读 docs/p13i2-project-task-event-sse-replay-contract.md、docs/plans/2026-07-21-p13i2-project-task-event-sse-replay-plan.md、docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/plans/2026-07-13-package-9-delivery-enhancement-plan.md、docs/integration-checklist.md。
-长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
-当前进度：P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/B、P12E-A/B/C、P12F-A/B/C/D/E-A/E-B/F-A/F-B/G-A/G-B/H/I/J-A/J-B/P12K/P12L/P12M/P12N、P13-A/P13-B/P13-C/P13-D1/P13-D2/P13-E/P13-F1/P13-F2/P13-G1/P13-G2/P13-H1、P9D、P9C-R1、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成；整仓前端 **318 passed** 仍仅作既有历史基线。
+完整阅读 docs/p13i4-project-task-status-reconciliation-contract.md、docs/plans/2026-07-21-p13i4-project-task-status-reconciliation-plan.md、docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/plans/2026-07-13-package-9-delivery-enhancement-plan.md、docs/integration-checklist.md。
+长期目标：保留全部现有进度与生产文档，按 V1→V2→V3 交付。当前优先完成 V1 本机/内网可实际使用的标书制作系统；V2 为团队深度协作，V3 为公网 SaaS 与规模化生产。每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
+当前进度：P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/B、P12E-A/B/C、P12F-A/B/C/D/E-A/E-B/F-A/F-B/G-A/G-B/H/I/J-A/J-B/P12K/P12L/P12M/P12N、P13-A/P13-B/P13-C/P13-D1/P13-D2/P13-E/P13-F1/P13-F2/P13-G1/P13-G2/P13-H1/P13-H2/P13-H3/P13-I1/P13-I2/P13-I3/P13-I4、P9D、P9C-R1、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成；整仓前端 **318 passed** 仍仅作既有历史基线。
 当前状态：修订历史已闭合来源、UTC 时间、联合搜索、搜索命中来源标签、游标分页、单条删除、展示名称、固定与保护性裁剪；检查点已有创建、列表、详情、安全恢复、展示名称、单条删除、当前项目显式搜索、固定状态读取/入口、固定/安全双保护裁剪、默认列表固定优先排序与固定名额提示。
-当前执行包：P13-I3 已完成；冻结=`5c63890`、功能=`c6dbe2e`，严格四文件。项目任务事件前端提示、认证/角色门控、SSE 严格解析、项目切换隔离、固定安全展示和关闭生命周期均已验收。
-下一步：P13-I4“项目任务状态安全对账”已完成只读审计并冻结契约/计划（冻结=`9d2cc27`），等待 Grok A 后端与 Grok B 前端在独立 worktree `C:\Users\Administrator\biaoshu-p13i4-grok-a` / `C:\Users\Administrator\biaoshu-p13i4-grok-b` failure-first 实现；对应 SQLite 数据目录必须隔离。I4 尚未实现或验收，通知、评论审批、协同光标、WebSocket、任务结果自动展示、正文自动刷新和强制锁仍不得追认到 I3/I4。
+当前执行包：P13-I4 已完成；冻结=`9d2cc27`、后端=`2ccfd0f`、前端=`ef6fe54`、注释修正=`7554d5d`。安全三键状态接口、当前任务匹配、200 条 FIFO 去重、Abort 单飞、项目切换取消和终态防回退均已验收。
+下一步：按“本机/内网可实际使用的标书制作系统”优先级重新只读审计并冻结下一能力包，不得直接扩展 I4。优先补任务结果与正文安全刷新、导出/版式、解析器可部署性、稳定启动及备份恢复；通知、评论审批、协同光标、WebSocket、强制锁、多人任务列表和历史时间线后置。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -106,7 +108,7 @@
 6. **写完能力更新 HANDOFF 时**：必须在 §2.3 表更新该模块注释状态。
 7. **PowerShell 脚本**：新增或修改后必须为 UTF-8 BOM，避免 Windows PowerShell 解析中文注释或字符串异常。
 
-### 2.3 功能注释齐备表（交接审计 · 2026-07-16）
+### 2.3 功能注释齐备表（交接审计 · 2026-07-21）
 
 图例：**齐** = 文件顶含模块+用途+对接（核心服务另有二次开发）；**部分** = 有用途但缺对接/二次开发或仅部分文件；**弱/无** = 缺文件顶或仅零星行内注释。
 
@@ -117,6 +119,7 @@
 | 应用入口 | `main.py` | **齐** | 含二次开发 |
 | 项目 CRUD | `services/project_service.py`、`api/projects.py` | **齐** | kind/business 与 editor-state responseMatrix 映射已写清 |
 | 任务引擎 | `services/task_service.py`、`api/tasks.py`、`tests/test_p13a_task_sse_workspace_auth.py` | **齐** | 取消、biz 分发、RAG 注入；P13-A 连接前短 Session 统一角色/成员/活动空间，流内 workspace 三层再校验；含 `content_fuse` |
+| 项目任务状态安全对账 P13-I4 后端 | `api/schemas.py`、`api/tasks.py`、`services/task_service.py`、`tests/test_p13i4_project_task_status.py` | **齐** | 严格三键 `taskId/status/progress`、`no-store`、required/disabled 与项目/workspace 作用域；专项与代表回归纳入后端 81 passed |
 | 模板/卡片融合 M3-A | `services/fuse_context_service.py`、`services/task_service.py`（content_fuse）、`tests/test_content_fuse.py` | **齐** | 只读建议；禁写 editor-state；跨 workspace 不泄漏；sourceRefs 含服务端 title；裁剪后 *Used |
 | 融合写入持久恢复 M3-D | `models/entities.py`、`api/content_fuse_applications.py`、`services/content_fuse_application_service.py`、`api/schemas.py`、`tests/test_content_fuse_applications.py` | **齐** | 任务结果权威、锁内 base 校验、原子写入/快照/裁剪、最近 20 批、漂移安全一次消费；后端专项 34 passed |
 | 商务任务 | `services/business_task_service.py` | **齐** | qualify/toc/quote/commit |
@@ -157,6 +160,7 @@
 | 技术标工作区 | `technical-plan/pages/TechnicalPlanWorkspace.tsx` | **齐** | ResponseMatrixPanel；串行 `response_match`；编写步 M3-A/M3-B 融合入口；P8B `light/local/ask` 解析决策 |
 | 模板/卡片融合 UI | `technical-plan/components/ContentFuseDialog.tsx`、`lib/contentFuse.ts`、`lib/contentFuseApplications.ts`；E2E `e2e/content-fuse-suggest.spec.ts`、`content-fuse-apply.spec.ts`、`content-fuse-persistent-recovery.spec.ts` | **齐** | M3-A 只读建议；M3-B 双栏预览；M3-D 服务端原子确认、最近 20 批、完整/部分/零恢复、一次消费、固定失败语义与迟到隔离；`test:e2e:fuse` / `fuse-apply` / `fuse-persistent-recovery` |
 | 技术标 hooks | `useProjectPipeline` / `useTechnicalPlanEditors` / `useProjectGuidance` | **齐** | SSE、项目切换隔离、取消终态保护、正文图片上传、responseMatrix；`reloadFromApi` 为 M3-D 提供单次 `Promise<boolean>` 真实重载结果，其他调用方可保持旧静默语义；TaskType 含 content_fuse |
+| 项目任务状态安全对账 P13-I4 前端 | `project-task-events/ProjectTaskEventPanel.tsx`、`technical-plan/hooks/useProjectPipeline.ts`、`technical-plan/hooks/projectTaskStatus.ts`、技术/商务 pages、`e2e/project-task-status-reconciliation.spec.ts` | **齐** | 200 条 FIFO 去重、Abort 单飞、切换取消、终态防回退；两页过时“不进入 useProjectPipeline”注释经双方确认后以 `7554d5d` 修正 |
 | 当前版本时间/来源 P13-B/C | `editor-state-collaboration/EditorStateVersionFreshness.tsx`、技术/商务 hooks/pages、`e2e/editor-state-version-freshness.spec.ts` | **齐** | 合法版本同响应接受 UTC 时间与九类流程来源；项目/写入代次隔离，零新请求/轮询/storage；P13-B/C E2E 11 passed |
 | 项目近期成员 P13-F2 | `editor-state-collaboration/projectPresenceApi.ts`、`ProjectPresencePanel.tsx`、技术/商务 pages、`e2e/project-presence.spec.ts` | **齐** | 文档内存 UUID、串行 heartbeat/leave、严格 parser、visible-only 生命周期与双页面薄挂载；专项 11 passed |
 | P9D 导出图片告警 | `shared/components/ExportImageWarnings.tsx`、技术标/商务标导出页、`e2e/export-image-warnings.spec.ts` | **齐** | 20 条/240 码点纯文本收敛；双页面不阻断下载；项目绑定与迟到代次隔离；`test:e2e:export-image-warnings` |
@@ -476,7 +480,7 @@ frontend/src/features/
 | 库 | Alembic | 仅 create_all + ALTER |
 | 生产 | HTTPS/Key 加密/PG/Docker | 本机身份和成员 RBAC 已有；生产部署能力未做 |
 
-**粗估**：技术标 ~93%；商务 ~80%；合规工具可用；内网多人 ~38%；公网 SaaS ~15%。该估算是产品覆盖率；P13-E 至 H1 已验收，但 SSE 事件重放、前端自动提示和真正多人实时协作仍未实现。
+**粗估**：本机/内网可用标书系统整体约 **85%**；技术标约 **93%**，商务标约 **80%**，内网多人协作约 **55%～60%**，公网 SaaS 约 **15%**。该估算是产品覆盖率；P13-E 至 P13-I4 已验收，账号/RBAC/CAS/presence/章节意图/SSE 重放/前端提示/当前任务状态对账已有，但任务结果与正文安全刷新、协同光标、评论审批、强制锁和生产部署治理仍未完成。
 
 ---
 
@@ -485,7 +489,7 @@ frontend/src/features/
 1. 阶段 4 **功能包 8** MVP=`6db1586`、P8B/P8C、**P8D MinerU 助手**（计划=`30d066f`、实现=`e1fe316`）与 **P8E Docling 助手**（计划=`73b1264`、后端=`79b346e`、助手=`e3f9cc4`）均已验收并推送；真实 CLI/模型仍需人工准备，自动部署仍须独立安全契约。
 2. 阶段 4 **P9A/P9B/P9C/P9D** 与阶段 5 **P10A/P10B/P10C/P10D/P10F/P10E/P10G/P10H/P10I/P10J/P10K** 均已实现、独立验收并文档闭环。P9C 的真实模型门仍是运行时前置：固定依赖和模型缓存就绪后，用户显式构建索引，再运行固定预检；未通过前继续关键词降级。
 3. P8C/P8D/P8E、P10K、M3-D、P11A、P11B 与 P11C 均已完成。P8E 已按顺序完成后端精确 `mineru|docling` 枚举和独立本机助手；继续保持 P8B/P8C/P8D 的策略、票据、回环和正文出域边界。
-4. P13-E、P13-F1/F2、P13-G1/G2、P13-H1/H2/H3 已完成。下一包必须重新只读审计并独立冻结；跨项目版本、完整时间线、协同光标、多任务总线、评论审批和强制锁不得合包。
+4. P13-E、P13-F1/F2、P13-G1/G2、P13-H1/H2/H3、P13-I1/I2/I3/I4 已完成。下一包必须按本机/内网实际可用优先级重新只读审计并独立冻结；优先任务结果与正文安全刷新、导出/版式、解析器部署、稳定启动和备份恢复，跨项目版本、完整时间线、协同光标、多任务总线、评论审批和强制锁后置且不得合包。
 
 资源同步后续只可由管理员配置新的签名发布方，绝不可放开浏览器 URL 或外网抓取。图片管线已冻结项目内资源引用协议，后续扩展不得放开外链或客户端路径。P13-H1/H2/H3 已分别完成项目级事件账本、SSE 重放和保守前端提示；跨项目总线、协同光标、评论审批和自动正文覆盖仍不在已交付范围。
 

@@ -19,6 +19,18 @@
 
 财务、人力、投标人以及账号登录、角色权限、协作审批属于平台演进阶段。当前已受限交付 P10A 身份底座、P10B/P10C/P10J/P10K 财务、P10D 人力资质卡、P10F 人力团队推荐快照、P10H 人员业绩卡、P10I 人员资质到期提示、P10E 投标人匿名汇总和 P10G 投标人单项目统计。任何新增角色能力仍须独立冻结数据、权限和审计边界，禁止绕过现有单 workspace 约束。
 
+### 1.1 版本目标分层（2026-07-21 锁定）
+
+版本分层只调整后续优先级，不删除、回退或改写任何既有实现、提交、验收记录与生产文档。已经交付的 P13 协作基础继续保留，并作为后续版本的可复用底座。
+
+| 版本 | 目标 | 优先能力 | 暂不阻塞该版本 |
+|------|------|----------|----------------|
+| **V1：本机/内网可实际使用** | 5–6 人在单机或可信内网中稳定完成真实标书日常工作 | 任务结果与正文安全刷新、可靠导出与整章版式、本机 MinerU/Docling 可部署性、稳定启动/停止、备份恢复、故障诊断与基础内网部署 | 协同光标、WebSocket、评论审批、强制锁、公网多租户与规模化运维 |
+| **V2：团队深度协作** | 在 V1 稳定基础上完成多人实时协作和完整版本治理 | 通知、评论/审批、协同光标、强制锁、多任务列表、完整历史时间线、跨项目版本与更完整身份审计 | 公网 SaaS、多区域扩缩容、开放外部来源生态 |
+| **V3：公网 SaaS 与规模化生产** | 面向公网部署、商业化运营和持续运维 | HTTPS、PostgreSQL/Alembic、Docker、密钥治理、可观测性、备份容灾、租户治理、合法外部数据源、容量与性能治理 | 无；按独立生产安全契约推进 |
+
+**执行门**：当前只推进 V1。新能力包必须先证明直接提升本机/内网真实工作流；V1 未形成可发布基线前，不因“实时协作”或“公网部署”名义抢跑 V2/V3。V2/V3 需求与既有文档完整保留，进入其版本时再重新只读审计、冻结契约与白名单。
+
 ## 2. 已有基础
 
 - 技术标全流程、商务标、异步任务、AI 生成与编辑、文档知识库检索、查重/废标检查、Word 导出、标讯本地库和资源中心已可用。
@@ -446,9 +458,17 @@
 
 真实 failure-first **1 failed / 1 passed / 3 did not run**。首轮疑似问题经 question=`msg_6a19689c036540b09eac00d65bbb58a7` 与 Grok 确认=`msg_5ebe466f38f9404b8294f42c630c6f8a7` 双方确认后，才发返修 task=`msg_98272242fe8741a086c96f460e2f90ed`；最终 review=`msg_bfe30b3e23574d6291f33b9a88baddde`，result=`msg_81187e032a1245d5b566f9238a7959ab`。Codex 独立 I3/H3/freshness **5/15/17 passed**，lint/build/diff-check 和严格四文件边界通过；未运行整仓 E2E、后端全量、xdist 或并发 Playwright。
 
-**下一包方向**：通知、评论审批、协同光标、WebSocket、任务详情自动刷新、强制锁仍未交付。下一包必须重新只读审计、冻结契约和白名单，并为 Grok A/B 建立独立 worktree 与独立 SQLite 测试目录。
+### P13-I4：项目任务状态安全对账（已完成）
 
-**当前冻结包**：P13-I4“项目任务状态安全对账”已完成只读审计并冻结；契约=`docs/p13i4-project-task-status-reconciliation-contract.md`，计划=`docs/plans/2026-07-21-p13i4-project-task-status-reconciliation-plan.md`，冻结=`9d2cc27`。Grok A 后端与 Grok B 前端分别在 `C:\Users\Administrator\biaoshu-p13i4-grok-a` / `C:\Users\Administrator\biaoshu-p13i4-grok-b` 实现；当前尚无功能提交、review 或验收结果。
+契约=`docs/p13i4-project-task-status-reconciliation-contract.md`，计划=`docs/plans/2026-07-21-p13i4-project-task-status-reconciliation-plan.md`，冻结=`9d2cc27`、后端=`2ccfd0f`、前端=`ef6fe54`、注释修正=`7554d5d`。后端只新增严格三键 `taskId/status/progress` 的 `no-store` 安全状态接口；前端只对当前浏览器最近发起且仍 active 的匹配任务执行一次性内存确认。
+
+“一次”按每个合法新事件解释，所有请求仍保持在途单飞，不是任务生命周期最多一次。相同 eventId 使用最近 200 条 FIFO 去重；项目/任务切换或卸载取消旧请求，迟到 active 响应不得把 SSE 终态回退，只修改 `status/progress` 并保留 `message/result/error`。`projectTaskStatus.ts` 是双方确认后唯一扩展白名单；生产 `window` 测试探针和动态 API import 方案经审查拒绝并撤回。
+
+Codex 最终串行验收：后端 I4 + I1 + I2 + P13-A **81 passed**，前端 I4 + I3 + H3 + freshness **45 passed**，lint、build、`compileall`、严格边界和 diff-check 均通过。未运行后端全量或整仓 **318 E2E**。
+
+闭环注释审计发现两页仍称任务事件提示“不进入 useProjectPipeline”。Codex question=`msg_23c3424d6b154f43af2921b09fdac9a1`，Grok 确认=`msg_e918277a10164ad5adcc6a829708d7c0`；双方确认后才授权两文件纯注释返修，Grok review_request=`msg_86824ed8031e4673a6a59f881ae47777`，Codex 提交=`7554d5d`。
+
+**下一包方向**：按“本机/内网可实际使用的标书制作系统”优先，先审计任务结果与正文安全刷新、导出/版式、解析器可部署性、稳定启动及备份恢复；通知、评论审批、协同光标、WebSocket、强制锁、多人任务列表和历史时间线后置。下一包必须重新只读审计、冻结契约和白名单，并为 Grok A/B 建立独立 worktree 与独立 SQLite 测试目录，不得直接扩展 I4。
 
 阶段 0/1/2、阶段 3 M3-A 至 M3-D、阶段 4 **包 5** 至 **包 8/P8B/P8C/P8D/P8E**、P9A/P9B/P9C/P9D、阶段 5 P10A 至 P10K、**P11A/P11B/P11C 三个真实数据收口包**，以及 **P12A/P12B-A/B/C/D/P12C-A/B/C/P12D-A/B/P12E-A/B/C/P12F-A/B/C/D/P13-A** 均保持已交付。P8E 完整契约见 `docs/p8e-docling-local-helper-contract.md`，实施与独立验收记录见 `docs/plans/2026-07-15-p8e-docling-local-helper-plan.md`。
 

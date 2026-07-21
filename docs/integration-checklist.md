@@ -3,6 +3,14 @@
 > 目标：验证 health / 项目 / 设置 / revise / editor-state / 响应矩阵 / 本地标讯库 / 资源中心及受控同步 / **中标内容模板** 已闭环。
 > Key **明文**存储与回显（保密机决策）。
 
+## 版本验收顺序
+
+1. **V1 本机/内网可实际使用版（当前）**：优先验证真实标书工作流、任务结果与正文安全刷新、导出/版式、本机解析器部署、稳定启停、备份恢复与故障诊断。
+2. **V2 团队深度协作版（后续）**：在 V1 发布基线上验收通知、评论审批、协同光标、强制锁、多任务列表和完整时间线。
+3. **V3 公网 SaaS 与规模化生产版（后续）**：验收 HTTPS、PostgreSQL/Alembic、Docker、密钥与租户治理、可观测性、容灾和合法外部来源。
+
+版本分层不得删除或改写既有功能、测试证据和生产文档；已交付的 P13 协作能力作为 V1 基础保留。V1 未形成可发布基线前，不以 V2/V3 需求阻塞其验收。
+
 ## P13-C 当前已载入版本修订来源可见性（已完成）
 
 契约：`docs/p13c-current-revision-source-visibility-contract.md`
@@ -1439,8 +1447,21 @@ Codex 独立串行通过 P13-G2 专项/P13-F2 presence/freshness **13/11/17 pass
 
 验收证据：真实 failure-first **1 failed / 1 passed / 3 did not run**；Codex question=`msg_6a19689c036540b09eac00d65bbb58a7`，Grok 确认=`msg_5ebe466f38f9404b8294f42c630c6f8a7`，确认后返修 task=`msg_98272242fe8741a086c96f460e2f90ed`；最终 review=`msg_bfe30b3e23574d6291f33b9a88baddde`，result=`msg_81187e032a1245d5b566f9238a7959ab`。Codex 独立 I3/H3/freshness **5/15/17 passed**，lint、build、`git diff --check` 和严格四文件白名单通过。Grok B 独立 worktree 已合并，不再处于在途；下一包必须重新只读审计和冻结，通知、评论审批、协同光标、WebSocket、任务详情自动刷新和强制锁仍未交付。
 
-## P13-I4 项目任务状态安全对账（已冻结，待实现）
+## P13-I4 项目任务状态安全对账（已完成）
 
-契约=`docs/p13i4-project-task-status-reconciliation-contract.md`，计划=`docs/plans/2026-07-21-p13i4-project-task-status-reconciliation-plan.md`，冻结=`9d2cc27`。只允许新增 `GET /api/projects/{projectId}/tasks/{taskId}/status` 的三字段安全投影，以及 I3 面板向当前 `useProjectPipeline` 任务的单飞内存对账；不得读取/展示 `message/error/result/payload`，不得刷新正文或 editor-state。
+契约=`docs/p13i4-project-task-status-reconciliation-contract.md`，计划=`docs/plans/2026-07-21-p13i4-project-task-status-reconciliation-plan.md`，冻结=`9d2cc27`、后端=`2ccfd0f`、前端=`ef6fe54`、注释修正=`7554d5d`。后端新增 `GET /api/projects/{projectId}/tasks/{taskId}/status` 严格三键安全投影；前端仅对当前浏览器最近 `runTask` 且仍 active 的匹配任务做状态确认。
 
-Grok A 后端 worktree=`C:\Users\Administrator\biaoshu-p13i4-grok-a`，独立数据目录=`...\backend\data`；Grok B 前端 worktree=`C:\Users\Administrator\biaoshu-p13i4-grok-b`，独立 E2E 端口/数据库。两边尚未开始或提交功能，必须先分别报告真实 failure-first；Codex 尚未审查，不能把冻结包当作已交付。
+联调验收项：
+
+1. 响应精确 `taskId/status/progress` 三键并带 `Cache-Control: no-store`；required/disabled、角色、成员、项目与 workspace 作用域、非法 query/body 及敏感字段均按契约覆盖。
+2. 每个合法新事件可触发一次只读确认，相同 eventId 在最近 200 条 FIFO 窗内零副作用；这不表示一个任务的完整生命周期最多只确认一次。
+3. 状态 GET 使用 `AbortController` 保持任一时刻最多一个在途请求；项目切换、任务切换和卸载取消旧请求，旧 `finally` 不得清理新请求。
+4. 迟到 active 响应不得把 SSE 已确认终态回退；成功响应只修改 `status/progress`，必须保留本地 `message/result/error`。
+5. 不得请求任务详情、editor-state 或文件列表，不得轮询、自动重试或使用定时器旁路；接口失败只保留固定安全文案。
+6. `projectTaskStatus.ts` 是双方确认后唯一扩展生产白名单。生产 `window` 测试探针和动态 API import 方案已被审查拒绝并撤回。
+
+验收证据：Codex 主工作区串行后端 I4 + I1 + I2 + P13-A **81 passed**，前端 I4 + I3 + H3 + freshness **45 passed**；lint、build、Python `compileall`、严格文件边界和 `git diff --check` 均通过。所有 Playwright 固定 `--workers=1 --retries=0`；未运行后端全量、整仓 **318 E2E**、xdist、并发 pytest 或并发 Playwright。
+
+闭环注释复核遵守双确认门：question=`msg_23c3424d6b154f43af2921b09fdac9a1`，Grok 确认=`msg_e918277a10164ad5adcc6a829708d7c0`，确认后 task=`msg_e9993fc7aa49409f80764846f87ba16a`，review_request=`msg_86824ed8031e4673a6a59f881ae47777`。最终仅修正技术/商务两页顶部四字段注释，运行代码与测试未变。
+
+I4 不提供任务结果自动展示、正文自动刷新、通知、评论审批、协同光标、WebSocket、强制锁、多人任务列表或历史时间线。下一包必须按本机/内网实际可用优先级重新只读审计并冻结，先评估任务结果与正文安全刷新、导出/版式、解析器部署、稳定启动和备份恢复，不得直接扩展 I4。
