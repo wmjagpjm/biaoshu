@@ -1645,7 +1645,11 @@ def _generate_one_chapter_body(
         temperature=0.4,
         timeout_sec=240.0,
     )
-    return result.content, kb_citations
+    content = result.content
+    # V1-H1：空白模型输出不得写入编辑态；仅用 strip 判空，返回原始正文
+    if not str(content or "").strip():
+        raise ValueError("模型未返回有效章节正文，请重试")
+    return content, kb_citations
 
 
 def _run_chapter(
