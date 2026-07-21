@@ -1,6 +1,6 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-22（V1-C 本机解析运行时预检已完成验收）
+> **交接日期**：2026-07-22（V1-E 导出前最新编辑态落盘已完成验收）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
@@ -12,13 +12,15 @@
 > **V1-A 增量基线**：受控停机与离线备份基础已交付；实现=`5b4ad39`。两个根 bat、两个 UTF-8 BOM PS1、标准库备份核心和专项测试严格六文件；Codex 独立专项 `60 passed`，未真实停机或备份主仓数据。
 > **V1-B 增量基线**：离线恢复与回滚演练已完成；代码=`20a4a60`。严格 v2、`biaoshu-data-v1`、六根四态、恢复前备份、同卷 staging+journal、提交前自动回滚、崩溃重入和 cleanup-pending 均已落地。初始 failure-first 为备份 `56/9`、恢复 `1/41`；Codex 最终独立备份/恢复 `65/81 passed`，A13-A15 手工物理态探针通过。
 > **V1-C 增量基线**：本机解析运行时诚实预检已完成；冻结=`6e7aafb`、实现=`21d3213`。严格三文件新增零回调 `dry-run`、显式合成 DOCX 真值门、固定六键 JSON/诊断码和默认 MinerU/可选 Docling 运维说明。Codex 独立新专项/MinerU/Docling `26/54/46 passed`；本机无 MinerU 时真实 dry-run 为 `cli_missing`/2，未运行真实合成门或安装模型。
+> **V1-D 增量基线**：lightweight 文档结构质量门已完成；冻结=`3a1cadf`、实现=`821c136`。DOCX 按 `w:p/w:tbl` 原序输出 Heading 1–6、普通段落和 GFM 表格；Codex 独立专项/回归 `9/10 passed`。
+> **V1-E 增量基线**：导出前最新编辑态确定性落盘已完成；冻结=`2f3beb1`、实现=`2a1b1ec`。技术/商务导出统一先等待既有 CAS 保存链，失败、冲突、保存代次变化、项目切换或迟到结果均禁止旧内容下载；Codex 独立新专项/图片告警/truth `18/4/46 passed`。
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
 > **P12M 完成状态**：冻结=`95b298f`、实现=`cc23542`。首轮七文件实现后，受影响回归准确暴露两份旧七键测试；经 Codex 明确 test-only 扩围后闭环，生产边界未扩大。
 > **P12M 最终生产哈希**：schemas=`76633E2BFF418A9FBBD0DD3AD18164C62496340AB4AD30BCCD7BDE2918DDF39D`；route=`3CC358D8280F3C6579261F88848D986E0A5A929D46D09F81FD378E7A9F23EF0C`；service=`F8D373B8DCCACB5B0921D4F972F0B85B29AAAAF82CFA0BE8E3D08AC2D107C1FA`；前端 API=`CEDCC06FDCB9B0743BEE2A5A019003D19145B2837BBB273226C15E7EFFD45BA3`；面板=`5C41D4A3C2807B1A69DB40D34F22E40A7A664280765A3F8D7C7DFCE3EB25E31D`。
 > **P12N 完成状态**：冻结=`337b401`、实现=`394639a`；严格两文件，只做非搜索态当前已加载修订的前端稳定固定优先，不改后端或游标。最终面板哈希=`FEAD15B6CB4043D1E6A96C1BFF9782A3B1F072A28D6619E375D9B5F07A23FF3B`，history E2E=`617C7481B55A2F7760A36127E5E5DB8C50E193526206D444F13D56AA6F65698F`。
-> **本地状态**：只允许主工作分支 `collab/grok-code-codex-review`，严禁操作 `main`。P13-H1/H2/H3、P13-I1/I2/I3/I4、V1-A/V1-B/V1-C 均已完成；V1-C 已由 Codex 提交推送，Grok A/B worktree 只保留审计证据，不得沿用白名单。下一包必须重新只读审计并建立独立 worktree/测试目录。
+> **本地状态**：只允许主工作分支 `collab/grok-code-codex-review`，严禁操作 `main`。P13-H1/H2/H3、P13-I1/I2/I3/I4、V1-A 至 V1-E 均已完成；V1-E 已由 Codex 提交推送，Grok A/B worktree 只保留审计证据，不得沿用白名单。下一包必须重新只读审计并建立独立 worktree/测试目录。
 > **V1-C 验收补充**：原始 failure-first `0 passed / 1 import error / 24 did-not-run`；测试 B1-B7 与生产 A1 均经双方确认后返修。最终编译、diff-check、三文件哈希和本机 `cli_missing`/2 探针通过；未运行真实 `--synthetic-check`、未安装/下载 CLI 或模型。
-> **验收基线**：P13-B Grok P13-B/真值 **6/46 passed**，Codex 独立 **6 passed**。P13-C Grok 后端/前端 **18/11 passed**；Codex 独立后端 P13-C+P12C/全状态 **32/19 passed**、P13-B/C E2E **11 passed**。P13-D1 Codex 独立专项+schema/PRAGMA 顺序/代表写链 **18/2/5 passed**。P13-D2 Grok 后端/freshness **44/17 passed**；Codex 独立核心/回归/freshness/外部写路径 **44/15/17/4 passed**。P13-E Grok/Codex 独立 P13-E 与完整认证均为 **25/36 passed**。P13-F1 初始 failure-first **30 failed / 4 passed**，两轮返修红测 **16 failed / 5 passed**、**2 failed**；Grok 最终专项/直接回归 **41/55 passed**，Codex 独立专项/代表回归 **41/3 passed**。P13-F2 初始 failure-first **7 failed / 1 passed**、返修红测 **2 failed / 0 passed**；Grok 最终专项 **11 passed**，Codex 独立专项/freshness **11/17 passed**。P13-G1 有效 failure-first **42 failed / 3 passed**；Grok 返修后聚焦/专项 **17/53 passed**，Codex 独立专项/P13-F1/认证/editor-state **53/41/8/1 passed**。P13-G2 failure-first **8 failed / 1 passed**；Grok 最终专项/聚焦关键序列 **13/7 passed**，Codex 独立专项/P13-F2/freshness **13/11/17 passed**。P13-H1 failure-first **25 failed / 3 passed**；Grok 最终专项/回归 **28/90 passed**，Codex 独立专项/editor-state 与 P13-D1 回归 **28/90 passed**。P13-H3 Codex 独立 H3 **15 passed**、freshness **17 passed**。P13-I2 failure-first **15 failed / 0 passed**；Codex 双确认返修后独立专项/代表回归 **17/125 passed**，合计 **142 passed**。P13-I4 Codex 独立后端 I4+I1+I2+P13-A **81 passed**、前端 I4+I3+H3+freshness **45 passed**。V1-A 初始 failure-first **50 failed / 1 passed**，最终测试版 failure-first **59 failed / 1 passed**；Codex 最终独立专项 **60 passed**，PS1 BOM/解析、`compileall`/diff-check 通过。V1-B 初始 failure-first 为备份 **56 passed / 9 failed**、恢复 **1 passed / 41 failed**；Codex 最终独立备份 **65 passed**、恢复 **81 passed**，Python 编译、PS1 BOM/Parser、diff-check 和 A13-A15 独立物理态探针通过。未运行后端全量、前端或整仓 **318 E2E**。**同一 worktree 的 pytest 禁止 xdist/并发分组；不同 worktree 也必须使用独立 SQLite 目录。Playwright 必须显式 `--workers=1 --retries=0` 串行；按风险分级验收，避免重复全量。**
+> **验收基线**：P13-B Grok P13-B/真值 **6/46 passed**，Codex 独立 **6 passed**。P13-C Grok 后端/前端 **18/11 passed**；Codex 独立后端 P13-C+P12C/全状态 **32/19 passed**、P13-B/C E2E **11 passed**。P13-D1 Codex 独立专项+schema/PRAGMA 顺序/代表写链 **18/2/5 passed**。P13-D2 Grok 后端/freshness **44/17 passed**；Codex 独立核心/回归/freshness/外部写路径 **44/15/17/4 passed**。P13-E Grok/Codex 独立 P13-E 与完整认证均为 **25/36 passed**。P13-F1 初始 failure-first **30 failed / 4 passed**，两轮返修红测 **16 failed / 5 passed**、**2 failed**；Grok 最终专项/直接回归 **41/55 passed**，Codex 独立专项/代表回归 **41/3 passed**。P13-F2 初始 failure-first **7 failed / 1 passed**、返修红测 **2 failed / 0 passed**；Grok 最终专项 **11 passed**，Codex 独立专项/freshness **11/17 passed**。P13-G1 有效 failure-first **42 failed / 3 passed**；Grok 返修后聚焦/专项 **17/53 passed**，Codex 独立专项/P13-F1/认证/editor-state **53/41/8/1 passed**。P13-G2 failure-first **8 failed / 1 passed**；Grok 最终专项/聚焦关键序列 **13/7 passed**，Codex 独立专项/P13-F2/freshness **13/11/17 passed**。P13-H1 failure-first **25 failed / 3 passed**；Grok 最终专项/回归 **28/90 passed**，Codex 独立专项/editor-state 与 P13-D1 回归 **28/90 passed**。P13-H3 Codex 独立 H3 **15 passed**、freshness **17 passed**。P13-I2 failure-first **15 failed / 0 passed**；Codex 双确认返修后独立专项/代表回归 **17/125 passed**，合计 **142 passed**。P13-I4 Codex 独立后端 I4+I1+I2+P13-A **81 passed**、前端 I4+I3+H3+freshness **45 passed**。V1-A 初始 failure-first **50 failed / 1 passed**，最终测试版 failure-first **59 failed / 1 passed**；Codex 最终独立专项 **60 passed**，PS1 BOM/解析、`compileall`/diff-check 通过。V1-B 初始 failure-first 为备份 **56 passed / 9 failed**、恢复 **1 passed / 41 failed**；Codex 最终独立备份 **65 passed**、恢复 **81 passed**。V1-D 最终专项/回归 **9/10 passed**。V1-E 原始 failure-first **11 failed / 3 passed**，生产返修前真红 **14 passed / 4 failed**，Codex 最终新专项/图片告警/truth **18/4/46 passed**，lint/build/diff-check 通过。未运行后端全量或整仓 **318 E2E**。**同一 worktree 的 pytest 禁止 xdist/并发分组；不同 worktree 也必须使用独立 SQLite 目录。Playwright 必须显式 `--workers=1 --retries=0` 串行；按风险分级验收，避免重复全量。**
 
 ---
 
@@ -27,12 +29,12 @@
 ```text
 继续 biaoshu 标书制作者剩余主线任务。仓库 C:\Users\Administrator\biaoshu，GitHub https://github.com/wmjagpjm/biaoshu.git。
 工作分支只能是 collab/grok-code-codex-review，禁止直接操作 main；先执行 git status -sb，并核对 HEAD 与 origin/collab/grok-code-codex-review 一致且工作区干净。
-完整阅读 docs/v1c-local-parser-runtime-preflight-contract.md、docs/plans/2026-07-21-v1c-local-parser-runtime-preflight-plan.md、docs/v1b-offline-restore-rollback-contract.md、docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/integration-checklist.md。
+完整阅读 docs/v1e-export-latest-editor-state-contract.md、docs/plans/2026-07-22-v1e-export-latest-editor-state-plan.md、docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/integration-checklist.md。
 长期目标：保留全部现有进度与生产文档，按 V1→V2→V3 交付。当前优先完成 V1 本机/内网可实际使用的标书制作系统；V2 为团队深度协作，V3 为公网 SaaS 与规模化生产。每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
-当前进度：P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/B、P12E-A/B/C、P12F-A/B/C/D/E-A/E-B/F-A/F-B/G-A/G-B/H/I/J-A/J-B/P12K/P12L/P12M/P12N、P13-A 至 P13-I4、V1-A/V1-B/V1-C、P9D、P9C-R1、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成；整仓前端 **318 passed** 仍仅作既有历史基线。
+当前进度：P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/B、P12E-A/B/C、P12F-A/B/C/D/E-A/E-B/F-A/F-B/G-A/G-B/H/I/J-A/J-B/P12K/P12L/P12M/P12N、P13-A 至 P13-I4、V1-A 至 V1-E、P9D、P9C-R1、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成；整仓前端 **318 passed** 仍仅作既有历史基线。
 当前状态：修订历史已闭合来源、UTC 时间、联合搜索、搜索命中来源标签、游标分页、单条删除、展示名称、固定与保护性裁剪；检查点已有创建、列表、详情、安全恢复、展示名称、单条删除、当前项目显式搜索、固定状态读取/入口、固定/安全双保护裁剪、默认列表固定优先排序与固定名额提示。
-当前执行包：V1-C“本机解析运行时预检”已完成，冻结=`6e7aafb`、实现=`21d3213`；契约=`docs/v1c-local-parser-runtime-preflight-contract.md`，计划=`docs/plans/2026-07-21-v1c-local-parser-runtime-preflight-plan.md`。
-下一步：只读审计并冻结 lightweight DOCX 表格/标题结构与合成 PDF/DOCX 内容完整性质量门；不得安装 MinerU/Docling 或读取真实标书。该质量包完成后继续标书内容制作与 Word 整章导出。在线热备、WAL、数据根迁移以及 V2/V3 能力继续后置。
+当前执行包：V1-E“导出前最新编辑态落盘”已完成，冻结=`2f3beb1`、实现=`2a1b1ec`；契约=`docs/v1e-export-latest-editor-state-contract.md`，计划=`docs/plans/2026-07-22-v1e-export-latest-editor-state-plan.md`。
+下一步：重新只读审计并比较稳健下载/人读文件名、任务结果正文安全刷新和多章内容质量门，冻结单一最高价值断点。在线热备、WAL、数据根迁移、复杂跨页 `structure`、OCR 以及 V2/V3 能力继续后置。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -493,7 +495,7 @@ frontend/src/features/
 1. 阶段 4 **功能包 8**、P8B/P8C/P8D/P8E 与 **V1-C 运行时诚实预检**均已验收并推送；V1-C 冻结=`6e7aafb`、实现=`21d3213`。真实 CLI/模型仍需人工准备；未授权前只允许 dry-run，不得自动安装或运行真实合成门。
 2. 阶段 4 **P9A/P9B/P9C/P9D** 与阶段 5 **P10A/P10B/P10C/P10D/P10F/P10E/P10G/P10H/P10I/P10J/P10K** 均已实现、独立验收并文档闭环。P9C 的真实模型门仍是运行时前置：固定依赖和模型缓存就绪后，用户显式构建索引，再运行固定预检；未通过前继续关键词降级。
 3. P8C/P8D/P8E、P10K、M3-D、P11A、P11B 与 P11C 均已完成。P8E 已按顺序完成后端精确 `mineru|docling` 枚举和独立本机助手；继续保持 P8B/P8C/P8D 的策略、票据、回环和正文出域边界。
-4. P13-E 至 P13-I4、V1-A/V1-B/V1-C/V1-D 已完成。V1-D 冻结=`3a1cadf`、实现=`821c136`，已关闭 lightweight DOCX 表格丢失与标题降级；下一包只读审计标书内容制作到 Word 整章导出的真实断点，V2/V3 协作能力继续后置。
+4. P13-E 至 P13-I4、V1-A 至 V1-E 已完成。V1-E 冻结=`2f3beb1`、实现=`2a1b1ec`，已关闭浏览器最新编辑态尚未保存就导出旧 Word 的竞态，并把跨项目迟到 success 固定为零下载；下一包重新审计稳健下载/人读文件名、任务结果正文安全刷新与多章质量门，V2/V3 协作能力继续后置。
 
 资源同步后续只可由管理员配置新的签名发布方，绝不可放开浏览器 URL 或外网抓取。图片管线已冻结项目内资源引用协议，后续扩展不得放开外链或客户端路径。P13-H1/H2/H3 已分别完成项目级事件账本、SSE 重放和保守前端提示；跨项目总线、协同光标、评论审批和自动正文覆盖仍不在已交付范围。
 
@@ -521,6 +523,8 @@ frontend/src/features/
 | docs/plans/2026-07-15-p8e-docling-local-helper-plan.md | P8E 两阶段受限实施与验收计划 |
 | docs/v1c-local-parser-runtime-preflight-contract.md | V1-C 零回调 dry-run、合成 DOCX 真值门与固定诊断契约 |
 | docs/plans/2026-07-21-v1c-local-parser-runtime-preflight-plan.md | V1-C Grok B/A 测试先行、实现与 Codex 验收计划 |
+| docs/v1e-export-latest-editor-state-contract.md | V1-E 导出前最新 editor-state 保存门、项目/token/generation 围栏完成契约 |
+| docs/plans/2026-07-22-v1e-export-latest-editor-state-plan.md | V1-E failure-first、双确认返修、六文件实现与 Codex 验收记录 |
 | docs/p9c-fixed-model-runtime-gate-contract.md | P9C-R1 固定提交、显式准备、严格离线加载与真实预检冻结契约 |
 | docs/plans/2026-07-16-p9c-fixed-model-runtime-gate-plan.md | P9C-R1 六文件 failure-first、Grok 自测与 Codex 真实验收计划 |
 | docs/p12d-revision-current-diff-summary-contract.md | P12D-A 当前状态与目标修订只读差异摘要契约 |
@@ -607,6 +611,7 @@ frontend/src/features/
 - **P8E 已完成并推送**：契约/计划提交=`73b1264`，P8E-A 后端=`79b346e`，P8E-B 助手=`e3f9cc4`。Docling 46、MinerU 54、后端受影响回归 37、P8C E2E 9、P8B E2E 6 passed；真实 Docling/模型仍未安装、未验收，禁止声称真实模型就绪。
 - **V1-C 已完成并推送**：冻结=`6e7aafb`、实现=`21d3213`。标准库 runtime preflight 提供默认 MinerU/可选 Docling 的 dry-run 与显式合成 DOCX 门；Codex 独立 `26/54/46 passed`，本机真实 dry-run 为 `cli_missing`/2。真实 CLI/模型与合成门仍未授权运行。
 - **V1-D 已完成并推送**：冻结=`3a1cadf`、实现=`821c136`。DOCX 按 body 原序输出 Heading 1–6、段落和普通 GFM 表格；空表固定占位，PDF 路径保持冻结。Codex 独立 failure-first **3 failed / 6 passed**，实现后专项/回归 **9/10 passed**，编译/diff/哈希门通过。
+- **V1-E 已完成并推送**：冻结=`2f3beb1`、实现=`2a1b1ec`。原始 failure-first **11 failed / 3 passed**，双方确认并加固后生产修复前为 **14 passed / 4 failed**；Codex 最终新专项/图片告警/truth **18/4/46 passed**，lint/build/diff-check 通过。最终严格六文件；P9D 跨项目迟到下载旧语义经双方确认后由更严格的零下载契约覆盖。
 - **Grok 当前状态**：2026-07-20 认证可用，P13-D1 首轮任务/review=`msg_a0c6083215454410b9a95c3c19c54c02`/`msg_1a838890b3384c4cbbd6b238e37d5ede`，test-only 返修任务/review=`msg_6cf099e801f544e69efbe51e6eab6c44`/`msg_de747706fcb64a188eef50d77e29d451`。单次任务进程已正常退出；再次需要 Grok 时必须先发新任务再后台静默启动，不要因进程退出误判额度或重复启动旧任务。Grok 全程只实现/自测，未暂存、未提交、未推送。
 - 当前分支仍为 `collab/grok-code-codex-review`；P12F-H 冻结=`0660145`、范围修订=`0db935b`/`aca68b6`、实现=`b4338ba` 已提交并推送，当前文档闭环提交以实际 HEAD 为准。全部既有基线保留。新会话第一步必须用 `git status -sb`、`git rev-parse HEAD`、`git rev-parse origin/collab/grok-code-codex-review` 重新核验，不可只信本文静态 SHA。
 - 阶段 3 **已完成并推送**：M3-A 只读融合建议、M3-B 差异预览与浏览器确认、M3-C 会话内单批撤销、M3-D 服务端原子确认与最近 20 批持久恢复。

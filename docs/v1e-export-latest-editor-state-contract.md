@@ -7,9 +7,9 @@
 
 # V1-E 导出前最新编辑态落盘契约
 
-> **状态：冻结前草案。** 冻结提交后才允许在独立 worktree 写 failure-first 或生产代码。
+> **状态：已完成、独立验收并推送。**
 > **分支：** 仅 `collab/grok-code-codex-review`，严禁操作 `main`。
-> **基线：** `01de49d`；V1-D 已完成并推送。
+> **冻结：** `2f3beb1`；**实现：** `2a1b1ec`。
 
 ## 1. 问题真值
 
@@ -100,8 +100,9 @@ PUT 未完成时 export POST 必须为 0；PUT 409、普通失败、非法成功
 测试：
 
 5. 新增 `frontend/e2e/export-latest-editor-state.spec.ts`。
+6. `frontend/e2e/export-image-warnings.spec.ts`，仅在双方确认 P9D 旧迟到下载语义与本契约冲突后扩围。
 
-禁止修改 `useProjectPipeline.ts`、共享 API/auth/router、后端、Schema、数据库、export service/route、模板、图片协议、依赖、配置或既有测试。若证据要求扩围，必须先 question、双方确认并修订冻结文档。
+禁止修改 `useProjectPipeline.ts`、共享 API/auth/router、后端、Schema、数据库、export service/route、模板、图片协议、依赖或配置。若证据要求扩围，必须先 question、双方确认并修订冻结文档。最终扩围只修正 P9D 图片告警 E2E 的旧断言：项目切换后迟到 export success 必须零告警、零下载，生产行为不回退。
 
 ## 7. failure-first 与反假绿矩阵
 
@@ -115,6 +116,8 @@ PUT 未完成时 export POST 必须为 0；PUT 409、普通失败、非法成功
 6. 快速双击：一次保存准备、一次 export；不得依赖 React disabled 的异步刷新假装单飞。
 7. A 项目保存挂起后切换 B：A 的迟到完成不得在 B 创建 export、告警或下载。
 8. 扫描测试源禁止 `waitForTimeout`、`setTimeout`、`sleep`、宽松 `or`、`skip/xfail`、真实外网、浏览器存储或源码读取；请求计数必须按项目、method、path、body 精确归属。
+9. export POST 已发出后切换项目：迟到 success 仍须零下载；技术标与商务标各自独立锁定。
+10. 导出准备等待期间继续编辑：用 Playwright 虚拟时钟推进 801ms/601ms，使新 timer 已触发且排在准备门之后；保存 generation 未稳定前 export 必须为 0，最终顺序只能为 `PUT_first`。
 
 failure-first 预期当前生产至少在技术/商务 pending edit 顺序用例失败：export POST 会先出现。实际数字必须如实报告，不得改断言凑红绿。
 
@@ -134,6 +137,30 @@ git -C .. diff --check
 
 Codex 根据新专项覆盖决定是否完整复跑两个 truth 文件；禁止并发 Playwright/pytest、整仓 E2E、后端全量、真实业务数据或外网。
 
+### 8.1 实际验收结果
+
+- 原始 14 项 failure-first：**11 failed / 3 passed**；测试强度经双方确认扩为 18 项。
+- 生产返修前真实结果：**14 passed / 4 failed**；四个真实红点分别为技术/商务迟到下载各一项、技术/商务导出准备期二次编辑 `export_first` 各一项。
+- Codex 最终串行、单 worker、零重试：新专项 **18/18 passed**、图片告警 **4/4 passed**、技术/商务 truth **46/46 passed**。
+- `npm run lint` exit 0，仅新专项有 3 条未使用符号 warning；`npm run build` exit 0，仅既有 chunk size warning；`git diff --check` 通过。
+- A1 公共三态已统一为 `ready|blocked|failed`；A2 通过项目绑定 token 和 await 后重复围栏阻止旧项目迟到下载；A3 通过保存 generation/epoch 复核阻止准备期二次编辑抢跑。
+
+### 8.2 审查与双确认链
+
+- A1-A3：Codex question=`msg_e3027ea7559d47bea869e7b9f0e1092b`，Grok A yes=`msg_03ddd798b14240f9803dd20209afba13`；Codex→B=`msg_1e8194468ccf49aca8bf8a141fb49465`，Grok B yes=`msg_0fc7e2f2cff94d9087b28893221c271c`。
+- A3 首版测试假红经双确认后改用虚拟时钟：question=`msg_3fb8c26f2f13486cabfe7e6d26512b95`，Grok B yes=`msg_2c380e1a6d944f33ae0a3d1cc393ac5f`，最终真红 review=`msg_20ec14e729144f289e0f05b723f60295`。
+- 生产返修 task=`msg_dc640e37b76b4d24a9b119d84aa57740`。
+- P9D 旧测试语义覆盖：Grok A question=`msg_fcd1dc83431d4a4b872d9cdcc60d4395`，Grok B yes=`msg_6d53ab6d53b64ae19111fcb7c1f55dd5`，test-only review=`msg_fcb18972d8d145c9a677ac6733542bc3`。
+
+### 8.3 最终六文件 SHA-256
+
+- 技术 hook：`220092EBFB807B083C32B1AF7E63791C0CBA7B6FE7F25C72FF736501C93115E2`
+- 商务 hook：`90E342C15D05E033D58718A2025E0F857173102D6B5742F09FD6AEDD98622AD7`
+- 技术页面：`2457FB5258EA1FFF8FB35AC3524FED3AE79F2E7AF776D7B989613917AB12F827`
+- 商务页面：`DF9C05DC9FC0CC8B01762B9BC6AAA2A80F0926A7939A3BE2CFBBAB15FC8F6567`
+- 新专项 E2E：`24B932D4ACA0860AE044F8CF49799E15B7E5190AEF8E42058E413562658DE28D`
+- 图片告警 E2E：`076B086BFB7085F224E149C3D445328BEE455E1F9707F13B7D9EEC1CF461F1C2`
+
 ## 9. 非目标与下一步
 
-本包不实现 DOCX 新版式、`structure`、Markdown inline、Blob 下载、人读文件名、弹窗拦截修复、导出历史、后端快照、任务 payload 正文、OCR、V2 协作或 V3 部署。完成后再按证据评估稳健下载和多章内容质量门。
+本包不实现 DOCX 新版式、`structure`、Markdown inline、Blob 下载、人读文件名、弹窗拦截修复、导出历史、后端快照、任务 payload 正文、OCR、V2 协作或 V3 部署。下一包按证据比较稳健下载/人读文件名、任务结果正文安全刷新和多章内容质量门；V2/V3 继续后置。
