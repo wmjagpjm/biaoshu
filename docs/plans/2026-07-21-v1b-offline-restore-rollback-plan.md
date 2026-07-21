@@ -10,9 +10,11 @@
 
 ---
 
-> 状态：契约已冻结，等待 Grok A/B failure-first
+> 状态：已完成实现、独立审查、串行验收与代码提交
 > 契约：`docs/v1b-offline-restore-rollback-contract.md`
 > 冻结前基线：`6382342`
+> 契约冻结：`40d1852`
+> 代码提交：`20a4a60`
 
 ## 0. 协作与禁止项
 
@@ -218,3 +220,13 @@ git status --short
 建议提交信息：`文档：闭环V1B离线恢复与回滚演练`
 
 只推送 `collab/grok-code-codex-review`，核对本地 HEAD=远端且工作区/暂存区为空；严禁操作 `main`。
+
+## 7. 最终执行结果
+
+- failure-first：备份 `56 passed / 9 failed`，恢复 `1 passed / 41 failed`；0 收集错误、0 skipped、0 xfail。
+- 双确认返修：生产 A1-A15、测试 B1-B12 全部按 `question -> confirm -> task -> review_request` 闭环；Grok A/B 全程未暂存、提交或推送。
+- 最终主仓：备份 `65/65 passed`，恢复 `81/81 passed`；Python 四文件编译、Restore PS1 BOM/Parser、diff-check 均通过。
+- Codex 独立探针：A13 restore 后/result 前重入、A14 hold intent 未生效、A15 不一致 installed 终态均通过。
+- 代码提交：`20a4a60 实现：完成V1B离线恢复与回滚演练`。
+- 未运行：后端全量、前端、Playwright、整仓 E2E；未触碰真实业务库、uploads、密钥或真实服务进程。
+- 下一步：重新只读审计并冻结 V1 自动解析生产可部署性与真实 TEMP 样本验收；不得沿用 V1-B 六文件白名单。

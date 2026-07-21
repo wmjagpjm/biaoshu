@@ -1,8 +1,9 @@
 # V1-B 离线恢复与回滚演练契约
 
-> 状态：只读审计完成，契约冻结，等待 Grok A/B failure-first
+> 状态：已实现并通过 Codex 独立验收，代码提交=`20a4a60`
 > 日期：2026-07-21
 > 实施基线：`6382342`（V1-A 代码与文档闭环）
+> 契约冻结：`40d1852`
 > 目标版本：V1 本机/可信内网可实际使用版
 > 前置实现：V1-A=`5b4ad39`
 
@@ -210,3 +211,24 @@ Codex 只组合运行 V1-A 升级专项、V1-B 专项、PowerShell 编码/解析
 ## 12. 未交付边界
 
 本包不提供：v1 强制恢复、跨数据兼容版本迁移、自动停机、在线热备/恢复、WAL、选择性文件/项目恢复、压缩/加密、定时/增量/云备份、备份浏览 UI、数据根迁移、非默认数据库路径、网络共享恢复、自动删除恢复前备份或任何跳过校验的逃生开关。
+
+## 13. 实现与验收记录
+
+代码提交=`20a4a60`，严格只包含本契约第 9 节六文件。Grok B 在冻结基线 `40d1852` 上先完成真实 failure-first：备份专项 `65` 项中 `56 passed / 9 failed`，首个业务失败为缺少 `DATA_COMPATIBILITY_VERSION`；恢复专项 `42` 项中 `1 passed / 41 failed`，首个业务失败为恢复入口不存在。两组均为 0 收集错误、0 skipped、0 xfail，全部使用 TEMP 假仓。
+
+Codex 审查期间累计关闭生产问题 A1-A15 与测试问题 B1-B12。所有疑似问题均先发 `question`，由对应 Grok 独立确认存在后才另发最小返修 `task`。后段关键确认链包括：A10-A12=`msg_ed016c5d46da4ed3ba24330caea27a79`/`msg_26f642e1c01e46128880404fab2b6256`，A13=`msg_954cb283f42a4957ae918a8ea582e7c1`/`msg_da70087247b14b579110d4177afcd3ae`，A14=`msg_32f3946d54424466a0e3db1d7729ef03`/`msg_264fb5ca434f421f97a861faf9ce1dcf`，A15=`msg_e9910bb425954c83ae6aae9cd874e9a7`/`msg_9ef96c7b8efd4474b488b8e403ec2066`，B12=`msg_e6a87ae72b404428bea9b5cfd1c76a8c`/`msg_32599cb8bc2a449d8f8b5f91948bd1d8`。最终关闭了 stale lock 竞态、锁/工作根清理假成功、journal 路径穿越与相位校验、公共异常泄漏、回滚全图/SQLite 证据、hold/result 崩溃重入、已恢复根误删、`cutover_before_hold` 假 A3、过宽短路误删唯一 live，以及同秒备份名造成的测试假绿。
+
+Codex 主仓串行验收结果：备份 `65 passed / 0 failed / 0 errors / 0 skipped`，恢复 `81 passed / 0 failed / 0 errors / 0 skipped`；四个 Python 文件无写入编译通过，Restore PS1 为 `EF-BB-BF` 且 Parser 0 错误，`git diff --check` 通过。Codex 另以独立断言验证 A13 result 前重入、A14 自然 `cutover_before_hold` 故障全图回滚和 A15 不一致终态 fail-closed，三项均通过。
+
+最终 SHA-256：
+
+| 文件 | SHA-256 |
+| --- | --- |
+| `tools/v1-ops/biaoshu_backup.py` | `27AF069EACDCB336CDFA54782138CFDA01A2ED53FFFF388753C5B64BD57B1D53` |
+| `tools/v1-ops/test_biaoshu_backup.py` | `2854DCF5202AE5DD1D94BA57AB573F8272025AEC5F8E33B9D0451B2CBFC0511A` |
+| `Restore-Biaoshu.bat` | `C962CFBD9234138EC9320BC299ECD0EA986756EF5B2398335E6537757491226D` |
+| `tools/v1-ops/Restore-Biaoshu.ps1` | `B1179C625674F7F822CE47D8593FF00698109D358AD722E8A938A4E34A02D7A0` |
+| `tools/v1-ops/biaoshu_restore.py` | `893074F9B2D88141FC2C952274F7256E4A3F6DF184DB3F7D0520D6D253704AF6` |
+| `tools/v1-ops/test_biaoshu_restore.py` | `BC6B8EBA2490E45A4BF06536337690C263C5E514722B2D3C3986066DBA350420` |
+
+本轮未真实停机、备份或恢复主仓业务数据，未运行后端全量、前端、Playwright 或整仓 E2E。下一包转入 V1 自动解析生产可部署性与真实 TEMP 样本审计；V2/V3 继续后置。

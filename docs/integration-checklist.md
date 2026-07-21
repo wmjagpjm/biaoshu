@@ -26,7 +26,7 @@
 
 实现=`5b4ad39`。最终 Codex 独立专项 `60 passed / 0 failed / 0 errors / 0 skipped`；两个 PS1 均为 UTF-8 BOM 且解析 0 错误，Python `compileall` 与 diff-check 通过。验收仅使用临时假仓、假 SQLite、假文件树和纯监听注入，未真实停机或备份主仓数据。下一包为 V1-B 离线恢复与回滚演练，必须重新只读审计并冻结覆盖/回滚边界。
 
-## V1-B 离线恢复与回滚演练（已冻结，待实现）
+## V1-B 离线恢复与回滚演练（已完成）
 
 契约=`docs/v1b-offline-restore-rollback-contract.md`，计划=`docs/plans/2026-07-21-v1b-offline-restore-rollback-plan.md`。本包先把新备份升级为严格 v2，再提供只接受精确数据兼容版本的完整离线恢复。
 
@@ -38,6 +38,8 @@
 6. 验收仅使用临时假仓、假 SQLite、假 `.env`、注入服务探针和故障点；禁止读取、备份或恢复主仓真实业务数据。
 
 只读审计与双确认已完成：A review=`msg_af63265fc30b48bb8e6473af1a2ba3c4`、确认=`msg_0423e8b43c5846948c4da28ce0192635`；B review=`msg_64563cdc769b420dbb2aa2710d1cd40b`、确认=`msg_058bfb59096643bf9831e91779424a46`。双方均确认“格式版本冒充数据兼容”和“缺根保留导致混合态”风险存在，确认阶段零文件修改。
+
+实现=`20a4a60`。真实 failure-first 为备份 **56 passed / 9 failed**、恢复 **1 passed / 41 failed**。Codex 与 Grok 按双确认门关闭 A1-A15/B1-B12；主仓最终备份 **65 passed**、恢复 **81 passed**，0 failure/error/skip。四个 Python 文件编译通过，Restore PS1 为 UTF-8 BOM 且 Parser 0 错误，diff-check 与 A13-A15 独立物理态探针通过。验收仅使用 TEMP 假仓、假 SQLite、假文件树和注入故障；未真实停机、备份或恢复业务数据，未运行后端全量、前端或整仓 E2E。
 
 ## P13-C 当前已载入版本修订来源可见性（已完成）
 

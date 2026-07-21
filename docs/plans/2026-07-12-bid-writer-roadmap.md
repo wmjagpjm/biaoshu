@@ -7,7 +7,7 @@
 
 # 标书制作者能力补全与角色化演进路线图
 
-> **状态**：阶段 0–5 已按下文拆包持续交付；P11A/B/C、P12A 至 P12N 版本治理链、P13-A/P13-B/P13-C 均已完成。P12N 冻结=`337b401`、实现=`394639a`；P13-B 冻结=`040d644`、实现=`1d4fe0b`；P13-C 冻结=`e62ea27`、实现=`6eaa89f`。继续按分级策略避免机械重复后端全量或整仓前端 **318 passed** 基线。
+> **状态**：阶段 0–5 已按下文拆包持续交付；P11A/B/C、P12A 至 P12N 版本治理链、P13-A/P13-B/P13-C 均已完成。P12N 冻结=`337b401`、实现=`394639a`；P13-B 冻结=`040d644`、实现=`1d4fe0b`；P13-C 冻结=`e62ea27`、实现=`6eaa89f`。V1-A、V1-B 已完成，V1-B 代码=`20a4a60`、备份/恢复专项=`65/81 passed`。当前转入 V1 自动解析生产可部署性、标书制作与导出交付；继续按分级策略避免机械重复后端全量或整仓前端 **318 passed** 基线，V2/V3 继续后置。
 > **当前分支**：`collab/grok-code-codex-review`
 > **协作方式**：Grok 负责限定范围的实现与测试；Codex 负责范围、审查、验收和提交授权。
 
@@ -468,7 +468,7 @@ Codex 最终串行验收：后端 I4 + I1 + I2 + P13-A **81 passed**，前端 I4
 
 闭环注释审计发现两页仍称任务事件提示“不进入 useProjectPipeline”。Codex question=`msg_23c3424d6b154f43af2921b09fdac9a1`，Grok 确认=`msg_e918277a10164ad5adcc6a829708d7c0`；双方确认后才授权两文件纯注释返修，Grok review_request=`msg_86824ed8031e4673a6a59f881ae47777`，Codex 提交=`7554d5d`。
 
-**下一包方向**：按“本机/内网可实际使用的标书制作系统”优先，先审计任务结果与正文安全刷新、导出/版式、解析器可部署性、稳定启动及备份恢复；通知、评论审批、协同光标、WebSocket、强制锁、多人任务列表和历史时间线后置。下一包必须重新只读审计、冻结契约和白名单，并为 Grok A/B 建立独立 worktree 与独立 SQLite 测试目录，不得直接扩展 I4。
+**下一包方向**：V1-A/V1-B 已完成稳定启停、离线备份和离线恢复底座。下一包先只读审计本机 MinerU/Docling 的生产可部署性与真实 TEMP 样本验收，再按风险推进标书内容制作和 Word 整章导出交付；通知、评论审批、协同光标、WebSocket、强制锁、多人任务列表和历史时间线后置。必须重新冻结契约、白名单和独立测试目录，不得沿用 I4 或 V1-B 文件范围。
 
 ### V1-A：受控停机与离线备份基础（已完成）
 
@@ -478,11 +478,13 @@ Codex 最终串行验收：后端 I4 + I1 + I2 + P13-A **81 passed**，前端 I4
 
 实现=`5b4ad39`。最终六文件严格落地，Codex 独立串行专项 `60 passed`，PS1 BOM/解析、Python `compileall` 与 diff-check 均通过。双确认返修关闭监听枚举失败假成功、严格快照类型、空格路径、复制期同大小变化、祖先 junction、wildcard/双栈 foreign 漏检和 PowerShell 5.1 中文失败乱码。下一包优先只读审计并冻结 **V1-B 离线恢复与回滚演练**；V2/V3 继续后置。
 
-### V1-B：离线恢复与回滚演练（已冻结，待实现）
+### V1-B：离线恢复与回滚演练（已完成）
 
 契约=`docs/v1b-offline-restore-rollback-contract.md`，计划=`docs/plans/2026-07-21-v1b-offline-restore-rollback-plan.md`。Codex 与 Grok A/B 只读审计确认：V1-A 的 `biaoshu-offline-backup-v1` 只是 manifest 格式，不能证明数据兼容；v1 又没有根状态，直接按 files 恢复会形成旧数据库与新文件树混合态。
 
 V1-B 因此把新备份升级为严格 v2，增加独立 `biaoshu-data-v1` 兼容标识和六根四态；v1 禁止自动覆盖。恢复必须显式停机、自动生成恢复前 v2 备份，以同卷 staging+journal 完成逐根切换、提交前自动回滚和崩溃重入。严格六文件代码/测试白名单，不改 backend/frontend/数据库模式；全部测试仅用临时假仓。V1 阶段继续优先完成自动化解析、内容生产、导出交付、稳定启停与数据安全；V2/V3 目标保留但不抢跑。
+
+实现=`20a4a60`。failure-first 为备份 `56 passed / 9 failed`、恢复 `1 passed / 41 failed`；生产 A1-A15 与测试 B1-B12 均经双方确认后最小返修。Codex 最终独立串行通过备份 `65`、恢复 `81`，并通过 Python 编译、PS1 BOM/Parser、diff-check 与 A13-A15 物理态探针。未真实操作业务数据，未运行后端全量或前端。下一包转为 V1 自动解析生产可部署性审计。
 
 阶段 0/1/2、阶段 3 M3-A 至 M3-D、阶段 4 **包 5** 至 **包 8/P8B/P8C/P8D/P8E**、P9A/P9B/P9C/P9D、阶段 5 P10A 至 P10K、**P11A/P11B/P11C 三个真实数据收口包**，以及 **P12A/P12B-A/B/C/D/P12C-A/B/C/P12D-A/B/P12E-A/B/C/P12F-A/B/C/D/P13-A** 均保持已交付。P8E 完整契约见 `docs/p8e-docling-local-helper-contract.md`，实施与独立验收记录见 `docs/plans/2026-07-15-p8e-docling-local-helper-plan.md`。
 
