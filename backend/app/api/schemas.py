@@ -2779,3 +2779,29 @@ class ProjectTaskEventListOut(BaseModel):
     items: list[ProjectTaskEventItemOut]
     next_cursor: str | None = Field(serialization_alias="nextCursor")
     has_more: bool = Field(serialization_alias="hasMore")
+
+
+# ---------- P13-I4 项目任务状态安全对账 ----------
+
+
+TaskStatusLiteral = Literal[
+    "pending", "running", "success", "failed", "cancelled"
+]
+
+
+class ProjectTaskStatusOut(BaseModel):
+    """
+    模块：P13-I4 任务状态安全投影
+    用途：精确三键 taskId/status/progress；供对账只读确认。
+    对接：GET /api/projects/{projectId}/tasks/{taskId}/status。
+    二次开发：
+      - extra=forbid；禁止 message/error/result/payload/actor/workspace/project；
+      - progress 必须为 0..100 整数；status 仅五态；
+      - 不得复用任务详情 dict 或 task_to_dict 宽字段。
+    """
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    task_id: str = Field(serialization_alias="taskId")
+    status: TaskStatusLiteral
+    progress: StrictInt

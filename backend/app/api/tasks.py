@@ -1,24 +1,27 @@
 """
 模块：项目任务路由
 用途：创建/查询/列表/取消任务，并为单任务提供 SSE 状态流；默认异步，?sync=1 同步执行。
-对接：POST/GET /api/projects/{id}/tasks；GET .../tasks/{id}/events；POST .../tasks/{id}/cancel
+对接：POST/GET /api/projects/{id}/tasks；GET .../tasks/{id}/events；
+  GET .../tasks/{id}/status（P13-I4 安全对账）；POST .../tasks/{id}/cancel
 二次开发：
   - SSE 连接前经私有依赖短 Session 复用 get_workspace_id（required=活动空间+bid_writer；disabled=默认/显式头）
   - 长连接不得挂 request-scope get_db，不得捕获 Session/ORM 行；流内每轮短 Session 再校验 workspace
   - 多任务总线、事件游标、URL token 鉴权须独立设计，禁止并入本路由
+  - status 对账仅三键投影 + no-store；禁止 query/body/token；不得回落任务详情
 """
 
 import asyncio
 import time
-from typing import Annotated, Any
+from typing import Annotated, Any, NoReturn
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_request_actor_user_id, get_workspace_id
+from app.api.schemas import ProjectTaskStatusOut
 from app.core.config import Settings, get_settings
 from app.core.database import SessionLocal, get_db
 from app.services import task_service
@@ -29,6 +32,9 @@ router = APIRouter(prefix="/projects", tags=["tasks"])
 _SSE_POLL_SECONDS = 0.25
 _SSE_HEARTBEAT_SECONDS = 15.0
 _SSE_MAX_SECONDS = 11 * 60
+
+_CODE_REQUEST_INVALID = "project_task_status_request_invalid"
+_MSG_REQUEST_INVALID = "请求无效"
 
 
 class TaskCreate(BaseModel):
@@ -43,6 +49,23 @@ class TaskCreate(BaseModel):
         )
     )
     payload: dict[str, Any] | None = None
+
+
+def _no_store(response: Response) -> None:
+    """用途：P13-I4 状态对账成功/业务错误统一 Cache-Control: no-store。"""
+    response.headers["Cache-Control"] = "no-store"
+
+
+def _raise_status_request_invalid() -> NoReturn:
+    """用途：非法 query/body 固定 422 脱敏，不回显输入。"""
+    raise HTTPException(
+        status_code=422,
+        detail={
+            "code": _CODE_REQUEST_INVALID,
+            "message": _MSG_REQUEST_INVALID,
+        },
+        headers={"Cache-Control": "no-store"},
+    ) from None
 
 
 def _resolve_sse_workspace_id(
@@ -101,6 +124,59 @@ def get_task(
     except KeyError:
         raise HTTPException(status_code=404, detail="任务不存在") from None
     return task_service.task_to_dict(task)
+
+
+@router.get(
+    "/{project_id}/tasks/{task_id}/status",
+    response_model=ProjectTaskStatusOut,
+)
+async def get_task_status(
+    project_id: str,
+    task_id: str,
+    request: Request,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    workspace_id: Annotated[str, Depends(get_workspace_id)],
+) -> ProjectTaskStatusOut:
+    """
+    用途：P13-I4 当前任务状态安全对账；只读确认 status/progress。
+    对接：useProjectPipeline 在匹配 task-event 后单飞 GET。
+    二次开发：
+      - 复用 get_workspace_id（required=活动空间+bid_writer；disabled=个人版兼容）；
+      - 禁止 query/body/URL token；响应精确三键 + Cache-Control: no-store；
+      - 独立 task_status_projection，禁止回落 task_to_dict 或泄漏 message/error/result。
+    """
+    _no_store(response)
+    if list(request.query_params.multi_items()):
+        _raise_status_request_invalid()
+    try:
+        raw_body = await request.body()
+    except Exception:
+        _raise_status_request_invalid()
+    if raw_body:
+        _raise_status_request_invalid()
+
+    try:
+        task = task_service.get_task(db, workspace_id, project_id, task_id)
+    except ProjectNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail="项目不存在",
+            headers={"Cache-Control": "no-store"},
+        ) from None
+    except KeyError:
+        raise HTTPException(
+            status_code=404,
+            detail="任务不存在",
+            headers={"Cache-Control": "no-store"},
+        ) from None
+
+    proj = task_service.task_status_projection(task)
+    return ProjectTaskStatusOut(
+        task_id=proj["taskId"],
+        status=proj["status"],
+        progress=proj["progress"],
+    )
 
 
 @router.get("/{project_id}/tasks/{task_id}/events")

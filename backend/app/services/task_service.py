@@ -298,6 +298,30 @@ def task_to_dict(task: ProjectTaskRow) -> dict:
     }
 
 
+def task_status_projection(task: ProjectTaskRow) -> dict[str, Any]:
+    """
+    用途：P13-I4 任务状态安全投影；精确三键 taskId/status/progress。
+    对接：GET .../tasks/{taskId}/status；响应层独立投影，禁止复用 task_to_dict。
+    二次开发：
+      - 不得读取或回传 message/error/result/payload/actor/workspace/project；
+      - status 仅五态；progress 钳制为 0..100 整数；
+      - 调用前须已通过 get_task 完成 workspace/project/task 归属校验。
+    """
+    status = str(task.status or "")
+    if status not in _TASK_EVENT_STATUSES:
+        status = "failed"
+    progress = int(task.progress) if task.progress is not None else 0
+    if progress < 0:
+        progress = 0
+    elif progress > 100:
+        progress = 100
+    return {
+        "taskId": task.id,
+        "status": status,
+        "progress": progress,
+    }
+
+
 def _read_task_snapshot(
     workspace_id: str, project_id: str, task_id: str
 ) -> dict | None:
