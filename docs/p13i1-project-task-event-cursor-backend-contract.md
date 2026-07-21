@@ -1,6 +1,6 @@
 # P13-I1 项目任务事件游标后端契约
 
-> 状态：两轮实现审查完成；认证错误 no-store 与三项反假绿缺口已双确认，十一文件范围修订待返修
+> 状态：已完成 Codex 独立审查、串行验收、功能提交与协作分支推送
 > 日期：2026-07-21
 > 前置：P13-A 任务 SSE 工作空间鉴权、P13-H1/H2 editor-state 事件账本与 SSE
 > 分支：仅 `collab/grok-code-codex-review`，禁止操作 `main`
@@ -123,6 +123,14 @@
 11. `backend/tests/test_p13i1_project_task_events.py`：failure-first、真实回传、事务、作用域、游标和隐私专项。
 
 禁止修改前端、共享 `api.py`、认证路由与服务、既有单任务 SSE 路由、配置、依赖、迁移脚本和其它测试；`auth_middleware.py` 仅允许为统一 `_error_response` 增加 no-store，不得改公开路径、认证、会话或 CSRF 语义。Grok 不得写文档、暂存、提交、推送或清理产物。
+
+## 7.1 最终验收记录
+
+- 状态：已完成实现、两轮双确认返修、Codex 独立审查、串行验收、中文提交与协作分支推送。
+- 真实验收：专项 **25 passed**；callback/一次性票据 **20 passed**；认证 **39 passed**；单任务 SSE/P13-A **18 passed**；P13-H1/H2 **43 passed**；合计 **145 passed**。`compileall` 与 `git diff --check` 通过。
+- 最终提交：`f0d6d75`（`功能：完成P13-I1项目任务事件游标后端`），分支 `collab/grok-code-codex-review`，已推送远端。
+- Grok 回执=`msg_be5b0a6a444841969517152db8fac4f8`；Codex 验收回执=`msg_7e1d86e5d0b240a4a011bba4c5bce8bf`。未发现新增疑点，未发返修任务。
+- 未运行后端全量、xdist、前端或整仓 E2E；P13-I2 才能在本包只读 API 上增加项目级 SSE、`Last-Event-ID` 与断线重放。
 
 ## 8. 后续明确拆分
 

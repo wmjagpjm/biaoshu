@@ -1394,3 +1394,18 @@ Codex 独立串行通过 P13-G2 专项/P13-F2 presence/freshness **13/11/17 pass
 完成证据：failure-first=`msg_f51300735be6483a9a2570cff2fc899e`，真实 **14 failed / 1 passed**；Codex 发现 request-scope `get_db` 会贯穿 SSE，question=`msg_681a4b8bc9194df98dab55c36b4aa93b`，Grok 确认=`msg_101ba01ec2cc48868a7f8ad0b8dfad07`，返修授权=`msg_85dcfc97c8424b9f987cc9ba682c071d`。返修后 Codex 独立专项/代表回归 **15/46 passed**，compileall、diff-check、严格三文件哈希门通过。
 
 无 Last-Event-ID 的已有历史只发公开 tip cursor 锚点，不回放旧 editor-state；有 Last-Event-ID 正序重放保留窗口内后续事件；空表首事件不得丢。SSE id 与四键 data.eventId 相等，心跳仅注释；连接前 stale 是 HTTP 409，连接中 stale 是无 id 固定控制帧。连接前与每轮查询均用已关闭的短 Session，stream scope 不再触发 request-scope `get_db`；required/活动 workspace/strict bid_writer、X-Workspace-Id、跨项目和请求语法必须精确。未运行后端全量、前端、整仓 E2E、xdist 或并发 pytest；H3 前端、WebSocket、通知、多任务总线或强制锁仍未实现。
+
+## P13-I1 项目任务事件游标后端（已完成并推送）
+
+契约=`docs/p13i1-project-task-event-cursor-backend-contract.md`，计划=`docs/plans/2026-07-21-p13i1-project-task-event-cursor-backend-plan.md`。严格十一文件新增脱敏 `project_task_events` 账本和项目级只读游标 GET；真实任务创建、状态/进度、失败、取消、版本冲突、进程中断及个人 callback/一次性票据终态写链均在同一事务产生事件。响应只含六个事件字段和三层列表字段，不提供 SSE、`Last-Event-ID`、WebSocket、通知、评论或任务正文结果。
+
+联调验收项：
+
+1. 新任务、状态/进度真变化、失败、取消、版本冲突和启动中断均只产生对应脱敏事件；相同状态/进度及 message/error/result 单独变化不重复，取消后的旧 worker 不得追加事件。
+2. 个人 callback 与一次性票据真实回传各只产生一条 `success/100/parse` 事件，响应 `taskId` 与事件 `taskId` 精确一致；事件不含 message/error/result/payload/actor/client 或正文文件名。
+3. 事件、任务更新与 200 条裁剪共享 Session/事务；两条终态链分别注入 flush 与最终 commit 故障，失败后任务、事件、正文、项目步骤、审计和修订零残留，票据仍可重试。
+4. `GET /api/projects/{projectId}/task-events` 仅允许 required 活动 workspace strict `bid_writer`；无 `after` 不回放历史但返回 bootstrap tip，保留游标可连续分页，伪造/裁剪/跨项目/跨 workspace 游标固定脱敏 409。
+5. 真实第二 workspace 产生 B 事件后，活动空间 A 查询 B 项目固定 404，A 项目使用 B 游标固定 409；任意 `X-Workspace-Id`、未登录、非 `bid_writer`、disabled 和非 GET 均固定拒绝。
+6. 成功、业务错误及认证中间件 401/403/503 均 `Cache-Control: no-store`；严格键集、格式、错误码和隐私门不得回显项目/空间/游标/异常原文。
+
+验收证据：首轮 failure-first **17 failed / 0 passed**；Codex 两轮只读问题/确认分别为 `msg_c60ffa9f89334940b6ab39eee85fb5c1`/`msg_c4b13a10f3ec490f983a0c03f4f9d262` 与 `msg_85b188d2dabe4f12be6c62d3dde1850f`/`msg_0e9da620244d4ead96a46f815131306c`；Grok 最终回执=`msg_be5b0a6a444841969517152db8fac4f8`；Codex 验收=`msg_7e1d86e5d0b240a4a011bba4c5bce8bf`。五组独立串行结果 **25/20/39/18/43 passed（合计 145）**，`compileall` 与 `git diff --check` 通过；功能提交=`f0d6d75` 已推送。未运行后端全量、xdist、前端或整仓 E2E。

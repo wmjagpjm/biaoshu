@@ -426,6 +426,14 @@
 
 完成回执：Grok 初始实现=`msg_52e843e975874aafad57b902885a3112`，A-D 返修=`msg_e9809e17435c494589e7cf1f13b8262a`，F/G/H 双确认返修=`msg_898315bea44b4cfca1435744b0cd920f`；Codex 独立 H3 `15 passed`、freshness `17 passed`、lint/build/diff-check 全通过，功能提交=`40aacc7`。
 
+### P13-I1：项目任务事件游标后端（已完成并推送）
+
+契约=`docs/p13i1-project-task-event-cursor-backend-contract.md`，计划=`docs/plans/2026-07-21-p13i1-project-task-event-cursor-backend-plan.md`。严格十一文件新增独立 `project_task_events` 表、真实任务状态写链事件、两条直接终态 callback 事件、200 条项目裁剪和 required strict `bid_writer` 游标 GET；事件只投影 `eventId/taskId/taskType/status/progress/occurredAt`，不进入 SSE 或正文结果总线。
+
+真实 failure-first 与两轮双确认返修已完成：首轮 **17 failed / 0 passed**，两条直接终态写链漏事件经双方确认后扩围；第二轮四项缺口（未登录 `no-store`、裁剪游标、跨 workspace、最终 commit 故障）经双方确认后返修。Grok 最终专项/回归 **25/20/39/18/43 passed**；Codex 独立串行同样合计 **145 passed**，`compileall`、`git diff --check`、十一文件边界与 SHA-256 门通过。
+
+功能提交=`f0d6d75`，Codex 验收回执=`msg_7e1d86e5d0b240a4a011bba4c5bce8bf`，Grok 最终回执=`msg_be5b0a6a444841969517152db8fac4f8`。未运行后端全量、xdist、前端或整仓 E2E；P13-I2 才能在本包只读 API 之上增加项目级 SSE、`Last-Event-ID` 和断线重放。
+
 阶段 0/1/2、阶段 3 M3-A 至 M3-D、阶段 4 **包 5** 至 **包 8/P8B/P8C/P8D/P8E**、P9A/P9B/P9C/P9D、阶段 5 P10A 至 P10K、**P11A/P11B/P11C 三个真实数据收口包**，以及 **P12A/P12B-A/B/C/D/P12C-A/B/C/P12D-A/B/P12E-A/B/C/P12F-A/B/C/D/P13-A** 均保持已交付。P8E 完整契约见 `docs/p8e-docling-local-helper-contract.md`，实施与独立验收记录见 `docs/plans/2026-07-15-p8e-docling-local-helper-plan.md`。
 
 P8D 与 P8E 本机外置解析助手均已完成并推送：P8D 计划=`30d066f`、实现=`e1fe316`、闭环=`38b9318`；P8E 计划=`73b1264`、后端=`79b346e`、助手=`e3f9cc4`。P8E 独立验收为 Docling 46、MinerU 54、后端受影响回归 37、P8C E2E 9、P8B E2E 6 passed；真实 Docling/模型未安装、未验收，自动安装/模型打包/服务端内嵌仍不是已交付能力。

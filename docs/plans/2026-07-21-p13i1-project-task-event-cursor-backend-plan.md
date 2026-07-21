@@ -1,7 +1,7 @@
 # P13-I1 项目任务事件游标后端实施计划
 
 > 执行要求：Grok 必须先运行真实 failure-first，再按白名单实现并自测；Codex 独立审查、双确认返修和最终验收。
-> 状态：两轮实现审查完成；认证错误 no-store 与三项反假绿缺口已双确认，十一文件范围修订待 Grok 返修
+> 状态：已完成 Grok 实现、两轮双确认返修、Codex 独立审查、串行验收、功能提交与协作分支推送
 > 契约：`docs/p13i1-project-task-event-cursor-backend-contract.md`
 > 分支：`collab/grok-code-codex-review`
 
@@ -52,3 +52,11 @@ git diff --check
 - 首次范围从八文件扩大为十文件；直接终态任务只记录一条 `success/100`，并补真实写链及事务回滚证据，不修改其它生产文件或既有测试。
 - 第二轮 Codex question=`msg_85b188d2dabe4f12be6c62d3dde1850f`，Grok 确认=`msg_0e9da620244d4ead96a46f815131306c`：未登录 401 缺 no-store、已裁剪游标、真实跨 workspace、两条最终 commit 故障四项均确认存在。
 - 第二次范围仅从十文件扩大为十一文件，新增 `auth_middleware.py` 的统一错误响应头；其它三项仅补原专项真实证据，不扩大生产范围。
+
+## 6. 最终验收与交付记录
+
+- Grok 最终回执=`msg_be5b0a6a444841969517152db8fac4f8`，Codex 最终验收回执=`msg_7e1d86e5d0b240a4a011bba4c5bce8bf`。
+- Codex 独立串行结果：P13-I1 专项 **25 passed**；callback/一次性票据 **20 passed**；认证 **39 passed**；单任务 SSE/P13-A **18 passed**；P13-H1/H2 **43 passed**；合计 **145 passed**。
+- `compileall` 与 `git diff --check` 均通过；仅有既有 Git LF/CRLF 提示。未运行后端全量、xdist、前端或整仓 E2E。
+- 十一文件精确提交=`f0d6d75`（`功能：完成P13-I1项目任务事件游标后端`），已推送 `origin/collab/grok-code-codex-review`。
+- 当前实现已关闭未登录 401 `no-store`、真实裁剪游标 stale 409、真实跨 workspace 作用域和两条直接终态最终 commit 故障四项双确认缺口；未发现新增疑点。
