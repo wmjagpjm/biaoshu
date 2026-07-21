@@ -1,6 +1,6 @@
 # P13-H3 编辑状态事件前端版本提示实施计划
 
-> 状态：契约冻结，待实现
+> 状态：契约冻结；failure-first 双确认后白名单最小扩为六文件，待实现
 > 契约：`docs/p13h3-editor-state-event-frontend-contract.md`
 > 分支：`collab/grok-code-codex-review`
 
@@ -8,7 +8,7 @@
 
 1. Grok 先在生产三文件未改时运行真实 failure-first，新增专项只验证 H3 行为；保存失败输出和测试范围，不修改文件以外内容。
 2. 新建共享 `EditorStateEventUpdatePanel.tsx`，先补中文四字段文件注释，再实现严格 parser、认证角色门控、EventSource 生命周期、项目代次隔离、固定提示和单次用户刷新。
-3. 技术标传入 `editors.stateVersion`（或现有等价当前版本字段）、`editors.reloadFromApi({ blocking: true })`；商务标传入 workspace 当前 stateVersion 与 `refreshFromApi()`。
+3. 两个 Hook 各增加 `currentStateVersion` React 状态并导出：所有合法版本接受路径与 ref 同步更新；项目切换、非法版本和既有清空路径同步置 null；禁止改变请求、保存链或冲突行为。技术标传入 `editors.currentStateVersion`、`editors.reloadFromApi({ blocking: true })`；商务标传入 `currentStateVersion` 与 `refreshFromApi()`。
 4. 新增 `editor-state-event-update.spec.ts`，通过 `text/event-stream` route mock 验证真实 EventSource 事件、关闭、迟到和刷新计数；不得用源码字符串或非零请求数冒充行为。
 5. Grok 仅运行专项与受影响 freshness 代表用例、lint/build，并发送 review_request；不得暂存、提交、推送或写交接文档。
 6. Codex 检查 diff、白名单、parser 与状态代次，发现疑似问题先发只读 question；双方明确确认后才发送修复授权。确认前不得返修。
@@ -22,7 +22,11 @@
 - 非法 JSON、错误字段、未知 event、控制帧和网络错误都必须断言固定不可用文本，且不出现后端 detail、ID 或正文。
 - 所有测试串行；禁止 `sleep` 作为完成证据、禁止并发 Playwright、禁止整仓重复测试。
 
-## 3. 预期验证命令
+## 3. failure-first 与范围修订记录
+
+生产未改时专项真实结果为 **1 passed / 1 failed / 5 did not run**，首个业务失败是技术标就绪后 EventSource 流数量仍为 0；status=`msg_1e4734a045024eed91aaf13a58ef705e`。随后 Codex 与 Grok 分别确认两个 Hook 无公开当前版本，原四文件白名单无法满足等值判断；question=`msg_6889315838a447a4be37811772f2a174`，confirmation=`msg_baac83f66c214b279eb8192527beab0d`。本修订仅扩入两个 Hook，不放宽其它边界。
+
+## 4. 预期验证命令
 
 ```powershell
 cd C:\Users\Administrator\biaoshu\frontend
@@ -36,4 +40,3 @@ git diff --cached --name-only
 ```
 
 不运行后端全量、整仓 E2E、xdist 或并发 pytest；只有出现共享认证/编辑器接口回归证据时才扩大范围。
-

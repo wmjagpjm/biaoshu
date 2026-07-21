@@ -1,6 +1,6 @@
 # P13-H3 编辑状态事件前端版本提示契约
 
-> 状态：契约冻结，待 Grok 实现与 Codex 独立验收
+> 状态：契约冻结；经 failure-first 双确认后最小扩为六文件，待 Grok 实现与 Codex 独立验收
 > 日期：2026-07-21
 > 前置：P13-H2 项目级 editor-state SSE（实现=`c19bf94`）
 > 分支：仅 `collab/grok-code-codex-review`，禁止操作 `main`
@@ -17,6 +17,7 @@
 2. 技术标 `useTechnicalPlanEditors.reloadFromApi({ blocking: true })` 与商务标 `useBusinessBidWorkspace.refreshFromApi()` 都返回单次真实 `Promise<boolean>`，适合作为用户确认后的唯一刷新动作。
 3. 两个工作区已有 `useAuthSession` 可提供 `phase`、`authRequired`、活动成员角色；项目 ID 来自当前路由。disabled、未认证、非 `bid_writer`、无项目 ID 均不得建立连接。
 4. `EditorStateVersionFreshness` 必须继续纯展示、零副作用；新逻辑独立组件并由页面薄挂载。
+5. failure-first 前进一步核对确认：两个编辑 Hook 只在 `stateVersionRef.current` 持有已接受版本，均未向页面导出；`versionUpdatedAt/sourceKind/actor` 不能等价替代版本相等判断。原四文件白名单因此无法诚实实现“相同版本忽略、不同版本提示”。Codex question=`msg_6889315838a447a4be37811772f2a174`，Grok 只读确认=`msg_baac83f66c214b279eb8192527beab0d`；双方确认后才允许最小扩围两个 Hook。
 
 ## 3. 生产行为
 
@@ -48,14 +49,17 @@
 1. `frontend/src/features/editor-state-collaboration/EditorStateEventUpdatePanel.tsx`
 2. `frontend/src/features/technical-plan/pages/TechnicalPlanWorkspace.tsx`
 3. `frontend/src/features/business-bid/pages/BusinessBidWorkspace.tsx`
+4. `frontend/src/features/technical-plan/hooks/useTechnicalPlanEditors.ts`
+5. `frontend/src/features/business-bid/hooks/useBusinessBidWorkspace.ts`
+
+两个 Hook 只允许增加并导出 `currentStateVersion`：合法 GET/PUT/既有外部写响应接受版本时与 `stateVersionRef.current` 同步；项目切换、非法版本和会清空权威版本的加载失败路径同步清空。不得改变请求次数、保存链、CAS/冲突、自动保存、阻断、重载或既有元数据语义。
 
 测试文件：
 
-4. `frontend/e2e/editor-state-event-update.spec.ts`
+6. `frontend/e2e/editor-state-event-update.spec.ts`
 
-禁止修改共享 API、认证 Hook、既有编辑 Hook、路由、AppShell、后端、依赖、配置及其它测试；若现有刷新接口或 E2E 桩不足，必须先发只读 question，双方确认后才能申请扩围。
+禁止修改共享 API、认证 Hook、路由、AppShell、后端、依赖、配置及其它测试；两个编辑 Hook 仅限上述版本镜像导出。若现有刷新接口或 E2E 桩仍不足，必须先发只读 question，双方确认后才能申请扩围。
 
 ## 6. 验收重点
 
 专项必须覆盖：认证/RBAC/disabled 门控、首次 cursor 不提示、合法新版本提示、相同版本忽略、四字段严格 parser、控制帧/坏帧/网络错误固定不可用、用户确认单次刷新成功/失败、项目 A→B 关闭与迟到隔离、无 storage/URL/正文写入、EventSource `withCredentials` 和精确 URL。Playwright 固定 Chromium、`--workers=1 --retries=0` 串行运行；另跑既有 freshness 专项代表用例、lint、build、diff-check，不跑整仓 E2E 或并发测试。
-
