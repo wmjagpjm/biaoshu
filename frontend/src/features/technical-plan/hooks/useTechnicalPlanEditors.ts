@@ -31,6 +31,14 @@ export type VersionedExternalWriteOutcome<T> =
   | { status: "post_failed"; blocked: boolean }
   | { status: "reload_failed"; data: T };
 
+/**
+ * V1-E 导出前保存准备门三态（冻结契约）。
+ * ready：可创建 export；
+ * blocked：冲突/保存错误/非法版本/新 pending 或 generation 变化等保守阻断；
+ * failed：会话/项目/写代次/PUT stale 等公共失效（内部 ImmediatePutStatus 仍可 stale）。
+ */
+export type ExportSaveGateResult = "ready" | "blocked" | "failed";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   createEditorStateCheckpoint as postCreateEditorStateCheckpoint,
@@ -433,6 +441,12 @@ export function useTechnicalPlanEditors(projectId: string) {
   const skipNextSave = useRef(true);
   const saveTimer = useRef<number | null>(null);
   /**
+   * V1-E：autosave 调度/编辑代次（纯内存）。
+   * 每次真正计划新防抖保存时单调递增；timer 触发/清除不得回退。
+   * flush 在调用瞬间捕获；ready 前精确比较；generation 增长返回 blocked。
+   */
+  const autosaveGenerationRef = useRef(0);
+  /**
    * 合并成功后的 setState 会触发本 hook 的普通防抖保存 effect；
    * 置 true 时跳过下一次全量 PUT（避免把 analysis/outline/chapters/facts 回写远端）。
    */
@@ -480,6 +494,20 @@ export function useTechnicalPlanEditors(projectId: string) {
    * 切项目时必须重置为已解决链，禁止被旧项目挂起 Promise 队头阻塞。
    */
   const matrixSaveChainRef = useRef(Promise.resolve());
+  /**
+   * V1-E：最近一次可判定的保存/水合结果，供导出准备门只读判断。
+   * 切项目重置；水合成功 / 即时 PUT / 外部写成功 / 矩阵合并成功时更新。
+   */
+  const lastSaveStatusRef = useRef<
+    | "ok"
+    | "stale"
+    | "blocked"
+    | "full_conflict"
+    | "matrix_conflict"
+    | "error"
+    | "invalid_version"
+    | null
+  >(null);
 
   /** 用途：判断异步请求是否仍属于当前 hook 项目会话。 */
   const isCurrentEditorSession = useCallback(
@@ -582,9 +610,13 @@ export function useTechnicalPlanEditors(projectId: string) {
     }
     const session = ++projectSessionRef.current;
     writeEpochRef.current += 1;
+    // V1-E：切项目递增 generation，旧 flush 不得与新项目代次偶然相等后放行
+    autosaveGenerationRef.current += 1;
     activeProjectIdRef.current = projectId;
     // 新项目保存链与旧项目解耦：旧 A 挂起 PUT 不得阻塞 B 的合法防抖保存
     matrixSaveChainRef.current = Promise.resolve();
+    // V1-E：切项目重置最近保存结果，禁止旧项目 ok 误放行新项目导出
+    lastSaveStatusRef.current = null;
     skipNextSave.current = true;
     skipNextAutosavePutRef.current = false;
     matrixPutBlockedRef.current = false;
@@ -627,6 +659,7 @@ export function useTechnicalPlanEditors(projectId: string) {
           setApiReady(false);
           setFullStateConflict(false);
           fullStateBlockedRef.current = false;
+          lastSaveStatusRef.current = null;
           setLoadError(TECHNICAL_EDITOR_LOAD_ERROR);
           setSaveError(null);
           return;
@@ -645,6 +678,8 @@ export function useTechnicalPlanEditors(projectId: string) {
         setApiReady(true);
         setFullStateConflict(false);
         fullStateBlockedRef.current = false;
+        // V1-E：合法水合成功视为最近结果可用，无待保存时导出门可 ready 且零 PUT
+        lastSaveStatusRef.current = "ok";
         setLoadError(null);
         setSaveError(null);
       } catch {
@@ -659,6 +694,7 @@ export function useTechnicalPlanEditors(projectId: string) {
         setApiReady(false);
         setFullStateConflict(false);
         fullStateBlockedRef.current = false;
+        lastSaveStatusRef.current = null;
         setLoadError(TECHNICAL_EDITOR_LOAD_ERROR);
         setSaveError(null);
       } finally {
@@ -711,18 +747,27 @@ export function useTechnicalPlanEditors(projectId: string) {
       requestSession: number,
       requestEpoch: number,
     ): Promise<ImmediatePutStatus> => {
+      /** 用途：仅当前写代次回写最近结果，供 V1-E 导出门判断。 */
+      const finish = (status: ImmediatePutStatus): ImmediatePutStatus => {
+        if (
+          isCurrentWriteEpoch(requestProjectId, requestSession, requestEpoch)
+        ) {
+          lastSaveStatusRef.current = status;
+        }
+        return status;
+      };
       if (
         !isCurrentWriteEpoch(requestProjectId, requestSession, requestEpoch)
       ) {
         return "stale";
       }
       if (fullStateBlockedRef.current) {
-        return "blocked";
+        return finish("blocked");
       }
       const expected = stateVersionRef.current;
       if (!isValidStateVersion(expected)) {
         enterFullStateBlock();
-        return "invalid_version";
+        return finish("invalid_version");
       }
       const latest = stateRef.current;
       const body: Record<string, unknown> = {
@@ -775,11 +820,11 @@ export function useTechnicalPlanEditors(projectId: string) {
           const detail = raw?.detail;
           if (detail?.code === "editor_state_version_conflict") {
             enterFullStateBlock();
-            return "full_conflict";
+            return finish("full_conflict");
           }
           if (!hasRealMatrixConflictDetail(detail)) {
             setSaveError(TECHNICAL_EDITOR_SAVE_ERROR);
-            return "error";
+            return finish("error");
           }
           const remoteMatrix = normalizeResponseMatrix(detail.responseMatrix);
           const remoteVersion = detail.currentResponseMatrixVersion.trim();
@@ -818,7 +863,7 @@ export function useTechnicalPlanEditors(projectId: string) {
             mergePreview,
             applyError: null,
           });
-          return "matrix_conflict";
+          return finish("matrix_conflict");
         }
         if (!res.ok) {
           if (
@@ -831,7 +876,7 @@ export function useTechnicalPlanEditors(projectId: string) {
             return "stale";
           }
           setSaveError(TECHNICAL_EDITOR_SAVE_ERROR);
-          return "error";
+          return finish("error");
         }
         const saved = (await res.json()) as EditorStateApi;
         if (
@@ -841,7 +886,7 @@ export function useTechnicalPlanEditors(projectId: string) {
         }
         if (!isValidStateVersion(saved.stateVersion)) {
           enterFullStateBlock();
-          return "invalid_version";
+          return finish("invalid_version");
         }
         applyStateVersion(saved.stateVersion);
         acceptVersionUpdatedAt(saved.updatedAt);
@@ -860,7 +905,7 @@ export function useTechnicalPlanEditors(projectId: string) {
             saved.responseMatrixVersion ?? versionAtRequest,
           );
         }
-        return "ok";
+        return finish("ok");
       } catch {
         if (
           !isCurrentWriteEpoch(requestProjectId, requestSession, requestEpoch)
@@ -868,7 +913,7 @@ export function useTechnicalPlanEditors(projectId: string) {
           return "stale";
         }
         setSaveError(TECHNICAL_EDITOR_SAVE_ERROR);
-        return "error";
+        return finish("error");
       }
     },
     [
@@ -903,7 +948,11 @@ export function useTechnicalPlanEditors(projectId: string) {
       return;
     }
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    // V1-E：真正计划新防抖保存时单调递增；timer 触发/清除不得回退
+    autosaveGenerationRef.current += 1;
     saveTimer.current = window.setTimeout(() => {
+      // 定时器已触发：立即清空，避免误判为仍有 pending timer（generation 不回退）
+      saveTimer.current = null;
       const requestProjectId = projectId;
       const requestSession = projectSessionRef.current;
       const requestEpoch = writeEpochRef.current;
@@ -1131,6 +1180,7 @@ export function useTechnicalPlanEditors(projectId: string) {
           setSelectedOutlineId(null);
           setSelectedChapterId(null);
           setApiReady(false);
+          lastSaveStatusRef.current = null;
           setLoadError(TECHNICAL_EDITOR_LOAD_ERROR);
           setSaveError(null);
           return false;
@@ -1151,6 +1201,7 @@ export function useTechnicalPlanEditors(projectId: string) {
         setMergeChoices({});
         setSelectedOutlineId(next.outline[0]?.id ?? null);
         setApiReady(true);
+        lastSaveStatusRef.current = "ok";
         setLoadError(null);
         setSaveError(null);
         return true;
@@ -1175,6 +1226,7 @@ export function useTechnicalPlanEditors(projectId: string) {
         setSelectedOutlineId(null);
         setSelectedChapterId(null);
         setApiReady(false);
+        lastSaveStatusRef.current = null;
         setLoadError(TECHNICAL_EDITOR_LOAD_ERROR);
         setSaveError(null);
         return false;
@@ -1283,6 +1335,8 @@ export function useTechnicalPlanEditors(projectId: string) {
         }
         // 重读成功后 residual 标志必须清空，确保下一次用户编辑正常发 PUT
         skipNextAutosavePutRef.current = false;
+        // V1-E：外部写+重读成功，最近结果可用
+        lastSaveStatusRef.current = "ok";
         return { status: "success", data };
       };
 
@@ -1436,6 +1490,119 @@ export function useTechnicalPlanEditors(projectId: string) {
     executeImmediateEditorStatePut,
     enterFullStateBlock,
   ]);
+
+  /**
+   * 用途：V1-E 导出前保存准备门——等待/落盘最新 editor-state，三态结果供页面消费。
+   * 规则：
+   *   - 调用瞬间捕获 project/session/writeEpoch/generation，run 内不得重新吸收；
+   *   - 有 pending timer：原子清除后仅在保存链尾追加一次即时 PUT（复用执行器 body）；
+   *   - 无 timer：只等待调用时保存链快照，零额外 PUT、不循环 flush；
+   *   - ready 前精确比较 session/project/epoch/generation 未变且 timer null；
+   *   - generation 增长 → blocked；session/epoch/put stale → failed。
+   * 二次开发：禁止复制 PUT body、自动重试、把正文塞进 export payload。
+   */
+  const flushPendingSaveForExport =
+    useCallback(async (): Promise<ExportSaveGateResult> => {
+      if (!projectId) return "blocked";
+      // 调用瞬间捕获 fence，禁止 run 内重新吸收新 epoch/generation
+      const requestProjectId = projectId;
+      const requestSession = projectSessionRef.current;
+      const requestEpoch = writeEpochRef.current;
+      const requestGeneration = autosaveGenerationRef.current;
+
+      // 原子清除 pending timer（若有）；已触发的 timer 在回调内已置 null；不回退 generation
+      let hadPendingTimer = false;
+      if (saveTimer.current != null) {
+        window.clearTimeout(saveTimer.current);
+        saveTimer.current = null;
+        hadPendingTimer = true;
+      }
+
+      /** ready 前统一复核；任一 fence 变化不得放行 */
+      const fenceBeforeReady = (): ExportSaveGateResult | null => {
+        if (!isCurrentEditorSession(requestProjectId, requestSession)) {
+          return "failed";
+        }
+        if (writeEpochRef.current !== requestEpoch) {
+          return "failed";
+        }
+        if (autosaveGenerationRef.current !== requestGeneration) {
+          return "blocked";
+        }
+        if (saveTimer.current != null) {
+          return "blocked";
+        }
+        return null;
+      };
+
+      const run = async (): Promise<ExportSaveGateResult> => {
+        const early = fenceBeforeReady();
+        if (early) return early;
+
+        if (hadPendingTimer) {
+          if (fullStateBlockedRef.current) {
+            return "blocked";
+          }
+          if (!isValidStateVersion(stateVersionRef.current)) {
+            enterFullStateBlock();
+            lastSaveStatusRef.current = "invalid_version";
+            return "blocked";
+          }
+          const putStatus = await executeImmediateEditorStatePut(
+            requestProjectId,
+            requestSession,
+            requestEpoch,
+          );
+          const afterPut = fenceBeforeReady();
+          if (afterPut) return afterPut;
+          if (putStatus === "ok") {
+            if (!isValidStateVersion(stateVersionRef.current)) {
+              return "blocked";
+            }
+            return "ready";
+          }
+          // 内部 ImmediatePutStatus.stale → 公共 failed
+          if (putStatus === "stale") {
+            return "failed";
+          }
+          return "blocked";
+        }
+
+        // 无 pending：链上在途保存已完成；只读最近结果，不发新 PUT
+        if (fullStateBlockedRef.current) {
+          return "blocked";
+        }
+        // 未解决矩阵冲突期间禁止导出旧/不一致远端态
+        if (matrixPutBlockedRef.current) {
+          return "blocked";
+        }
+        if (!isValidStateVersion(stateVersionRef.current)) {
+          return "blocked";
+        }
+        const last = lastSaveStatusRef.current;
+        if (last === "ok") {
+          return "ready";
+        }
+        // 内部 stale 结果映射公共 failed
+        if (last === "stale") {
+          return "failed";
+        }
+        return "blocked";
+      };
+
+      const queued = matrixSaveChainRef.current
+        .catch(() => undefined)
+        .then(run);
+      matrixSaveChainRef.current = queued
+        .then(() => undefined)
+        .catch(() => undefined);
+      return queued;
+    }, [
+      projectId,
+      isCurrentEditorSession,
+      executeImmediateEditorStatePut,
+      enterFullStateBlock,
+    ]);
 
   /**
    * 用途：P12B-D2 检查点安全恢复——进入版本化外部写 runner；执行时读最新 expected。
@@ -1759,6 +1926,8 @@ export function useTechnicalPlanEditors(projectId: string) {
         setMatrixConflict(null);
         setMergeChoices({});
         setSaveError(null);
+        // V1-E：矩阵合并 PUT 成功，最近结果可用
+        lastSaveStatusRef.current = "ok";
       } catch {
         if (
           !isCurrentWriteEpoch(requestProjectId, requestSession, requestEpoch)
@@ -2059,6 +2228,8 @@ export function useTechnicalPlanEditors(projectId: string) {
     runVersionedExternalWrite,
     /** P12B-D2：显式创建检查点（强制即时 PUT + POST {}） */
     createCheckpoint,
+    /** V1-E：导出前保存准备门（ready/blocked/failed） */
+    flushPendingSaveForExport,
     /** P12B-D2：检查点安全恢复（版本化外部写 + 唯一 GET） */
     restoreCheckpoint,
     /** P12C-C3：修订受限恢复（共用操作令牌 + 版本化外部写 + 唯一 GET） */

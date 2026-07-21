@@ -84,6 +84,14 @@ export type BusinessVersionedExternalWriteOutcome<T> =
   | { status: "reload_failed"; data: T };
 
 /**
+ * V1-E 导出前保存准备门三态（冻结契约，与技术标同语义）。
+ * ready：可创建 export；
+ * blocked：冲突/保存错误/非法版本/新 pending 或 generation 变化等保守阻断；
+ * failed：会话/项目/写代次/PUT stale 等公共失效（内部 ImmediatePutStatus 仍可 stale）。
+ */
+export type ExportSaveGateResult = "ready" | "blocked" | "failed";
+
+/**
  * 反馈历史 localStorage 键。
  * 非 editor-state 权威；仅保留既有 AI 反馈记录语义。
  */
@@ -184,6 +192,12 @@ export function useBusinessBidWorkspace(projectId: string) {
   /** 跳过水合后的下一次防抖 PUT */
   const skipNextSave = useRef(true);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * V1-E：autosave 调度/编辑代次（纯内存，与技术标同语义）。
+   * 每次真正计划新防抖保存时单调递增；timer 触发/清除不得回退。
+   * flush 在调用瞬间捕获；ready 前精确比较；generation 增长返回 blocked。
+   */
+  const autosaveGenerationRef = useRef(0);
   /** 项目会话代次：切项目或重置时递增，作废所有飞行中回调 */
   const sessionRef = useRef(0);
   /** 同项目写入代次：重载时递增，旧代次回调不得覆盖新 GET */
@@ -211,6 +225,19 @@ export function useBusinessBidWorkspace(projectId: string) {
   const checkpointOpTokenSeqRef = useRef(0);
   /** 同项目串行保存链 */
   const saveChainRef = useRef(Promise.resolve());
+  /**
+   * V1-E：最近一次可判定的保存/水合结果，供导出准备门只读判断。
+   * 切项目重置；水合成功 / 即时 PUT / 外部写成功时更新。
+   */
+  const lastSaveStatusRef = useRef<
+    | "ok"
+    | "stale"
+    | "blocked"
+    | "full_conflict"
+    | "error"
+    | "invalid_version"
+    | null
+  >(null);
 
   /** 用途：判断回调是否仍属于当前项目会话。 */
   const isCurrentSession = useCallback(
@@ -308,6 +335,7 @@ export function useBusinessBidWorkspace(projectId: string) {
         setWorkspace(createEmptyWorkspace(pid));
         applyStateVersion(null);
         setApiReady(false);
+        lastSaveStatusRef.current = null;
         setLoadError(BUSINESS_EDITOR_LOAD_ERROR);
         setSaveError(null);
         setFullStateConflict(false);
@@ -321,6 +349,8 @@ export function useBusinessBidWorkspace(projectId: string) {
       acceptCurrentRevisionSourceKind(remote.currentRevisionSourceKind);
       acceptCurrentRevisionActorUsername(remote.currentRevisionActorUsername);
       setApiReady(true);
+      // V1-E：合法水合成功视为最近结果可用，无待保存时导出门可 ready 且零 PUT
+      lastSaveStatusRef.current = "ok";
       setLoadError(null);
       setSaveError(null);
       setFullStateConflict(false);
@@ -336,6 +366,7 @@ export function useBusinessBidWorkspace(projectId: string) {
       setWorkspace(createEmptyWorkspace(pid));
       applyStateVersion(null);
       setApiReady(false);
+      lastSaveStatusRef.current = null;
       setLoadError(BUSINESS_EDITOR_LOAD_ERROR);
       setSaveError(null);
       setFullStateConflict(false);
@@ -363,8 +394,12 @@ export function useBusinessBidWorkspace(projectId: string) {
     }
     sessionRef.current += 1;
     writeEpochRef.current += 1;
+    // V1-E：切项目递增 generation，旧 flush 不得与新项目代次偶然相等后放行
+    autosaveGenerationRef.current += 1;
     activeProjectRef.current = projectId;
     saveChainRef.current = Promise.resolve();
+    // V1-E：切项目重置最近保存结果，禁止旧项目 ok 误放行新项目导出
+    lastSaveStatusRef.current = null;
     skipNextSave.current = true;
     // P13-H3：切项目立即清空版本镜像，禁止旧项目版本参与新提示
     applyStateVersion(null);
@@ -412,12 +447,19 @@ export function useBusinessBidWorkspace(projectId: string) {
       pid: string,
       epoch: number,
     ): Promise<ImmediatePutStatus> => {
+      /** 用途：仅当前写代次回写最近结果，供 V1-E 导出门判断。 */
+      const finish = (status: ImmediatePutStatus): ImmediatePutStatus => {
+        if (isCurrentWriteEpoch(session, pid, epoch)) {
+          lastSaveStatusRef.current = status;
+        }
+        return status;
+      };
       if (!isCurrentWriteEpoch(session, pid, epoch)) return "stale";
-      if (fullStateBlockedRef.current) return "blocked";
+      if (fullStateBlockedRef.current) return finish("blocked");
       const expected = stateVersionRef.current;
       if (!isValidStateVersion(expected)) {
         enterFullStateBlock();
-        return "invalid_version";
+        return finish("invalid_version");
       }
       const ws = workspaceRef.current;
       try {
@@ -441,24 +483,24 @@ export function useBusinessBidWorkspace(projectId: string) {
         if (!isCurrentWriteEpoch(session, pid, epoch)) return "stale";
         if (!isValidStateVersion(saved.stateVersion)) {
           enterFullStateBlock();
-          return "invalid_version";
+          return finish("invalid_version");
         }
         applyStateVersion(saved.stateVersion);
         acceptVersionUpdatedAt(saved.updatedAt);
         acceptCurrentRevisionSourceKind(saved.currentRevisionSourceKind);
         acceptCurrentRevisionActorUsername(saved.currentRevisionActorUsername);
         setSaveError(null);
-        return "ok";
+        return finish("ok");
       } catch (err) {
         if (!isCurrentWriteEpoch(session, pid, epoch)) return "stale";
         const status = (err as { status?: number })?.status;
         const code = (err as { code?: string })?.code;
         if (status === 409 && code === "editor_state_version_conflict") {
           enterFullStateBlock();
-          return "full_conflict";
+          return finish("full_conflict");
         }
         setSaveError(BUSINESS_EDITOR_SAVE_ERROR);
-        return "error";
+        return finish("error");
       }
     },
     [
@@ -482,10 +524,14 @@ export function useBusinessBidWorkspace(projectId: string) {
       return;
     }
     if (saveTimer.current) clearTimeout(saveTimer.current);
+    // V1-E：真正计划新防抖保存时单调递增；timer 触发/清除不得回退
+    autosaveGenerationRef.current += 1;
     const session = sessionRef.current;
     const pid = projectId;
     const epoch = writeEpochRef.current;
     saveTimer.current = setTimeout(() => {
+      // 定时器已触发：立即清空，避免误判为仍有 pending timer（generation 不回退）
+      saveTimer.current = null;
       const runSave = async () => {
         await executeImmediateEditorStatePut(session, pid, epoch);
       };
@@ -825,6 +871,8 @@ export function useBusinessBidWorkspace(projectId: string) {
         // refreshFromApi 水合已设 skipNextSave=true，须由 effect 只吞一次水合触发的
         // 自动保存；若此处清零会形成恢复后旧 UI 自动 PUT。
         // 用户下一次真实编辑时 skip 已消费完毕，PUT 正常发出。
+        // V1-E：外部写+重读成功，最近结果可用
+        lastSaveStatusRef.current = "ok";
         return { status: "success", data };
       };
 
@@ -954,6 +1002,109 @@ export function useBusinessBidWorkspace(projectId: string) {
   ]);
 
   /**
+   * 用途：V1-E 导出前保存准备门——等待/落盘最新 editor-state，三态结果供页面消费。
+   * 规则与技术标同语义：
+   *   - 调用瞬间捕获 project/session/writeEpoch/generation，run 内不得重新吸收；
+   *   - pending timer 原子清除后仅追加一次即时 PUT；无 timer 只等链零额外 PUT；
+   *   - ready 前精确比较 session/project/epoch/generation 未变且 timer null；
+   *   - generation 增长 → blocked；session/epoch/put stale → failed。
+   */
+  const flushPendingSaveForExport =
+    useCallback(async (): Promise<ExportSaveGateResult> => {
+      if (!projectId) return "blocked";
+      // 调用瞬间捕获 fence，禁止 run 内重新吸收新 epoch/generation
+      const requestPid = projectId;
+      const requestSession = sessionRef.current;
+      const requestEpoch = writeEpochRef.current;
+      const requestGeneration = autosaveGenerationRef.current;
+
+      let hadPendingTimer = false;
+      if (saveTimer.current != null) {
+        clearTimeout(saveTimer.current);
+        saveTimer.current = null;
+        hadPendingTimer = true;
+      }
+
+      /** ready 前统一复核；任一 fence 变化不得放行 */
+      const fenceBeforeReady = (): ExportSaveGateResult | null => {
+        if (!isCurrentSession(requestSession, requestPid)) {
+          return "failed";
+        }
+        if (writeEpochRef.current !== requestEpoch) {
+          return "failed";
+        }
+        if (autosaveGenerationRef.current !== requestGeneration) {
+          return "blocked";
+        }
+        if (saveTimer.current != null) {
+          return "blocked";
+        }
+        return null;
+      };
+
+      const run = async (): Promise<ExportSaveGateResult> => {
+        const early = fenceBeforeReady();
+        if (early) return early;
+
+        if (hadPendingTimer) {
+          if (fullStateBlockedRef.current) {
+            return "blocked";
+          }
+          if (!isValidStateVersion(stateVersionRef.current)) {
+            enterFullStateBlock();
+            lastSaveStatusRef.current = "invalid_version";
+            return "blocked";
+          }
+          const putStatus = await executeImmediateEditorStatePut(
+            requestSession,
+            requestPid,
+            requestEpoch,
+          );
+          const afterPut = fenceBeforeReady();
+          if (afterPut) return afterPut;
+          if (putStatus === "ok") {
+            if (!isValidStateVersion(stateVersionRef.current)) {
+              return "blocked";
+            }
+            return "ready";
+          }
+          // 内部 ImmediatePutStatus.stale → 公共 failed
+          if (putStatus === "stale") {
+            return "failed";
+          }
+          return "blocked";
+        }
+
+        // 无 pending：只读最近结果，不发新 PUT
+        if (fullStateBlockedRef.current) {
+          return "blocked";
+        }
+        if (!isValidStateVersion(stateVersionRef.current)) {
+          return "blocked";
+        }
+        const last = lastSaveStatusRef.current;
+        if (last === "ok") {
+          return "ready";
+        }
+        if (last === "stale") {
+          return "failed";
+        }
+        return "blocked";
+      };
+
+      const queued = saveChainRef.current.catch(() => undefined).then(run);
+      saveChainRef.current = queued
+        .then(() => undefined)
+        .catch(() => undefined);
+      return queued;
+    }, [
+      projectId,
+      isCurrentSession,
+      executeImmediateEditorStatePut,
+      enterFullStateBlock,
+    ]);
+
+  /**
    * 用途：P12B-D2 检查点安全恢复。
    */
   const restoreCheckpoint = useCallback(
@@ -1069,6 +1220,8 @@ export function useBusinessBidWorkspace(projectId: string) {
     currentStateVersion,
     refreshFromApi,
     createCheckpoint,
+    /** V1-E：导出前保存准备门（ready/blocked/failed） */
+    flushPendingSaveForExport,
     restoreCheckpoint,
     restoreRevision,
     setParseMarkdown,

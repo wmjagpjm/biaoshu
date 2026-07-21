@@ -117,6 +117,23 @@ export function BusinessBidWorkspace() {
   } | null>(null);
   /** P9D：导出告警代次；项目切换或新导出启动时递增，丢弃迟到 setState */
   const exportImageWarningGenRef = useRef(0);
+  /**
+   * V1-E：导出准备单飞令牌（项目绑定）。
+   * 同项目连点：同步拒绝第二次；切项目后旧完成不得作用于新项目。
+   */
+  const exportPrepareTokenRef = useRef<{
+    projectId: string;
+    token: number;
+  } | null>(null);
+  const exportPrepareTokenSeqRef = useRef(0);
+  /**
+   * V1-E：每次 render 立即同步当前 projectId。
+   * gate/task await 后与下载/告警前必须读 ref 比较 startedProjectId，禁止闭包 projectId。
+   */
+  const currentProjectIdRef = useRef(projectId);
+  currentProjectIdRef.current = projectId;
+  /** V1-E：导出准备进行态（与 pipeline.busy 共同禁用按钮） */
+  const [exportPreparing, setExportPreparing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const parseStrategy = useWorkspaceParseStrategy();
 
@@ -142,6 +159,7 @@ export function BusinessBidWorkspace() {
     updateCommitBlock,
     submitRevise,
     createCheckpoint,
+    flushPendingSaveForExport,
     restoreCheckpoint,
     restoreRevision,
   } = useBusinessBidWorkspace(projectId);
@@ -301,6 +319,9 @@ export function BusinessBidWorkspace() {
     // 递增代次使飞行中的旧导出闭包无法再写入告警；下载语义保持既有行为
     exportImageWarningGenRef.current += 1;
     setExportImageWarningState(null);
+    // V1-E：显式作废旧导出准备令牌；不得只 setExportPreparing(false)
+    exportPrepareTokenRef.current = null;
+    setExportPreparing(false);
   }, [projectId]);
 
   const exportImageWarnings =
@@ -1131,36 +1152,126 @@ export function BusinessBidWorkspace() {
             <button
               type="button"
               className="btn btn-primary"
-              disabled={busy}
+              disabled={busy || exportPreparing}
               onClick={() => {
+                // V1-E：同步单飞——同项目第二次点击立即拒绝，不依赖 disabled 异步刷新
+                const startedProjectId = projectId;
+                const existing = exportPrepareTokenRef.current;
+                if (existing && existing.projectId === startedProjectId) {
+                  return;
+                }
+                const myToken = ++exportPrepareTokenSeqRef.current;
+                exportPrepareTokenRef.current = {
+                  projectId: startedProjectId,
+                  token: myToken,
+                };
+                setExportPreparing(true);
                 void (async () => {
-                  // 捕获启动时项目与代次；成功返回后仅当前代次可写告警
-                  const startedProjectId = projectId;
-                  const gen = ++exportImageWarningGenRef.current;
-                  // 每次导出开始前清空旧告警，避免短暂展示上一轮结果
-                  setExportImageWarningState(null);
-                  const t = await runBizTask("export", { mode: "business" });
-                  if (t.status === "success") {
-                    const path = t.result?.downloadPath as string | undefined;
-                    // 契约：成功且代次仍匹配时先写告警，再始终继续既有下载；
-                    // 旧任务迟到仍下载但不写告警，避免污染新项目页面
-                    if (exportImageWarningGenRef.current === gen) {
-                      setExportImageWarningState({
-                        projectId: startedProjectId,
-                        warnings: normalizeExportImageWarnings(
-                          t.result?.imageWarnings,
-                        ),
-                      });
+                  try {
+                    const gate = await flushPendingSaveForExport();
+                    // 切项目/被新令牌覆盖：旧完成不得创建 export、写告警或下载
+                    const cur = exportPrepareTokenRef.current;
+                    if (
+                      !cur ||
+                      cur.projectId !== startedProjectId ||
+                      cur.token !== myToken ||
+                      currentProjectIdRef.current !== startedProjectId
+                    ) {
+                      return;
                     }
-                    if (path) {
-                      const base = getApiBase().replace(/\/$/, "");
-                      window.open(`${base}${path}`, "_blank");
+                    if (gate !== "ready") {
+                      return;
+                    }
+                    // 捕获启动时代次；成功返回后仅当前代次可写告警
+                    const gen = ++exportImageWarningGenRef.current;
+                    // 每次导出开始前清空旧告警，避免短暂展示上一轮结果
+                    setExportImageWarningState(null);
+                    // 禁止走 runBizTask：其 success 后无条件 refreshFromApi，
+                    // A 迟到会 setLoading(true) 且 finally 因会话不匹配永不清零，卡死 B。
+                    const t = await pipeline.runTask("export", {
+                      mode: "business",
+                    });
+                    if (t.status === "success") {
+                      // 再次核对项目令牌 + 当前项目 ref，禁止 A 迟到 success 污染 B
+                      const still = exportPrepareTokenRef.current;
+                      if (
+                        !still ||
+                        still.projectId !== startedProjectId ||
+                        still.token !== myToken ||
+                        currentProjectIdRef.current !== startedProjectId
+                      ) {
+                        return;
+                      }
+                      // 同项目成功：保持既有 refresh + 步进语义（原 runBizTask 后半段）
+                      await refreshFromApi();
+                      if (
+                        currentProjectIdRef.current !== startedProjectId ||
+                        exportPrepareTokenRef.current?.token !== myToken
+                      ) {
+                        return;
+                      }
+                      const exportStep = STEP_BY_TASK.export;
+                      const patched = await updateProjectAsync(
+                        startedProjectId,
+                        { technicalPlanStep: exportStep },
+                      );
+                      if (
+                        currentProjectIdRef.current !== startedProjectId ||
+                        exportPrepareTokenRef.current?.token !== myToken
+                      ) {
+                        return;
+                      }
+                      if (patched) {
+                        setProject(patched);
+                      } else {
+                        const remote = await getProjectAsync(startedProjectId);
+                        if (
+                          currentProjectIdRef.current !== startedProjectId ||
+                          exportPrepareTokenRef.current?.token !== myToken
+                        ) {
+                          return;
+                        }
+                        if (remote) setProject(remote);
+                      }
+                      const path = t.result?.downloadPath as string | undefined;
+                      // 契约：成功且代次仍匹配时先写告警，再继续既有下载；
+                      // 旧任务迟到不得写告警/下载，避免污染新项目页面
+                      if (exportImageWarningGenRef.current === gen) {
+                        setExportImageWarningState({
+                          projectId: startedProjectId,
+                          warnings: normalizeExportImageWarnings(
+                            t.result?.imageWarnings,
+                          ),
+                        });
+                      }
+                      if (path) {
+                        const base = getApiBase().replace(/\/$/, "");
+                        window.open(`${base}${path}`, "_blank");
+                      }
+                    }
+                  } finally {
+                    // 必须同时核对 current project + started project + myToken；
+                    // 绝不能 A finally 清 B 新 token
+                    const cur = exportPrepareTokenRef.current;
+                    if (
+                      cur &&
+                      cur.projectId === startedProjectId &&
+                      cur.token === myToken &&
+                      currentProjectIdRef.current === startedProjectId
+                    ) {
+                      exportPrepareTokenRef.current = null;
+                      setExportPreparing(false);
                     }
                   }
                 })();
               }}
             >
-              <Download size={16} /> {busy ? "导出中…" : "生成并下载 Word"}
+              <Download size={16} />{" "}
+              {exportPreparing
+                ? "正在准备导出…"
+                : busy
+                  ? "导出中…"
+                  : "生成并下载 Word"}
             </button>
           </div>
           <ExportImageWarnings warnings={exportImageWarnings} />

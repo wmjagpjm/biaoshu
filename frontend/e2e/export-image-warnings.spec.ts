@@ -46,6 +46,30 @@ async function getOpenCalls(page: Page): Promise<string[]> {
   });
 }
 
+/**
+ * 用途：释放 export 成功响应后观察 window.open 是否新增；超时无新增返回 false。
+ * 对接：V1-E 迟到 success 零下载；事件驱动 waitForFunction，禁止 sleep。
+ */
+async function openCallsIncreased(
+  page: Page,
+  baseline: number,
+  timeoutMs = 5_000,
+): Promise<boolean> {
+  try {
+    await page.waitForFunction(
+      (n) => {
+        const w = window as Window & { __p9dOpenCalls?: string[] };
+        return (w.__p9dOpenCalls || []).length > n;
+      },
+      baseline,
+      { timeout: timeoutMs },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** 用途：网络捕获与外网阻断；业务请求默认继续真实后端。 */
 async function installNetworkGuard(page: Page): Promise<{
   externalHits: string[];
@@ -442,10 +466,11 @@ test.describe("P9D 导出图片告警", () => {
     await assertNoSensitiveStorage(page);
   });
 
-  test("项目切换：挂起 A 导出成功后切到 B，迟到响应不污染 B 告警", async ({
+  test("项目切换：挂起 A export success 后切到 B，迟到响应不污染 B 告警且不触发下载", async ({
     page,
     request,
   }) => {
+    // V1-E 后续语义：A 的 export success 迟到响应不得污染 B 告警，且不得触发 window.open 下载
     const projectA = await seedTechnicalInvalidImage(
       request,
       "E2E P9D 迟到隔离A",
@@ -473,6 +498,8 @@ test.describe("P9D 导出图片告警", () => {
     const net = await installNetworkGuard(page);
 
     const LATE_WARNING = "项目A迟到告警标记_UNIQUE_P9D_LATE";
+    const storedNameA = "p9d-late-a.docx";
+    const aDownloadMarker = `/projects/${projectA}/export/download/${storedNameA}`;
     let releaseExportA!: () => void;
     const exportAHeld = new Promise<void>((resolve) => {
       releaseExportA = resolve;
@@ -507,7 +534,6 @@ test.describe("P9D 导出图片告警", () => {
       }
       markExportASeen();
       await exportAHeld;
-      const storedName = "p9d-late-a.docx";
       await route.fulfill({
         status: 201,
         contentType: "application/json",
@@ -519,8 +545,8 @@ test.describe("P9D 导出图片告警", () => {
           progress: 100,
           message: "导出完成",
           result: {
-            storedName,
-            downloadPath: `/projects/${projectA}/export/download/${storedName}`,
+            storedName: storedNameA,
+            downloadPath: aDownloadMarker,
             size: 2048,
             mode: "technical",
             imageWarnings: [LATE_WARNING],
@@ -550,21 +576,52 @@ test.describe("P9D 导出图片告警", () => {
     );
     await expect(page.getByText(LATE_WARNING)).toHaveCount(0);
 
-    // 释放 A 的成功响应；强同步：等待 A 成功续体已执行到 window.open 下载调用
-    // （证明 await runTask 之后的逻辑已跑到，而不仅是 route.fulfill 发出）
-    releaseExportA();
-    const aDownloadMarker = `/projects/${projectA}/export/download/`;
-    await expect
-      .poll(
-        async () => {
-          const calls = await getOpenCalls(page);
-          return calls.some((u) => u.includes(aDownloadMarker));
-        },
-        { timeout: 15_000 },
-      )
-      .toBe(true);
+    // release 前记录 opensBefore 与 A downloadPath marker；建立响应同步
+    const opensBefore = (await getOpenCalls(page)).length;
+    const lateSuccessResponse = page.waitForResponse(
+      async (res) => {
+        if (res.status() !== 201) return false;
+        const req = res.request();
+        if (req.method().toUpperCase() !== "POST") return false;
+        const url = req.url();
+        let pathname = "";
+        try {
+          pathname = new URL(url).pathname;
+        } catch {
+          return false;
+        }
+        if (!pathname.includes(`/projects/${projectA}/tasks`)) return false;
+        if (url.includes("/events") || /\/tasks\/[^/?]+$/.test(pathname)) {
+          return false;
+        }
+        try {
+          const body = req.postDataJSON() as { type?: string };
+          if (body?.type !== "export") return false;
+        } catch {
+          return false;
+        }
+        return true;
+      },
+      { timeout: 15_000 },
+    );
 
-    // A 下载续体已运行后，B 仍不得被污染
+    // 释放 A 的迟到 success 并证明响应已交付；其后必须零 window.open
+    releaseExportA();
+    await lateSuccessResponse;
+
+    const openIncreased = await openCallsIncreased(page, opensBefore, 5_000);
+    expect(
+      openIncreased,
+      "V1-E：A export success 迟到交付后 window.open 必须精确零新增",
+    ).toBe(false);
+    const calls = await getOpenCalls(page);
+    expect(calls.length).toBe(opensBefore);
+    expect(
+      calls.some((u) => u.includes(aDownloadMarker)),
+      "V1-E：A downloadPath marker 不得出现在 window.open 记录中",
+    ).toBe(false);
+
+    // 迟到 success 已交付后，B 仍零告警且仍在 B 页
     await expect(page.getByText(LATE_WARNING)).toHaveCount(0);
     await expect(page.getByRole("region", { name: "导出图片告警" })).toHaveCount(
       0,
