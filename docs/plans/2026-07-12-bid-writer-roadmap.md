@@ -7,7 +7,7 @@
 
 # 标书制作者能力补全与角色化演进路线图
 
-> **状态**：阶段 0–5 已按下文拆包持续交付；P11A/B/C、P12A 至 P12N、P13-A 至 P13-I4、V1-A/V1-B/V1-C 均已完成。V1-C 冻结=`6e7aafb`、实现=`21d3213`，独立新专项/MinerU/Docling=`26/54/46 passed`。当前转入 lightweight DOCX/PDF 解析质量、标书制作与 Word 整章导出；继续按分级策略避免机械重复全量，V2/V3 后置。
+> **状态**：阶段 0–5 已按下文拆包持续交付；P11A/B/C、P12A 至 P12N、P13-A 至 P13-I4、V1-A/V1-B/V1-C/V1-D 均已完成。V1-D 冻结=`3a1cadf`、实现=`821c136`，Codex 独立专项/回归=`9/10 passed`。当前转入标书内容制作到 Word 整章导出的只读审计；继续按分级策略避免机械重复全量，V2/V3 后置。
 > **当前分支**：`collab/grok-code-codex-review`
 > **协作方式**：Grok 负责限定范围的实现与测试；Codex 负责范围、审查、验收和提交授权。
 
@@ -182,7 +182,15 @@
 
 **验收**：原始 failure-first 为生产脚本缺失 `0/1/24 did-not-run`；B1-B7 与生产 A1 均经双方确认后返修。Codex 独立新专项/MinerU/Docling `26/54/46 passed`；本机真实 dry-run 为 `cli_missing`/2。未运行真实合成门，未安装或下载模型。
 
-**下一主线**：独立审计 lightweight DOCX 表格/标题结构和合成 PDF/DOCX 内容完整性，再推进标书制作与 Word 整章导出；不得把解析器安装混入代码包。
+**下一主线**：V1-D 已完成 lightweight DOCX 表格/标题结构和合成 PDF/DOCX 内容质量门；继续只读审计标书制作与 Word 整章导出的真实断点，不得把解析器安装混入代码包。
+
+#### V1-D：lightweight 文档结构质量门（已完成）
+
+**状态**：冻结=`3a1cadf`、实现=`821c136`。严格两文件将 DOCX 改为按 `w:p/w:tbl` 原序输出，Heading 1–6 映射 Markdown，普通表格输出 GFM，空表固定占位；PDF 生产路径不变。
+
+**验收**：原始 failure-first **2 failed / 6 passed**，两轮双方确认收紧后为 **3 failed / 6 passed**；Codex 独立实现后专项/受影响回归 **9/10 passed**，编译、diff、哈希和空暂存门通过。未运行后端全量、前端 E2E、真实 CLI/模型或业务样本。
+
+**下一主线**：以代码和 TEMP 合成证据审计“章节内容 → Word 下载”完整链，冻结单一最高优先级断点；复杂排版、OCR、V2/V3 协作和公网部署继续后置。
 
 #### 功能包 5：响应矩阵智能建议“人工确认后应用”浏览器 E2E
 

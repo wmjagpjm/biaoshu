@@ -7,7 +7,7 @@
 
 # V1-D lightweight 文档结构质量契约
 
-> **状态：冻结前草案。** 冻结提交后才允许在独立 worktree 写测试或实现。
+> **状态：已完成并推送。** 冻结=`3a1cadf`，实现=`821c136`。
 > **分支：** 仅 `collab/grok-code-codex-review`，严禁操作 `main`。
 > **基线：** `ca741ed`；V1-C 已完成，本机仍无真实 MinerU/Docling CLI。
 
@@ -146,3 +146,12 @@ git -C .. diff --check
 ## 9. 完成定义与下一步
 
 严格两文件实现、新专项与受影响回归、编译/diff/哈希/空暂存全部通过；Codex 独立审查后中文提交推送并闭环五份生产文档。完成后进入标书内容制作与 Word 整章导出，不扩到 OCR 或 V2/V3。
+
+## 10. 完成证据（2026-07-22）
+
+- Grok B 原始 failure-first=`msg_1066522513a74304887abf801313a8e7`，真实 **2 failed / 6 passed**；B1-B3 双确认后为 **3 failed / 6 passed**。
+- B4-B6 由 Codex question=`msg_072c9755f07844b1a854b252833ff5f1`、Grok B 确认=`msg_82319caa5bf24f0fa33f7637d1a3810e` 后才授权收紧；最终测试回执=`msg_61742788ed494efe94fb1a0d10e238bb`。
+- 冻结测试 SHA-256=`842241C97AB4F570D090197C9CB932CC4F44B12B38B22FA08DB1F7186C8A6884`，18899 字节；Codex 独立复跑 TEMP 单节点 **1 passed**，完整 failure-first **3 failed / 6 passed**。
+- Grok A 生产实现回执=`msg_49add091dbb94f789e68a9a7f46e2f92`；生产 SHA-256=`D2BB50847EFFF9CA17FCFA0BAF0AF9494344F19F5003463CA00E4C4ACC2119CE`，6396 字节，冻结测试哈希未变。
+- Codex 独立专项/受影响回归 **9/10 passed**，`py_compile` 与 `git diff --check` 通过；未运行后端全量、前端 E2E、真实 CLI/模型或业务样本。
+- 下一主线已转为标书内容制作到 Word 整章导出的独立只读审计；V1-D 两文件从现在起只保留证据，不得沿用白名单扩包。

@@ -8,6 +8,7 @@
 # V1-D lightweight 文档结构质量实施计划
 
 > **执行要求：** 使用 `executing-plans` 逐项执行；任何范围或测试疑点先通过消息箱确认。
+> **完成状态（2026-07-22）：** 冻结=`3a1cadf`，实现=`821c136`；严格两文件已验收并推送。
 
 **目标：** 用现有 python-docx/pypdf 修复 lightweight DOCX 表格丢失与标题降级，并用合成 DOCX/PDF 锁定结构质量。
 
@@ -77,3 +78,11 @@
 ## 任务 7：继续 V1 产品主线
 
 V1-D 后优先审计标书制作主流程当前断点和 Word 整章导出；OCR、真实外置解析器安装、跨项目协作与公网 SaaS 继续后置。
+
+## 执行结果
+
+1. Grok B 原始 failure-first **2 failed / 6 passed**；B1-B3 收紧后 **3 failed / 6 passed**。Codex 第二轮发现 B4 标题子串假绿、B5 TEMP 顺序依赖和 B6 空表非完整块，双方确认后才授权 test-only 返修。
+2. 最终冻结测试哈希=`842241C97AB4F570D090197C9CB932CC4F44B12B38B22FA08DB1F7186C8A6884`；Codex 独立 failure-first 仍为 **3 failed / 6 passed**，TEMP 汇总单节点 **1 passed**。
+3. Grok A 仅修改 `parse_service.py`，未触碰冻结测试；Codex 静态审查确认按 `w:p/w:tbl` 原序遍历、Heading 1–6、GFM 普通表格、空表与降级边界一致。
+4. Grok A 自测专项/回归 **9/10 passed**；Codex 独立复跑同为 **9/10 passed**，编译与 diff 门通过。
+5. 实现提交=`821c136`，已 fast-forward 并只推送 `collab/grok-code-codex-review`；Grok 全程未暂存、提交或推送。

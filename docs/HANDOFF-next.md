@@ -493,7 +493,7 @@ frontend/src/features/
 1. 阶段 4 **功能包 8**、P8B/P8C/P8D/P8E 与 **V1-C 运行时诚实预检**均已验收并推送；V1-C 冻结=`6e7aafb`、实现=`21d3213`。真实 CLI/模型仍需人工准备；未授权前只允许 dry-run，不得自动安装或运行真实合成门。
 2. 阶段 4 **P9A/P9B/P9C/P9D** 与阶段 5 **P10A/P10B/P10C/P10D/P10F/P10E/P10G/P10H/P10I/P10J/P10K** 均已实现、独立验收并文档闭环。P9C 的真实模型门仍是运行时前置：固定依赖和模型缓存就绪后，用户显式构建索引，再运行固定预检；未通过前继续关键词降级。
 3. P8C/P8D/P8E、P10K、M3-D、P11A、P11B 与 P11C 均已完成。P8E 已按顺序完成后端精确 `mineru|docling` 枚举和独立本机助手；继续保持 P8B/P8C/P8D 的策略、票据、回环和正文出域边界。
-4. P13-E 至 P13-I4、V1-A/V1-B/V1-C 已完成。下一包按本机/内网实际可用优先级只读审计 lightweight DOCX 表格/标题结构和合成 PDF/DOCX 质量门；随后继续标书制作与 Word 整章导出，V2/V3 协作能力继续后置。
+4. P13-E 至 P13-I4、V1-A/V1-B/V1-C/V1-D 已完成。V1-D 冻结=`3a1cadf`、实现=`821c136`，已关闭 lightweight DOCX 表格丢失与标题降级；下一包只读审计标书内容制作到 Word 整章导出的真实断点，V2/V3 协作能力继续后置。
 
 资源同步后续只可由管理员配置新的签名发布方，绝不可放开浏览器 URL 或外网抓取。图片管线已冻结项目内资源引用协议，后续扩展不得放开外链或客户端路径。P13-H1/H2/H3 已分别完成项目级事件账本、SSE 重放和保守前端提示；跨项目总线、协同光标、评论审批和自动正文覆盖仍不在已交付范围。
 
@@ -595,7 +595,7 @@ frontend/src/features/
 
 ---
 
-## 11. 当前会话状态（更新至 2026-07-20）
+## 11. 当前会话状态（更新至 2026-07-22）
 
 - **用户长期目标（必须完整保留）**：持续完成 biaoshu 标书制作者剩余主线任务，按既定路线图完成独立规划、受限实现审查、独立验收、中文文档闭环与协作分支推送；不直接操作 `main`。
 - **P13-D1 已完成并推送**：冻结=`3132684`、实现=`a8982e3`；Grok 最终 test-only review=`msg_de747706fcb64a188eef50d77e29d451`。Codex 独立专项+schema **18 passed**、PRAGMA 顺序 **2 passed**、代表性真实写链 **5 passed**，py_compile/diff-check/生产哈希/精确白名单均通过。
@@ -606,6 +606,7 @@ frontend/src/features/
 - **P8D 已完成并推送**：契约=`docs/p8d-mineru-local-helper-contract.md`，计划=`docs/plans/2026-07-15-p8d-mineru-local-helper-plan.md`，实现=`e1fe316`。纯标准库助手只从交互 TTY 读取 P8C 单次票据，Windows 只认 `mineru.exe`，强制本地离线模型、环境白名单、临时输出和回环无代理/无重定向单次回调；真实 CLI/模型由用户人工准备。
 - **P8E 已完成并推送**：契约/计划提交=`73b1264`，P8E-A 后端=`79b346e`，P8E-B 助手=`e3f9cc4`。Docling 46、MinerU 54、后端受影响回归 37、P8C E2E 9、P8B E2E 6 passed；真实 Docling/模型仍未安装、未验收，禁止声称真实模型就绪。
 - **V1-C 已完成并推送**：冻结=`6e7aafb`、实现=`21d3213`。标准库 runtime preflight 提供默认 MinerU/可选 Docling 的 dry-run 与显式合成 DOCX 门；Codex 独立 `26/54/46 passed`，本机真实 dry-run 为 `cli_missing`/2。真实 CLI/模型与合成门仍未授权运行。
+- **V1-D 已完成并推送**：冻结=`3a1cadf`、实现=`821c136`。DOCX 按 body 原序输出 Heading 1–6、段落和普通 GFM 表格；空表固定占位，PDF 路径保持冻结。Codex 独立 failure-first **3 failed / 6 passed**，实现后专项/回归 **9/10 passed**，编译/diff/哈希门通过。
 - **Grok 当前状态**：2026-07-20 认证可用，P13-D1 首轮任务/review=`msg_a0c6083215454410b9a95c3c19c54c02`/`msg_1a838890b3384c4cbbd6b238e37d5ede`，test-only 返修任务/review=`msg_6cf099e801f544e69efbe51e6eab6c44`/`msg_de747706fcb64a188eef50d77e29d451`。单次任务进程已正常退出；再次需要 Grok 时必须先发新任务再后台静默启动，不要因进程退出误判额度或重复启动旧任务。Grok 全程只实现/自测，未暂存、未提交、未推送。
 - 当前分支仍为 `collab/grok-code-codex-review`；P12F-H 冻结=`0660145`、范围修订=`0db935b`/`aca68b6`、实现=`b4338ba` 已提交并推送，当前文档闭环提交以实际 HEAD 为准。全部既有基线保留。新会话第一步必须用 `git status -sb`、`git rev-parse HEAD`、`git rev-parse origin/collab/grok-code-codex-review` 重新核验，不可只信本文静态 SHA。
 - 阶段 3 **已完成并推送**：M3-A 只读融合建议、M3-B 差异预览与浏览器确认、M3-C 会话内单批撤销、M3-D 服务端原子确认与最近 20 批持久恢复。
