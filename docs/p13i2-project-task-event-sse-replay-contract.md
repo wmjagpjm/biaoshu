@@ -1,6 +1,6 @@
 # P13-I2 项目任务事件 SSE 与断线重放契约
 
-> 状态：只读审计完成，等待独立冻结提交后交给 Grok failure-first
+> 状态：实现、双确认返修与 Codex 独立验收完成
 > 日期：2026-07-21
 > 前置：P13-I1 项目任务事件账本与游标 GET（功能=`f0d6d75`）
 > 分支：仅 `collab/grok-code-codex-review`，禁止操作 `main`
@@ -99,3 +99,11 @@ data: {"eventId":"pte_<同一ID>","taskId":"task_<不透明标识>","taskType":"
 ## 9. 后续明确拆分
 
 I2 仍不提供前端 EventSource 接入、任务详情自动刷新、通知、评论审批、协同光标、WebSocket、强制锁或跨项目事件；这些能力须另行只读审计和冻结。
+
+## 10. 实现与验收回执
+
+- 冻结提交=`525d059`，功能提交=`03fb90e`，严格三文件未扩围。
+- Grok failure-first=`msg_d83ad4841dab4cdb9b57ec4aaf6721a8`，真实 **15 failed / 0 passed**；初始实现 review_request=`msg_186855fc4b18450e89bf71162cae8279`。
+- Codex 只读 question=`msg_e3f6751a53c14bb8b08e4bb32c713f1e`，Grok 确认=`msg_63b808eadc244154afdca692874a27f8`：连接中 stale、unavailable、request-scope `get_db` 反假绿和跨 workspace 游标四项均为真实验收证据缺口。双方确认后才授权 test-only 返修；控制帧唯一性再次经 `msg_8830175702d24e99955a1a2d8824f6ba` / `msg_be93334deb8846d6ae6a999796223b85` 确认并收紧。
+- 返修属于既有生产语义的 evidence-only 补强，新增用例首次即绿，未制造红测；最终 Grok 回执=`msg_f4a26b03cfb04055ae2f09b6c449f441`。
+- Codex 独立串行通过 I2 专项 **17 passed**、I1/单任务 SSE/P13-A/H1/H2/认证代表回归 **125 passed**，合计 **142 passed**；`compileall`、`git diff --check`、严格三文件边界与 SHA-256 门通过。未运行后端全量、xdist、前端或整仓 E2E。

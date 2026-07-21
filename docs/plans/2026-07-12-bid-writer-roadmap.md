@@ -434,7 +434,13 @@
 
 功能提交=`f0d6d75`，Codex 验收回执=`msg_7e1d86e5d0b240a4a011bba4c5bce8bf`，Grok 最终回执=`msg_be5b0a6a444841969517152db8fac4f8`。未运行后端全量、xdist、前端或整仓 E2E；P13-I2 才能在本包只读 API 之上增加项目级 SSE、`Last-Event-ID` 和断线重放。
 
-**下一包冻结方向**：P13-I2 只在 I1 `project_task_events` 账本上增加项目级 `/task-events/stream`、`Last-Event-ID` 重放和 stale 控制帧；严格三文件契约=`docs/p13i2-project-task-event-sse-replay-contract.md`，计划=`docs/plans/2026-07-21-p13i2-project-task-event-sse-replay-plan.md`。不改实体、Schema、`main.py`、I1 写链、现有单任务 SSE、认证公共层、前端或其它测试。
+### P13-I2：项目任务事件 SSE 与断线重放（已完成）
+
+契约=`docs/p13i2-project-task-event-sse-replay-contract.md`，计划=`docs/plans/2026-07-21-p13i2-project-task-event-sse-replay-plan.md`，冻结=`525d059`，功能=`03fb90e`。严格三文件增加项目级 `/task-events/stream`、`Last-Event-ID` 重放、tip cursor 锚点、50 条连续排页、注释心跳和 stale/unavailable 控制帧；连接前和流内只使用关闭的短 Session，不改实体、Schema、`main.py`、I1 写链、现有单任务 SSE、认证公共层或前端。
+
+真实 failure-first **15 failed / 0 passed**。Codex 与 Grok 双方确认四项验收证据缺口后才 test-only 返修，控制帧唯一性再次确认收紧；Codex 独立 I2 专项/代表回归 **17/125 passed**，合计 **142 passed**，`compileall`、diff-check、严格三文件哈希门通过。未运行后端全量、xdist、前端或整仓 E2E。
+
+**下一包方向**：P13-I3 只在 I2 SSE 上增加技术标/商务标共享的安全任务状态提示，不替换 `useProjectPipeline`，不自动请求任务详情，不展示 eventId/taskId/时间或正文。I3 已在独立 worktree 冻结并进入 Grok B failure-first，实现尚未经过 Codex 审查与合并。
 
 阶段 0/1/2、阶段 3 M3-A 至 M3-D、阶段 4 **包 5** 至 **包 8/P8B/P8C/P8D/P8E**、P9A/P9B/P9C/P9D、阶段 5 P10A 至 P10K、**P11A/P11B/P11C 三个真实数据收口包**，以及 **P12A/P12B-A/B/C/D/P12C-A/B/C/P12D-A/B/P12E-A/B/C/P12F-A/B/C/D/P13-A** 均保持已交付。P8E 完整契约见 `docs/p8e-docling-local-helper-contract.md`，实施与独立验收记录见 `docs/plans/2026-07-15-p8e-docling-local-helper-plan.md`。
 

@@ -1,17 +1,17 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-21（P13-E、P13-F1、P13-F2、P13-G1、P13-G2、P13-H1、P13-H2、P13-H3、P13-I1 均已完成验收；I1 功能与文档随本次闭环推送）
+> **交接日期**：2026-07-21（P13-E、P13-F1、P13-F2、P13-G1、P13-G2、P13-H1、P13-H2、P13-H3、P13-I1、P13-I2 均已完成验收）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
 > **协作分支功能基线**：P12F-J-A 冻结=`2f03b8c`、实现=`a7021c4`；P12F-I 冻结=`060191e`、实现=`008e443`；P12F-H 冻结=`0660145`、范围修订=`0db935b`/`aca68b6`、实现=`b4338ba`；P12F-G-B 冻结=`89b5728`、实现=`bb7c4f4`；P12F-G-A 冻结=`c176cb5`、实现=`d2555d4`；P12F-F-B 冻结=`4585388`、实现=`be2fe77`；P12F-F-A 冻结=`b2eed7c`、实现=`e6516e8`；P12F-E-B 冻结=`a31e50e`、实现=`f9127ec`；P12F-E-A 冻结=`af3798a`、实现=`c66b69d`；P12F-D 冻结=`a2acdf3`、实现=`587df9a`；P13-A 冻结=`e8dfa61`、实现=`1509aa2`；P12F-C 冻结=`bb1ae3e`、实现=`fe99f5a`；P12F-B 冻结=`4ddd896`、实现=`c84a94d`；P12F-A 冻结=`e713fb3`、实现=`24f4cf2`；P12E-A 冻结=`5aa205c`、实现=`f9f067e`；P12E-B 冻结=`00ef081`、实现=`5a5b08a`；P12E-C 冻结=`8b40bf4`、实现=`b6a4375`；其余既有功能基线见本文 §11。新会话必须以 `git rev-parse HEAD` 与远端分支一致为准。
-> **最新增量基线**：P12N 已交付当前已加载修订固定优先；冻结=`337b401`、实现=`394639a`。P13-B 已交付当前客户端接受版本的 UTC 更新时间；冻结=`040d644`、实现=`1d4fe0b`。P13-C 已交付当前版本九类修订流程来源；冻结=`e62ea27`、实现=`6eaa89f`。P13-D1 已交付修订操作者可信账本；冻结=`3132684`、实现=`a8982e3`。P13-D2 已交付当前版本操作者用户名展示；冻结=`4b95ab5`、实现=`44c9196`。P13-E 已交付活动工作空间切换与成员只读可见性；冻结=`19f0bfe`、实现=`5685441`、闭环=`70dfb39`。P13-F1 已交付项目在线租约后端基础；冻结=`78302bc`、实现=`6164d8c`。P13-F2 已交付项目近期成员前端；冻结=`a5709ed`、实现=`dfa6bc0`。P13-G1 已交付项目章节编辑意图租约后端；冻结=`a0b7c48`、实现=`015ab37`。P13-G2 已交付技术标章节编辑意图前端提示；冻结=`3a74fbb`、实现=`86abbbf`。P13-H1 已交付 editor-state 事件账本与游标后端；冻结=`da2537a`、实现=`4255823`。P13-H2 已交付 editor-state SSE 重放；功能=`c19bf94`。P13-H3 已交付编辑状态事件前端版本提示；功能=`40aacc7`，未知命名事件边界另包。P13-I1 已交付项目任务事件游标后端；功能=`f0d6d75`。
+> **最新增量基线**：P12N 已交付当前已加载修订固定优先；冻结=`337b401`、实现=`394639a`。P13-B 已交付当前客户端接受版本的 UTC 更新时间；冻结=`040d644`、实现=`1d4fe0b`。P13-C 已交付当前版本九类修订流程来源；冻结=`e62ea27`、实现=`6eaa89f`。P13-D1 已交付修订操作者可信账本；冻结=`3132684`、实现=`a8982e3`。P13-D2 已交付当前版本操作者用户名展示；冻结=`4b95ab5`、实现=`44c9196`。P13-E 已交付活动工作空间切换与成员只读可见性；冻结=`19f0bfe`、实现=`5685441`、闭环=`70dfb39`。P13-F1 已交付项目在线租约后端基础；冻结=`78302bc`、实现=`6164d8c`。P13-F2 已交付项目近期成员前端；冻结=`a5709ed`、实现=`dfa6bc0`。P13-G1 已交付项目章节编辑意图租约后端；冻结=`a0b7c48`、实现=`015ab37`。P13-G2 已交付技术标章节编辑意图前端提示；冻结=`3a74fbb`、实现=`86abbbf`。P13-H1 已交付 editor-state 事件账本与游标后端；冻结=`da2537a`、实现=`4255823`。P13-H2 已交付 editor-state SSE 重放；功能=`c19bf94`。P13-H3 已交付编辑状态事件前端版本提示；功能=`40aacc7`，未知命名事件边界另包。P13-I1 已交付项目任务事件游标后端；功能=`f0d6d75`。P13-I2 已交付项目任务事件 SSE 与断线重放；冻结=`525d059`、功能=`03fb90e`。
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
 > **P12M 完成状态**：冻结=`95b298f`、实现=`cc23542`。首轮七文件实现后，受影响回归准确暴露两份旧七键测试；经 Codex 明确 test-only 扩围后闭环，生产边界未扩大。
 > **P12M 最终生产哈希**：schemas=`76633E2BFF418A9FBBD0DD3AD18164C62496340AB4AD30BCCD7BDE2918DDF39D`；route=`3CC358D8280F3C6579261F88848D986E0A5A929D46D09F81FD378E7A9F23EF0C`；service=`F8D373B8DCCACB5B0921D4F972F0B85B29AAAAF82CFA0BE8E3D08AC2D107C1FA`；前端 API=`CEDCC06FDCB9B0743BEE2A5A019003D19145B2837BBB273226C15E7EFFD45BA3`；面板=`5C41D4A3C2807B1A69DB40D34F22E40A7A664280765A3F8D7C7DFCE3EB25E31D`。
 > **P12N 完成状态**：冻结=`337b401`、实现=`394639a`；严格两文件，只做非搜索态当前已加载修订的前端稳定固定优先，不改后端或游标。最终面板哈希=`FEAD15B6CB4043D1E6A96C1BFF9782A3B1F072A28D6619E375D9B5F07A23FF3B`，history E2E=`617C7481B55A2F7760A36127E5E5DB8C50E193526206D444F13D56AA6F65698F`。
-> **本地状态**：只允许分支 `collab/grok-code-codex-review`。P13-H1 已完成并推送（实现=`4255823`、文档=`7e5e02e`）；P13-H2 已完成实现与独立验收（功能=`c19bf94`）；P13-H3 已完成实现与独立验收（功能=`40aacc7`）；P13-I1 已完成实现、独立验收与功能推送（功能=`f0d6d75`），本次文档闭环随后提交。详细边界见 I1/H2/H3 契约文档。
-> **验收基线**：P13-B Grok P13-B/真值 **6/46 passed**，Codex 独立 **6 passed**。P13-C Grok 后端/前端 **18/11 passed**；Codex 独立后端 P13-C+P12C/全状态 **32/19 passed**、P13-B/C E2E **11 passed**。P13-D1 Codex 独立专项+schema/PRAGMA 顺序/代表写链 **18/2/5 passed**。P13-D2 Grok 后端/freshness **44/17 passed**；Codex 独立核心/回归/freshness/外部写路径 **44/15/17/4 passed**。P13-E Grok/Codex 独立 P13-E 与完整认证均为 **25/36 passed**。P13-F1 初始 failure-first **30 failed / 4 passed**，两轮返修红测 **16 failed / 5 passed**、**2 failed**；Grok 最终专项/直接回归 **41/55 passed**，Codex 独立专项/代表回归 **41/3 passed**。P13-F2 初始 failure-first **7 failed / 1 passed**、返修红测 **2 failed / 0 passed**；Grok 最终专项 **11 passed**，Codex 独立专项/freshness **11/17 passed**。P13-G1 有效 failure-first **42 failed / 3 passed**；Grok 返修后聚焦/专项 **17/53 passed**，Codex 独立专项/P13-F1/认证/editor-state **53/41/8/1 passed**。P13-G2 failure-first **8 failed / 1 passed**；Grok 最终专项/聚焦关键序列 **13/7 passed**，Codex 独立专项/P13-F2/freshness **13/11/17 passed**。P13-H1 failure-first **25 failed / 3 passed**；Grok 最终专项/回归 **28/90 passed**，Codex 独立专项/editor-state 与 P13-D1 回归 **28/90 passed**。P13-H3 Codex 独立 H3 **15 passed**、freshness **17 passed**，lint/build/diff-check 全通过；未运行整仓 E2E、后端全量或并发测试。**所有 pytest 与 Playwright E2E 共用 SQLite 重置库，pytest 禁止 xdist/并发分组，Playwright 必须显式 `--workers=1 --retries=0` 逐条串行运行；按风险分级验收，避免 Grok 与 Codex 重复全量。**
+> **本地状态**：只允许分支 `collab/grok-code-codex-review`。P13-H1/H2/H3、P13-I1 均已完成并推送；P13-I2 已完成实现与独立验收（功能=`03fb90e`），本次文档闭环后推送。P13-I3 仅在独立 worktree `C:\Users\Administrator\biaoshu-p13i3-grok` 的分支 `collab/p13i3-grok-worktree` 在途，禁止将其视为已交付或直接改主工作区。
+> **验收基线**：P13-B Grok P13-B/真值 **6/46 passed**，Codex 独立 **6 passed**。P13-C Grok 后端/前端 **18/11 passed**；Codex 独立后端 P13-C+P12C/全状态 **32/19 passed**、P13-B/C E2E **11 passed**。P13-D1 Codex 独立专项+schema/PRAGMA 顺序/代表写链 **18/2/5 passed**。P13-D2 Grok 后端/freshness **44/17 passed**；Codex 独立核心/回归/freshness/外部写路径 **44/15/17/4 passed**。P13-E Grok/Codex 独立 P13-E 与完整认证均为 **25/36 passed**。P13-F1 初始 failure-first **30 failed / 4 passed**，两轮返修红测 **16 failed / 5 passed**、**2 failed**；Grok 最终专项/直接回归 **41/55 passed**，Codex 独立专项/代表回归 **41/3 passed**。P13-F2 初始 failure-first **7 failed / 1 passed**、返修红测 **2 failed / 0 passed**；Grok 最终专项 **11 passed**，Codex 独立专项/freshness **11/17 passed**。P13-G1 有效 failure-first **42 failed / 3 passed**；Grok 返修后聚焦/专项 **17/53 passed**，Codex 独立专项/P13-F1/认证/editor-state **53/41/8/1 passed**。P13-G2 failure-first **8 failed / 1 passed**；Grok 最终专项/聚焦关键序列 **13/7 passed**，Codex 独立专项/P13-F2/freshness **13/11/17 passed**。P13-H1 failure-first **25 failed / 3 passed**；Grok 最终专项/回归 **28/90 passed**，Codex 独立专项/editor-state 与 P13-D1 回归 **28/90 passed**。P13-H3 Codex 独立 H3 **15 passed**、freshness **17 passed**。P13-I2 failure-first **15 failed / 0 passed**；Codex 双确认返修后独立专项/代表回归 **17/125 passed**，合计 **142 passed**，lint/build 不适用，`compileall`/diff-check 通过。**同一 worktree 的 pytest 禁止 xdist/并发分组；不同 worktree 也必须使用独立 SQLite 目录。Playwright 必须显式 `--workers=1 --retries=0` 串行；按风险分级验收，避免重复全量。**
 
 ---
 
@@ -20,12 +20,12 @@
 ```text
 继续 biaoshu 标书制作者剩余主线任务。仓库 C:\Users\Administrator\biaoshu，GitHub https://github.com/wmjagpjm/biaoshu.git。
 工作分支只能是 collab/grok-code-codex-review，禁止直接操作 main；先执行 git status -sb，并核对 HEAD 与 origin/collab/grok-code-codex-review 一致且工作区干净。
-完整阅读 docs/p13h1-editor-state-event-cursor-backend-contract.md、docs/plans/2026-07-20-p13h1-editor-state-event-cursor-backend-plan.md、docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/plans/2026-07-13-package-9-delivery-enhancement-plan.md、docs/integration-checklist.md。
+完整阅读 docs/p13i2-project-task-event-sse-replay-contract.md、docs/plans/2026-07-21-p13i2-project-task-event-sse-replay-plan.md、docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/plans/2026-07-13-package-9-delivery-enhancement-plan.md、docs/integration-checklist.md。
 长期目标：持续完成卡片化知识与素材库、多模板融合与可控 AI 编写、质量与交付闭环；每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
 当前进度：P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/B、P12E-A/B/C、P12F-A/B/C/D/E-A/E-B/F-A/F-B/G-A/G-B/H/I/J-A/J-B/P12K/P12L/P12M/P12N、P13-A/P13-B/P13-C/P13-D1/P13-D2/P13-E/P13-F1/P13-F2/P13-G1/P13-G2/P13-H1、P9D、P9C-R1、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成；整仓前端 **318 passed** 仍仅作既有历史基线。
 当前状态：修订历史已闭合来源、UTC 时间、联合搜索、搜索命中来源标签、游标分页、单条删除、展示名称、固定与保护性裁剪；检查点已有创建、列表、详情、安全恢复、展示名称、单条删除、当前项目显式搜索、固定状态读取/入口、固定/安全双保护裁剪、默认列表固定优先排序与固定名额提示。
-当前执行包：P13-I1 已完成并随本记录闭环；功能=`f0d6d75`，严格十一文件。项目任务事件只读游标、真实任务/回传写链、200 条裁剪、跨 workspace、认证 no-store 和最终 commit 故障证据均已验收；P13-I2 才能接项目级 SSE/`Last-Event-ID`。
-下一步：先对 P13-I2 项目级任务事件 SSE 与断线重放做只读审计并独立冻结；不得把任务总线、通知、评论审批、协同光标、WebSocket 或强制锁合并进入 I2。
+当前执行包：P13-I2 已完成；冻结=`525d059`、功能=`03fb90e`，严格三文件。项目级 `/task-events/stream`、`Last-Event-ID`、cursor 锚点、保留窗口重放、连接中 stale/unavailable、短 Session 和隐私边界均已验收。
+下一步：P13-I3 项目任务事件前端提示已在独立 worktree 冻结并由 Grok B failure-first 实现；Codex 尚未审查，严禁把在途前端视为已交付。通知、评论审批、协同光标、WebSocket、任务详情自动刷新或强制锁仍不得并入 I3。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -1068,4 +1068,12 @@ failure-first=`msg_1e4734a045024eed91aaf13a58ef705e`（1 passed / 1 failed / 5 d
 
 Grok 最终回执=`msg_be5b0a6a444841969517152db8fac4f8`；Codex 独立验收回执=`msg_7e1d86e5d0b240a4a011bba4c5bce8bf`。Codex 串行通过专项 **25**、callback/票据 **20**、认证 **39**、单任务 SSE/P13-A **18**、P13-H1/H2 **43**，合计 **145 passed**；`compileall`、`git diff --check`、十一文件边界与哈希门通过。工作区已清空，本地 HEAD 与远端均为 `f0d6d75`。
 
-未运行后端全量、xdist、前端或整仓 E2E。下一包先只读审计并冻结 P13-I2 项目级任务事件 SSE 与断线重放；不得把任务通知、评论审批、协同光标、WebSocket 或强制锁并入 I2。
+未运行后端全量、xdist、前端或整仓 E2E。下一包为已在独立 worktree 在途的 P13-I3 前端任务事件提示；不得把任务通知、评论审批、协同光标、WebSocket 或强制锁并入 I3。
+
+## P13-I2 项目任务事件 SSE 与断线重放（已完成）
+
+契约=`docs/p13i2-project-task-event-sse-replay-contract.md`，计划=`docs/plans/2026-07-21-p13i2-project-task-event-sse-replay-plan.md`，冻结=`525d059`，功能=`03fb90e`。严格三文件在 I1 脱敏账本上增加项目级 `/task-events/stream`：无 header 时只发 tip cursor 锚点，有 `Last-Event-ID` 时正序重放保留事件，空表首事件不丢；SSE 只发六键任务事件、注释心跳与固定控制帧，不读取任务正文或结果。
+
+真实 failure-first 为 **15 failed / 0 passed**。Codex 首轮 question=`msg_e3f6751a53c14bb8b08e4bb32c713f1e`，Grok 确认=`msg_63b808eadc244154afdca692874a27f8`；双方确认连接中 stale、unavailable、request-scope `get_db` 反假绿和跨 workspace 游标四项证据缺口后才授权 test-only 返修。控制帧唯一性又经 `msg_8830175702d24e99955a1a2d8824f6ba` / `msg_be93334deb8846d6ae6a999796223b85` 确认收紧，生产哈希全程不变。
+
+Codex 独立串行专项 **17 passed**、I1/单任务 SSE/P13-A/H1/H2/认证代表回归 **125 passed**，合计 **142 passed**；`compileall`、`git diff --check`、严格三文件和哈希门通过。未运行后端全量、xdist、前端或整仓 E2E。P13-I3 前端提示仍在隔离 worktree 在途，未经 Codex 审查不得合入。

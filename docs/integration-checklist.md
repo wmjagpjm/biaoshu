@@ -1409,3 +1409,18 @@ Codex 独立串行通过 P13-G2 专项/P13-F2 presence/freshness **13/11/17 pass
 6. 成功、业务错误及认证中间件 401/403/503 均 `Cache-Control: no-store`；严格键集、格式、错误码和隐私门不得回显项目/空间/游标/异常原文。
 
 验收证据：首轮 failure-first **17 failed / 0 passed**；Codex 两轮只读问题/确认分别为 `msg_c60ffa9f89334940b6ab39eee85fb5c1`/`msg_c4b13a10f3ec490f983a0c03f4f9d262` 与 `msg_85b188d2dabe4f12be6c62d3dde1850f`/`msg_0e9da620244d4ead96a46f815131306c`；Grok 最终回执=`msg_be5b0a6a444841969517152db8fac4f8`；Codex 验收=`msg_7e1d86e5d0b240a4a011bba4c5bce8bf`。五组独立串行结果 **25/20/39/18/43 passed（合计 145）**，`compileall` 与 `git diff --check` 通过；功能提交=`f0d6d75` 已推送。未运行后端全量、xdist、前端或整仓 E2E。
+
+## P13-I2 项目任务事件 SSE 与断线重放（已完成）
+
+契约=`docs/p13i2-project-task-event-sse-replay-contract.md`，计划=`docs/plans/2026-07-21-p13i2-project-task-event-sse-replay-plan.md`，冻结=`525d059`，功能=`03fb90e`。严格三文件增加 `GET /api/projects/{projectId}/task-events/stream`，I1 游标 GET、任务写链、实体、Schema、`main.py`、认证公共层和单任务 SSE 保持不变。
+
+联调验收项：
+
+1. 无 `Last-Event-ID` 且已有历史只发一个 tip cursor 锚点，不回放旧任务事件；空表连接后的首条真实事件不得被 bootstrap 吸收。
+2. 合法 `Last-Event-ID` 按 `(occurred_at,id)` 正序重放；51 条以上积压跨 50 条页无丢失、重复或乱序，断线重连只接续最后成功 ID 之后事件。
+3. 伪造、裁剪、跨项目或跨 workspace 游标连接前固定 409/no-store；连接中 stale 精确一条无 id 控制帧后关闭。内部异常精确一条 unavailable，不泄漏异常原文、SQL、路径或栈。
+4. required、authenticated、活动 workspace、精确 `bid_writer` 门控；任意 `X-Workspace-Id`、非 writer、disabled、跨 workspace 项目、query/body/重复或非法头和非 GET 均固定拒绝。
+5. task-event data 精确六键，SSE id 与 data.eventId 相等；心跳仅注释。不得返回 message/error/result/payload/正文、actor、client、Cookie、CSRF 或内部 detail。
+6. 连接前和流内每轮均新建并关闭短 Session，stream 路径 `get_db` 精确零调用；每轮查询保持 workspace/project 双谓词。
+
+验收证据：failure-first=`msg_d83ad4841dab4cdb9b57ec4aaf6721a8`，真实 **15 failed / 0 passed**；初始 review_request=`msg_186855fc4b18450e89bf71162cae8279`。Codex/Grok 四项双确认=`msg_e3f6751a53c14bb8b08e4bb32c713f1e`/`msg_63b808eadc244154afdca692874a27f8`，控制帧唯一性双确认=`msg_8830175702d24e99955a1a2d8824f6ba`/`msg_be93334deb8846d6ae6a999796223b85`；最终 Grok 回执=`msg_f4a26b03cfb04055ae2f09b6c449f441`。Codex 独立专项/代表回归 **17/125 passed（合计 142）**，`compileall`、`git diff --check`、严格三文件和 SHA-256 门通过。未运行后端全量、xdist、前端或整仓 E2E。

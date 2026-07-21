@@ -1,7 +1,7 @@
 # P13-I2 项目任务事件 SSE 与断线重放实施计划
 
 > 执行要求：Grok 先运行真实 failure-first，再按三文件白名单实现并自测；Codex 独立审查、双确认返修和最终验收。
-> 状态：已完成只读审计与契约冻结，待 Grok failure-first
+> 状态：实现、双确认返修与 Codex 独立验收完成
 > 契约：`docs/p13i2-project-task-event-sse-replay-contract.md`
 > 分支：`collab/grok-code-codex-review`
 
@@ -41,6 +41,8 @@ cd ..
 git diff --check
 ```
 
-## 5. 当前冻结记录
+## 5. 完成记录
 
-只读审计确认：I1 端点已注册于 `main.py`，无需修改入口；既有单任务 SSE 输出完整任务快照，不能复用；H2 已验证短 Session、cursor 锚点和 stale 控制帧模式可参考但不得改动 H2 文件。当前唯一待执行动作是先发送三文件 failure-first 任务，认证成功后由 Grok 实现并自测。
+只读审计确认：I1 端点已注册于 `main.py`，无需修改入口；既有单任务 SSE 输出完整任务快照，不能复用；H2 的短 Session、cursor 锚点和 stale 控制帧模式只作参考，H2 文件保持未改。
+
+冻结=`525d059`，功能=`03fb90e`。failure-first 为真实 **15 failed / 0 passed**。Codex 审查发现连接中 stale、unavailable、request-scope `get_db` 反假绿与跨 workspace 游标四项证据缺口；Grok 只读确认后才授权 test-only 返修，控制帧唯一性又经第二次 question/确认收紧。Codex 最终独立串行 I2 专项 **17 passed**、代表回归 **125 passed**，合计 **142 passed**；`compileall`、`git diff --check`、严格三文件和哈希门通过。未运行后端全量、xdist、前端或整仓 E2E。
