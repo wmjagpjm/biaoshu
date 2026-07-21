@@ -8,6 +8,7 @@
 # V1-H1 章节生成空白正文质量实施计划
 
 > **执行代理要求：** 必须使用 `executing-plans`，逐项执行并在每个审查点核对真实证据。
+> **完成状态：** 冻结=`a1cee86`，实现=`d550dd9`；Codex 独立验收和推送已完成。
 
 **目标：** 模型返回空白章节正文时，单章和多章任务必须失败且不得写入空白 `needs_review` 章节，同时保留合法短章与既有逐章 CAS 语义。
 
@@ -109,3 +110,10 @@
 ### 任务 8：继续 V1-H2
 
 H1 闭环后立即冻结技术标导出 `contentWarnings`：历史空章、手工空章或部分生成残留仍可导出审阅草稿，但浏览器必须显示固定、有限、脱敏的正文完整性提醒；禁止复用 `imageWarnings` 或按字数硬拦。
+
+## 执行结果
+
+1. Grok B 单文件 failure-first 与 Codex 独立复跑均为 **4 failed / 2 passed**；测试哈希冻结为 `B39231458F4AA982D4A7DF442622F3D49F890CB279308F9BAF43C6F2B683AA26`。
+2. Grok A 只在 `_generate_one_chapter_body()` 返回前增加空白门，生产哈希为 `535F20CF7837014E71A71310706206D54B377A73B9E01DE8C7C2C8EDEC919578`；未修改冻结测试或其它文件。
+3. Codex 独立串行通过专项 **6 passed**、P12B/P12C/知识库回归 **66 passed**，`git diff --check`、严格两文件、空暂存区与脱敏错误门通过。
+4. 实现提交=`d550dd9`，已快进并只推送 `collab/grok-code-codex-review`；未运行后端全量、前端 E2E 或并发测试。

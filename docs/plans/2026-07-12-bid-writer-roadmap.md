@@ -7,7 +7,7 @@
 
 # 标书制作者能力补全与角色化演进路线图
 
-> **状态**：阶段 0–5 已按下文拆包持续交付；P11A/B/C、P12A 至 P12N、P13-A 至 P13-I4、V1-A 至 V1-G 均已完成。V1-G 冻结=`b9cacd1`、实现=`fb3b58f`，Codex 独立前端=`9+28+18+8+5+15 passed`。下一包重新只读审计多章正文内容质量与最终标书可交付性；继续按分级策略避免机械重复全量，V2/V3 后置。
+> **状态**：阶段 0–5 已按下文拆包持续交付；P11A/B/C、P12A 至 P12N、P13-A 至 P13-I4、V1-A 至 V1-H1 均已完成。V1-H1 冻结=`a1cee86`、实现=`d550dd9`，Codex 独立后端=`6+66 passed`。下一包固定为 V1-H2 技术标导出正文完整性有限告警；继续按分级策略避免机械重复全量，V2/V3 后置。
 > **当前分支**：`collab/grok-code-codex-review`
 > **协作方式**：Grok 负责限定范围的实现与测试；Codex 负责范围、审查、验收和提交授权。
 
@@ -190,7 +190,7 @@
 
 **验收**：原始 failure-first **2 failed / 6 passed**，两轮双方确认收紧后为 **3 failed / 6 passed**；Codex 独立实现后专项/受影响回归 **9/10 passed**，编译、diff、哈希和空暂存门通过。未运行后端全量、前端 E2E、真实 CLI/模型或业务样本。
 
-**下一主线**：V1-F/V1-G 均已完成；重新只读审计多章正文内容质量与最终标书可交付性。复杂排版、OCR、V2/V3 协作和公网部署继续后置。
+**下一主线**：V1-F/V1-G/V1-H1 均已完成；V1-H2 处理技术标导出正文完整性有限告警。复杂排版、OCR、V2/V3 协作和公网部署继续后置。
 
 #### V1-E：导出前最新编辑态落盘（已完成）
 
@@ -206,7 +206,7 @@
 
 **验收**：首轮 failure-first 后端/新下载/P9D/V1-E 为 **16 failed / 1 passed、13 failed / 0 passed、3 failed / 1 passed、3 failed / 15 passed**。多轮反假绿与控制字符边界均经双方确认后返修；最终 Grok/Codex 独立后端 **20/1 passed**、前端 **14/4/18/28/18 passed**，lint/build/diff-check、十文件和端口门通过。未运行后端全量或整仓 318 E2E。
 
-**下一主线**：V1-G 已完成任务 success 编辑态刷新围栏；重新只读审计多章正文内容质量与最终标书可交付性。`structure` 跨页设计、OCR、真实解析器安装、V2/V3 继续后置。
+**下一主线**：V1-G 与 V1-H1 已完成；V1-H2 处理历史/手工/部分生成空章的导出可发现性。`structure` 跨页设计、OCR、真实解析器安装、V2/V3 继续后置。
 
 #### V1-G：任务成功后编辑态刷新围栏（已完成）
 
@@ -632,3 +632,9 @@ P12D-B 技术/商务共用前端修订对比入口已完成。Grok 任务 `msg_a
 P12E-A 冻结=`5aa205c`、实现=`f9f067e`。Grok 任务经历 402 额度中断后恢复，完成七文件受限返修并发送 review_request=`msg_c24f270186a741a09a33781e84b1e762`；Codex 首轮审查以真实红测发现第 101 个正文差异章仍进入 difflib，返修任务=`msg_f09905515e974049827cd981087884c6`，红测 **1 failed / 1 passed**、修后 **2 passed**。
 
 Codex 独立通过后端专项/受影响回归/全量 **23/27/854 passed**（1 条既有 Starlette/httpx 弃用告警），前端 history/checkpoint/truth/全量 **27/51/46/290 passed**；Playwright 全部单 worker、零重试串行，lint/build/diff-check/精确七文件/空暂存区均通过。P12E-A 本身只覆盖单条历史修订对请求时当前状态；双历史修订手动比较随后已由 P12E-B/C 完成。正文自动恢复、自动批量比较、删除、搜索、分页或多人协作仍未实现。
+
+## V1-H1 章节生成空白正文质量门（已完成）
+
+冻结=`a1cee86`，实现=`d550dd9`。中央 `_generate_one_chapter_body()` 仅以 `strip()` 判空：空白输出固定失败且不写空章，有效 Markdown 原样返回；多章仍按既有逐章 CAS 保留成功前缀，合法短章不受字数门影响。
+
+Grok B/Codex 独立 failure-first 均为 **4 failed / 2 passed**；Codex 最终专项/定向回归 **6/66 passed**，严格两文件、哈希、diff-check 和空暂存区通过。未运行后端全量或前端 E2E。V1-H2 继续覆盖历史/手工/部分生成空章的非阻断 `contentWarnings`，不得复用 `imageWarnings`。
