@@ -19,6 +19,7 @@
 - 任一端口由无法确认归属的进程监听时，整次操作固定失败且零终止；不得按端口盲杀，不得影响 8010/8012/5174/5176 等测试端口或其它应用。
 - 全部归属通过后才逐个终止进程树，并在有界时间内复查两个端口均已释放。无监听视为幂等成功；失败只显示固定中文原因，不输出完整命令行、环境变量或用户目录之外的敏感参数。
 - 提供 `-WhatIf`/等价只读模式，必须走同一归属判定但不终止进程。
+- 为专项测试提供 `-ListenerSnapshotJson <临时文件>`，只允许与 `-WhatIf` 同时使用；JSON 严格为 `port/pid/executablePath/commandLine` 四键记录数组。该入口只替代监听快照来源，仍走生产归属判定；未带 `-WhatIf`、额外/缺失键、重复 PID、非法端口/PID/路径或非数组均固定失败且零终止。不得接受快照正文作为待执行命令。
 
 ## 3. 离线备份
 
@@ -36,6 +37,7 @@
 - 先在目标根创建同卷临时目录，完成复制、源/副本文件 SHA-256、大小核对和副本数据库 `PRAGMA integrity_check=ok` 后，再原子改名为 `biaoshu-backup-<UTC>`。任一步失败必须删除本轮临时目录，不得留下看似成功的最终目录。
 - 目标根必须在仓库外，且不能位于任一源目录内；拒绝符号链接、junction/reparse point、路径逃逸、已存在最终目录和非普通文件。源文件在复制期间变化必须失败，不得把不一致快照标记为成功。
 - `manifest.json` 使用固定版本 `biaoshu-offline-backup-v1`，只记录 UTC 时间、Git HEAD（可空）、逻辑根、相对路径、字节数和 SHA-256；不得记录绝对路径、主机名、用户名、API Key、Cookie、票据或文件正文。
+- Python 核心冻结公开测试接口：`BACKUP_SCHEMA_VERSION`、`BackupError`、`build_source_plan(repo_root, include_semantic_models=False)`、`assert_services_stopped(host="127.0.0.1", ports=(8000, 5173), probe=None)`、`create_offline_backup(repo_root, destination_root, include_semantic_models=False, now=None, git_head=None, service_probe=None)` 与 `main(argv=None)`。`probe/now/git_head` 只用于纯测试注入，不得暴露为 root bat 的危险绕过参数；CLI 不提供跳过端口、完整性、哈希或源变化检查的选项。
 
 ## 4. 严格实现白名单
 

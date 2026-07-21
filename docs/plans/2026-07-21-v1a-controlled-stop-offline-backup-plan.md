@@ -24,6 +24,7 @@
 - “备份成功”必须由临时假 SQLite 的副本 `integrity_check=ok`、全文件哈希/大小和严格 manifest 同时证明；只看目录存在或脚本 exit 0 不算通过。
 - 必须真实篡改源/副本、构造 corrupt DB、占用假监听门或注入归属快照，证明失败路径删除临时目录且无最终目录。
 - Stop 测试不得杀真实进程；通过纯判定函数/注入快照/`WhatIf` 证明 foreign listener 导致所有 PID 零终止，不能只检查字符串含 `taskkill`。
+- A/B 必须使用契约冻结的 Python 公开测试接口；不得各自发明不兼容函数名。Stop 的快照注入只允许 `WhatIf`，测试必须证明去掉 `WhatIf` 后固定拒绝。
 - legacy 根必须以独立逻辑名进入 manifest，不能与 canonical uploads 合并；不存在时不得生成伪目录。
 - manifest 与控制台均做敏感字符串门，且任何路径字段只能是规范相对路径。
 
