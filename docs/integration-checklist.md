@@ -11,7 +11,7 @@
 
 版本分层不得删除或改写既有功能、测试证据和生产文档；已交付的 P13 协作能力作为 V1 基础保留。V1 未形成可发布基线前，不以 V2/V3 需求阻塞其验收。
 
-## V1-A 受控停机与离线备份基础（已冻结，待实现）
+## V1-A 受控停机与离线备份基础（已完成）
 
 契约=`docs/v1a-controlled-stop-offline-backup-contract.md`，计划=`docs/plans/2026-07-21-v1a-controlled-stop-offline-backup-plan.md`。验收必须全部使用临时假仓库、假 SQLite 和假文件，禁止读取或复制主仓真实数据。
 
@@ -23,6 +23,8 @@
 6. 两个 PowerShell 文件必须 UTF-8 BOM；根 bat 只调用固定脚本。不得真实终止服务或创建真实业务备份作为验收证据。
 
 本包不提供恢复覆盖、在线热备、定时/增量/云备份、压缩加密、WAL、路径迁移或跨版本恢复。
+
+实现=`5b4ad39`。最终 Codex 独立专项 `60 passed / 0 failed / 0 errors / 0 skipped`；两个 PS1 均为 UTF-8 BOM 且解析 0 错误，Python `compileall` 与 diff-check 通过。验收仅使用临时假仓、假 SQLite、假文件树和纯监听注入，未真实停机或备份主仓数据。下一包为 V1-B 离线恢复与回滚演练，必须重新只读审计并冻结覆盖/回滚边界。
 
 ## P13-C 当前已载入版本修订来源可见性（已完成）
 
