@@ -462,6 +462,7 @@ export function BusinessBidWorkspace() {
           <ProjectTaskEventPanel
             projectId={projectId}
             testId="business-project-task-event-update"
+            onSafeTaskEvent={pipeline.reconcileCurrentTaskStatus}
           />
           {fullStateConflict ? (
             <div

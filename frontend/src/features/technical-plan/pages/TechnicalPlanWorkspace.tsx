@@ -724,6 +724,7 @@ export function TechnicalPlanWorkspace() {
           <ProjectTaskEventPanel
             projectId={projectId}
             testId="technical-project-task-event-update"
+            onSafeTaskEvent={pipeline.reconcileCurrentTaskStatus}
           />
           {editors.saveError ? (
             <p

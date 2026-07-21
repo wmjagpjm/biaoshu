@@ -1,18 +1,21 @@
 /**
  * 模块：技术标与商务标共用任务流水线
- * 用途：上传文件、创建异步任务、优先订阅 SSE 进度并在断线时回退查询；支持协作式取消。
+ * 用途：上传文件、创建异步任务、优先订阅 SSE 进度并在断线时回退查询；支持协作式取消；
+ *       P13-I4 对当前 runTask 做单飞安全 status 对账（只改 status/progress）。
  * 对接：
  *   - POST /projects/{id}/tasks（默认异步）
  *   - GET  /projects/{id}/tasks/{taskId}/events（SSE）
  *   - GET  /projects/{id}/tasks/{taskId}（SSE 回退）
+ *   - GET  /projects/{id}/tasks/{taskId}/status（I4 安全三键，非详情）
  *   - POST /projects/{id}/tasks/{taskId}/cancel
  *   - POST /projects/{id}/files
  *   - POST /projects/{id}/images
- * 二次开发：默认工作空间使用原生 EventSource；多工作空间鉴权或事件游标需独立设计。
+ * 二次开发：禁止用 status 对账触发详情/editor-state/轮询/重试；禁止展示 status 外字段。
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch, apiUploadFile, getApiBase } from "../../../shared/lib/api";
+import { applySafeStatusProjection } from "./projectTaskStatus";
 
 export type PipelineTask = {
   id: string;
@@ -203,6 +206,51 @@ async function pollTaskUntilFinished(
  * 对接：TechnicalPlanWorkspace、BusinessBidWorkspace、项目任务 API。
  * 二次开发：多任务并行或跨项目保活前，需把单控制器重构为按任务 id 管理的连接表。
  */
+/** I4 安全 status 响应：严格三键，不进 UI 原文 */
+type SafeTaskStatusProjection = {
+  taskId: string;
+  status: PipelineTask["status"];
+  progress: number;
+};
+
+const STATUS_SET = new Set([
+  "pending",
+  "running",
+  "success",
+  "failed",
+  "cancelled",
+]);
+
+function parseSafeStatusProjection(
+  raw: unknown,
+  expectedTaskId: string,
+): SafeTaskStatusProjection | null {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
+  }
+  const obj = raw as Record<string, unknown>;
+  if (Object.keys(obj).length !== 3) return null;
+  if (typeof obj.taskId !== "string" || obj.taskId !== expectedTaskId) {
+    return null;
+  }
+  if (typeof obj.status !== "string" || !STATUS_SET.has(obj.status)) {
+    return null;
+  }
+  if (
+    typeof obj.progress !== "number" ||
+    !Number.isInteger(obj.progress) ||
+    obj.progress < 0 ||
+    obj.progress > 100
+  ) {
+    return null;
+  }
+  return {
+    taskId: obj.taskId,
+    status: obj.status,
+    progress: obj.progress,
+  };
+}
+
 export function useProjectPipeline(projectId: string) {
   const [busy, setBusy] = useState(false);
   const [lastTask, setLastTask] = useState<PipelineTask | null>(null);
@@ -215,6 +263,31 @@ export function useProjectPipeline(projectId: string) {
   const taskRunRef = useRef(0);
   const activeProjectIdRef = useRef(projectId);
   activeProjectIdRef.current = projectId;
+  /** I4：对账世代；项目切换/卸载/新代次递增，作废迟到响应 */
+  const reconcileGenRef = useRef(0);
+  /** I4：进行中的 status 请求（同 project+task 单飞；配合 AbortController） */
+  const reconcileInflightRef = useRef<{
+    gen: number;
+    projectId: string;
+    taskId: string;
+  } | null>(null);
+  /** I4：当前 status GET 的 AbortController；切换/卸载时 abort */
+  const reconcileAbortRef = useRef<AbortController | null>(null);
+
+  /** 取消在途 status 对账并推进世代（旧 finally 不得清新请求） */
+  const abortReconcileInflight = useCallback(() => {
+    reconcileGenRef.current += 1;
+    const prev = reconcileAbortRef.current;
+    reconcileAbortRef.current = null;
+    reconcileInflightRef.current = null;
+    if (prev) {
+      try {
+        prev.abort();
+      } catch {
+        /* ignore */
+      }
+    }
+  }, []);
 
   useEffect(() => {
     const session = ++projectSessionRef.current;
@@ -222,16 +295,19 @@ export function useProjectPipeline(projectId: string) {
     setLastTask(null);
     setBusy(false);
     setError(null);
+    // 项目切换：取消旧 status fetch
+    abortReconcileInflight();
     return () => {
       // 先作废旧回调，再关闭流，避免旧项目的异步收尾覆盖新项目状态。
       taskRunRef.current += 1;
       if (projectSessionRef.current === session) {
         projectSessionRef.current += 1;
       }
+      abortReconcileInflight();
       taskStreamRef.current?.close();
       taskStreamRef.current = null;
     };
-  }, [projectId]);
+  }, [projectId, abortReconcileInflight]);
 
   const refreshFiles = useCallback(async () => {
     if (!projectId) return;
@@ -410,9 +486,9 @@ export function useProjectPipeline(projectId: string) {
   );
 
   /**
-    * 用途：取消当前进行中任务（协作式，章间/步骤间生效）。
-    * 对接：POST .../tasks/{id}/cancel
-    */
+   * 用途：取消当前进行中任务（协作式，章间/步骤间生效）。
+   * 对接：POST .../tasks/{id}/cancel
+   */
   const cancelTask = useCallback(async () => {
     const currentTask = lastTaskRef.current;
     const tid = currentTask?.id;
@@ -468,6 +544,94 @@ export function useProjectPipeline(projectId: string) {
     !!lastTask &&
     (lastTask.status === "pending" || lastTask.status === "running");
 
+  /**
+   * 用途：I3 合法 task-event 触发后，仅对「当前浏览器最近 runTask」且仍 pending/running
+   *       的 taskId 发起一次 GET .../status；AbortController 取消旧请求；
+   *       同 project+task 单飞；任一时刻最多一个 status GET；迟到响应按世代隔离。
+   * 对接：GET /projects/{id}/tasks/{taskId}/status；ProjectTaskEventPanel.onSafeTaskEvent。
+   * 二次开发：禁止详情 GET、editor-state、轮询、重试、覆盖 message/result/error。
+   */
+  const reconcileCurrentTaskStatus = useCallback(
+    (eventTaskId: string) => {
+      if (typeof eventTaskId !== "string" || !eventTaskId) return;
+      const runProjectId = activeProjectIdRef.current;
+      if (!runProjectId) return;
+      const current = lastTaskRef.current;
+      if (!current || current.id !== eventTaskId) return;
+      if (!isActiveTask(current)) return;
+
+      const inflight = reconcileInflightRef.current;
+      if (
+        inflight &&
+        inflight.projectId === runProjectId &&
+        inflight.taskId === eventTaskId
+      ) {
+        // 同项目同 task 请求未完成：单飞，不重复发起
+        return;
+      }
+
+      // 不同 task/项目或无在途：取消旧 status，保证任一时刻最多一个 GET
+      const prevAc = reconcileAbortRef.current;
+      reconcileAbortRef.current = null;
+      if (prevAc) {
+        try {
+          prevAc.abort();
+        } catch {
+          /* ignore */
+        }
+      }
+
+      const gen = ++reconcileGenRef.current;
+      const ac = new AbortController();
+      reconcileAbortRef.current = ac;
+      reconcileInflightRef.current = {
+        gen,
+        projectId: runProjectId,
+        taskId: eventTaskId,
+      };
+
+      const path = `/projects/${encodeURIComponent(runProjectId)}/tasks/${encodeURIComponent(eventTaskId)}/status`;
+
+      void (async () => {
+        try {
+          const raw = await apiFetch<unknown>(path, { signal: ac.signal });
+          if (ac.signal.aborted) return;
+          if (reconcileGenRef.current !== gen) return;
+          if (activeProjectIdRef.current !== runProjectId) return;
+          const still = lastTaskRef.current;
+          if (!still || still.id !== eventTaskId) return;
+          // 终态后忽略迟到 status（await 期间 pipeline/SSE 可能已 success）
+          if (!isActiveTask(still)) return;
+
+          const parsed = parseSafeStatusProjection(raw, eventTaskId);
+          if (!parsed) return;
+
+          // 只写 status/progress；与 E2E 共用同一纯函数，保留 message/result/error
+          const next = applySafeStatusProjection(still, {
+            status: parsed.status,
+            progress: parsed.progress,
+          });
+          // 与 publishTask 同守卫：禁止终态被 pending/running 回退
+          if (isTaskStateRegression(still, next)) return;
+          lastTaskRef.current = next;
+          setLastTask({ ...next });
+        } catch {
+          // AbortError / 接口失败：无 UI 原文、无重试（I3 文案由面板负责）
+          if (ac.signal.aborted) return;
+        } finally {
+          // 仅清理本代次；旧 finally 不得清掉新请求
+          if (reconcileInflightRef.current?.gen === gen) {
+            reconcileInflightRef.current = null;
+          }
+          if (reconcileAbortRef.current === ac) {
+            reconcileAbortRef.current = null;
+          }
+        }
+      })();
+    },
+    [],
+  );
+
   return {
     busy,
     lastTask,
@@ -483,5 +647,6 @@ export function useProjectPipeline(projectId: string) {
     runTask,
     cancelTask,
     downloadExport,
+    reconcileCurrentTaskStatus,
   };
 }

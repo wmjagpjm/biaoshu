@@ -54,6 +54,11 @@ const TYPE_LABEL: Record<string, string> = {
 export type ProjectTaskEventPanelProps = {
   projectId: string;
   testId: string;
+  /**
+   * 合法 task-event 解析成功后，仅把不透明 taskId 交给页面做当前任务状态对账。
+   * 禁止在回调内展示 taskId；面板自身仍不渲染 taskId。
+   */
+  onSafeTaskEvent?: (taskId: string) => void;
 };
 
 type SafeEvent = {
@@ -61,6 +66,8 @@ type SafeEvent = {
   statusLabel: string;
   progress: number;
   eventId: string;
+  /** 内存对账用，禁止展示 */
+  taskId: string;
 };
 
 type PanelPhase = "idle" | "event" | "unavailable";
@@ -316,6 +323,7 @@ function parseTaskEventData(
     statusLabel,
     progress: obj.progress,
     eventId: obj.eventId,
+    taskId: obj.taskId,
   };
 }
 
@@ -357,6 +365,7 @@ function parseControlFrameData(
 export function ProjectTaskEventPanel({
   projectId,
   testId,
+  onSafeTaskEvent,
 }: ProjectTaskEventPanelProps) {
   const { phase, authRequired, activeMembership } = useAuthSession();
   const eligible =
@@ -370,6 +379,16 @@ export function ProjectTaskEventPanel({
 
   const generationRef = useRef(0);
   const sourceRef = useRef<EventSource | null>(null);
+  /**
+   * 本连接/本项目已接受的 eventId（FIFO，最多 200，与服务端保留窗一致）；
+   * 仅首次接受（仍在窗内）才回调 onSafeTaskEvent。
+   * 项目/eligible/连接代次切换或 effect cleanup 时清空；禁止在 setState updater 内做副作用。
+   */
+  const ACCEPTED_EVENT_ID_CAPACITY = 200;
+  const acceptedEventIdsRef = useRef<string[]>([]);
+  /** 回调 ref：避免把 onSafeTaskEvent 放进 effect 依赖导致重连 */
+  const onSafeTaskEventRef = useRef(onSafeTaskEvent);
+  onSafeTaskEventRef.current = onSafeTaskEvent;
 
   const closeSource = useCallback(() => {
     const src = sourceRef.current;
@@ -386,6 +405,7 @@ export function ProjectTaskEventPanel({
   useEffect(() => {
     if (!eligible) {
       generationRef.current += 1;
+      acceptedEventIdsRef.current = [];
       closeSource();
       setPanelPhase("idle");
       setSafeEvent(null);
@@ -394,6 +414,8 @@ export function ProjectTaskEventPanel({
 
     const gen = ++generationRef.current;
     const activePid = projectId;
+    // 新连接代次：清空 eventId 去重 FIFO
+    acceptedEventIdsRef.current = [];
     setPanelPhase("idle");
     setSafeEvent(null);
     closeSource();
@@ -435,11 +457,27 @@ export function ProjectTaskEventPanel({
         markUnavailable();
         return;
       }
+      // 去重与副作用均在 updater 外：窗内重复 eventId 不回调；超 200 按 FIFO 淘汰
+      const accepted = acceptedEventIdsRef.current;
+      const firstAccept = !accepted.includes(parsed.eventId);
+      if (firstAccept) {
+        accepted.push(parsed.eventId);
+        if (accepted.length > ACCEPTED_EVENT_ID_CAPACITY) {
+          accepted.shift();
+        }
+      }
       setSafeEvent((prev) => {
         if (prev && prev.eventId === parsed.eventId) return prev;
         return parsed;
       });
       setPanelPhase("event");
+      if (!firstAccept) return;
+      // 合法事件且本连接首次接受：仅内存回调 taskId；失败/坏帧不回调
+      try {
+        onSafeTaskEventRef.current?.(parsed.taskId);
+      } catch {
+        /* 回调异常不得拖垮面板 */
+      }
     };
 
     const onControlFrame = (eventName: "cursor-stale" | "unavailable") => {
@@ -479,6 +517,7 @@ export function ProjectTaskEventPanel({
       if (generationRef.current === gen) {
         generationRef.current += 1;
       }
+      acceptedEventIdsRef.current = [];
       es.removeEventListener("cursor", onCursor);
       es.removeEventListener("task-event", onTaskEvent);
       es.removeEventListener("cursor-stale", onCursorStale);
