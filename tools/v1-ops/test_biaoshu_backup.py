@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-模块：V1-A 受控停机与离线备份专项测试
-用途：在临时假仓库/假 SQLite/假文件树上验证契约 §5 与冻结 Python API；
-      生产入口缺失时形成真实 failure-first（禁止 skip/xfail）。
+模块：V1-B 可恢复备份 v2 专项测试（自 V1-A 60 项升级）
+用途：在临时假仓库/假 SQLite/假文件树上验证 v2 六键、独立兼容版本、
+      六根四态与 files 聚合；生产仍为 v1 时形成真实 failure-first（禁止 skip/xfail）。
 对接：tools/v1-ops/biaoshu_backup.py、Stop-Biaoshu-Dev.ps1、Backup-Biaoshu.ps1、
       根目录 Stop-Biaoshu-Dev.bat / Backup-Biaoshu.bat；unittest；标准库 tempfile。
 二次开发：不得杀真实进程、不得占真实 8000/5173、不得读主仓 data/uploads；
@@ -42,16 +42,36 @@ _BACKUP_BAT = _REPO_ROOT / "Backup-Biaoshu.bat"
 # UTF-8 BOM
 _BOM = b"\xef\xbb\xbf"
 
-# 冻结 schema 版本
-_EXPECTED_SCHEMA = "biaoshu-offline-backup-v1"
+# 冻结 v2 schema / 独立数据兼容版本（V1-B 契约 §3）
+_EXPECTED_SCHEMA = "biaoshu-offline-backup-v2"
+_EXPECTED_DATA_COMPAT = "biaoshu-data-v1"
+_EXPECTED_MANIFEST_TOP_KEYS = (
+    "schema_version",
+    "data_compatibility_version",
+    "created_at_utc",
+    "git_head",
+    "roots",
+    "files",
+)
+_EXPECTED_ROOT_NAMES = (
+    "db",
+    "uploads",
+    "knowledge",
+    "knowledge_cards",
+    "legacy_uploads",
+    "semantic_models",
+)
+_ROOT_ENTRY_KEYS = ("state", "file_count", "total_bytes")
+_ALLOWED_ROOT_STATES = frozenset({"present", "empty", "absent", "not_included"})
 
 # 假敏感标记：仅用于断言不得泄漏到 manifest/控制台
 _FAKE_API_KEY_MARKER = "sk-fake-v1a-test-key-DO-NOT-LEAK"
 _FAKE_SECRET_BODY = f"api_key={_FAKE_API_KEY_MARKER}; password=fake-secret-body"
 
-# 契约冻结的公开 Python 接口名
+# 契约冻结的公开 Python 接口名（V1-B 增 DATA_COMPATIBILITY_VERSION）
 _FROZEN_API_NAMES = (
     "BACKUP_SCHEMA_VERSION",
+    "DATA_COMPATIBILITY_VERSION",
     "BackupError",
     "build_source_plan",
     "assert_services_stopped",
@@ -473,22 +493,36 @@ def _item_sha256(item: dict[str, Any]) -> Any:
 
 def _assert_manifest_item_strict(tc: unittest.TestCase, item: dict[str, Any]) -> None:
     """
-    反假绿：精确要求逻辑根、相对路径、字节数、哈希字段存在且类型正确。
-    宽兼容仅限字节字段名（size_bytes|size|bytes），不得掩盖缺字段。
+    反假绿：精确四键 logical_root/relative_path/size_bytes/sha256。
+    字节字段名允许 size_bytes|size|bytes 兼容读取，但 v2 权威键为 size_bytes。
     """
     tc.assertIsInstance(item, dict)
+    # v2 精确四键（不得用多余业务键掩盖契约）
+    exact_keys = set(item.keys())
+    required = {"logical_root", "relative_path", "size_bytes", "sha256"}
+    # 允许兼容别名存在，但权威四键必须齐
+    for k in ("logical_root", "relative_path"):
+        tc.assertIn(k, item, f"manifest 条目缺 {k}：{item}")
     lr = _entry_logical_root(item)
     tc.assertIsInstance(lr, str, f"manifest 条目缺少 logical_root：{item}")
     tc.assertTrue(bool(lr.strip()), f"logical_root 不得为空：{item}")
+    tc.assertIn(
+        lr,
+        _EXPECTED_ROOT_NAMES,
+        f"logical_root 必须是六根之一：{lr}",
+    )
     rel = _item_relative_path(item)
     tc.assertIsInstance(rel, str, f"manifest 条目缺少 relative_path：{item}")
     tc.assertTrue(bool(str(rel).strip()), f"relative_path 不得为空：{item}")
     tc.assertFalse(os.path.isabs(str(rel)), f"relative_path 不得为绝对路径：{rel}")
+    tc.assertNotIn("\\", str(rel), f"relative_path 必须是 POSIX（禁反斜杠）：{rel}")
     tc.assertNotIn("..", Path(str(rel)).parts, f"relative_path 不得含 ..：{rel}")
+    tc.assertNotEqual(str(rel).strip(), ".", f"relative_path 不得为 '.'：{rel}")
+    tc.assertFalse(str(rel) != str(rel).strip(), f"relative_path 不得含前后空白：{rel!r}")
     size = _item_size_bytes(item)
     tc.assertIsInstance(size, int, f"字节数字段必须为 int（size_bytes|size|bytes）：{item}")
+    tc.assertNotIsInstance(size, bool, f"字节数不得为 bool：{item}")
     tc.assertGreaterEqual(size, 0)
-    # 反假绿：至少有一个权威字节字段名，禁止“有值但键全无”的幻想
     tc.assertTrue(
         any(k in item for k in ("size_bytes", "size", "bytes")),
         f"缺少字节数字段名：{item}",
@@ -497,6 +531,89 @@ def _assert_manifest_item_strict(tc: unittest.TestCase, item: dict[str, Any]) ->
     tc.assertIsInstance(digest, str, f"缺少 sha256：{item}")
     tc.assertEqual(len(digest), 64, f"sha256 长度必须 64：{digest}")
     tc.assertRegex(str(digest), r"^[0-9a-f]{64}$")
+    # 抑制 unused 告警：exact_keys/required 供调用方扩展检查
+    _ = (exact_keys, required)
+
+
+def _assert_v2_manifest_strict(tc: unittest.TestCase, manifest: dict[str, Any], raw: str) -> None:
+    """
+    V1-B 反假绿：顶层精确六键、独立兼容版本、六根三键四态、files 聚合一致。
+    禁止“键存在即可”或 or 放宽。
+    """
+    tc.assertIsInstance(manifest, dict)
+    top_keys = tuple(manifest.keys())
+    tc.assertEqual(
+        sorted(top_keys),
+        sorted(_EXPECTED_MANIFEST_TOP_KEYS),
+        f"manifest 顶层必须精确六键，实际={list(top_keys)}",
+    )
+    tc.assertEqual(manifest["schema_version"], _EXPECTED_SCHEMA)
+    tc.assertEqual(manifest["data_compatibility_version"], _EXPECTED_DATA_COMPAT)
+    created = manifest["created_at_utc"]
+    tc.assertIsInstance(created, str)
+    tc.assertRegex(str(created), r"^\d{4}-\d{2}-\d{2}T")
+    head = manifest["git_head"]
+    tc.assertTrue(head is None or isinstance(head, str), f"git_head 必须 null 或 str：{head!r}")
+
+    roots = manifest["roots"]
+    tc.assertIsInstance(roots, dict, "roots 必须为对象")
+    tc.assertEqual(
+        sorted(roots.keys()),
+        sorted(_EXPECTED_ROOT_NAMES),
+        f"roots 必须精确六键：{list(roots.keys())}",
+    )
+    files = _manifest_file_items(manifest)
+    agg: dict[str, list[dict[str, Any]]] = {n: [] for n in _EXPECTED_ROOT_NAMES}
+    for item in files:
+        _assert_manifest_item_strict(tc, item)
+        lr = str(_entry_logical_root(item))
+        agg[lr].append(item)
+
+    for name in _EXPECTED_ROOT_NAMES:
+        entry = roots[name]
+        tc.assertIsInstance(entry, dict, f"roots.{name} 必须为对象")
+        tc.assertEqual(
+            sorted(entry.keys()),
+            sorted(_ROOT_ENTRY_KEYS),
+            f"roots.{name} 必须精确三键 state/file_count/total_bytes：{list(entry.keys())}",
+        )
+        state = entry["state"]
+        tc.assertIn(state, _ALLOWED_ROOT_STATES, f"roots.{name}.state 非法：{state}")
+        if name == "db":
+            tc.assertEqual(state, "present", "db 根只能是 present")
+        elif name != "semantic_models":
+            tc.assertIn(
+                state,
+                {"present", "empty", "absent"},
+                f"{name} 不得使用 not_included：{state}",
+            )
+        fc = entry["file_count"]
+        tb = entry["total_bytes"]
+        tc.assertIsInstance(fc, int)
+        tc.assertNotIsInstance(fc, bool)
+        tc.assertIsInstance(tb, int)
+        tc.assertNotIsInstance(tb, bool)
+        tc.assertGreaterEqual(fc, 0)
+        tc.assertGreaterEqual(tb, 0)
+        items = agg[name]
+        real_count = len(items)
+        real_bytes = sum(int(_item_size_bytes(i)) for i in items)
+        if state == "present":
+            tc.assertGreaterEqual(fc, 1, f"{name} present 时 file_count>=1")
+            tc.assertEqual(fc, real_count, f"{name} file_count 与 files 聚合不一致")
+            tc.assertEqual(tb, real_bytes, f"{name} total_bytes 与 files 聚合不一致")
+        elif state in {"empty", "absent", "not_included"}:
+            tc.assertEqual(fc, 0, f"{name} {state} 时 file_count 必须为 0")
+            tc.assertEqual(tb, 0, f"{name} {state} 时 total_bytes 必须为 0")
+            tc.assertEqual(real_count, 0, f"{name} {state} 时 files 不得有条目")
+        if name == "db" and state == "present":
+            rels = [str(_item_relative_path(i)) for i in items]
+            tc.assertEqual(rels, ["biaoshu.db"], f"db 根必须仅含 biaoshu.db：{rels}")
+
+    # 敏感门（raw 文本）
+    tc.assertNotIn(_FAKE_API_KEY_MARKER, raw)
+    tc.assertNotIn("sk-fake", raw)
+    tc.assertIsNone(re.search(r"[A-Za-z]:\\", raw))
 
 
 def _create_windows_junction(link: Path, target: Path) -> None:
@@ -667,6 +784,15 @@ class TestFrozenPythonApiSurface(unittest.TestCase):
 
     def test_schema_version_constant(self) -> None:
         self.assertEqual(self.mod.BACKUP_SCHEMA_VERSION, _EXPECTED_SCHEMA)
+
+    def test_data_compatibility_version_constant(self) -> None:
+        # 用 getattr 使缺失成为 Assertion 失败而非 AttributeError 收集错误
+        val = getattr(self.mod, "DATA_COMPATIBILITY_VERSION", None)
+        self.assertEqual(
+            val,
+            _EXPECTED_DATA_COMPAT,
+            f"DATA_COMPATIBILITY_VERSION 必须为 {_EXPECTED_DATA_COMPAT!r}，实际={val!r}",
+        )
 
     def test_backup_error_is_exception(self) -> None:
         self.assertTrue(issubclass(self.mod.BackupError, Exception))
@@ -988,35 +1114,32 @@ class TestCreateOfflineBackupSuccess(unittest.TestCase):
         self.assertTrue(manifest_path.is_file(), "缺少 manifest.json")
         raw = manifest_path.read_text(encoding="utf-8")
         manifest = json.loads(raw)
-        # schema：精确键，禁止宽兼容掩盖缺字段
-        self.assertIn("schema_version", manifest, "manifest 必须含 schema_version")
-        self.assertEqual(manifest["schema_version"], _EXPECTED_SCHEMA)
-        # 禁止敏感/绝对路径
-        self.assertNotIn(_FAKE_API_KEY_MARKER, raw)
-        self.assertNotIn("sk-fake", raw)
-        self.assertIsNone(re.search(r"[A-Za-z]:\\", raw))
+        # V1-B：精确六键 + 兼容版本 + 六根四态聚合
+        _assert_v2_manifest_strict(self, manifest, raw)
         self.assertNotIn(str(self.repo), raw)
         self.assertNotIn(str(self.dest), raw)
         files = _manifest_file_items(manifest)
         self.assertGreater(len(files), 0, "manifest.files 不得为空")
-        logical_roots: set[str] = set()
-        for item in files:
-            _assert_manifest_item_strict(self, item)
-            logical_roots.add(str(_entry_logical_root(item)))
-        # 成功路径至少覆盖 db 与 uploads 逻辑根
+        logical_roots = {str(_entry_logical_root(i)) for i in files}
         self.assertIn("db", logical_roots, f"manifest 缺 db 逻辑根：{logical_roots}")
         self.assertIn("uploads", logical_roots, f"manifest 缺 uploads 逻辑根：{logical_roots}")
-        head_val = manifest.get("git_head")
+        head_val = manifest["git_head"]
         if head_val is not None:
             self.assertEqual(head_val, self.fixed_head)
+        # 关闭 semantic 时必须 not_included（非 absent 偷换）
+        self.assertEqual(
+            manifest["roots"]["semantic_models"]["state"],
+            "not_included",
+            "默认未启用 semantic 时 roots.semantic_models.state 必须为 not_included",
+        )
 
     def test_legacy_root_in_manifest_independent(self) -> None:
         self._run_backup()
         finals = _find_final_backup_dirs(self.dest)
-        manifest = json.loads((finals[0] / "manifest.json").read_text(encoding="utf-8"))
+        raw = (finals[0] / "manifest.json").read_text(encoding="utf-8")
+        manifest = json.loads(raw)
+        _assert_v2_manifest_strict(self, manifest, raw)
         items = _manifest_file_items(manifest)
-        for item in items:
-            _assert_manifest_item_strict(self, item)
         by_root: dict[str, list[str]] = {}
         for item in items:
             lr = str(_entry_logical_root(item))
@@ -1028,6 +1151,8 @@ class TestCreateOfflineBackupSuccess(unittest.TestCase):
             by_root,
             f"缺独立 logical_root=legacy_uploads：{list(by_root)}",
         )
+        self.assertEqual(manifest["roots"]["legacy_uploads"]["state"], "present")
+        self.assertEqual(manifest["roots"]["uploads"]["state"], "present")
         # canonical 相对路径不得伪装成 legacy 文件名混根
         self.assertTrue(
             any("note.txt" in r or r.endswith("note.txt") for r in by_root["uploads"]),
@@ -1037,7 +1162,6 @@ class TestCreateOfflineBackupSuccess(unittest.TestCase):
             any("legacy-doc" in r for r in by_root["legacy_uploads"]),
             f"legacy 相对路径应含 legacy-doc：{by_root['legacy_uploads']}",
         )
-        # 二者不得混入同一 logical_root
         self.assertFalse(
             any("legacy-doc" in r for r in by_root["uploads"]),
             "legacy 文件不得进入 logical_root=uploads",
@@ -1046,31 +1170,31 @@ class TestCreateOfflineBackupSuccess(unittest.TestCase):
     def test_semantic_models_flag_controls_inclusion(self) -> None:
         self._run_backup(include_semantic_models=False)
         finals = _find_final_backup_dirs(self.dest)
-        manifest_off = json.loads((finals[0] / "manifest.json").read_text(encoding="utf-8"))
+        raw_off = (finals[0] / "manifest.json").read_text(encoding="utf-8")
+        manifest_off = json.loads(raw_off)
+        _assert_v2_manifest_strict(self, manifest_off, raw_off)
+        # v2：关闭时 roots 仍有六键，semantic 状态精确 not_included，files 无条目
+        self.assertEqual(manifest_off["roots"]["semantic_models"]["state"], "not_included")
+        self.assertEqual(manifest_off["roots"]["semantic_models"]["file_count"], 0)
         roots_off = {
             str(_entry_logical_root(i)) for i in _manifest_file_items(manifest_off)
         }
         self.assertNotIn("semantic_models", roots_off)
-        self.assertNotIn("semantic-models", roots_off)
-        # 关闭：备份树内不应有 model.bin 语义副本
         model_off = list(finals[0].rglob("model.bin"))
         self.assertEqual(model_off, [], f"关闭开关不得复制 semantic 模型：{model_off}")
         shutil.rmtree(finals[0])
         self._run_backup(include_semantic_models=True)
         finals2 = _find_final_backup_dirs(self.dest)
-        manifest_on = json.loads((finals2[0] / "manifest.json").read_text(encoding="utf-8"))
+        raw_on = (finals2[0] / "manifest.json").read_text(encoding="utf-8")
+        manifest_on = json.loads(raw_on)
+        _assert_v2_manifest_strict(self, manifest_on, raw_on)
+        self.assertEqual(manifest_on["roots"]["semantic_models"]["state"], "present")
+        self.assertGreaterEqual(manifest_on["roots"]["semantic_models"]["file_count"], 1)
         items_on = _manifest_file_items(manifest_on)
-        for item in items_on:
-            _assert_manifest_item_strict(self, item)
         roots_on = {str(_entry_logical_root(i)) for i in items_on}
-        self.assertTrue(
-            "semantic_models" in roots_on or "semantic-models" in roots_on,
-            f"开启后 manifest 应含 semantic 逻辑根：{roots_on}",
-        )
-        # 副本存在（按逻辑根目录或 rglob model.bin）
+        self.assertIn("semantic_models", roots_on, f"开启后 files 应含 semantic_models：{roots_on}")
         model_on = list(finals2[0].rglob("model.bin"))
         self.assertGreater(len(model_on), 0, "开启后备份树内应有 model.bin 副本")
-        # 禁止用源目录 hyphen 字符串对整份 JSON 做脆弱断言；逻辑根与副本即可
 
     def test_no_temp_dir_left_on_success(self) -> None:
         self._run_backup()
@@ -2318,7 +2442,165 @@ class TestMainCliSafety(unittest.TestCase):
 
 
 # ===========================================================================
-# 10. 反读主仓真实数据（元测试门）
+# 10. V1-B：六根四态 / 聚合 / unknown 与跳过文件 fail-closed
+# ===========================================================================
+
+
+class TestV2RootStatesAndFailClosed(unittest.TestCase):
+    """用途：present/empty/absent/not_included 精确态与聚合；canonical 内静默遗漏 fail-closed。"""
+
+    def setUp(self) -> None:
+        self.mod = _import_backup_module()
+        self._tmp = tempfile.TemporaryDirectory(prefix="v1b-v2-states-")
+        base = Path(self._tmp.name)
+        self.repo = base / "repo"
+        self.dest = base / "dest"
+        self.repo.mkdir()
+        self.dest.mkdir()
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _backup(self, **kwargs: Any) -> Path:
+        params = dict(
+            repo_root=str(self.repo),
+            destination_root=str(self.dest),
+            include_semantic_models=False,
+            now=datetime(2026, 7, 21, 15, 0, 0, tzinfo=timezone.utc),
+            git_head="abc123v2rootstates0000000000000000000000",
+            service_probe=_probe_all_free,
+        )
+        params.update(kwargs)
+        result = self.mod.create_offline_backup(**params)
+        finals = _find_final_backup_dirs(self.dest)
+        self.assertEqual(len(finals), 1, f"应恰好一个最终目录：{finals} result={result}")
+        return finals[0]
+
+    def test_empty_and_absent_root_states(self) -> None:
+        """empty：目录存在无文件；absent：路径不存在；均计数为 0。"""
+        # 最小：仅 db + 空 uploads/knowledge/cards，无 legacy、无 semantic
+        backend_data = self.repo / "backend" / "data"
+        backend_data.mkdir(parents=True)
+        _write_minimal_sqlite(backend_data / "biaoshu.db", marker="v2-empty-absent")
+        (self.repo / "backend" / "uploads").mkdir(parents=True)
+        (backend_data / "knowledge").mkdir(parents=True)
+        (backend_data / "knowledge_cards").mkdir(parents=True)
+        # knowledge_cards 故意不创建 → absent；knowledge 空目录 → empty
+        # 重新：knowledge 空=empty；不创建 knowledge_cards=absent
+        shutil.rmtree(backend_data / "knowledge_cards")
+        final = self._backup()
+        raw = (final / "manifest.json").read_text(encoding="utf-8")
+        manifest = json.loads(raw)
+        _assert_v2_manifest_strict(self, manifest, raw)
+        roots = manifest["roots"]
+        self.assertEqual(roots["db"]["state"], "present")
+        self.assertEqual(roots["uploads"]["state"], "empty")
+        self.assertEqual(roots["knowledge"]["state"], "empty")
+        self.assertEqual(roots["knowledge_cards"]["state"], "absent")
+        self.assertEqual(roots["legacy_uploads"]["state"], "absent")
+        self.assertEqual(roots["semantic_models"]["state"], "not_included")
+        for name in ("uploads", "knowledge", "knowledge_cards", "legacy_uploads"):
+            self.assertEqual(roots[name]["file_count"], 0)
+            self.assertEqual(roots[name]["total_bytes"], 0)
+
+    def test_present_root_file_count_matches_files_aggregation(self) -> None:
+        paths = _make_fake_repo(
+            self.repo,
+            include_legacy=True,
+            include_semantic=False,
+            include_forbidden_dbs=False,
+        )
+        # 再写入第二个 upload，聚合必须精确
+        extra = paths["upload_file"].parent / "extra.bin"
+        extra.write_bytes(b"XYZ-EXTRA-UPLOAD")
+        final = self._backup()
+        raw = (final / "manifest.json").read_text(encoding="utf-8")
+        manifest = json.loads(raw)
+        _assert_v2_manifest_strict(self, manifest, raw)
+        uploads_items = [
+            i
+            for i in _manifest_file_items(manifest)
+            if _entry_logical_root(i) == "uploads"
+        ]
+        self.assertEqual(
+            manifest["roots"]["uploads"]["file_count"],
+            len(uploads_items),
+        )
+        self.assertEqual(
+            manifest["roots"]["uploads"]["total_bytes"],
+            sum(int(_item_size_bytes(i)) for i in uploads_items),
+        )
+        self.assertGreaterEqual(manifest["roots"]["uploads"]["file_count"], 2)
+
+    def test_canonical_unknown_or_skipped_file_fail_closed(self) -> None:
+        """
+        canonical 根内出现会被静默遗漏的未知/被排除/非普通文件时固定失败。
+        反假绿：不得跳过、不得留下最终目录。
+        """
+        _make_fake_repo(
+            self.repo,
+            include_legacy=True,
+            include_semantic=False,
+            include_forbidden_dbs=False,
+        )
+        # 在 canonical uploads 放入会被 V1-A 跳过的 .log，v2 必须 fail-closed
+        poison = self.repo / "backend" / "uploads" / "leak-me.log"
+        poison.write_text("must-not-silent-skip\n", encoding="utf-8")
+        with self.assertRaises(self.mod.BackupError):
+            self.mod.create_offline_backup(
+                repo_root=str(self.repo),
+                destination_root=str(self.dest),
+                service_probe=_probe_all_free,
+            )
+        self.assertEqual(_find_final_backup_dirs(self.dest), [])
+        self.assertEqual(_find_temp_dirs(self.dest), [])
+
+    def test_canonical_non_regular_file_fail_closed(self) -> None:
+        """canonical knowledge 内 symlink/junction 非普通文件 → 失败。"""
+        _make_fake_repo(
+            self.repo,
+            include_legacy=False,
+            include_semantic=False,
+            include_forbidden_dbs=False,
+        )
+        target = Path(self._tmp.name) / "outside-target"
+        target.mkdir()
+        (target / "x.txt").write_text("out", encoding="utf-8")
+        link = self.repo / "backend" / "data" / "knowledge" / "bad-link"
+        # Windows：优先 junction；若失败再尝试 symlink（无权限则业务失败不得 skip）
+        try:
+            _create_windows_junction(link, target)
+        except AssertionError:
+            try:
+                link.symlink_to(target, target_is_directory=True)
+            except OSError as exc:
+                raise AssertionError(
+                    f"无法在夹具中创建 reparse/symlink（禁止 skip）：{exc}"
+                ) from exc
+        try:
+            with self.assertRaises(self.mod.BackupError):
+                self.mod.create_offline_backup(
+                    repo_root=str(self.repo),
+                    destination_root=str(self.dest),
+                    service_probe=_probe_all_free,
+                )
+            self.assertEqual(_find_final_backup_dirs(self.dest), [])
+        finally:
+            if link.exists() or link.is_symlink():
+                try:
+                    _remove_windows_junction(link)
+                except Exception:
+                    pass
+                if link.exists() or link.is_symlink():
+                    try:
+                        link.unlink(missing_ok=True)  # type: ignore[call-arg]
+                    except TypeError:
+                        if link.exists() or link.is_symlink():
+                            link.unlink()
+
+
+# ===========================================================================
+# 11. 反读主仓真实数据（元测试门）
 # ===========================================================================
 
 
@@ -2335,10 +2617,29 @@ class TestNoTouchRealBusinessData(unittest.TestCase):
         # 夹具必须用 TemporaryDirectory / tempfile
         self.assertIn("TemporaryDirectory", src)
         self.assertIn("_make_fake_repo", src)
+        # 禁止可执行 skip/xfail 装饰（注释中的 skip 字样不算）
+        self.assertIsNone(
+            re.search(r"(?m)^\s*@unittest\.skip\b", src),
+            "禁止 unittest skip 装饰",
+        )
+        self.assertIsNone(
+            re.search(r"(?m)^\s*@pytest\.mark\.skip\b", src),
+            "禁止 pytest skip 装饰",
+        )
+        # 拆分字面量，避免元测试自命中；括号需正则转义
+        skip_call = "skip" + "Test"
+        self.assertIsNone(
+            re.search(rf"(?m)^\s*self\.{skip_call}\(", src),
+            "禁止调用 skipTest",
+        )
+        self.assertIsNone(
+            re.search(r"(?m)^\s*@unittest\.expectedFailure\b", src),
+            "禁止 expectedFailure",
+        )
 
 
 def _suite_order() -> unittest.TestSuite:
-    """串行：先入口存在性，再 API，再行为。"""
+    """串行：先入口存在性，再 API，再行为，再 v2 四态/fail-closed。"""
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
     for cls in (
@@ -2349,6 +2650,7 @@ def _suite_order() -> unittest.TestSuite:
         TestServicePortGate,
         TestCreateOfflineBackupSuccess,
         TestCreateOfflineBackupFailures,
+        TestV2RootStatesAndFailClosed,
         TestStopWhatIfAndSnapshot,
         TestBackupEntryWiring,
         TestMainCliSafety,
@@ -2364,7 +2666,7 @@ if __name__ == "__main__":
     result = runner.run(_suite_order())
     # 明确打印汇总，便于 review_request 引用
     print(
-        "\n[V1-A][GROK-B] SUMMARY "
+        "\n[V1-B][GROK-B] SUMMARY "
         f"ran={result.testsRun} "
         f"failures={len(result.failures)} "
         f"errors={len(result.errors)} "
@@ -2372,8 +2674,19 @@ if __name__ == "__main__":
     )
     if result.failures:
         first = result.failures[0]
-        print(f"[V1-A][GROK-B] FIRST_FAILURE test={first[0]} msg={first[1].splitlines()[-1] if first[1] else ''}")
+        print(
+            f"[V1-B][GROK-B] FIRST_FAILURE test={first[0]} "
+            f"msg={first[1].splitlines()[-1] if first[1] else ''}"
+        )
     if result.errors:
         first_e = result.errors[0]
-        print(f"[V1-A][GROK-B] FIRST_ERROR test={first_e[0]} msg={first_e[1].splitlines()[-1] if first_e[1] else ''}")
+        print(
+            f"[V1-B][GROK-B] FIRST_ERROR test={first_e[0]} "
+            f"msg={first_e[1].splitlines()[-1] if first_e[1] else ''}"
+        )
+    # 反假绿：收集错误与 skip 单独暴露
+    if result.errors:
+        print(f"[V1-B][GROK-B] COLLECTION_OR_SETUP_ERRORS={len(result.errors)}")
+    if result.skipped:
+        print(f"[V1-B][GROK-B] UNEXPECTED_SKIP={len(result.skipped)}")
     sys.exit(0 if result.wasSuccessful() else 1)

@@ -3,6 +3,7 @@
 
 冻结公开测试接口：
 - BACKUP_SCHEMA_VERSION
+- DATA_COMPATIBILITY_VERSION
 - BackupError
 - build_source_plan
 - assert_services_stopped
@@ -10,6 +11,7 @@
 - main
 
 安全约定：不读取危险绕过开关；不把绝对路径/主机名/用户名/密钥写入清单。
+V1-B：写出严格 v2 manifest（独立数据兼容版本 + 六根四态）。
 """
 
 from __future__ import annotations
@@ -30,7 +32,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
-BACKUP_SCHEMA_VERSION = "biaoshu-offline-backup-v1"
+BACKUP_SCHEMA_VERSION = "biaoshu-offline-backup-v2"
+DATA_COMPATIBILITY_VERSION = "biaoshu-data-v1"
 
 # 逻辑根名称（manifest 使用）
 LOGICAL_DB = "db"
@@ -40,11 +43,26 @@ LOGICAL_KNOWLEDGE_CARDS = "knowledge_cards"
 LOGICAL_LEGACY_UPLOADS = "legacy_uploads"
 LOGICAL_SEMANTIC_MODELS = "semantic_models"
 
+# 固定六根顺序
+ALL_LOGICAL_ROOTS: Tuple[str, ...] = (
+    LOGICAL_DB,
+    LOGICAL_UPLOADS,
+    LOGICAL_KNOWLEDGE,
+    LOGICAL_KNOWLEDGE_CARDS,
+    LOGICAL_LEGACY_UPLOADS,
+    LOGICAL_SEMANTIC_MODELS,
+)
+
+STATE_PRESENT = "present"
+STATE_EMPTY = "empty"
+STATE_ABSENT = "absent"
+STATE_NOT_INCLUDED = "not_included"
+
 _DEFAULT_PORTS: Tuple[int, ...] = (8000, 5173)
 _CHUNK_SIZE = 1024 * 1024
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 
-# 目录遍历时跳过的名称（精确或前缀）
+# 目录遍历时跳过的名称（精确或前缀）——出现在可恢复数据根内时 v2 固定失败
 _SKIP_DIR_NAMES = {
     ".git",
     ".venv",
@@ -184,6 +202,19 @@ def _should_skip_file(name: str) -> bool:
     return False
 
 
+def _live_paths(repo_root: Path) -> Dict[str, Path]:
+    """固定锚定的六根 live 路径（绝对，不跟随 reparse）。"""
+    root = _abspath_no_follow(repo_root)
+    return {
+        LOGICAL_DB: root / "backend" / "data" / "biaoshu.db",
+        LOGICAL_UPLOADS: root / "backend" / "uploads",
+        LOGICAL_KNOWLEDGE: root / "backend" / "data" / "knowledge",
+        LOGICAL_KNOWLEDGE_CARDS: root / "backend" / "data" / "knowledge_cards",
+        LOGICAL_LEGACY_UPLOADS: root / "uploads",
+        LOGICAL_SEMANTIC_MODELS: root / "backend" / "data" / "semantic-models",
+    }
+
+
 def build_source_plan(
     repo_root: Any,
     include_semantic_models: bool = False,
@@ -192,6 +223,7 @@ def build_source_plan(
 
     每项：logical_root, path(Path), kind("file"|"dir"), required(bool)
     不存在且非必需的项不会进入计划；legacy 仅在非空时进入。
+    保持 V1-A 参数与语义兼容；v2 根状态由 create_offline_backup 另行聚合。
     """
     root = _resolve_repo_root(repo_root)
     plan: List[Dict[str, Any]] = []
@@ -407,7 +439,10 @@ def _copy_file_verified(src: Path, dst: Path) -> Tuple[int, str]:
 
 
 def _iter_source_files(entry: Dict[str, Any]) -> List[Tuple[str, Path]]:
-    """返回 (relative_posix_path, absolute_path) 列表。"""
+    """返回 (relative_posix_path, absolute_path) 列表。
+
+    V1-A 兼容：对计划内目录使用宽松跳过规则。
+    """
     path: Path = entry["path"]
     kind: str = entry["kind"]
     required: bool = entry["required"]
@@ -476,6 +511,82 @@ def _iter_source_files(entry: Dict[str, Any]) -> List[Tuple[str, Path]]:
     return results
 
 
+def _iter_dir_files_strict(root_path: Path, logical: str) -> List[Tuple[str, Path]]:
+    """严格遍历数据根：被排除/未知/非普通文件一律失败，不得静默跳过。"""
+    if not root_path.exists():
+        return []
+    if not root_path.is_dir():
+        raise BackupError(f"源路径不是目录: {logical}")
+    if _is_reparse_or_symlink(root_path):
+        raise BackupError("拒绝遍历符号链接或重解析点源目录")
+
+    results: List[Tuple[str, Path]] = []
+    root_resolved = root_path.resolve(strict=False)
+    seen_case: Dict[str, str] = {}
+
+    for dirpath, dirnames, filenames in os.walk(
+        root_path, topdown=True, followlinks=False
+    ):
+        current = Path(dirpath)
+        if _is_reparse_or_symlink(current):
+            raise BackupError("拒绝遍历符号链接或重解析点")
+
+        kept_dirs: List[str] = []
+        for name in list(dirnames):
+            if _should_skip_dir(name):
+                raise BackupError(
+                    f"可恢复数据根含被排除或未知内容，无法安全备份: {logical}"
+                )
+            child = current / name
+            if _is_reparse_or_symlink(child):
+                raise BackupError("拒绝遍历符号链接或重解析点子目录")
+            try:
+                child.resolve(strict=False).relative_to(root_resolved)
+            except ValueError as exc:
+                raise BackupError("源路径逃逸出逻辑根") from exc
+            kept_dirs.append(name)
+        dirnames[:] = kept_dirs
+
+        for name in filenames:
+            if _should_skip_file(name):
+                raise BackupError(
+                    f"可恢复数据根含被排除或未知内容，无法安全备份: {logical}"
+                )
+            fp = current / name
+            if _is_reparse_or_symlink(fp):
+                raise BackupError("拒绝备份符号链接或重解析点文件")
+            if not _is_regular_file(fp):
+                raise BackupError("拒绝备份非普通文件")
+            try:
+                resolved = fp.resolve(strict=False)
+                rel = resolved.relative_to(root_resolved)
+            except ValueError as exc:
+                raise BackupError("源路径逃逸出逻辑根") from exc
+            rel_posix = rel.as_posix()
+            if (
+                not rel_posix
+                or rel_posix in (".", "..")
+                or rel_posix.startswith("../")
+                or rel_posix.startswith("/")
+                or "\\" in rel_posix
+                or "\x00" in rel_posix
+            ):
+                raise BackupError("源相对路径非法")
+            # 控制字符
+            if any(ord(ch) < 32 for ch in rel_posix):
+                raise BackupError("源相对路径非法")
+            if rel_posix != rel_posix.strip():
+                raise BackupError("源相对路径非法")
+            key = rel_posix.casefold()
+            if key in seen_case and seen_case[key] != rel_posix:
+                raise BackupError("源相对路径存在大小写碰撞")
+            seen_case[key] = rel_posix
+            results.append((rel_posix, fp))
+
+    results.sort(key=lambda x: (x[0].casefold(), x[0]))
+    return results
+
+
 def _integrity_check_sqlite(db_path: Path) -> None:
     uri = db_path.resolve().as_uri() + "?mode=ro"
     try:
@@ -509,6 +620,99 @@ def _utc_stamp(now: Optional[datetime]) -> Tuple[str, str]:
     return iso, stamp
 
 
+def _root_state_entry(
+    state: str, file_count: int, total_bytes: int
+) -> Dict[str, Any]:
+    return {
+        "state": state,
+        "file_count": int(file_count),
+        "total_bytes": int(total_bytes),
+    }
+
+
+def _collect_v2_sources(
+    repo_root: Path,
+    include_semantic_models: bool,
+) -> Tuple[Dict[str, Dict[str, Any]], List[Tuple[str, str, Path]]]:
+    """聚合六根状态与待复制文件列表。
+
+    返回：
+    - roots: logical -> {state, file_count, total_bytes}
+    - items: [(logical, rel_posix, abs_path), ...]
+    """
+    paths = _live_paths(repo_root)
+    roots: Dict[str, Dict[str, Any]] = {}
+    items: List[Tuple[str, str, Path]] = []
+
+    # db：只能 present，且仅 biaoshu.db
+    db_path = paths[LOGICAL_DB]
+    _assert_no_reparse_in_chain(db_path, "源目录不能是符号链接或重解析点")
+    if not db_path.exists():
+        raise BackupError("必需的日用数据库不存在")
+    if _is_reparse_or_symlink(db_path) or not _is_regular_file(db_path):
+        raise BackupError("拒绝备份符号链接、重解析点或非普通文件")
+    # 日用库旁未知 .db 不在 db 逻辑根内（db 根是单文件）；data 目录其它文件不属本根
+    items.append((LOGICAL_DB, "biaoshu.db", db_path))
+    size = db_path.lstat().st_size
+    roots[LOGICAL_DB] = _root_state_entry(STATE_PRESENT, 1, size)
+
+    # 目录型根
+    dir_logicals = [
+        LOGICAL_UPLOADS,
+        LOGICAL_KNOWLEDGE,
+        LOGICAL_KNOWLEDGE_CARDS,
+        LOGICAL_LEGACY_UPLOADS,
+    ]
+    for logical in dir_logicals:
+        path = paths[logical]
+        if _path_component_exists(path):
+            _assert_no_reparse_in_chain(path, "源目录不能是符号链接或重解析点")
+        if not _path_component_exists(path) or not path.exists():
+            roots[logical] = _root_state_entry(STATE_ABSENT, 0, 0)
+            continue
+        if not path.is_dir():
+            raise BackupError(f"源路径不是目录: {logical}")
+        pairs = _iter_dir_files_strict(path, logical)
+        if not pairs:
+            roots[logical] = _root_state_entry(STATE_EMPTY, 0, 0)
+            continue
+        total = 0
+        for rel, abs_path in pairs:
+            items.append((logical, rel, abs_path))
+            total += abs_path.lstat().st_size
+        roots[logical] = _root_state_entry(STATE_PRESENT, len(pairs), total)
+
+    # semantic_models
+    logical = LOGICAL_SEMANTIC_MODELS
+    sem_path = paths[logical]
+    if not include_semantic_models:
+        roots[logical] = _root_state_entry(STATE_NOT_INCLUDED, 0, 0)
+    else:
+        if _path_component_exists(sem_path):
+            _assert_no_reparse_in_chain(sem_path, "源目录不能是符号链接或重解析点")
+        if not _path_component_exists(sem_path) or not sem_path.exists():
+            roots[logical] = _root_state_entry(STATE_ABSENT, 0, 0)
+        elif not sem_path.is_dir():
+            raise BackupError(f"源路径不是目录: {logical}")
+        else:
+            pairs = _iter_dir_files_strict(sem_path, logical)
+            if not pairs:
+                roots[logical] = _root_state_entry(STATE_EMPTY, 0, 0)
+            else:
+                total = 0
+                for rel, abs_path in pairs:
+                    items.append((logical, rel, abs_path))
+                    total += abs_path.lstat().st_size
+                roots[logical] = _root_state_entry(STATE_PRESENT, len(pairs), total)
+
+    # 保证六键齐全
+    for name in ALL_LOGICAL_ROOTS:
+        if name not in roots:
+            raise BackupError("根状态聚合不完整")
+
+    return roots, items
+
+
 def create_offline_backup(
     repo_root: Any,
     destination_root: Any,
@@ -521,8 +725,13 @@ def create_offline_backup(
     root = _resolve_repo_root(repo_root)
     dest_root = _abspath_no_follow(destination_root)
 
+    # 仍调用 build_source_plan 保持接口与 reparse 预检路径一致
     plan = build_source_plan(root, include_semantic_models=include_semantic_models)
-    source_paths = [entry["path"] for entry in plan]
+    # 源路径门：六根 live 路径均参与目标冲突检查
+    live_map = _live_paths(root)
+    source_paths = list(live_map.values())
+    # 同时包含 plan 中的路径（兼容）
+    source_paths.extend(entry["path"] for entry in plan)
     _ensure_outside_repo_and_sources(dest_root, root, source_paths)
 
     assert_services_stopped(probe=service_probe)
@@ -549,6 +758,10 @@ def create_offline_backup(
     # 创建目标根后再复查祖先/自身 reparse（避免只检查最终叶子）
     _assert_no_reparse_in_chain(dest_root, "目标根不能是符号链接或重解析点")
 
+    roots_meta, source_items = _collect_v2_sources(
+        root, include_semantic_models=include_semantic_models
+    )
+
     tmp_dir: Optional[Path] = None
     try:
         # 同卷临时目录
@@ -562,39 +775,32 @@ def create_offline_backup(
 
         files_meta: List[Dict[str, Any]] = []
 
-        for entry in plan:
-            logical = entry["logical_root"]
-            pairs = _iter_source_files(entry)
-            if entry["required"] and not pairs:
-                raise BackupError("必需的日用数据库不存在")
-
-            for rel_posix, src_path in pairs:
-                # 备份内布局：<logical_root>/<relative>
-                rel_out = Path(logical) / Path(rel_posix)
-                # 拒绝绝对/逃逸
-                rel_s = rel_out.as_posix()
-                if (
-                    rel_out.is_absolute()
-                    or rel_s.startswith("/")
-                    or ".." in rel_out.parts
-                ):
-                    raise BackupError("清单相对路径非法")
-                dst_path = tmp_dir / rel_out
-                # 确保落在临时目录内
-                try:
-                    dst_path.resolve(strict=False).relative_to(tmp_dir.resolve(strict=False))
-                except ValueError as exc:
-                    raise BackupError("备份路径逃逸出临时目录") from exc
-
-                size, digest = _copy_file_verified(src_path, dst_path)
-                files_meta.append(
-                    {
-                        "logical_root": logical,
-                        "relative_path": rel_posix,
-                        "size_bytes": size,
-                        "sha256": digest,
-                    }
+        for logical, rel_posix, src_path in source_items:
+            rel_out = Path(logical) / Path(rel_posix)
+            rel_s = rel_out.as_posix()
+            if (
+                rel_out.is_absolute()
+                or rel_s.startswith("/")
+                or ".." in rel_out.parts
+            ):
+                raise BackupError("清单相对路径非法")
+            dst_path = tmp_dir / rel_out
+            try:
+                dst_path.resolve(strict=False).relative_to(
+                    tmp_dir.resolve(strict=False)
                 )
+            except ValueError as exc:
+                raise BackupError("备份路径逃逸出临时目录") from exc
+
+            size, digest = _copy_file_verified(src_path, dst_path)
+            files_meta.append(
+                {
+                    "logical_root": logical,
+                    "relative_path": rel_posix,
+                    "size_bytes": size,
+                    "sha256": digest,
+                }
+            )
 
         # 必需库必须已复制
         db_entries = [m for m in files_meta if m["logical_root"] == LOGICAL_DB]
@@ -606,12 +812,69 @@ def create_offline_backup(
             raise BackupError("副本数据库缺失")
         _integrity_check_sqlite(copied_db)
 
+        # 用复制后真实大小/哈希复核 roots 聚合
+        agg: Dict[str, Dict[str, int]] = {
+            name: {"file_count": 0, "total_bytes": 0} for name in ALL_LOGICAL_ROOTS
+        }
+        for m in files_meta:
+            lr = m["logical_root"]
+            if lr not in agg:
+                raise BackupError("清单含未知逻辑根")
+            agg[lr]["file_count"] += 1
+            agg[lr]["total_bytes"] += int(m["size_bytes"])
+
+        for name in ALL_LOGICAL_ROOTS:
+            state = roots_meta[name]["state"]
+            fc = agg[name]["file_count"]
+            tb = agg[name]["total_bytes"]
+            if state == STATE_PRESENT:
+                if fc < 1 or fc != roots_meta[name]["file_count"] or tb != roots_meta[name]["total_bytes"]:
+                    raise BackupError("根状态与文件聚合不一致")
+                # 用复制后计数写回
+                roots_meta[name] = _root_state_entry(STATE_PRESENT, fc, tb)
+            elif state in (STATE_EMPTY, STATE_ABSENT, STATE_NOT_INCLUDED):
+                if fc != 0 or tb != 0:
+                    raise BackupError("根状态与文件聚合不一致")
+                roots_meta[name] = _root_state_entry(state, 0, 0)
+            else:
+                raise BackupError("非法根状态")
+
+        # db 仅允许 present 且单文件 biaoshu.db
+        if roots_meta[LOGICAL_DB]["state"] != STATE_PRESENT:
+            raise BackupError("数据库根状态非法")
+        if len(db_entries) != 1 or db_entries[0]["relative_path"] != "biaoshu.db":
+            raise BackupError("数据库根文件集合非法")
+
+        # 稳定排序
+        files_meta.sort(
+            key=lambda m: (
+                ALL_LOGICAL_ROOTS.index(m["logical_root"])
+                if m["logical_root"] in ALL_LOGICAL_ROOTS
+                else 99,
+                m["relative_path"].casefold(),
+                m["relative_path"],
+            )
+        )
+
+        # 精确六键；sort_keys 保证稳定序列化
         manifest = {
             "schema_version": BACKUP_SCHEMA_VERSION,
+            "data_compatibility_version": DATA_COMPATIBILITY_VERSION,
             "created_at_utc": created_at,
             "git_head": resolved_head,
+            "roots": {name: roots_meta[name] for name in ALL_LOGICAL_ROOTS},
             "files": files_meta,
         }
+        if set(manifest.keys()) != {
+            "schema_version",
+            "data_compatibility_version",
+            "created_at_utc",
+            "git_head",
+            "roots",
+            "files",
+        }:
+            raise BackupError("清单顶层键非法")
+
         # 敏感门：序列化后不得含绝对盘符路径痕迹（粗检）、以及常见密钥字段名正文
         manifest_text = json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True)
         lowered = manifest_text.lower()
