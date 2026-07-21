@@ -42,9 +42,11 @@ _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 
 
 def _error_response(status_code: int, code: str, message: str) -> JSONResponse:
+    # P13-I1：统一认证错误出口固定 no-store；不改错误体/状态码/公开路径语义
     return JSONResponse(
         status_code=status_code,
         content={"detail": {"code": code, "message": message}},
+        headers={"Cache-Control": "no-store"},
     )
 
 

@@ -2746,3 +2746,36 @@ class EditorStateEventListOut(BaseModel):
     items: list[EditorStateEventItemOut]
     next_cursor: str | None = Field(serialization_alias="nextCursor")
     has_more: bool = Field(serialization_alias="hasMore")
+
+
+class ProjectTaskEventItemOut(BaseModel):
+    """
+    模块：P13-I1 单条任务状态事件
+    用途：精确六键 eventId/taskId/taskType/status/progress/occurredAt。
+    对接：GET .../task-events items[]。
+    二次开发：extra=forbid；禁止 message/error/result/payload/actor/client。
+    """
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    event_id: str = Field(serialization_alias="eventId")
+    task_id: str = Field(serialization_alias="taskId")
+    task_type: str = Field(serialization_alias="taskType")
+    status: str
+    progress: int
+    occurred_at: str = Field(serialization_alias="occurredAt")
+
+
+class ProjectTaskEventListOut(BaseModel):
+    """
+    模块：P13-I1 任务事件列表响应
+    用途：精确三顶层键 items/nextCursor/hasMore。
+    对接：GET /api/projects/{projectId}/task-events。
+    二次开发：hasMore=false 时 nextCursor 为 null 或 bootstrap tip；禁止额外键。
+    """
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    items: list[ProjectTaskEventItemOut]
+    next_cursor: str | None = Field(serialization_alias="nextCursor")
+    has_more: bool = Field(serialization_alias="hasMore")

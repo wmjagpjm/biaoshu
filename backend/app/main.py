@@ -39,6 +39,7 @@ from app.api import (
     parse_callback,
     project_chapter_edit_leases as project_chapter_edit_leases_api,
     project_presence as project_presence_api,
+    project_task_events as project_task_events_api,
     projects,
     resources,
     revise,
@@ -78,6 +79,7 @@ from app.models import (  # noqa: F401
     ProjectEditorStateRow,
     ProjectFileRow,
     ProjectPresenceLeaseRow,
+    ProjectTaskEventRow,
     ProjectTaskRow,
     ResourceRow,
     ResourceSyncItemRow,
@@ -155,6 +157,7 @@ def create_app() -> FastAPI:
     app.include_router(editor_state_checkpoints_api.router, prefix="/api")
     app.include_router(editor_state_revisions_api.router, prefix="/api")
     app.include_router(editor_state_events_api.router, prefix="/api")
+    app.include_router(project_task_events_api.router, prefix="/api")
     app.include_router(settings_api.router, prefix="/api")
     app.include_router(llm.router, prefix="/api")
     app.include_router(revise.router, prefix="/api")

@@ -22,12 +22,18 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.database import SessionLocal
-from app.models.entities import ProjectEditorStateRow, ProjectTaskRow
+from app.models.entities import (
+    Project,
+    ProjectEditorStateRow,
+    ProjectTaskEventRow,
+    ProjectTaskRow,
+    utc_now,
+)
 from app.services import (
     editor_state_service,
     file_service,
@@ -113,6 +119,12 @@ def _upsert_editor_state_for_task(
 ACTIVE_STATUSES = frozenset({"pending", "running"})
 TERMINAL_STATUSES = frozenset({"success", "failed", "cancelled"})
 
+# P13-I1：项目任务事件每项目保留上限（与 editor-state 事件裁剪独立）
+MAX_TASK_EVENTS_PER_PROJECT = 200
+_TASK_EVENT_STATUSES = frozenset(
+    {"pending", "running", "success", "failed", "cancelled"}
+)
+
 
 class TaskCancelled(Exception):
     """用途：协作式取消；worker 在检查点抛出，不覆盖 cancelled 状态。"""
@@ -124,6 +136,126 @@ def _now() -> datetime:
 
 def _dumps(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False)
+
+
+def _new_task_event_id() -> str:
+    """用途：生成不透明任务事件 ID（pte_ + 32 hex）。"""
+    return f"pte_{secrets.token_hex(16)}"
+
+
+def _resolve_task_workspace_id(db: Session, task: ProjectTaskRow) -> str:
+    """
+    用途：从任务所属项目解析 workspace_id。
+    二次开发：禁止默认空间回落；缺失项目视为数据损坏。
+    """
+    project = db.get(Project, task.project_id)
+    if (
+        project is None
+        or not isinstance(project.workspace_id, str)
+        or not project.workspace_id
+    ):
+        raise RuntimeError("任务所属项目缺失")
+    return project.workspace_id
+
+
+def _trim_task_events(db: Session, workspace_id: str, project_id: str) -> None:
+    """
+    用途：同事务内按 occurred_at DESC,id DESC 连续裁剪本项目任务事件至最多 200 条。
+    二次开发：SELECT 仅 id；DELETE 必须 workspace+project+id 三重限定；只 flush。
+    """
+    rows = list(
+        db.execute(
+            select(ProjectTaskEventRow.id)
+            .where(
+                ProjectTaskEventRow.workspace_id == workspace_id,
+                ProjectTaskEventRow.project_id == project_id,
+            )
+            .order_by(
+                ProjectTaskEventRow.occurred_at.desc(),
+                ProjectTaskEventRow.id.desc(),
+            )
+        ).all()
+    )
+    if len(rows) <= MAX_TASK_EVENTS_PER_PROJECT:
+        return
+    drop_ids = [str(r.id) for r in rows[MAX_TASK_EVENTS_PER_PROJECT:]]
+    if not drop_ids:
+        return
+    db.execute(
+        delete(ProjectTaskEventRow).where(
+            ProjectTaskEventRow.workspace_id == workspace_id,
+            ProjectTaskEventRow.project_id == project_id,
+            ProjectTaskEventRow.id.in_(drop_ids),
+        )
+    )
+    db.flush()
+
+
+def _record_task_event(
+    db: Session,
+    *,
+    workspace_id: str,
+    project_id: str,
+    task_id: str,
+    task_type: str,
+    status: str,
+    progress: int,
+) -> None:
+    """
+    用途：插入一条脱敏任务状态事件并裁剪；不 commit/rollback/refresh。
+    对接：create_task_record / _set_task / cancel_task /
+      fail_interrupted_tasks / _fail_task_stale_version。
+    二次开发：
+      - 仅投影 taskId/taskType/status/progress/occurredAt；
+      - 禁止写入 message/error/result/payload/actor/client；
+      - 调用方负责 status/progress 真变化判定与同一 Session 事务。
+    """
+    if not isinstance(workspace_id, str) or not workspace_id:
+        raise ValueError("workspace_id 无效")
+    if not isinstance(project_id, str) or not project_id:
+        raise ValueError("project_id 无效")
+    if not isinstance(task_id, str) or not task_id:
+        raise ValueError("task_id 无效")
+    if not isinstance(task_type, str) or not task_type:
+        raise ValueError("task_type 无效")
+    if status not in _TASK_EVENT_STATUSES:
+        raise ValueError("task event status 无效")
+    safe_progress = max(0, min(100, int(progress)))
+    row = ProjectTaskEventRow(
+        id=_new_task_event_id(),
+        workspace_id=workspace_id,
+        project_id=project_id,
+        task_id=task_id,
+        task_type=task_type,
+        status=status,
+        progress=safe_progress,
+        occurred_at=utc_now(),
+    )
+    db.add(row)
+    db.flush()
+    _trim_task_events(db, workspace_id, project_id)
+
+
+def _maybe_record_task_status_event(
+    db: Session,
+    *,
+    workspace_id: str,
+    task: ProjectTaskRow,
+    prev_status: str,
+    prev_progress: int,
+) -> None:
+    """用途：仅当 status 或 progress 真变化时记事件。"""
+    if task.status == prev_status and int(task.progress) == int(prev_progress):
+        return
+    _record_task_event(
+        db,
+        workspace_id=workspace_id,
+        project_id=task.project_id,
+        task_id=task.id,
+        task_type=task.type,
+        status=task.status,
+        progress=int(task.progress),
+    )
 
 
 def get_task(db: Session, workspace_id: str, project_id: str, task_id: str) -> ProjectTaskRow:
@@ -212,7 +344,7 @@ def _set_task(
     force: bool = False,
 ) -> None:
     """
-    用途：更新任务行并 commit。
+    用途：更新任务行并 commit；status/progress 真变化时同事务写事件。
     force=False 时若库中已是 cancelled，拒绝再改写为其它终态（除保留 cancelled）。
     """
     if not force:
@@ -222,6 +354,8 @@ def _set_task(
         if task.status == "cancelled" and status is None:
             # 进度心跳也不覆盖已取消
             raise TaskCancelled()
+    prev_status = task.status
+    prev_progress = int(task.progress)
     if status is not None:
         task.status = status
     if progress is not None:
@@ -233,6 +367,15 @@ def _set_task(
     if error is not None:
         task.error = error[:4000]
     task.updated_at = _now()
+    # 仅公开状态/进度变化记事件；message/error/result 单独变化不计
+    workspace_id = _resolve_task_workspace_id(db, task)
+    _maybe_record_task_status_event(
+        db,
+        workspace_id=workspace_id,
+        task=task,
+        prev_status=prev_status,
+        prev_progress=prev_progress,
+    )
     db.commit()
     db.refresh(task)
 
@@ -267,11 +410,20 @@ def cancel_task(
     task = get_task(db, workspace_id, project_id, task_id)
     if task.status not in ACTIVE_STATUSES:
         raise ValueError(f"任务已结束（{task.status}），无法取消")
+    prev_status = task.status
+    prev_progress = int(task.progress)
     task.status = "cancelled"
     task.message = "已取消"
     task.error = "用户取消"
     # 进度保留当前值，便于 UI 展示中断点
     task.updated_at = _now()
+    _maybe_record_task_status_event(
+        db,
+        workspace_id=workspace_id,
+        task=task,
+        prev_status=prev_status,
+        prev_progress=prev_progress,
+    )
     db.commit()
     db.refresh(task)
     return task
@@ -287,11 +439,25 @@ def fail_interrupted_tasks(db: Session) -> int:
     )
     rows = list(db.scalars(stmt).all())
     for t in rows:
+        prev_status = t.status
+        prev_progress = int(t.progress)
         t.status = "failed"
         t.progress = 100
         t.message = "进程中断"
         t.error = "服务重启，任务未完成，请重试"
         t.updated_at = _now()
+        try:
+            ws_id = _resolve_task_workspace_id(db, t)
+        except RuntimeError:
+            # 孤立任务：仍标失败，但不写事件
+            continue
+        _maybe_record_task_status_event(
+            db,
+            workspace_id=ws_id,
+            task=t,
+            prev_status=prev_status,
+            prev_progress=prev_progress,
+        )
     if rows:
         db.commit()
     return len(rows)
@@ -332,12 +498,22 @@ def _fail_task_stale_version(db: Session, task: ProjectTaskRow) -> None:
         db.refresh(task)
         if task.status == "cancelled":
             raise TaskCancelled()
+        prev_status = task.status
+        prev_progress = int(task.progress)
         task.status = "failed"
         task.progress = 100
         task.message = MSG_TASK_RESULT_STALE
         task.error = ERR_TASK_BASE_CHANGED
         task.result_json = None
         task.updated_at = _now()
+        workspace_id = _resolve_task_workspace_id(db, task)
+        _maybe_record_task_status_event(
+            db,
+            workspace_id=workspace_id,
+            task=task,
+            prev_status=prev_status,
+            prev_progress=prev_progress,
+        )
         db.commit()
         db.refresh(task)
     except TaskCancelled:
@@ -405,6 +581,17 @@ def create_task_record(
         updated_at=_now(),
     )
     db.add(task)
+    db.flush()
+    # 真实新任务固定写一条 pending 事件；与任务行同一事务
+    _record_task_event(
+        db,
+        workspace_id=workspace_id,
+        project_id=project_id,
+        task_id=task.id,
+        task_type=task.type,
+        status=task.status,
+        progress=int(task.progress),
+    )
     db.commit()
     db.refresh(task)
     return task

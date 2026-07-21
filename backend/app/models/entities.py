@@ -1374,6 +1374,60 @@ class ProjectTaskRow(Base):
     )
 
 
+class ProjectTaskEventRow(Base):
+    """
+    模块：P13-I1 项目任务状态事件账本
+    用途：记录真实任务 status/progress 变化的脱敏事件；每项目最多 200 条。
+    对接：task_service._record_task_event；project_task_event_service；
+      GET /api/projects/{projectId}/task-events。
+    二次开发：
+      - 禁止 message/error/result/payload/actor/client/URL/异常原文；
+      - ID 固定 pte_ + 32 hex；裁剪与写事务同 Session，失败整事务回滚；
+      - 列表只按 (occurred_at, id) 游标，禁止从 project_tasks 补洞。
+    """
+
+    __tablename__ = "project_task_events"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ("
+            "'pending','running','success','failed','cancelled'"
+            ")",
+            name="ck_project_task_events_status",
+        ),
+        Index(
+            "ix_pte_workspace_project_occurred_id",
+            "workspace_id",
+            "project_id",
+            "occurred_at",
+            "id",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    task_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    task_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    progress: Mapped[int] = mapped_column(Integer, nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        index=True,
+    )
+
+
 class ContentFuseApplicationBatchRow(Base):
     """
     模块：M3-D 融合写入持久恢复批次

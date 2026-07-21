@@ -20,7 +20,7 @@ from app.api.deps import get_request_actor_user_id, get_workspace_id, require_st
 from app.core.config import Settings, get_settings
 from app.core.database import get_db
 from app.models.entities import Project, ProjectEditorStateRow, ProjectTaskRow
-from app.services import editor_state_revision_service, editor_state_service
+from app.services import editor_state_revision_service, editor_state_service, task_service
 from app.services.local_parser_ticket_service import (
     CODE_TICKET_INVALID,
     MSG_TICKET_INVALID,
@@ -121,6 +121,17 @@ def parse_callback(
             updated_at=now,
         )
         db.add(task)
+        # P13-I1：直接终态 parse 任务只诚实记一条 success/100；
+        # workspace 仅用鉴权依赖活动空间；helper 内禁止 commit/rollback/refresh
+        task_service._record_task_event(
+            db,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            task_id=task.id,
+            task_type="parse",
+            status="success",
+            progress=100,
+        )
 
         # 同事务更新项目步骤；禁止调用会自行 commit 的 update_project
         project = db.get(Project, project_id)

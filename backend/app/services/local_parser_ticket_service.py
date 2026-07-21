@@ -26,7 +26,7 @@ from app.models.entities import (
     ProjectTaskRow,
     utc_now,
 )
-from app.services import auth_service, editor_state_revision_service, editor_state_service
+from app.services import auth_service, editor_state_revision_service, editor_state_service, task_service
 from app.services.project_service import ProjectNotFoundError
 
 # 固定契约常量
@@ -315,6 +315,17 @@ def _finalize_success_writes(
         updated_at=now,
     )
     db.add(task)
+    # P13-I1：直接终态 parse 任务只诚实记一条 success/100；
+    # workspace 仅用已校验 ticket.workspace_id；helper 内禁止 commit/rollback/refresh
+    task_service._record_task_event(
+        db,
+        workspace_id=ticket.workspace_id,
+        project_id=ticket.project_id,
+        task_id=task.id,
+        task_type="parse",
+        status="success",
+        progress=100,
+    )
 
     project.status = "analyzing"
     project.technical_plan_step = 1
