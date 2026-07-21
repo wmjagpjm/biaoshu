@@ -1,10 +1,12 @@
 /**
- * 模块：技术标分步工作区（含 P13-B/C/D2 版本、P13-F2 近期成员、P13-G2 章节意图）
- * 用途：技术标流水线工作区；标题区展示版本与项目近期成员；content 步展示章节处理意图提示。
+ * 模块：技术标分步工作区（含 P13-B/C/D2/H3 版本、P13-F2 近期成员、P13-G2 章节意图）
+ * 用途：技术标流水线工作区；标题区展示版本与项目近期成员；content 步展示章节处理意图提示；
+ *       薄挂载 EditorStateEventUpdatePanel 做远端版本变化提示。
  * 对接：useTechnicalPlanEditors、EditorStateVersionFreshness、ProjectPresencePanel
  *       （testid=technical-project-presence）、ChapterEditIntentPanel
- *       （testid=technical-chapter-edit-intent，仅 content 薄挂载）。
- * 二次开发：禁止改 editor-state 保存/冲突/任务路由；presence/意图仅薄挂载；
+ *       （testid=technical-chapter-edit-intent，仅 content 薄挂载）、
+ *       EditorStateEventUpdatePanel（testid=technical-editor-state-event-update）。
+ * 二次开发：禁止改 editor-state 保存/冲突/任务路由；presence/意图/事件提示仅薄挂载；
  *       意图不是强制锁，不得禁用 ChapterEditor/按钮/autosave；不得灌入 editor Hook。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -36,6 +38,7 @@ import {
 import { useWorkspaceParseStrategy } from "../../parse-strategy/hooks/useWorkspaceParseStrategy";
 import { ChapterEditor } from "../components/ChapterEditor";
 import { ContentFuseDialog } from "../components/ContentFuseDialog";
+import { EditorStateEventUpdatePanel } from "../../editor-state-collaboration/EditorStateEventUpdatePanel";
 import { EditorStateVersionFreshness } from "../../editor-state-collaboration/EditorStateVersionFreshness";
 import { ChapterEditIntentPanel } from "../../editor-state-collaboration/ChapterEditIntentPanel";
 import { ProjectPresencePanel } from "../../editor-state-collaboration/ProjectPresencePanel";
@@ -234,6 +237,15 @@ export function TechnicalPlanWorkspace() {
   const parseStrategy = useWorkspaceParseStrategy();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [revisePreview, setRevisePreview] = useState<string | null>(null);
+  /**
+   * P13-H3：用户确认刷新失败时，blocking 重载会卸载工作区进入 loadError 页；
+   * 在此保留失败旗标，于错误页同 testid 展示固定重载失败文案。
+   * 与 projectId 同步的 ref：await 后仅当仍是请求项目才写旗标，防 A→B 迟到污染。
+   */
+  const [eventReloadFailed, setEventReloadFailed] = useState(false);
+  const eventReloadProjectIdRef = useRef(projectId);
+  // 渲染同步当前项目，不依赖 effect 清零顺序
+  eventReloadProjectIdRef.current = projectId;
   const [revisePreviewStep, setRevisePreviewStep] = useState<TechnicalPlanStepId | null>(
     null,
   );
@@ -392,6 +404,7 @@ export function TechnicalPlanWorkspace() {
     setMatchProgress(null);
     setContentFuseOpen(false);
     setParseChoiceOpen(false);
+    setEventReloadFailed(false);
   }, [projectId]);
 
   // 渲染顺序：项目/editor loading → 不存在跳列表 → loadError（ContentFuse 打开时例外）→ 工作区
@@ -424,6 +437,16 @@ export function TechnicalPlanWorkspace() {
         data-testid="technical-editor-load-error"
       >
         <p style={{ color: "var(--danger)" }}>{editors.loadError}</p>
+        {eventReloadFailed ? (
+          <div
+            data-testid="technical-editor-state-event-update"
+            style={{ margin: "6px 0 0", minHeight: 4 }}
+          >
+            <p style={{ margin: "4px 0 0", color: "var(--danger)" }}>
+              重新载入失败，请稍后重试
+            </p>
+          </div>
+        ) : null}
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button
             type="button"
@@ -670,6 +693,30 @@ export function TechnicalPlanWorkspace() {
           <ProjectPresencePanel
             projectId={projectId}
             testId="technical-project-presence"
+          />
+          <EditorStateEventUpdatePanel
+            projectId={projectId}
+            stateVersion={editors.currentStateVersion}
+            onReload={async () => {
+              // 页面级 project 守卫：捕获请求项目；await/异常后仅同项目可写旗标。
+              // 面板 generation 只保护面板 phase，不得冒充本页 guard。
+              const requestProjectId = projectId;
+              try {
+                const ok = await editors.reloadFromApi({ blocking: true });
+                if (eventReloadProjectIdRef.current !== requestProjectId) {
+                  return false;
+                }
+                setEventReloadFailed(!ok);
+                return ok;
+              } catch {
+                if (eventReloadProjectIdRef.current !== requestProjectId) {
+                  return false;
+                }
+                setEventReloadFailed(true);
+                return false;
+              }
+            }}
+            testId="technical-editor-state-event-update"
           />
           {editors.saveError ? (
             <p

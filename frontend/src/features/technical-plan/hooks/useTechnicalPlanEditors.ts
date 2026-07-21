@@ -1,14 +1,16 @@
 /**
- * 模块：技术方案大纲 / 正文 / 全局事实 / 分析概述（P11C + P12B 全状态 CAS + P13-B/C/D2）
+ * 模块：技术方案大纲 / 正文 / 全局事实 / 分析概述（P11C + P12B 全状态 CAS + P13-B/C/D2/H3）
  * 用途：技术标编辑内容只认 GET|PUT /api/projects/{id}/editor-state；真实空态保持空；
  *       全部 editor-state PUT 携带服务端 expectedStateVersion，同项目串行队列；
  *       P12B-C3 受限「版本化外部写」runner：M3-D apply/consume 与 PUT 共用 matrixSaveChainRef；
  *       P13-B/C/D2：合法 stateVersion 被当前会话接受时同步 versionUpdatedAt、
- *       currentRevisionSourceKind 与 currentRevisionActorUsername 供标题区展示。
+ *       currentRevisionSourceKind 与 currentRevisionActorUsername 供标题区展示；
+ *       P13-H3：同步导出 currentStateVersion（与 ref 镜像），供事件版本提示等值判断。
  * 对接：editor-state API；页面 TechnicalPlanWorkspace；responseMatrixVersion 乐观锁；
  *       全状态 409 code=editor_state_version_conflict；矩阵 409 字段级三方合并；
  *       guidance 纳入主状态同一队列；getCsrfToken 内存 CSRF；ContentFuseDialog；
  *       EditorStateVersionFreshness（只读展示，零额外请求）；
+ *       EditorStateEventUpdatePanel（仅消费 currentStateVersion + reloadFromApi）；
  *       parseRevisionSourceKind / parseRevisionActorUsername（唯一校验）。
  * 明确非目标：
  *   - 禁止读写/删除/迁移 biaoshu.technicalPlan.editors.*（旧键忽略并保值）
@@ -16,10 +18,11 @@
  *   - 禁止本地计算 stateVersion；禁止版本落盘/URL/Cookie/console
  *   - versionUpdatedAt / currentRevisionSourceKind / currentRevisionActorUsername
  *     禁止参与 CAS/保存队列/矩阵版本/缓存键
+ *   - currentStateVersion 仅镜像已接受版本，禁止参与 CAS/保存链/自动请求
  * 二次开发：矩阵 409 时禁止静默覆盖本地；须用户显式「重新载入远端矩阵」或「应用合并」；
  *       应用合并 PUT 仅含 responseMatrix + responseMatrixVersion + expectedStateVersion；
  *       全状态冲突时禁止矩阵旁路解除阻断；项目切换后须丢弃过期合并/409 异步结果；
- *       M3-D 不得旁路 runner 直连 POST；切项目须立即清空时间、来源与操作者。
+ *       M3-D 不得旁路 runner 直连 POST；切项目须立即清空时间、来源、操作者与 currentStateVersion。
  */
 
 /** 用途：版本化外部写（M3-D apply/consume）结果；Dialog 据此分流文案。 */
@@ -408,6 +411,13 @@ export function useTechnicalPlanEditors(projectId: string) {
    */
   const [currentRevisionActorUsername, setCurrentRevisionActorUsername] =
     useState<string | null>(null);
+  /**
+   * P13-H3：当前项目会话已接受的 stateVersion（与 stateVersionRef 镜像，仅导出供提示）。
+   * 合法接受路径同步更新；切项目/非法/既有清空路径同步 null；不参与 CAS/保存。
+   */
+  const [currentStateVersion, setCurrentStateVersion] = useState<string | null>(
+    null,
+  );
   const [matrixConflict, setMatrixConflict] =
     useState<ResponseMatrixConflict | null>(null);
   const [mergeChoices, setMergeChoices] = useState<
@@ -497,13 +507,18 @@ export function useTechnicalPlanEditors(projectId: string) {
     setMatrixVersion(next);
   }, []);
 
-  /** 用途：仅接受合法服务端 stateVersion 写入内存 ref。 */
+  /**
+   * 用途：仅接受合法服务端 stateVersion 写入内存 ref，并镜像到 currentStateVersion。
+   * 对接：P13-H3 导出等值判断；非法/清空时 ref 与 React 状态同步 null。
+   */
   const applyStateVersion = useCallback((version: unknown) => {
     if (!isValidStateVersion(version)) {
       stateVersionRef.current = null;
+      setCurrentStateVersion(null);
       return false;
     }
     stateVersionRef.current = version;
+    setCurrentStateVersion(version);
     return true;
   }, []);
 
@@ -574,7 +589,8 @@ export function useTechnicalPlanEditors(projectId: string) {
     skipNextAutosavePutRef.current = false;
     matrixPutBlockedRef.current = false;
     fullStateBlockedRef.current = false;
-    stateVersionRef.current = null;
+    // P13-H3：切项目立即清空版本镜像，禁止旧项目版本参与新提示
+    applyStateVersion(null);
     // P13-B/C/D2：切项目立即清空，禁止短暂显示旧项目时间/来源/操作者
     setVersionUpdatedAt(null);
     setCurrentRevisionSourceKind(null);
@@ -605,7 +621,7 @@ export function useTechnicalPlanEditors(projectId: string) {
           setState(createEmptyEditors());
           applyMatrixVersion(null);
           clearMatrixBase();
-          stateVersionRef.current = null;
+          applyStateVersion(null);
           setSelectedOutlineId(null);
           setSelectedChapterId(null);
           setApiReady(false);
@@ -637,7 +653,7 @@ export function useTechnicalPlanEditors(projectId: string) {
         setState(createEmptyEditors());
         applyMatrixVersion(null);
         clearMatrixBase();
-        stateVersionRef.current = null;
+        applyStateVersion(null);
         setSelectedOutlineId(null);
         setSelectedChapterId(null);
         setApiReady(false);
@@ -1108,7 +1124,7 @@ export function useTechnicalPlanEditors(projectId: string) {
           setState(createEmptyEditors());
           applyMatrixVersion(null);
           clearMatrixBase();
-          stateVersionRef.current = null;
+          applyStateVersion(null);
           matrixPutBlockedRef.current = false;
           setMatrixConflict(null);
           setMergeChoices({});
@@ -1152,7 +1168,7 @@ export function useTechnicalPlanEditors(projectId: string) {
         setState(createEmptyEditors());
         applyMatrixVersion(null);
         clearMatrixBase();
-        stateVersionRef.current = null;
+        applyStateVersion(null);
         matrixPutBlockedRef.current = false;
         setMatrixConflict(null);
         setMergeChoices({});
@@ -2062,6 +2078,8 @@ export function useTechnicalPlanEditors(projectId: string) {
     currentRevisionSourceKind,
     /** P13-D2：当前已载入版本的操作者用户名（仅展示） */
     currentRevisionActorUsername,
+    /** P13-H3：当前已载入 stateVersion（与 ref 镜像，仅供事件提示等值判断） */
+    currentStateVersion,
     targetWordsTotal,
     selectedOutlineId,
     setSelectedOutlineId,

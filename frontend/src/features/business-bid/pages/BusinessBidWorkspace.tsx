@@ -1,10 +1,13 @@
 /**
- * 模块：商务标分步工作区（含 P13-B/C/D2 版本展示与 P13-F2 近期成员）
+ * 模块：商务标分步工作区（含 P13-B/C/D2/H3 版本展示与 P13-F2 近期成员）
  * 用途：六步流水线；上传/解析/biz_* 生成/导出接 project/task/editor-state；
- *       标题区展示已载入版本 UTC 时间/来源/操作者，以及项目近期成员短租约快照。
+ *       标题区展示已载入版本 UTC 时间/来源/操作者，以及项目近期成员短租约快照；
+ *       薄挂载 EditorStateEventUpdatePanel 做远端版本变化提示。
  * 对接：useProjectPipeline、useBusinessBidWorkspace、GET project、useWorkspaceParseStrategy、
  *       EditorStateVersionFreshness（testid=business-editor-version-freshness 等）、
- *       ProjectPresencePanel（testid=business-project-presence）；presence 不进入 editor Hook。
+ *       ProjectPresencePanel（testid=business-project-presence）、
+ *       EditorStateEventUpdatePanel（testid=business-editor-state-event-update）；
+ *       presence/事件提示不进入 editor Hook。
  * 二次开发：勿大改步骤信息架构；新任务类型扩在 pipeline TaskType；解析入口统一 handleParse。
  *       项目详情只认 GET /api/projects/{id}，禁止 mockBusinessProjects 复活。
  *       P11B：editor-state 加载失败显示固定失败卡，禁止挂步骤/表格/编辑控件。
@@ -44,6 +47,7 @@ import {
   BUSINESS_STEPS,
 } from "../components/BusinessStepStepper";
 import { useBusinessBidWorkspace } from "../hooks/useBusinessBidWorkspace";
+import { EditorStateEventUpdatePanel } from "../../editor-state-collaboration/EditorStateEventUpdatePanel";
 import { EditorStateVersionFreshness } from "../../editor-state-collaboration/EditorStateVersionFreshness";
 import { ProjectPresencePanel } from "../../editor-state-collaboration/ProjectPresencePanel";
 import { EditorStateCheckpointPanel } from "../../editor-state-checkpoints/EditorStateCheckpointPanel";
@@ -91,6 +95,15 @@ export function BusinessBidWorkspace() {
   const [strategyTip, setStrategyTip] = useState("");
   const [parseChoiceOpen, setParseChoiceOpen] = useState(false);
   /**
+   * P13-H3：用户确认刷新失败时，非 silent 重载会卸载工作区进入 loadError 页；
+   * 在此保留失败旗标，于错误页同 testid 展示固定重载失败文案。
+   * 与 projectId 同步的 ref：await 后仅当仍是请求项目才写旗标，防 A→B 迟到污染。
+   */
+  const [eventReloadFailed, setEventReloadFailed] = useState(false);
+  const eventReloadProjectIdRef = useRef(projectId);
+  // 渲染同步当前项目，不依赖 effect 清零顺序
+  eventReloadProjectIdRef.current = projectId;
+  /**
    * P9D：导出图片告警与产生它的 projectId 绑定（仅内存）。
    * 渲染时 projectId 不匹配则同步视为空，避免切换首帧泄漏旧告警。
    */
@@ -115,6 +128,7 @@ export function BusinessBidWorkspace() {
     versionUpdatedAt,
     currentRevisionSourceKind,
     currentRevisionActorUsername,
+    currentStateVersion,
     refreshFromApi,
     setParseMarkdown,
     updateQualifyItem,
@@ -150,6 +164,11 @@ export function BusinessBidWorkspace() {
     void pipeline.refreshTasks();
     // 仅 projectId 变化时刷新
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
+  // P13-H3：项目切换清空事件重载失败旗标，禁止旧失败文案污染新项目
+  useEffect(() => {
+    setEventReloadFailed(false);
   }, [projectId]);
 
   const runBizTask = useCallback(
@@ -335,6 +354,16 @@ export function BusinessBidWorkspace() {
     return (
       <div className="page bb-layout" data-testid="business-editor-load-error">
         <p style={{ color: "var(--danger)" }}>{loadError}</p>
+        {eventReloadFailed ? (
+          <div
+            data-testid="business-editor-state-event-update"
+            style={{ margin: "6px 0 0", minHeight: 4 }}
+          >
+            <p style={{ margin: "4px 0 0", color: "var(--danger)" }}>
+              重新载入失败，请稍后重试
+            </p>
+          </div>
+        ) : null}
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button
             type="button"
@@ -400,6 +429,32 @@ export function BusinessBidWorkspace() {
           <ProjectPresencePanel
             projectId={projectId}
             testId="business-project-presence"
+          />
+          <EditorStateEventUpdatePanel
+            projectId={projectId}
+            stateVersion={currentStateVersion}
+            onReload={async () => {
+              // 将 refreshFromApi 的 false/异常转为固定重载失败旗标；
+              // loadError 既有语义保留；工作区卸载后错误页同 testid 展示固定文案。
+              // 页面级 project 守卫：捕获请求项目；await/异常后仅同项目可写旗标。
+              // 面板 generation 只保护面板 phase，不得冒充本页 guard。
+              const requestProjectId = projectId;
+              try {
+                const ok = await refreshFromApi();
+                if (eventReloadProjectIdRef.current !== requestProjectId) {
+                  return false;
+                }
+                setEventReloadFailed(!ok);
+                return ok;
+              } catch {
+                if (eventReloadProjectIdRef.current !== requestProjectId) {
+                  return false;
+                }
+                setEventReloadFailed(true);
+                return false;
+              }
+            }}
+            testId="business-editor-state-event-update"
           />
           {fullStateConflict ? (
             <div
