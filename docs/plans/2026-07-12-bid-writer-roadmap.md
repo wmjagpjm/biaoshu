@@ -440,7 +440,13 @@
 
 真实 failure-first **15 failed / 0 passed**。Codex 与 Grok 双方确认四项验收证据缺口后才 test-only 返修，控制帧唯一性再次确认收紧；Codex 独立 I2 专项/代表回归 **17/125 passed**，合计 **142 passed**，`compileall`、diff-check、严格三文件哈希门通过。未运行后端全量、xdist、前端或整仓 E2E。
 
-**下一包方向**：P13-I3 只在 I2 SSE 上增加技术标/商务标共享的安全任务状态提示，不替换 `useProjectPipeline`，不自动请求任务详情，不展示 eventId/taskId/时间或正文。I3 已在独立 worktree 冻结并进入 Grok B failure-first，实现尚未经过 Codex 审查与合并。
+### P13-I3：项目任务事件前端提示（已完成）
+
+契约=`docs/p13i3-project-task-event-frontend-contract.md`，计划=`docs/plans/2026-07-21-p13i3-project-task-event-frontend-plan.md`，冻结=`5c63890`，功能=`c6dbe2e`。严格四文件只在 I2 SSE 上增加技术标/商务标共享的安全任务状态提示：required/authenticated/bid_writer 门控、原生 EventSource、四类命名事件严格解析、项目切换隔离和固定安全展示均已闭环；不替换 `useProjectPipeline`，不自动请求任务详情，不展示 eventId/taskId/时间或正文。
+
+真实 failure-first **1 failed / 1 passed / 3 did not run**。首轮疑似问题经 question=`msg_6a19689c036540b09eac00d65bbb58a7` 与 Grok 确认=`msg_5ebe466f38f9404b8294f42c630c6f8a7` 双方确认后，才发返修 task=`msg_98272242fe8741a086c96f460e2f90ed`；最终 review=`msg_bfe30b3e23574d6291f33b9a88baddde`，result=`msg_81187e032a1245d5b566f9238a7959ab`。Codex 独立 I3/H3/freshness **5/15/17 passed**，lint/build/diff-check 和严格四文件边界通过；未运行整仓 E2E、后端全量、xdist 或并发 Playwright。
+
+**下一包方向**：通知、评论审批、协同光标、WebSocket、任务详情自动刷新、强制锁仍未交付。下一包必须重新只读审计、冻结契约和白名单，并为 Grok A/B 建立独立 worktree 与独立 SQLite 测试目录。
 
 阶段 0/1/2、阶段 3 M3-A 至 M3-D、阶段 4 **包 5** 至 **包 8/P8B/P8C/P8D/P8E**、P9A/P9B/P9C/P9D、阶段 5 P10A 至 P10K、**P11A/P11B/P11C 三个真实数据收口包**，以及 **P12A/P12B-A/B/C/D/P12C-A/B/C/P12D-A/B/P12E-A/B/C/P12F-A/B/C/D/P13-A** 均保持已交付。P8E 完整契约见 `docs/p8e-docling-local-helper-contract.md`，实施与独立验收记录见 `docs/plans/2026-07-15-p8e-docling-local-helper-plan.md`。
 

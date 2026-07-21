@@ -1,6 +1,6 @@
 # P13-I3 项目任务事件前端提示契约
 
-> 状态：Codex 只读审计后冻结，等待 Grok B failure-first
+> 状态：已实现并通过 Codex 独立串行验收
 > 日期：2026-07-21
 > 前置：P13-I2 项目任务事件 SSE 与断线重放契约（冻结=`525d059`）
 > 分支：实现使用 `collab/p13i3-grok-worktree`；最终由 Codex 合并到 `collab/grok-code-codex-review`
@@ -46,3 +46,12 @@
 专项必须通过真实 SSE route mock 覆盖：required/authenticated/bid_writer 门控；精确 URL 和 `withCredentials`；首次 cursor 不展示；合法 task-event 的六键、ID 相等、类型/状态/进度展示；相同事件重复到达不产生额外副作用；重复键、额外键、缺键、非法 ID/status/progress/time、控制帧、默认 message、网络错误均固定不可用；项目 A→B 关闭旧流并隔离迟到事件；无任务详情请求、无 storage/URL/console/敏感字段；卸载关闭连接。
 
 Playwright 固定 Chromium、单 worker、零重试；运行 I3 专项、H3/freshness 代表专项、lint、build、diff-check。禁止整仓 E2E、并发 Playwright、后端全量或 xdist。
+
+## 7. 实现与验收回执
+
+- 冻结提交：`5c63890`；功能提交：`c6dbe2e`。
+- Grok B worktree `C:\Users\Administrator\biaoshu-p13i3-grok` 已完成实现、自测并由 Codex 合并；该 worktree 不再处于在途状态。
+- 真实 failure-first：`1 failed / 1 passed / 3 did not run`；未将未运行项伪报为失败或通过。
+- 双方确认的问题链：首轮 question=`msg_6a19689c036540b09eac00d65bbb58a7`，Grok 确认=`msg_5ebe466f38f9404b8294f42c630c6f8a`，返修 task=`msg_98272242fe8741a086c96f460e2f90ed`，最终 review=`msg_bfe30b3e23574d6291f33b9a88baddde`，result=`msg_81187e032a1245d5b566f9238a7959ab`。
+- Codex 独立串行验收：I3 专项 `5 passed`、H3 `15 passed`、freshness `17 passed`；lint、build、`git diff --check` 全部通过。Playwright 使用单 worker、零重试，未运行整仓 E2E、后端全量或并发测试。
+- 本包仍不提供通知、评论审批、协同光标、WebSocket、任务详情自动刷新或强制锁；下一包必须重新只读审计、冻结契约和白名单。

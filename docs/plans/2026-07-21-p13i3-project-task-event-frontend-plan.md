@@ -1,6 +1,6 @@
 # P13-I3 项目任务事件前端提示实施计划
 
-> 状态：契约已冻结，等待 Grok B failure-first
+> 状态：已实现并通过 Codex 独立串行验收
 > 契约：`docs/p13i3-project-task-event-frontend-contract.md`
 > 实现分支：`collab/p13i3-grok-worktree`
 
@@ -24,3 +24,11 @@ Grok B 的相对 SQLite 数据库位于 `C:\Users\Administrator\biaoshu-p13i3-gr
 - A→B 场景必须先捕获旧 EventSource，再发送 A 迟到帧，断言 B 无旧提示。
 - 控制帧和网络错误必须不展示后端原文；禁止用非零请求数代替“无任务详情请求”。
 - 所有测试串行，禁止 sleep 作为完成证据、skip/xfail、源码字符串冒充行为。
+
+## 4. 完成记录
+
+- 冻结提交：`5c63890`；功能提交：`c6dbe2e`。
+- failure-first：`1 failed / 1 passed / 3 did not run`；Grok B 已在独立 worktree 完成实现与自测。
+- Codex 独立结果：I3/H3/freshness 为 `5/15/17 passed`，lint、build、`git diff --check` 通过。
+- 问题确认后才返修：question=`msg_6a19689c036540b09eac00d65bbb58a7`，确认=`msg_5ebe466f38f9404b8294f42c630c6f8a`，返修 task=`msg_98272242fe8741a086c96f460e2f90ed`，最终 review=`msg_bfe30b3e23574d6291f33b9a88baddde`，result=`msg_81187e032a1245d5b566f9238a7959ab`。
+- 本包已完成，下一包不得直接沿用本包白名单，须重新审计并冻结。

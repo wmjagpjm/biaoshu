@@ -1424,3 +1424,17 @@ Codex 独立串行通过 P13-G2 专项/P13-F2 presence/freshness **13/11/17 pass
 6. 连接前和流内每轮均新建并关闭短 Session，stream 路径 `get_db` 精确零调用；每轮查询保持 workspace/project 双谓词。
 
 验收证据：failure-first=`msg_d83ad4841dab4cdb9b57ec4aaf6721a8`，真实 **15 failed / 0 passed**；初始 review_request=`msg_186855fc4b18450e89bf71162cae8279`。Codex/Grok 四项双确认=`msg_e3f6751a53c14bb8b08e4bb32c713f1e`/`msg_63b808eadc244154afdca692874a27f8`，控制帧唯一性双确认=`msg_8830175702d24e99955a1a2d8824f6ba`/`msg_be93334deb8846d6ae6a999796223b85`；最终 Grok 回执=`msg_f4a26b03cfb04055ae2f09b6c449f441`。Codex 独立专项/代表回归 **17/125 passed（合计 142）**，`compileall`、`git diff --check`、严格三文件和 SHA-256 门通过。未运行后端全量、xdist、前端或整仓 E2E。
+
+## P13-I3 项目任务事件前端提示（已完成）
+
+契约=`docs/p13i3-project-task-event-frontend-contract.md`，计划=`docs/plans/2026-07-21-p13i3-project-task-event-frontend-plan.md`，冻结=`5c63890`，功能=`c6dbe2e`。严格四文件只增加技术标/商务标共享的项目任务安全提示；required/authenticated/bid_writer 门控、原生 EventSource、精确 URL/凭据、四类命名事件结构化解析、重复键拒绝、固定安全展示、项目 A→B 代次隔离和卸载关闭均已覆盖。
+
+联调验收项：
+
+1. `cursor` 首帧只更新水位，不产生可见提示；合法 `task-event` 仅显示固定任务类型、状态和进度，不显示 ID、时间、正文或后端 detail。
+2. 非法 ID/type/cursor、重复键、额外键、缺键、非法 status/progress/UTC 时间、控制帧、默认 `message` 和网络错误均固定显示“项目任务提示暂不可用”，并关闭流。
+3. 未认证、非 `bid_writer`、空项目、disabled、项目切换和卸载均不保留旧连接；A 项目迟到事件不得污染 B 项目。
+4. 无任务详情、编辑态或其它额外请求；不写 localStorage、sessionStorage、URL、Cookie、console 或日志。
+5. Playwright 固定 Chromium、单 worker、零重试；禁止整仓 E2E、并发 Playwright、后端全量和 xdist。
+
+验收证据：真实 failure-first **1 failed / 1 passed / 3 did not run**；Codex question=`msg_6a19689c036540b09eac00d65bbb58a7`，Grok 确认=`msg_5ebe466f38f9404b8294f42c630c6f8a7`，确认后返修 task=`msg_98272242fe8741a086c96f460e2f90ed`；最终 review=`msg_bfe30b3e23574d6291f33b9a88baddde`，result=`msg_81187e032a1245d5b566f9238a7959ab`。Codex 独立 I3/H3/freshness **5/15/17 passed**，lint、build、`git diff --check` 和严格四文件白名单通过。Grok B 独立 worktree 已合并，不再处于在途；下一包必须重新只读审计和冻结，通知、评论审批、协同光标、WebSocket、任务详情自动刷新和强制锁仍未交付。
