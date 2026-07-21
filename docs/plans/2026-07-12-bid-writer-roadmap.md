@@ -470,6 +470,12 @@ Codex 最终串行验收：后端 I4 + I1 + I2 + P13-A **81 passed**，前端 I4
 
 **下一包方向**：按“本机/内网可实际使用的标书制作系统”优先，先审计任务结果与正文安全刷新、导出/版式、解析器可部署性、稳定启动及备份恢复；通知、评论审批、协同光标、WebSocket、强制锁、多人任务列表和历史时间线后置。下一包必须重新只读审计、冻结契约和白名单，并为 Grok A/B 建立独立 worktree 与独立 SQLite 测试目录，不得直接扩展 I4。
 
+### V1-A：受控停机与离线备份基础（已冻结，待实现）
+
+只读审计确认发起者写类任务完成后已经刷新权威 editor-state，继续扩 I4 收益低且会扩大任务详情敏感面；V1 下一包转向日用数据安全。契约=`docs/v1a-controlled-stop-offline-backup-contract.md`，计划=`docs/plans/2026-07-21-v1a-controlled-stop-offline-backup-plan.md`。
+
+本包只新增受控 Stop、离线 Backup、标准库核心与临时假数据专项；不改现有启动脚本、运行时配置、数据库模式或业务代码，不读取/备份主仓真实数据。恢复覆盖、在线热备、WAL、数据根迁移与本地解析指引继续拆包。
+
 阶段 0/1/2、阶段 3 M3-A 至 M3-D、阶段 4 **包 5** 至 **包 8/P8B/P8C/P8D/P8E**、P9A/P9B/P9C/P9D、阶段 5 P10A 至 P10K、**P11A/P11B/P11C 三个真实数据收口包**，以及 **P12A/P12B-A/B/C/D/P12C-A/B/C/P12D-A/B/P12E-A/B/C/P12F-A/B/C/D/P13-A** 均保持已交付。P8E 完整契约见 `docs/p8e-docling-local-helper-contract.md`，实施与独立验收记录见 `docs/plans/2026-07-15-p8e-docling-local-helper-plan.md`。
 
 P8D 与 P8E 本机外置解析助手均已完成并推送：P8D 计划=`30d066f`、实现=`e1fe316`、闭环=`38b9318`；P8E 计划=`73b1264`、后端=`79b346e`、助手=`e3f9cc4`。P8E 独立验收为 Docling 46、MinerU 54、后端受影响回归 37、P8C E2E 9、P8B E2E 6 passed；真实 Docling/模型未安装、未验收，自动安装/模型打包/服务端内嵌仍不是已交付能力。

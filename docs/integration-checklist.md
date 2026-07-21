@@ -11,6 +11,19 @@
 
 版本分层不得删除或改写既有功能、测试证据和生产文档；已交付的 P13 协作能力作为 V1 基础保留。V1 未形成可发布基线前，不以 V2/V3 需求阻塞其验收。
 
+## V1-A 受控停机与离线备份基础（已冻结，待实现）
+
+契约=`docs/v1a-controlled-stop-offline-backup-contract.md`，计划=`docs/plans/2026-07-21-v1a-controlled-stop-offline-backup-plan.md`。验收必须全部使用临时假仓库、假 SQLite 和假文件，禁止读取或复制主仓真实数据。
+
+1. Stop 必须先验证 8000/5173 全部监听者属于本仓库，任一 foreign listener 时所有 PID 零终止；无监听幂等成功，`WhatIf` 零终止。
+2. Backup 必须拒绝服务仍监听、仓库内目标、symlink/reparse、未知数据库与已存在最终目录；失败无最终目录并清理本轮临时目录。
+3. 精确包含日用库、canonical uploads、knowledge/knowledge_cards 和独立 legacy uploads；semantic-models 仅显式加入，测试/e2e 库、`.env`、日志与消息箱不得进入。
+4. 副本 SQLite `integrity_check=ok`，每个文件源/副本大小与 SHA-256 一致；复制期源变化必须失败。
+5. manifest 严格固定字段且只有规范相对路径，不得出现绝对路径、用户名、主机名、Key、Cookie、票据或正文。
+6. 两个 PowerShell 文件必须 UTF-8 BOM；根 bat 只调用固定脚本。不得真实终止服务或创建真实业务备份作为验收证据。
+
+本包不提供恢复覆盖、在线热备、定时/增量/云备份、压缩加密、WAL、路径迁移或跨版本恢复。
+
 ## P13-C 当前已载入版本修订来源可见性（已完成）
 
 契约：`docs/p13c-current-revision-source-visibility-contract.md`
