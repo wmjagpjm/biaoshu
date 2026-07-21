@@ -1438,3 +1438,9 @@ Codex 独立串行通过 P13-G2 专项/P13-F2 presence/freshness **13/11/17 pass
 5. Playwright 固定 Chromium、单 worker、零重试；禁止整仓 E2E、并发 Playwright、后端全量和 xdist。
 
 验收证据：真实 failure-first **1 failed / 1 passed / 3 did not run**；Codex question=`msg_6a19689c036540b09eac00d65bbb58a7`，Grok 确认=`msg_5ebe466f38f9404b8294f42c630c6f8a7`，确认后返修 task=`msg_98272242fe8741a086c96f460e2f90ed`；最终 review=`msg_bfe30b3e23574d6291f33b9a88baddde`，result=`msg_81187e032a1245d5b566f9238a7959ab`。Codex 独立 I3/H3/freshness **5/15/17 passed**，lint、build、`git diff --check` 和严格四文件白名单通过。Grok B 独立 worktree 已合并，不再处于在途；下一包必须重新只读审计和冻结，通知、评论审批、协同光标、WebSocket、任务详情自动刷新和强制锁仍未交付。
+
+## P13-I4 项目任务状态安全对账（已冻结，待实现）
+
+契约=`docs/p13i4-project-task-status-reconciliation-contract.md`，计划=`docs/plans/2026-07-21-p13i4-project-task-status-reconciliation-plan.md`，冻结=`9d2cc27`。只允许新增 `GET /api/projects/{projectId}/tasks/{taskId}/status` 的三字段安全投影，以及 I3 面板向当前 `useProjectPipeline` 任务的单飞内存对账；不得读取/展示 `message/error/result/payload`，不得刷新正文或 editor-state。
+
+Grok A 后端 worktree=`C:\Users\Administrator\biaoshu-p13i4-grok-a`，独立数据目录=`...\backend\data`；Grok B 前端 worktree=`C:\Users\Administrator\biaoshu-p13i4-grok-b`，独立 E2E 端口/数据库。两边尚未开始或提交功能，必须先分别报告真实 failure-first；Codex 尚未审查，不能把冻结包当作已交付。

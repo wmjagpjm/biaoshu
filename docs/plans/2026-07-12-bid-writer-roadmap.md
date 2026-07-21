@@ -448,6 +448,8 @@
 
 **下一包方向**：通知、评论审批、协同光标、WebSocket、任务详情自动刷新、强制锁仍未交付。下一包必须重新只读审计、冻结契约和白名单，并为 Grok A/B 建立独立 worktree 与独立 SQLite 测试目录。
 
+**当前冻结包**：P13-I4“项目任务状态安全对账”已完成只读审计并冻结；契约=`docs/p13i4-project-task-status-reconciliation-contract.md`，计划=`docs/plans/2026-07-21-p13i4-project-task-status-reconciliation-plan.md`，冻结=`9d2cc27`。Grok A 后端与 Grok B 前端分别在 `C:\Users\Administrator\biaoshu-p13i4-grok-a` / `C:\Users\Administrator\biaoshu-p13i4-grok-b` 实现；当前尚无功能提交、review 或验收结果。
+
 阶段 0/1/2、阶段 3 M3-A 至 M3-D、阶段 4 **包 5** 至 **包 8/P8B/P8C/P8D/P8E**、P9A/P9B/P9C/P9D、阶段 5 P10A 至 P10K、**P11A/P11B/P11C 三个真实数据收口包**，以及 **P12A/P12B-A/B/C/D/P12C-A/B/C/P12D-A/B/P12E-A/B/C/P12F-A/B/C/D/P13-A** 均保持已交付。P8E 完整契约见 `docs/p8e-docling-local-helper-contract.md`，实施与独立验收记录见 `docs/plans/2026-07-15-p8e-docling-local-helper-plan.md`。
 
 P8D 与 P8E 本机外置解析助手均已完成并推送：P8D 计划=`30d066f`、实现=`e1fe316`、闭环=`38b9318`；P8E 计划=`73b1264`、后端=`79b346e`、助手=`e3f9cc4`。P8E 独立验收为 Docling 46、MinerU 54、后端受影响回归 37、P8C E2E 9、P8B E2E 6 passed；真实 Docling/模型未安装、未验收，自动安装/模型打包/服务端内嵌仍不是已交付能力。
