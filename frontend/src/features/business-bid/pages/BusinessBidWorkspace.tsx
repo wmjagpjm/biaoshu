@@ -1,13 +1,15 @@
 /**
- * 模块：商务标分步工作区（含 P13-B/C/D2/H3 版本展示与 P13-F2 近期成员）
+ * 模块：商务标分步工作区（含 P13-B/C/D2/H3 版本展示、P13-F2 近期成员、P13-I3 任务事件提示）
  * 用途：六步流水线；上传/解析/biz_* 生成/导出接 project/task/editor-state；
  *       标题区展示已载入版本 UTC 时间/来源/操作者，以及项目近期成员短租约快照；
- *       薄挂载 EditorStateEventUpdatePanel 做远端版本变化提示。
+ *       薄挂载 EditorStateEventUpdatePanel 做远端版本变化提示；
+ *       薄挂载 ProjectTaskEventPanel 做项目任务事件安全提示（不自动请求详情）。
  * 对接：useProjectPipeline、useBusinessBidWorkspace、GET project、useWorkspaceParseStrategy、
  *       EditorStateVersionFreshness（testid=business-editor-version-freshness 等）、
  *       ProjectPresencePanel（testid=business-project-presence）、
- *       EditorStateEventUpdatePanel（testid=business-editor-state-event-update）；
- *       presence/事件提示不进入 editor Hook。
+ *       EditorStateEventUpdatePanel（testid=business-editor-state-event-update）、
+ *       ProjectTaskEventPanel（testid=business-project-task-event-update）；
+ *       presence/任务事件提示不进入 editor Hook / useProjectPipeline。
  * 二次开发：勿大改步骤信息架构；新任务类型扩在 pipeline TaskType；解析入口统一 handleParse。
  *       项目详情只认 GET /api/projects/{id}，禁止 mockBusinessProjects 复活。
  *       P11B：editor-state 加载失败显示固定失败卡，禁止挂步骤/表格/编辑控件。
@@ -48,6 +50,7 @@ import {
 } from "../components/BusinessStepStepper";
 import { useBusinessBidWorkspace } from "../hooks/useBusinessBidWorkspace";
 import { EditorStateEventUpdatePanel } from "../../editor-state-collaboration/EditorStateEventUpdatePanel";
+import { ProjectTaskEventPanel } from "../../project-task-events/ProjectTaskEventPanel";
 import { EditorStateVersionFreshness } from "../../editor-state-collaboration/EditorStateVersionFreshness";
 import { ProjectPresencePanel } from "../../editor-state-collaboration/ProjectPresencePanel";
 import { EditorStateCheckpointPanel } from "../../editor-state-checkpoints/EditorStateCheckpointPanel";
@@ -455,6 +458,10 @@ export function BusinessBidWorkspace() {
               }
             }}
             testId="business-editor-state-event-update"
+          />
+          <ProjectTaskEventPanel
+            projectId={projectId}
+            testId="business-project-task-event-update"
           />
           {fullStateConflict ? (
             <div
