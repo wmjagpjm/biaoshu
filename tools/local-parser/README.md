@@ -1,24 +1,87 @@
 <!--
-模块：P8D/P8E 本机外置解析助手说明
-用途：说明 MinerU 与 Docling 双助手的人工安装、模型准备、复制即用命令、离线边界、失败排查与残余风险。
-对接：mineru_callback_helper.py；docling_callback_helper.py；P8C 一次性回调；docs/p8d / docs/p8e 契约。
+模块：P8D/P8E 本机外置解析助手与 V1-C 运行时预检说明
+用途：说明 MinerU 与 Docling 双助手的人工安装、模型准备、复制即用命令、离线边界、失败排查与残余风险；并说明 V1-C 预检入口。
+对接：runtime_preflight.py；mineru_callback_helper.py；docling_callback_helper.py；P8C 一次性回调；docs/p8d / docs/p8e / docs/v1c 契约。
 二次开发：不提供自动安装器；不承诺清理解析器自建孙进程；不把票据写入参数/环境/文件/日志；真实模型未验收不得冒充自动化通过。
 -->
 
-# 本机外置解析助手（P8D MinerU / P8E Docling）
+# 本机外置解析助手（P8D MinerU / P8E Docling）与 V1-C 预检
 
 本目录是**独立本机工具**，不嵌入后端进程。用户在浏览器为目标项目签发 P8C 一次性回传票据后，在本机**交互终端**显式选择源文件（Docling 还需本地模型目录），由助手调用 PATH 中已安装的解析 CLI，再向本机回环后端提交 Markdown。
 
-| 助手 | 脚本 | 回调 `source` |
+| 助手 / 入口 | 脚本 | 回调 `source` / 角色 |
 |------|------|----------------|
-| P8D MinerU | `mineru_callback_helper.py` | `mineru`（默认） |
-| P8E Docling | `docling_callback_helper.py` | `docling`（显式） |
+| P8D MinerU | `mineru_callback_helper.py` | `mineru`（默认业务回传） |
+| P8E Docling | `docling_callback_helper.py` | `docling`（显式业务回传） |
+| V1-C 预检 | `runtime_preflight.py` | **不回调**；仅静态检查或合成样本真值门 |
 
-两条路径共用已验收的输入校验、TTY 票据、Origin 归一化、Markdown 有界读取与无代理/无重定向回调原语；**不得**把 Docling 冒充成 MinerU，也不得由浏览器或后端自动拉起本助手。
+两条业务路径共用已验收的输入校验、TTY 票据、Origin 归一化、Markdown 有界读取与无代理/无重定向回调原语；**不得**把 Docling 冒充成 MinerU，也不得由浏览器或后端自动拉起本助手。V1 默认解析器为 **MinerU**；Docling 为管理员显式选择的可选路径，V1 不要求安装。
 
 ---
 
-## 共用前置条件
+## V1-C：本机解析运行时预检（推荐先跑）
+
+在安装/验收真实 CLI 之前或之后，用标准库入口做**诚实预检**。预检**不签发、不读取、不消费**一次性票据，**不访问后端**，**不读取**真实标书、`uploads`、数据库或密钥。
+
+### 模式与成功语义
+
+| 模式 | 行为 | 成功时 |
+|------|------|--------|
+| `--dry-run` | 仅静态：解析可执行文件类型、Docling artifacts 目录、内存命令形态 | `ok=true`、`diagnosticCode=static_ready`、`runtimeVerified=false`；消息含「尚未运行」 |
+| `--synthetic-check` | 在 TEMP 生成含固定锚点的最小 DOCX，离线跑已安装 CLI，校验唯一 Markdown 含锚点 | `ok=true`、`diagnosticCode=synthetic_passed`、`runtimeVerified=true` |
+
+成功**不**表示 OCR/表格/整本标书质量已验收。`dry-run` **绝不**启动子进程、不创建业务样本、不 HTTP。
+
+### 复制即用命令
+
+默认 MinerU 静态检查（本机未安装时预期 `cli_missing`、退出码 2，这是正确生产真值）：
+
+```powershell
+backend\.venv\Scripts\python.exe tools\local-parser\runtime_preflight.py --engine mineru --dry-run
+```
+
+MinerU 合成样本真值门（须已人工安装 CLI/模型，且仅在现场授权后执行；**Agent 禁止自动跑真实合成门或代装**）：
+
+```powershell
+backend\.venv\Scripts\python.exe tools\local-parser\runtime_preflight.py --engine mineru --synthetic-check
+```
+
+可选 Docling（**必须**提供已存在的本地 `--artifacts-path`；MinerU **禁止**带该参数）：
+
+```powershell
+backend\.venv\Scripts\python.exe tools\local-parser\runtime_preflight.py --engine docling --artifacts-path "D:\models\docling" --dry-run
+backend\.venv\Scripts\python.exe tools\local-parser\runtime_preflight.py --engine docling --artifacts-path "D:\models\docling" --synthetic-check
+```
+
+参数要点：
+
+- `--engine` 仅 `mineru|docling`，默认 `mineru`
+- `--dry-run` 与 `--synthetic-check` **互斥且必选其一**
+- stdout **仅一个**六键 JSON：`ok`、`engine`、`mode`、`diagnosticCode`、`message`、`runtimeVerified`（无路径、无 argv、无正文、无异常类名）
+
+### 当前机器诚实口径与禁止项
+
+- 若 PATH 中无安全的 `mineru.exe` / `docling.exe`，`dry-run` 应得 `diagnosticCode=cli_missing`（退出码 2）。**不得**把缺 CLI 伪装成通过。
+- **禁止** Agent 自动 `pip install`、下载模型、执行 `docling-tools models download` / `mineru-models-download` 或联网安装。
+- **禁止**把真实业务文件路径传给预检；预检只处理代码生成的合成 DOCX。
+- 现场授权边界：真实 CLI 安装、模型准备、真实 `--synthetic-check`、授权业务样本 E2E 只能由**用户/管理员显式授权**后人工执行。
+
+### 主要诊断码（摘要）
+
+| `diagnosticCode` | 含义 | 退出码 |
+|---|---|---:|
+| `static_ready` | dry-run 静态通过 | 0 |
+| `synthetic_passed` | 合成样本命中锚点 | 0 |
+| `argument_invalid` | 参数非法 | 2 |
+| `cli_missing` | CLI 缺失或不安全类型 | 2 |
+| `artifacts_invalid` | Docling 模型目录非法 | 2 |
+| `parser_failed` / `parser_timeout` / `output_invalid` / `sample_marker_missing` | 合成门失败类 | 2 |
+| `interrupted` | 用户中断 | 130 |
+| `internal_error` | 未预期兜底 | 1 |
+
+---
+
+## 共用前置条件（业务回传助手）
 
 1. **本机后端已启动**
    默认回调 Origin 为 `http://127.0.0.1:8000`。须能访问
@@ -143,11 +206,12 @@ docling convert
 
 ## 明确不做
 
-- 不自动安装/升级 MinerU 或 Docling，不在助手内执行 `pip` / `docling-tools models download` / `mineru-models-download`
+- 不自动安装/升级 MinerU 或 Docling，不在助手/预检内执行 `pip` / `docling-tools models download` / `mineru-models-download`
 - 不把解析器注册为后端 `parse_engines`，不由浏览器 `parseStrategy=local` 自动拉起
 - 不支持 GPU/VLM/ASR、远程服务、URL/HTML/音视频等额外格式、外部插件、自定义 OCR/线程/超时
 - 不读取浏览器 Cookie/CSRF、仓库 `.env`、数据库或上传目录
 - 不接受管道票据，不把 Windows 批处理包装当作安全可执行文件
+- 预检不签票、不回调、不读取真实标书；`dry-run` 不启动解析器子进程
 - **自动化测试仅用假 CLI/假 HTTP**；**真实 Docling/模型未安装、未验收**，不得用假绿冒充生产就绪
 
 ---
@@ -202,12 +266,15 @@ docling convert
 
 ```powershell
 cd C:\Users\Administrator\biaoshu
+backend\.venv\Scripts\python.exe -m unittest discover -s tools\local-parser -p "test_runtime_preflight.py" -v
 backend\.venv\Scripts\python.exe -m unittest discover -s tools\local-parser -p "test_docling_callback_helper.py" -v
 backend\.venv\Scripts\python.exe -m unittest discover -s tools\local-parser -p "test_mineru_callback_helper.py" -v
 ```
 
 ## 相关文档
 
+- V1-C 契约：`docs/v1c-local-parser-runtime-preflight-contract.md`
+- V1-C 计划：`docs/plans/2026-07-21-v1c-local-parser-runtime-preflight-plan.md`
 - P8D 契约：`docs/p8d-mineru-local-helper-contract.md`
 - P8E 契约：`docs/p8e-docling-local-helper-contract.md`
 - P8E 计划：`docs/plans/2026-07-15-p8e-docling-local-helper-plan.md`
