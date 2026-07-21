@@ -1,15 +1,16 @@
 /**
- * 模块：技术标分步工作区（含 P13-B/C/D2/H3 版本、P13-F2 近期成员、P13-G2 章节意图、P13-I3 任务事件提示）
+ * 模块：技术标分步工作区（含 P13-B/C/D2/H3 版本、P13-F2 近期成员、P13-G2 章节意图、P13-I3/I4 任务事件提示）
  * 用途：技术标流水线工作区；标题区展示版本与项目近期成员；content 步展示章节处理意图提示；
  *       薄挂载 EditorStateEventUpdatePanel 做远端版本变化提示；
- *       薄挂载 ProjectTaskEventPanel 做项目任务事件安全提示（不自动请求详情）。
- * 对接：useTechnicalPlanEditors、EditorStateVersionFreshness、ProjectPresencePanel
- *       （testid=technical-project-presence）、ChapterEditIntentPanel
+ *       薄挂载 ProjectTaskEventPanel 做项目任务事件安全提示（不自动请求详情）；
+ *       P13-I4 经 onSafeTaskEvent 接入 useProjectPipeline.reconcileCurrentTaskStatus，仅做当前任务安全状态对账。
+ * 对接：useTechnicalPlanEditors、useProjectPipeline.reconcileCurrentTaskStatus、EditorStateVersionFreshness、
+ *       ProjectPresencePanel（testid=technical-project-presence）、ChapterEditIntentPanel
  *       （testid=technical-chapter-edit-intent，仅 content 薄挂载）、
  *       EditorStateEventUpdatePanel（testid=technical-editor-state-event-update）、
- *       ProjectTaskEventPanel（testid=technical-project-task-event-update）。
+ *       ProjectTaskEventPanel（testid=technical-project-task-event-update，onSafeTaskEvent）。
  * 二次开发：禁止改 editor-state 保存/冲突/任务路由；presence/意图/任务事件提示仅薄挂载；
- *       任务事件提示不进入 useProjectPipeline/editor Hook；意图不是强制锁。
+ *       任务事件安全对账仅限 reconcileCurrentTaskStatus，不自动拉详情、不进 editor Hook；意图不是强制锁。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
