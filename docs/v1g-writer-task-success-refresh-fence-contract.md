@@ -7,7 +7,7 @@
 
 # V1-G 任务成功后编辑态刷新围栏契约
 
-> **状态：已冻结方案，待 failure-first 与实现。**
+> **状态：已完成实现、Codex 独立验收、提交并推送。** 冻结=`b9cacd1`，实现=`fb3b58f`。
 > **分支：** 仅 `collab/grok-code-codex-review`，严禁操作 `main`。
 > **基线：** `a9ff414c626fb59a64e2575f81a11cc06b795ab9`；V1-A 至 V1-F 已完成并推送。
 
@@ -89,10 +89,11 @@
 6. 商务 `biz_qualify`：A→B 释放旧 success 后零额外 editor-state GET、零旧项目步进/项目对象污染，B 商务正文与资格内容保持权威值。
 7. 同项目技术 analyze success：任务完成后 editor-state GET 精确增加 1，水合任务后权威正文并显示当前提示。
 8. 同项目商务 biz_qualify success：editor-state GET 精确增加 1，水合当前正文并保持既有步进。
+9. 技术 analyze A→B→A：A 旧任务保持 running，B 完整就绪后再返回 A 新会话；释放旧 success 后 A/B GET 增量均为 0，零旧 tip、零 sticky，返回 A 后的正文不得被旧任务刷新覆盖。
 
 可控终态必须使用 pending/running task + per-task SSE 或等价可证明的 HoldGate；先证明 B 初始 GET 已完成且编辑控件可用，再释放 A success。禁止用固定 `waitForTimeout/setTimeout/sleep` 作完成证据、宽泛非零计数、`skip/fixme/only`、源码字符串扫描或条件分支假绿。
 
-生产未改时预期前六项真实失败、后两项通过，参考目标为 **6 failed / 2 passed**；实际数字必须如实记录。首红优先落在释放 A success 后出现额外 A editor-state GET，其次为 B loading 粘住，不得以登录、端口、fixture、SSE 连接或选择器错误冒充红测。
+生产未改时前六个 A→B 与一个 A→B→A 用例应真实失败，两个同项目对照应通过，参考目标为 **7 failed / 2 passed**；实际数字必须如实记录。首红优先落在释放 A success 后出现额外 A editor-state GET，其次为 B loading 粘住，不得以登录、端口、fixture、SSE 连接或选择器错误冒充红测。
 
 ## 7. 分级验收
 
@@ -116,3 +117,18 @@ git -C .. diff --check
 ## 8. 非目标
 
 本包不做后端任务取消、后台完成通知、I4 自动正文刷新、任务列表、多人锁、协同光标、导出、解析器安装、多章内容质量、V2 团队协作或 V3 SaaS 部署。V1-G 只关闭“当前页面主动发起任务后的 success 副作用所有权”。
+
+## 9. 完成证据
+
+- Grok A/B 只读审计分别为 `msg_7c2ceeff812547b9a3f148f9fcfffce3`、`msg_3183e06e07914fcb838451e8dfac6119`，Codex 裁定=`msg_650b57e1cbf14e9083adaeedb2a2c971`。
+- Grok B 首轮 failure-first=`msg_93e7b744bb5a4571a6c94bbd05151bab`，真实 **6 failed / 2 passed**。Codex 发现只按 projectId 可在 ABA 路径假绿，question/确认=`msg_55bcb5327e8d45ba8e588449850fd7ad`/`msg_c0fe6fb76a4e44e5b955f2f1d528d21c`；双确认后加固=`msg_367a928158774a15bfa0aaf3dc72ad63`，最终生产前真实 **7 failed / 2 passed**。
+- Grok A production review=`msg_36a13fd6fcc046c3b1267f016aa1a829`。Codex 独立串行通过新专项/技术 truth/商务 truth/I4/I3/H3 **9/28/18/8/5/15 passed**，lint、build、`git diff --check`、严格五文件、冻结测试哈希、空暂存区和 8010/5174 清理均通过。
+- 实现提交=`fb3b58f`，已快进并只推送 `collab/grok-code-codex-review`；未运行后端 pytest、整仓 318 E2E 或并发测试。
+
+最终 SHA-256：
+
+- `frontend/e2e/v1g-writer-task-soft-switch-hydration.spec.ts`=`66A5DFADB3BC12DD046BF65F81248552BF2F8875245ECEFC7DFA2284268AB68A`
+- `frontend/src/features/technical-plan/pages/TechnicalPlanWorkspace.tsx`=`3098A2E2823DDA802BE3B7CEE302E29D642D125C1080B25A3A32CE0AD37813DF`
+- `frontend/src/features/business-bid/pages/BusinessBidWorkspace.tsx`=`599444A17E152D690A4D0ACECE03F7A7729EA86A51BBEFB6CBBBEA2B7ABD6868`
+- `frontend/src/features/technical-plan/hooks/useTechnicalPlanEditors.ts`=`0AFDB22E102FF7B116B902A530AB18735CCDD8FE259E94B66725E2EEBC90BEA4`
+- `frontend/src/features/business-bid/hooks/useBusinessBidWorkspace.ts`=`B362B5751D7235DC30CA286080380D9D592F45526F7356A30F48BF4AD54BDCA1`

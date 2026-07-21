@@ -7,7 +7,7 @@
 
 # 标书制作者能力补全与角色化演进路线图
 
-> **状态**：阶段 0–5 已按下文拆包持续交付；P11A/B/C、P12A 至 P12N、P13-A 至 P13-I4、V1-A 至 V1-F 均已完成。V1-F 冻结=`5df1114`、契约收紧=`ee97701`、实现=`65fe5e6`，Codex 独立后端/前端=`20+1/14+4+18+28+18 passed`。下一包优先 V1-G writer 任务迟到 success 的正文刷新与 sticky loading 安全门；继续按分级策略避免机械重复全量，V2/V3 后置。
+> **状态**：阶段 0–5 已按下文拆包持续交付；P11A/B/C、P12A 至 P12N、P13-A 至 P13-I4、V1-A 至 V1-G 均已完成。V1-G 冻结=`b9cacd1`、实现=`fb3b58f`，Codex 独立前端=`9+28+18+8+5+15 passed`。下一包重新只读审计多章正文内容质量与最终标书可交付性；继续按分级策略避免机械重复全量，V2/V3 后置。
 > **当前分支**：`collab/grok-code-codex-review`
 > **协作方式**：Grok 负责限定范围的实现与测试；Codex 负责范围、审查、验收和提交授权。
 
@@ -190,7 +190,7 @@
 
 **验收**：原始 failure-first **2 failed / 6 passed**，两轮双方确认收紧后为 **3 failed / 6 passed**；Codex 独立实现后专项/受影响回归 **9/10 passed**，编译、diff、哈希和空暂存门通过。未运行后端全量、前端 E2E、真实 CLI/模型或业务样本。
 
-**下一主线**：V1-F 已完成稳健 Word 下载与人读文件名；优先冻结已双确认的 V1-G writer 任务迟到 success sticky loading，随后再评估多章内容质量门。复杂排版、OCR、V2/V3 协作和公网部署继续后置。
+**下一主线**：V1-F/V1-G 均已完成；重新只读审计多章正文内容质量与最终标书可交付性。复杂排版、OCR、V2/V3 协作和公网部署继续后置。
 
 #### V1-E：导出前最新编辑态落盘（已完成）
 
@@ -206,7 +206,15 @@
 
 **验收**：首轮 failure-first 后端/新下载/P9D/V1-E 为 **16 failed / 1 passed、13 failed / 0 passed、3 failed / 1 passed、3 failed / 15 passed**。多轮反假绿与控制字符边界均经双方确认后返修；最终 Grok/Codex 独立后端 **20/1 passed**、前端 **14/4/18/28/18 passed**，lint/build/diff-check、十文件和端口门通过。未运行后端全量或整仓 318 E2E。
 
-**下一主线**：冻结已双确认的 V1-G writer 任务迟到 success sticky loading；多章内容质量门随后评估。`structure` 跨页设计、OCR、真实解析器安装、V2/V3 继续后置。
+**下一主线**：V1-G 已完成任务 success 编辑态刷新围栏；重新只读审计多章正文内容质量与最终标书可交付性。`structure` 跨页设计、OCR、真实解析器安装、V2/V3 继续后置。
+
+#### V1-G：任务成功后编辑态刷新围栏（已完成）
+
+**完成**：冻结=`b9cacd1`、实现=`fb3b58f`。技术 `parse/analyze/outline/chapters/chapter` 共用任务成功重载 helper；商务 `runBizTask` 与两侧 editor-state Hook 共同以项目、task generation 和入口项目门隔离旧闭包，不修改 pipeline/I4/SSE 或后端。
+
+**验收**：首轮 failure-first **6 failed / 2 passed**；Codex 发现 ABA 假绿后经双方确认加固为 **7 failed / 2 passed**。最终 Codex 独立新专项/技术 truth/商务 truth/I4/I3/H3 **9/28/18/8/5/15 passed**，lint/build/diff-check、严格五文件和端口门通过。
+
+**下一主线**：重新审计多章正文内容质量与最终标书可交付性；复杂跨页版式、OCR、真实解析器安装和 V2/V3 继续后置。
 
 #### 功能包 5：响应矩阵智能建议“人工确认后应用”浏览器 E2E
 

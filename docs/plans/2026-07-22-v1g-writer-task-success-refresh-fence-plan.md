@@ -8,6 +8,7 @@
 # V1-G 任务成功后编辑态刷新围栏实施计划
 
 > **执行代理要求：** 必须使用 `executing-plans`，逐项执行并在每个审查点核对真实证据。
+> **完成状态：** 冻结=`b9cacd1`，实现=`fb3b58f`；Codex 独立验收和推送已完成。
 
 **目标：** A 项目任务迟到 success 不再触发旧编辑态重载、粘住 B 的 loading 或污染 B 的提示/项目步进，同时保持当前项目成功后精确一次自动水合。
 
@@ -124,3 +125,10 @@
 ### 任务 8：继续 V1 主线
 
 V1-G 完成后重新只读审计下一项本机/内网实际可用断点，优先多章正文内容质量与最终标书可交付性；不得提前混入 V2/V3。
+
+## 执行结果
+
+1. Grok B 首轮单文件 failure-first 为 **6 failed / 2 passed**；Codex 审查发现 ABA 代次未锁且 task POST 计数过宽，经 `msg_55bcb5327e8d45ba8e588449850fd7ad`/`msg_c0fe6fb76a4e44e5b955f2f1d528d21c` 双确认后加固为 **7 failed / 2 passed**。
+2. Grok A 严格四生产实现并保持测试哈希，review=`msg_36a13fd6fcc046c3b1267f016aa1a829`；未暂存、提交或推送。
+3. Codex 独立串行通过新专项/技术 truth/商务 truth/I4/I3/H3 **9/28/18/8/5/15 passed**，lint、build、diff-check、严格五文件、空暂存和端口门通过。
+4. 实现提交=`fb3b58f`，已快进并推送 `collab/grok-code-codex-review`；未运行后端 pytest、整仓 318 E2E 或并发测试。
