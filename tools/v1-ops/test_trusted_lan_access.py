@@ -941,26 +941,11 @@ def _run_ps1_start_inject(
         + "exit $__v1l_code"
     )
     run_env = _build_run_env(env)
-    raw = subprocess.run(
-        [
-            "powershell",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            command,
-        ],
-        cwd=str(cwd or script_path.parent),
-        capture_output=True,
+    proc = _run_ps_harness_file(
+        command,
+        cwd=cwd or script_path.parent,
         timeout=timeout,
-        check=False,
         env=run_env,
-    )
-    proc = subprocess.CompletedProcess(
-        args=raw.args,
-        returncode=raw.returncode,
-        stdout=_decode_ps_output(raw.stdout),
-        stderr=_decode_ps_output(raw.stderr),
     )
     combined = (proc.stdout or "") + "\n" + (proc.stderr or "")
     captures, counts, http_events, tcp_queries, unified_trace = _parse_inject_markers(
@@ -991,9 +976,12 @@ def _ps_inject_stub_block(
         + f"$global:__V1L_HTTP_MAP = "
         f"[System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{http_b64}')) "
         f"| ConvertFrom-Json; "
-        + f"$global:__V1L_PROC_META = @("
+        # PS5.1：禁止 @(<pipeline>|ConvertFrom-Json) 把多元素 Object[] 嵌成单元素；
+        # 先赋局部变量，再 @($var) 展平为逐记录对象（勿用 Generic.List，@($list) 会参数类型不匹配）。
+        + f"$__v1l_proc_raw = "
         f"[System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{proc_b64}')) "
-        f"| ConvertFrom-Json); "
+        f"| ConvertFrom-Json; "
+        + "$global:__V1L_PROC_META = @($__v1l_proc_raw); "
         + "function global:Get-NetTCPConnection { "
         "  [CmdletBinding()] "
         "  param( "
@@ -1072,8 +1060,12 @@ def _ps_inject_stub_block(
             _ps_start_process_capture_body().replace(
                 "throw 'V1L_START_PROCESS_CAPTURED'",
                 (
+                    # 注意：不得在 @{ ... } 内写 $map['key']，PS 会把 [] 当哈希表语法解析失败
                     f"if (-not {multi_flag}) {{ throw 'V1L_START_PROCESS_CAPTURED' }} "
-                    "else { return [pscustomobject]@{ Id = 900000 + $global:__V1K_SC['Start-Process'] } }"
+                    "else { "
+                    "$__v1l_dummy_id = 900000 + [int]$global:__V1K_SC['Start-Process']; "
+                    "return [pscustomobject]@{ Id = $__v1l_dummy_id } "
+                    "}"
                 ),
             )
         )
@@ -1156,11 +1148,59 @@ def _ps_emit_inject_markers() -> str:
     )
 
 
+def _run_ps_harness_file(
+    command: str,
+    *,
+    cwd: Path | None = None,
+    timeout: int = 45,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """
+    将长 inject harness 写入 TEMP .ps1 后以 -File 执行。
+    避免 powershell -Command 对长脚本/复杂转义的截断与静默中止。
+    """
+    tmp: Path | None = None
+    try:
+        fd, name = tempfile.mkstemp(prefix="v1l-harness-", suffix=".ps1")
+        os.close(fd)
+        tmp = Path(name)
+        # UTF-8 BOM：Windows PowerShell 5.1 -File 默认按系统 ANSI 读，无 BOM 会破坏中文/非 ASCII
+        tmp.write_bytes(_BOM + command.encode("utf-8"))
+        raw = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(tmp),
+            ],
+            cwd=str(cwd) if cwd is not None else None,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+            env=env if env is not None else _build_run_env(None),
+        )
+        return subprocess.CompletedProcess(
+            args=raw.args,
+            returncode=raw.returncode,
+            stdout=_decode_ps_output(raw.stdout),
+            stderr=_decode_ps_output(raw.stderr),
+        )
+    finally:
+        if tmp is not None:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
 def _run_ps1_scope_meta_probe(
     probe_ps1: Path,
     *,
     tcp_rows: list[dict[str, Any]] | None = None,
     http_map: dict[str, dict[str, Any]] | None = None,
+    allow_multiple_starts: bool = False,
     timeout: int = 45,
 ) -> tuple[
     list[dict[str, Any]],
@@ -1173,14 +1213,16 @@ def _run_ps1_scope_meta_probe(
     """
     helper/meta：同一 PowerShell 进程内用 & 调用独立 .ps1（跨脚本作用域），
     证明 global stub 写回捕获容器；不计入业务覆盖。
+    allow_multiple_starts=True 时首个 Start-Process 返回 dummy 成功（证明 start-success→probe）。
     """
     tcp_b64, http_b64, proc_b64, _meta = _encode_inject_payloads(tcp_rows, http_map)
+    multi_flag = "$true" if allow_multiple_starts else "$false"
     ps1_lit = str(probe_ps1.resolve()).replace("'", "''")
     command = (
         "$__v1l_code = 1; "
         + "try { "
         + _ps_inject_stub_block(
-            tcp_b64=tcp_b64, http_b64=http_b64, proc_b64=proc_b64, multi_flag="$false"
+            tcp_b64=tcp_b64, http_b64=http_b64, proc_b64=proc_b64, multi_flag=multi_flag
         )
         + f"try {{ & '{ps1_lit}' }} catch {{ "
         "  $__msg = \"$_\"; "
@@ -1197,24 +1239,10 @@ def _run_ps1_scope_meta_probe(
         + "}; "
         + "exit $__v1l_code"
     )
-    raw = subprocess.run(
-        [
-            "powershell",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            command,
-        ],
-        cwd=str(probe_ps1.parent),
-        capture_output=True,
-        timeout=timeout,
-        check=False,
-        env=_build_run_env(None),
+    raw = _run_ps_harness_file(
+        command, cwd=probe_ps1.parent, timeout=timeout, env=_build_run_env(None)
     )
-    combined = (
-        _decode_ps_output(raw.stdout) + "\n" + _decode_ps_output(raw.stderr)
-    )
+    combined = (raw.stdout or "") + "\n" + (raw.stderr or "")
     caps, counts, http_events, tcp_queries, unified_trace = _parse_inject_markers(
         combined
     )
@@ -1281,24 +1309,10 @@ def _run_ps1_scope_meta_adjacent_twice(
         + _one_run(b_tcp, b_http, b_proc, "B")
         + "exit 0"
     )
-    raw = subprocess.run(
-        [
-            "powershell",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            command,
-        ],
-        cwd=str(probe_ps1.parent),
-        capture_output=True,
-        timeout=timeout,
-        check=False,
-        env=_build_run_env(None),
+    raw = _run_ps_harness_file(
+        command, cwd=probe_ps1.parent, timeout=timeout, env=_build_run_env(None)
     )
-    combined = (
-        _decode_ps_output(raw.stdout) + "\n" + _decode_ps_output(raw.stderr)
-    )
+    combined = (raw.stdout or "") + "\n" + (raw.stderr or "")
 
     def _split_tag(text: str, tag: str) -> str:
         marker = f"V1L_META_TAG={tag}"
@@ -1345,32 +1359,54 @@ def _run_ps1_scope_meta_adjacent_twice(
 
 def _write_scope_meta_probe_ps1(path: Path) -> None:
     """
-    写入跨脚本 meta 探针：顺序调用 TCP 查询、Cim 元数据、health→auth、唯一 frontend Start-Process。
-    仅用于作用域夹具证明，零 live 副作用（全部走 global stub）。
+    写入跨脚本 meta 探针：双 PID Cim、TCP 查询、health→auth、唯一 frontend Start-Process、
+    随后 frontend probe。仅用于作用域夹具证明，零 live 副作用（全部走 global stub）。
     """
+    fe_probe = f"http://{_VALID_LAN_HOST}:{_EXPECTED_FRONTEND_PORT}/create"
     body = (
-        "# V1-L Q5 scope meta probe — do not use outside tests\n"
+        "# V1-L Q5/Q8 scope meta probe — do not use outside tests\n"
         f"$tcp = @(Get-NetTCPConnection -LocalAddress '{_EXPECTED_BACKEND_HOST}' "
         f"-LocalPort {_EXPECTED_BACKEND_PORT} -State Listen -ErrorAction Stop)\n"
         "if ($tcp.Count -lt 1) { throw 'V1L_META_TCP_EMPTY' }\n"
-        f"$pidVal = [int]$tcp[0].OwningProcess\n"
-        "$cim = @(Get-CimInstance -ClassName Win32_Process "
-        '-Filter "ProcessId = $pidVal" -ErrorAction SilentlyContinue)\n'
-        "if ($cim.Count -lt 1) { throw 'V1L_META_CIM_EMPTY' }\n"
-        "if ([string]::IsNullOrWhiteSpace([string]$cim[0].ExecutablePath) -and "
-        "[string]::IsNullOrWhiteSpace([string]$cim[0].CommandLine)) { "
-        "throw 'V1L_META_CIM_NO_META' }\n"
+        # 双 PID 精确 Cim：禁止只测单对象假绿（backend 710001 + frontend 720001）
+        f"$beCim = @(Get-CimInstance -ClassName Win32_Process "
+        f'-Filter "ProcessId = 710001" -ErrorAction SilentlyContinue)\n'
+        f"$feCim = @(Get-CimInstance -ClassName Win32_Process "
+        f'-Filter "ProcessId = 720001" -ErrorAction SilentlyContinue)\n'
+        "if ($beCim.Count -lt 1) { throw 'V1L_META_CIM_BE_EMPTY' }\n"
+        "if ($feCim.Count -lt 1) { throw 'V1L_META_CIM_FE_EMPTY' }\n"
+        "if ([int]$beCim[0].ProcessId -ne 710001) { throw 'V1L_META_CIM_BE_PID' }\n"
+        "if ([int]$feCim[0].ProcessId -ne 720001) { throw 'V1L_META_CIM_FE_PID' }\n"
+        "if ([string]::IsNullOrWhiteSpace([string]$beCim[0].ExecutablePath) -and "
+        "[string]::IsNullOrWhiteSpace([string]$beCim[0].CommandLine)) { "
+        "throw 'V1L_META_CIM_BE_NO_META' }\n"
+        "if ([string]::IsNullOrWhiteSpace([string]$feCim[0].ExecutablePath) -and "
+        "[string]::IsNullOrWhiteSpace([string]$feCim[0].CommandLine)) { "
+        "throw 'V1L_META_CIM_FE_NO_META' }\n"
+        # 单行 Write-Output，避免多行 hashtable 在 & 跨脚本调用时截断后续语句
+        "$__beMeta = @{ ProcessId = [int]$beCim[0].ProcessId; "
+        "ExecutablePath = [string]$beCim[0].ExecutablePath; "
+        "CommandLine = [string]$beCim[0].CommandLine }; "
+        "Write-Output ('V1L_META_CIM_BE=' + ($__beMeta | ConvertTo-Json -Compress))\n"
+        "$__feMeta = @{ ProcessId = [int]$feCim[0].ProcessId; "
+        "ExecutablePath = [string]$feCim[0].ExecutablePath; "
+        "CommandLine = [string]$feCim[0].CommandLine }; "
+        "Write-Output ('V1L_META_CIM_FE=' + ($__feMeta | ConvertTo-Json -Compress))\n"
         f"$null = Invoke-WebRequest -Uri '{_EXPECTED_BACKEND_HEALTH_URL}' "
         f"-Method {_EXPECTED_AUTH_HTTP_METHOD}\n"
         f"$null = Invoke-WebRequest -Uri '{_EXPECTED_AUTH_BOOTSTRAP_URL}' "
         f"-Method {_EXPECTED_AUTH_HTTP_METHOD}\n"
         "try {\n"
-        "  Start-Process -FilePath 'npm.cmd' "
+        # multi 成功路径会返回 dummy 对象；必须吞掉，避免输出流中断 harness 后续 marker
+        "  $null = Start-Process -FilePath 'npm.cmd' "
         f"-ArgumentList '{_EXPECTED_FRONTEND_START_ARGS_LAN}' "
         "-WorkingDirectory 'C:\\meta-frontend' -WindowStyle Hidden\n"
         "} catch {\n"
         "  if (\"$_\" -notmatch 'V1L_START_PROCESS_CAPTURED') { throw }\n"
         "}\n"
+        # start-success 路径后必须再发 frontend probe（与生产 Wait-FrontendReady 同 URL）
+        f"$null = Invoke-WebRequest -Uri '{fe_probe}' "
+        f"-Method {_EXPECTED_AUTH_HTTP_METHOD}\n"
     )
     path.write_text(body, encoding="utf-8")
 
@@ -2745,13 +2781,19 @@ class TestLanPositiveStartOrder(unittest.TestCase):
 
     def test_owned_ready_auth_true_starts_single_lan_frontend_in_order(self) -> None:
         """
-        注入 owned backend TCP + Cim 进程元数据 + health/auth HTTP 映射。
-        统一单调 trace 精确证明 health < auth < 唯一 LAN frontend_start。
+        注入 owned backend TCP + Cim 进程元数据 + health/auth/frontend-probe HTTP 映射。
+        首个 Start-Process 返回 dummy 成功（allow_multiple_starts=True），仍断言唯一 1 次；
+        统一单调 trace 精确证明 health < auth < 唯一 LAN frontend_start，且随后 frontend probe；
+        正确生产应 ready/exit0（不得捕获异常冒充成功）。
         """
+        fe_url = f"http://{_VALID_LAN_HOST}:{_EXPECTED_FRONTEND_PORT}/create"
         tcp = [_owned_backend_tcp_row(self.tr.root)]
-        http = _ready_http_map(auth_required=True, bootstrapped=True)
+        http = _ready_http_map(
+            auth_required=True, bootstrapped=True, frontend_url=fe_url
+        )
         # Get-CimInstance 按 PID 回 executablePath/commandLine 后，正确生产可判 owned；
         # 本用例以「实现后必须满足」为业务门；生产未实现时业务红。
+        # 首启 dummy 成功：若生产二次 Start-Process，counts/captures 会 >1 而失败。
         proc, caps, counts, http_events, tcp_queries, unified_trace = _run_ps1_start_inject(
             self.tr.true_source(),
             [
@@ -2766,7 +2808,7 @@ class TestLanPositiveStartOrder(unittest.TestCase):
             env=self.tr.npm_env({"VITE_API_BASE_URL": "/api"}),
             tcp_rows=tcp,
             http_map=http,
-            allow_multiple_starts=False,
+            allow_multiple_starts=True,
         )
         # TCP 枚举：backend 回环 8000 + frontend 精确 LanHost:5173
         ports_addrs = {
@@ -2786,12 +2828,29 @@ class TestLanPositiveStartOrder(unittest.TestCase):
             f"LAN 5173 必须按精确 LanHost 枚举：{tcp_queries!r}",
         )
         self.assertEqual(counts.get("Start-Process"), 1)
+        self.assertEqual(len(caps), 1, f"必须唯一 Start-Process capture：{caps!r}")
         _assert_unified_trace_health_auth_then_unique_frontend_start(
             self,
             http_events=http_events,
             captures=caps,
             unified_trace=unified_trace,
             host=_VALID_LAN_HOST,
+        )
+        # start-success 后必须观测精确 LanHost frontend /create 探针
+        probe_urls = [str(e.get("url")) for e in http_events]
+        self.assertIn(
+            fe_url,
+            probe_urls,
+            f"start 后必须精确 LanHost frontend probe：{http_events!r}",
+        )
+        start_seq = int(caps[0]["seq"])
+        probe_ev = next(e for e in http_events if str(e.get("url")) == fe_url)
+        probe_seq = int(probe_ev.get("seq"))
+        self.assertLess(
+            start_seq,
+            probe_seq,
+            f"统一 seq 必须 frontend_start < probe：start={start_seq} probe={probe_seq} "
+            f"trace={unified_trace!r}",
         )
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 
@@ -3340,12 +3399,17 @@ class TestScopeFixtureMeta(unittest.TestCase):
         """
         【helper 自检 / 不计业务覆盖】
         1) 真源 Start-Biaoshu-Dev.ps1 经 & 调用后，Get-NetTCPConnection 查询写回 global 容器；
-        2) 独立 .ps1 探针证明 listener 返回、Cim 元数据、health→auth、唯一 frontend_start
-           均写回同一捕获容器（跨脚本作用域，非 -Command 本地假绿）。
+        2) 独立 .ps1 探针证明 listener 返回、双 PID Cim 精确元数据、health→auth、
+           start-success 后唯一 frontend_start、再 frontend probe 均写回同一捕获容器。
         """
         # --- 真源路径：listener 查询写回 ---
-        tcp = [_owned_backend_tcp_row(self.tr.root, pid=710001)]
-        http = _ready_http_map(auth_required=True, bootstrapped=True)
+        be_row = _owned_backend_tcp_row(self.tr.root, pid=710001)
+        fe_row = _owned_frontend_tcp_row(self.tr.root, _VALID_LAN_HOST, pid=720001)
+        tcp = [be_row, fe_row]
+        fe_url = f"http://{_VALID_LAN_HOST}:{_EXPECTED_FRONTEND_PORT}/create"
+        http = _ready_http_map(
+            auth_required=True, bootstrapped=True, frontend_url=fe_url
+        )
         _proc, _caps, counts_src, _http_src, tcp_src, _trace_src = _run_ps1_start_inject(
             self.tr.true_source(),
             ["-Component", "backend"],
@@ -3374,13 +3438,14 @@ class TestScopeFixtureMeta(unittest.TestCase):
         self.assertIn("Start-Process", counts_src)
         self.assertIsInstance(counts_src["Start-Process"], int)
 
-        # --- 跨脚本探针：完整 health→auth→frontend_start + Cim ---
+        # --- 跨脚本探针：双 PID Cim + health→auth→start-success→frontend probe ---
         probe = self._new_meta_probe()
         caps, counts, http_events, tcp_queries, unified_trace, combined = (
             _run_ps1_scope_meta_probe(
                 probe,
                 tcp_rows=tcp,
                 http_map=http,
+                allow_multiple_starts=True,
             )
         )
         self.assertGreater(
@@ -3390,37 +3455,70 @@ class TestScopeFixtureMeta(unittest.TestCase):
             int(tcp_queries[0].get("LocalPort")),
             _EXPECTED_BACKEND_PORT,
         )
-        # listener 返回非空：探针在空返回时会 throw V1L_META_TCP_EMPTY
+        # listener / 双 PID Cim 返回非空
         self.assertNotIn("V1L_META_TCP_EMPTY", combined)
-        self.assertNotIn("V1L_META_CIM_EMPTY", combined)
-        self.assertNotIn("V1L_META_CIM_NO_META", combined)
-        self.assertEqual(len(http_events), 2, http_events)
+        self.assertNotIn("V1L_META_CIM_BE_EMPTY", combined)
+        self.assertNotIn("V1L_META_CIM_FE_EMPTY", combined)
+        self.assertNotIn("V1L_META_CIM_BE_NO_META", combined)
+        self.assertNotIn("V1L_META_CIM_FE_NO_META", combined)
+        # 精确断言双 PID 各自 ProcessId/ExecutablePath/CommandLine
+        cim_be = _parse_json_marker_line(combined, "V1L_META_CIM_BE=")
+        cim_fe = _parse_json_marker_line(combined, "V1L_META_CIM_FE=")
+        self.assertIsInstance(cim_be, dict, f"缺 backend Cim 标记：{combined[:800]!r}")
+        self.assertIsInstance(cim_fe, dict, f"缺 frontend Cim 标记：{combined[:800]!r}")
+        self.assertEqual(int(cim_be["ProcessId"]), 710001)
+        self.assertEqual(int(cim_fe["ProcessId"]), 720001)
+        self.assertEqual(
+            str(cim_be["ExecutablePath"]), str(be_row["executablePath"])
+        )
+        self.assertEqual(str(cim_be["CommandLine"]), str(be_row["commandLine"]))
+        self.assertEqual(
+            str(cim_fe["ExecutablePath"]), str(fe_row["executablePath"])
+        )
+        self.assertEqual(str(cim_fe["CommandLine"]), str(fe_row["commandLine"]))
+        # health + auth + frontend probe
+        self.assertEqual(len(http_events), 3, http_events)
         self.assertEqual(http_events[0].get("url"), _EXPECTED_BACKEND_HEALTH_URL)
         self.assertEqual(http_events[1].get("url"), _EXPECTED_AUTH_BOOTSTRAP_URL)
+        self.assertEqual(http_events[2].get("url"), fe_url)
         self.assertEqual(http_events[0].get("method"), _EXPECTED_AUTH_HTTP_METHOD)
         self.assertEqual(http_events[1].get("method"), _EXPECTED_AUTH_HTTP_METHOD)
+        self.assertEqual(http_events[2].get("method"), _EXPECTED_AUTH_HTTP_METHOD)
+        # 唯一 start：第二次 Start-Process 若发生会由 counts/captures 失败
         self.assertEqual(counts.get("Start-Process"), 1)
         self.assertEqual(len(caps), 1, caps)
         self.assertIn(_VALID_LAN_HOST, str(caps[0].get("ArgumentList", "")))
-        # 统一 seq：health < auth < start
+        # 统一 seq：health < auth < start < frontend_probe
         http_trace = [t for t in unified_trace if t.get("kind") == "http"]
         start_trace = [t for t in unified_trace if t.get("kind") == "start"]
-        self.assertEqual(len(http_trace), 2, unified_trace)
+        self.assertEqual(len(http_trace), 3, unified_trace)
         self.assertEqual(len(start_trace), 1, unified_trace)
         self.assertLess(int(http_trace[0]["seq"]), int(http_trace[1]["seq"]))
         self.assertLess(int(http_trace[1]["seq"]), int(start_trace[0]["seq"]))
+        self.assertLess(int(start_trace[0]["seq"]), int(http_trace[2]["seq"]))
 
     def test_global_stub_adjacent_runs_isolated_same_process(self) -> None:
         """
         【helper 自检 / 不计业务覆盖】
         同一 PowerShell 进程连续两次 inject 探测；finally 清理后无 residual；
-        第二次计数/映射/trace 不继承第一次。
+        第二次计数/映射/trace 不继承第一次。双 PID Cim 每轮均精确命中。
         """
         probe = self._new_meta_probe()
-        tcp_a = [_owned_backend_tcp_row(self.tr.root, pid=710001)]
-        tcp_b = [_owned_backend_tcp_row(self.tr.root, pid=710099)]
-        http_a = _ready_http_map(auth_required=True, bootstrapped=True)
-        # B 轮使用不同 Content 标记映射独立性（URL 仍 health→auth）
+        tcp_a = [
+            _owned_backend_tcp_row(self.tr.root, pid=710001),
+            _owned_frontend_tcp_row(self.tr.root, _VALID_LAN_HOST, pid=720001),
+        ]
+        # B 轮换 PID 证明映射独立；探针仍精确查 710001/720001，故 B 轮 Cim 应空而 throw——
+        # 相邻隔离用例用同 PID 双行，仅 HTTP Content 区分轮次。
+        tcp_b = [
+            _owned_backend_tcp_row(self.tr.root, pid=710001),
+            _owned_frontend_tcp_row(self.tr.root, _VALID_LAN_HOST, pid=720001),
+        ]
+        fe_url = f"http://{_VALID_LAN_HOST}:{_EXPECTED_FRONTEND_PORT}/create"
+        http_a = _ready_http_map(
+            auth_required=True, bootstrapped=True, frontend_url=fe_url
+        )
+        # B 轮使用不同 Content 标记映射独立性（URL 仍 health→auth→fe probe）
         http_b = {
             _EXPECTED_BACKEND_HEALTH_URL: {
                 "StatusCode": 200,
@@ -3435,6 +3533,7 @@ class TestScopeFixtureMeta(unittest.TestCase):
                     auth_required=True, bootstrapped=True
                 ),
             },
+            fe_url: {"StatusCode": 200, "Content": "<html>meta-B</html>"},
         }
         run_a, run_b, combined = _run_ps1_scope_meta_adjacent_twice(
             probe,
@@ -3447,21 +3546,25 @@ class TestScopeFixtureMeta(unittest.TestCase):
         self.assertEqual(run_b["residual"], "", f"B 轮清理残留：{run_b['residual']}")
         self.assertEqual(run_a["counts"].get("Start-Process"), 1)
         self.assertEqual(run_b["counts"].get("Start-Process"), 1)
-        self.assertEqual(len(run_a["http_events"]), 2)
-        self.assertEqual(len(run_b["http_events"]), 2)
+        self.assertEqual(len(run_a["http_events"]), 3)
+        self.assertEqual(len(run_b["http_events"]), 3)
         self.assertEqual(len(run_a["captures"]), 1)
         self.assertEqual(len(run_b["captures"]), 1)
-        # 各自独立：seq 均从 1 起（health=1, auth=2, start=3），不累加到 4+
+        # 各自独立：seq 均从 1 起（health=1, auth=2, start=3, probe=4），不累加
         seqs_a = [int(t["seq"]) for t in run_a["unified_trace"]]
         seqs_b = [int(t["seq"]) for t in run_b["unified_trace"]]
-        self.assertEqual(sorted(seqs_a), [1, 2, 3], run_a["unified_trace"])
-        self.assertEqual(sorted(seqs_b), [1, 2, 3], run_b["unified_trace"])
+        self.assertEqual(sorted(seqs_a), [1, 2, 3, 4], run_a["unified_trace"])
+        self.assertEqual(sorted(seqs_b), [1, 2, 3, 4], run_b["unified_trace"])
         # TCP 查询各自非空且不共享同一列表对象累积（B 轮条数不大于合理单轮）
         self.assertGreater(len(run_a["tcp_queries"]), 0)
         self.assertGreater(len(run_b["tcp_queries"]), 0)
         self.assertLessEqual(len(run_b["tcp_queries"]), 4)
         self.assertNotIn("V1L_META_TCP_EMPTY", combined)
-        self.assertNotIn("V1L_META_CIM_EMPTY", combined)
+        self.assertNotIn("V1L_META_CIM_BE_EMPTY", combined)
+        self.assertNotIn("V1L_META_CIM_FE_EMPTY", combined)
+        # 双 PID 标记两轮均出现
+        self.assertIn("V1L_META_CIM_BE=", combined)
+        self.assertIn("V1L_META_CIM_FE=", combined)
 
 
 # ===========================================================================
