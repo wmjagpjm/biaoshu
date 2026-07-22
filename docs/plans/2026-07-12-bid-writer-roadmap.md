@@ -7,7 +7,7 @@
 
 # 标书制作者能力补全与角色化演进路线图
 
-> **状态**：P11A/B/C、P12A 至 P12N、P13-A 至 P13-I4、V1-A 至 V1-K 均已完成。V1-K 冻结=`8f0c137`、实现=`cd4102f`；下一包为 V1-L 可信内网访问只读审计。
+> **状态**：P11A/B/C、P12A 至 P12N、P13-A 至 P13-I4、V1-A 至 V1-K 均已完成。V1-L 已完成只读审计与契约冻结，尚未实现；当前进入 failure-first。
 > **当前分支**：`collab/grok-code-codex-review`
 > **协作方式**：Grok 负责限定范围的实现与测试；Codex 负责范围、审查、验收和提交授权。
 
@@ -663,4 +663,10 @@ A/B 审计与双确认一致：五入口统一到单一 UTF-8 BOM PowerShell 真
 
 Failure-first 为 **44 failed / 14 passed / 19 subtests passed**。Codex 在首轮生产绿测后通过 Q4/Q5/Q6 关闭先删后移、无关 Replace 参数假证明和 PS5.1 双 Replace 异常回退；最终独立 V1-K/V1-A 回归 **67 passed / 19 subtests passed**、**65 passed**，编译、PS1 Parse/BOM、diff-check、白名单和哈希门通过。
 
-**下一步**：只读审计并独立冻结 V1-L 可信内网访问的 bind host、allowed hosts、同源会话、CORS、Cookie、防火墙与发布说明；冻结前禁止直接改 `0.0.0.0`。
+#### V1-L：可信内网访问（已冻结，尚未实现）
+
+A/B 审计与 Q1 九项决策均独立 YES。唯一拓扑为“内网浏览器 → 显式 RFC1918 IPv4 上的 Vite 5173 → 回环 FastAPI 8000”；默认仍 loopback，LAN 必须显式 profile/host、强制 required 并先证明后端 `authRequired=true`。前端保持同源 `/api`，不扩 CORS、不改 Strict Cookie、不暴露 OpenAPI/backend，不使用通配 bind/Host。
+
+V1-K 七键状态和单次原子替换保持；防火墙只文档化 Private/LocalSubnet/5173 的管理员手工步骤。IPv6、自动防火墙、WAL/PostgreSQL、HTTPS/公网、Docker 与 V2/V3 后置。契约=`docs/v1l-trusted-lan-access-contract.md`，计划=`docs/plans/2026-07-22-v1l-trusted-lan-access-plan.md`。
+
+**下一步**：Grok B 严格 test-only 形成 failure-first，Codex 独立排除假红并提交测试后，才授权 Grok A production-only。审计与文档冻结不得计作功能完成。
