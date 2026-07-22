@@ -25,7 +25,42 @@ biaoshu/
 .\Diagnose-Biaoshu-Dev.bat
 ```
 
-浏览器访问：`http://127.0.0.1:5173/create`。当前仍只监听本机回环；可信内网访问由 V1-L 独立交付。
+浏览器访问：`http://127.0.0.1:5173/create`。默认仍只监听本机回环。
+
+### 可信内网访问（V1-L，显式 opt-in）
+
+同一局域网 5–6 人访问时，**禁止**把后端 `:8000` 或无鉴权前端直接绑到 `0.0.0.0`。正确拓扑：浏览器只打开 Vite 单入口，后端始终 `127.0.0.1:8000`，业务请求走同源 `/api` 代理。
+
+1. **先在本机完成管理员 bootstrap**（不自动创建口令；脚本交互输入，勿写入 `.env`）：
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe scripts\bootstrap_local_admin.py
+```
+
+2. **显式指定本机一块 RFC1918 IPv4 后启动**（示例，请换成你的私有地址）：
+
+```powershell
+.\tools\v1-ops\Start-Biaoshu-Dev.ps1 -ListenProfile lan -LanHost 192.168.1.20
+```
+
+3. **内网浏览器只访问** `http://<LanHost>:5173`（如 `http://192.168.1.20:5173/create`）。**禁止**访问或映射 `:8000`、`/docs`、`/redoc`。
+
+4. **Windows 防火墙仅手工配置**（生产代码不会改防火墙）。确认当前网络配置文件为 **Private** 后：
+
+```powershell
+# 查询
+Get-NetFirewallRule -DisplayName 'Biaoshu-V1L-Vite-5173' -ErrorAction SilentlyContinue
+
+# 创建：仅 Private + LocalSubnet + TCP 5173
+New-NetFirewallRule -DisplayName 'Biaoshu-V1L-Vite-5173' -Direction Inbound -Action Allow `
+  -Protocol TCP -LocalPort 5173 -Profile Private -RemoteAddress LocalSubnet
+
+# 回滚删除（不得删除其它规则）
+Remove-NetFirewallRule -DisplayName 'Biaoshu-V1L-Vite-5173'
+```
+
+回滚顺序：停止服务 → 删除上述固定规则 → 恢复默认 `.\Start-Biaoshu-Dev.bat` 回环启动。远端设备可达性需在另一台可信内网机器上验证。
 
 前端也可单独启动：
 
@@ -82,7 +117,7 @@ npm run preview  # 预览构建产物
 ```
 
 联调步骤见 **[docs/integration-checklist.md](docs/integration-checklist.md)**。  
-前端 Vite：`/api` → `8000`，host 固定 `127.0.0.1`。  
+前端 Vite 默认：`/api` → 回环 `8000`，host `127.0.0.1`；LAN 模式 host 为显式 `LanHost`，proxy 仍只指向回环。
 
 ## 设计原则
 

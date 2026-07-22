@@ -83,6 +83,7 @@ function Sync-V1KTestHookState {
 Initialize-V1KTestHookState
 
 function Resolve-V1KArguments([string[]]$List) {
+  # V1-L：严格解析；未知/重复参数固定 listen_profile_invalid
   $result = [ordered]@{
     Component             = 'all'
     PlanOnly              = $false
@@ -90,19 +91,31 @@ function Resolve-V1KArguments([string[]]$List) {
     ListenerSnapshotJson  = ''
     ProbeSnapshotJson     = ''
     ProcessSnapshotJson   = ''
+    AuthSnapshotJson      = ''
+    ListenProfile         = 'loopback'
+    LanHost               = ''
+    HasLanHost            = $false
+    ArgError              = ''
   }
   if ($null -eq $List) { return $result }
+  $seen = @{}
   $i = 0
   $n = @($List).Count
   while ($i -lt $n) {
     $token = [string]$List[$i]
-    $key = $token
-    if ($key.StartsWith('-') -and $key.Length -gt 1) {
-      $key = $key.Substring(1)
+    if (-not $token.StartsWith('-') -or $token.Length -le 1) {
+      $result.ArgError = 'listen_profile_invalid'
+      $i += 1
+      continue
     }
-    $keyLower = $key.ToLowerInvariant()
+    $keyLower = $token.Substring(1).ToLowerInvariant()
+    if ($seen.ContainsKey($keyLower)) {
+      $result.ArgError = 'listen_profile_invalid'
+      # 仍消费值位，避免错位
+    }
+    $seen[$keyLower] = $true
     if ($keyLower -eq 'component') {
-      if (($i + 1) -ge $n) { break }
+      if (($i + 1) -ge $n) { $result.ArgError = 'listen_profile_invalid'; break }
       $result.Component = [string]$List[$i + 1]
       $i += 2
     } elseif ($keyLower -eq 'planonly') {
@@ -112,19 +125,38 @@ function Resolve-V1KArguments([string[]]$List) {
       $result.DiagnoseOnly = $true
       $i += 1
     } elseif ($keyLower -eq 'listenersnapshotjson') {
-      if (($i + 1) -ge $n) { break }
+      if (($i + 1) -ge $n) { $result.ArgError = 'listen_profile_invalid'; break }
       $result.ListenerSnapshotJson = [string]$List[$i + 1]
       $i += 2
     } elseif ($keyLower -eq 'probesnapshotjson') {
-      if (($i + 1) -ge $n) { break }
+      if (($i + 1) -ge $n) { $result.ArgError = 'listen_profile_invalid'; break }
       $result.ProbeSnapshotJson = [string]$List[$i + 1]
       $i += 2
     } elseif ($keyLower -eq 'processsnapshotjson') {
-      if (($i + 1) -ge $n) { break }
+      if (($i + 1) -ge $n) { $result.ArgError = 'listen_profile_invalid'; break }
       $result.ProcessSnapshotJson = [string]$List[$i + 1]
       $i += 2
+    } elseif ($keyLower -eq 'authsnapshotjson') {
+      if (($i + 1) -ge $n) { $result.ArgError = 'listen_profile_invalid'; break }
+      $result.AuthSnapshotJson = [string]$List[$i + 1]
+      $i += 2
+    } elseif ($keyLower -eq 'listenprofile') {
+      if (($i + 1) -ge $n) { $result.ArgError = 'listen_profile_invalid'; break }
+      $result.ListenProfile = [string]$List[$i + 1]
+      $i += 2
+    } elseif ($keyLower -eq 'lanhost') {
+      if (($i + 1) -ge $n) { $result.ArgError = 'listen_profile_invalid'; break }
+      $result.LanHost = [string]$List[$i + 1]
+      $result.HasLanHost = $true
+      $i += 2
     } else {
-      $i += 1
+      $result.ArgError = 'listen_profile_invalid'
+      # 未知开关：若下一项不像开关则跳过值
+      if (($i + 1) -lt $n -and -not ([string]$List[$i + 1]).StartsWith('-')) {
+        $i += 2
+      } else {
+        $i += 1
+      }
     }
   }
   return $result
@@ -137,6 +169,11 @@ $DiagnoseOnly = [bool]$parsedArgs.DiagnoseOnly
 $ListenerSnapshotJson = [string]$parsedArgs.ListenerSnapshotJson
 $ProbeSnapshotJson = [string]$parsedArgs.ProbeSnapshotJson
 $ProcessSnapshotJson = [string]$parsedArgs.ProcessSnapshotJson
+$AuthSnapshotJson = [string]$parsedArgs.AuthSnapshotJson
+$ListenProfileRaw = [string]$parsedArgs.ListenProfile
+$LanHostRaw = [string]$parsedArgs.LanHost
+$HasLanHost = [bool]$parsedArgs.HasLanHost
+$ArgError = [string]$parsedArgs.ArgError
 
 if (@('all', 'backend', 'frontend') -notcontains $Component) {
   Write-Host 'snapshot_invalid'
@@ -146,6 +183,10 @@ if (@('all', 'backend', 'frontend') -notcontains $Component) {
 # 冻结回环探测 URL（变量名与值由专项 AST 门锁定）
 $BackendHealthUrl = 'http://127.0.0.1:8000/api/health'
 $FrontendProbeUrl = 'http://127.0.0.1:5173/create'
+$AuthBootstrapUrl = 'http://127.0.0.1:8000/api/auth/bootstrap-status'
+$FrontendBindHost = '127.0.0.1'
+$ListenProfile = 'loopback'
+$LanHost = ''
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptDir '..\..'))
@@ -165,6 +206,155 @@ $BackendStartArgs = @('-m', 'uvicorn', 'app.main:app', '--reload', '--host', '12
 $FrontendStartArgs = @('run', 'dev', '--', '--host', '127.0.0.1', '--port', '5173')
 $MaxProbeAttempts = 30
 $ProbeIntervalMs = 500
+
+
+function Test-IsRfc1918IPv4([string]$HostText) {
+  # 精确字面 RFC1918 IPv4；前后空白残留、主机名、端口、URL 一律拒绝
+  if ($null -eq $HostText) { return $false }
+  if ($HostText -ne $HostText.Trim()) { return $false }
+  if ([string]::IsNullOrEmpty($HostText)) { return $false }
+  if ($HostText -notmatch '^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$') {
+    return $false
+  }
+  $parts = $HostText.Split('.')
+  $a = [int]$parts[0]
+  $b = [int]$parts[1]
+  if ($a -eq 10) { return $true }
+  if ($a -eq 172 -and $b -ge 16 -and $b -le 31) { return $true }
+  if ($a -eq 192 -and $b -eq 168) { return $true }
+  return $false
+}
+
+function Test-LanApiBaseValid {
+  # 未设置允许；显式空/空白/非精确 /api 拒绝
+  $item = Get-Item -LiteralPath Env:VITE_API_BASE_URL -ErrorAction SilentlyContinue
+  if ($null -eq $item) { return $true }
+  $val = [string]$env:VITE_API_BASE_URL
+  return ($val -eq '/api')
+}
+
+function Restore-EnvVar([string]$Name, [bool]$Had, [string]$Previous) {
+  if ($Had) {
+    Set-Item -LiteralPath ("Env:" + $Name) -Value $Previous
+  } else {
+    Remove-Item -LiteralPath ("Env:" + $Name) -ErrorAction SilentlyContinue
+  }
+}
+
+function Read-AuthSnapshotObject([string]$Path) {
+  # 成功返回 @{ ok=$true; authRequired=...; bootstrapped=... }
+  # 结构/类型失败返回 @{ ok=$false; code='lan_backend_auth_unverified' }
+  # bootstrapped=false 且其余合法返回对应 code
+  if ([string]::IsNullOrWhiteSpace($Path)) {
+    return @{ ok = $false; code = 'lan_backend_auth_unverified' }
+  }
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+    return @{ ok = $false; code = 'lan_backend_auth_unverified' }
+  }
+  try {
+    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+    if ($null -eq $raw) { return @{ ok = $false; code = 'lan_backend_auth_unverified' } }
+    $trimmed = $raw.Trim()
+    if (-not ($trimmed.StartsWith('{') -or $trimmed.StartsWith('['))) {
+      return @{ ok = $false; code = 'lan_backend_auth_unverified' }
+    }
+    $data = $raw | ConvertFrom-Json
+  } catch {
+    return @{ ok = $false; code = 'lan_backend_auth_unverified' }
+  }
+  if ($null -eq $data) { return @{ ok = $false; code = 'lan_backend_auth_unverified' } }
+  # 拒绝数组/标量
+  try {
+    $props = @($data.PSObject.Properties.Name)
+  } catch {
+    return @{ ok = $false; code = 'lan_backend_auth_unverified' }
+  }
+  $allowed = @('port', 'httpStatus', 'authRequired', 'bootstrapped')
+  if ($props.Count -ne 4) { return @{ ok = $false; code = 'lan_backend_auth_unverified' } }
+  foreach ($k in $allowed) {
+    if ($props -notcontains $k) { return @{ ok = $false; code = 'lan_backend_auth_unverified' } }
+  }
+  foreach ($p in $props) {
+    if ($allowed -notcontains $p) { return @{ ok = $false; code = 'lan_backend_auth_unverified' } }
+  }
+  if (-not (Test-IsStrictJsonInt $data.port)) { return @{ ok = $false; code = 'lan_backend_auth_unverified' } }
+  if (-not (Test-IsStrictJsonInt $data.httpStatus)) { return @{ ok = $false; code = 'lan_backend_auth_unverified' } }
+  if (-not (Test-IsStrictJsonBool $data.authRequired)) { return @{ ok = $false; code = 'lan_backend_auth_unverified' } }
+  if (-not (Test-IsStrictJsonBool $data.bootstrapped)) { return @{ ok = $false; code = 'lan_backend_auth_unverified' } }
+  try {
+    $portInt = [int]$data.port
+    $httpInt = [int]$data.httpStatus
+    $authReq = [bool]$data.authRequired
+    $boot = [bool]$data.bootstrapped
+  } catch {
+    return @{ ok = $false; code = 'lan_backend_auth_unverified' }
+  }
+  if ($portInt -ne 8000) { return @{ ok = $false; code = 'lan_backend_auth_unverified' } }
+  if ($httpInt -ne 200) { return @{ ok = $false; code = 'lan_backend_auth_unverified' } }
+  if (-not $authReq) { return @{ ok = $false; code = 'lan_backend_auth_unverified' } }
+  if (-not $boot) { return @{ ok = $false; code = 'lan_admin_not_bootstrapped' } }
+  return @{ ok = $true; code = ''; authRequired = $true; bootstrapped = $true }
+}
+
+function Invoke-LiveLanAuthProof {
+  # 回环 GET bootstrap-status；精确两键严格布尔均为真
+  $content = $null
+  $statusCode = 0
+  try {
+    $resp = Invoke-WebRequest -Uri $AuthBootstrapUrl -Method GET -UseBasicParsing -TimeoutSec 2
+    $statusCode = [int]$resp.StatusCode
+    $content = [string]$resp.Content
+  } catch {
+    return 'lan_backend_auth_unverified'
+  }
+  try {
+    if ($statusCode -ne 200) { return 'lan_backend_auth_unverified' }
+    $data = $content | ConvertFrom-Json
+    if ($null -eq $data) { return 'lan_backend_auth_unverified' }
+    $props = @($data.PSObject.Properties.Name)
+    if ($props.Count -ne 2) { return 'lan_backend_auth_unverified' }
+    if ($props -notcontains 'authRequired' -or $props -notcontains 'bootstrapped') {
+      return 'lan_backend_auth_unverified'
+    }
+    foreach ($p in $props) {
+      if (@('authRequired', 'bootstrapped') -notcontains $p) { return 'lan_backend_auth_unverified' }
+    }
+    if (-not (Test-IsStrictJsonBool $data.authRequired)) { return 'lan_backend_auth_unverified' }
+    if (-not (Test-IsStrictJsonBool $data.bootstrapped)) { return 'lan_backend_auth_unverified' }
+    if (-not [bool]$data.authRequired) { return 'lan_backend_auth_unverified' }
+    if (-not [bool]$data.bootstrapped) { return 'lan_admin_not_bootstrapped' }
+    return ''
+  } catch {
+    return 'lan_backend_auth_unverified'
+  }
+}
+
+function Resolve-LanAuthProofCode {
+  # plan 不调用；diagnose 优先 AuthSnapshot；start 仅 live
+  $modeName = Get-ModeName
+  if ($modeName -eq 'plan') { return '' }
+  if ($modeName -eq 'diagnose') {
+    if (-not [string]::IsNullOrWhiteSpace($AuthSnapshotJson)) {
+      $snap = Read-AuthSnapshotObject -Path $AuthSnapshotJson
+      if ($snap.ok) { return '' }
+      return [string]$snap.code
+    }
+    return (Invoke-LiveLanAuthProof)
+  }
+  return (Invoke-LiveLanAuthProof)
+}
+
+function Test-FrontendBindHostMatch([string]$CommandLine, [string]$LocalAddress) {
+  if ($ListenProfile -ne 'lan') { return $true }
+  if (-not [string]::IsNullOrWhiteSpace($LocalAddress)) {
+    return ($LocalAddress -eq $LanHost)
+  }
+  if ([string]::IsNullOrWhiteSpace($CommandLine)) { return $false }
+  if ($CommandLine -match '(?i)--host\s+(\S+)') {
+    return ($Matches[1] -eq $LanHost)
+  }
+  return $false
+}
 
 function Get-ModeName {
   if ($DiagnoseOnly) { return 'diagnose' }
@@ -190,6 +380,12 @@ function Get-CodeChinese([string]$Code) {
     'frontend_not_ready' { return '前端未就绪' }
     'snapshot_invalid' { return '快照无效' }
     'status_write_failed' { return '状态写入失败' }
+    'listen_profile_invalid' { return '监听配置无效' }
+    'lan_host_required' { return '内网模式需要提供局域网地址' }
+    'lan_host_invalid' { return '局域网地址无效' }
+    'lan_backend_auth_unverified' { return '内网后端鉴权未验证' }
+    'lan_admin_not_bootstrapped' { return '内网管理员尚未初始化' }
+    'lan_api_base_invalid' { return '内网 API 基址无效' }
     default { return '启动诊断失败' }
   }
 }
@@ -545,81 +741,81 @@ function Get-LiveListenerRecords {
   if (-not (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue)) {
     throw 'LISTENER_ENUM_FAILED'
   }
-  $allowedLocal = @('127.0.0.1', '0.0.0.0', '::', '::1')
   $records = New-Object System.Collections.Generic.List[object]
   foreach ($port in $TargetPorts) {
-    $exactConns = $null
-    $exactOk = $false
-    try {
-      $exactConns = @(Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort $port -State Listen -ErrorAction Stop)
-      $exactOk = $true
-    } catch {
-      $detail = "$($_.Exception.Message) $($_.FullyQualifiedErrorId)"
-      if (Test-IsNoConnectionError $detail) {
-        $exactConns = @()
-        $exactOk = $true
-      }
+    # 后端恒回环；LAN 前端精确 LanHost，默认前端回环
+    if ([int]$port -eq $BackendPort) {
+      $bindAddrs = @('127.0.0.1')
+    } elseif ([int]$port -eq $FrontendPort) {
+      $bindAddrs = @([string]$FrontendBindHost)
+    } else {
+      $bindAddrs = @('127.0.0.1')
     }
-    if (-not $exactOk) { throw 'LISTENER_ENUM_FAILED' }
-
-    $fullConns = $null
-    $fullOk = $false
-    try {
-      $fullConns = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction Stop |
-        Where-Object { $_.LocalAddress -in $allowedLocal })
-      $fullOk = $true
-    } catch {
-      $detail = "$($_.Exception.Message) $($_.FullyQualifiedErrorId)"
-      if (Test-IsNoConnectionError $detail) {
-        $fullConns = @()
-        $fullOk = $true
-      }
-    }
-    if (-not $fullOk) { throw 'LISTENER_ENUM_FAILED' }
 
     $seenPid = @{}
-    foreach ($conn in @(@($exactConns) + @($fullConns))) {
-      if (-not $conn) { continue }
-      $owning = $null
+    foreach ($addr in $bindAddrs) {
+      $exactConns = $null
+      $exactOk = $false
       try {
-        $owning = $conn.OwningProcess
+        $exactConns = @(Get-NetTCPConnection -LocalAddress $addr -LocalPort $port -State Listen -ErrorAction Stop)
+        $exactOk = $true
       } catch {
-        throw 'LISTENER_PID_UNTRUSTED'
-      }
-      if ($null -eq $owning) { throw 'LISTENER_PID_UNTRUSTED' }
-      if ($owning -is [bool] -or $owning -is [string] -or
-          $owning -is [double] -or $owning -is [float] -or
-          $owning -is [single] -or $owning -is [decimal]) {
-        throw 'LISTENER_PID_UNTRUSTED'
-      }
-      try {
-        $pidVal = [int]$owning
-      } catch {
-        throw 'LISTENER_PID_UNTRUSTED'
-      }
-      if ($pidVal -le 0) { throw 'LISTENER_PID_UNTRUSTED' }
-      $dedupeKey = '{0}|{1}' -f [int]$port, $pidVal
-      if ($seenPid.ContainsKey($dedupeKey)) { continue }
-      $seenPid[$dedupeKey] = $true
-
-      $exe = ''
-      $cmd = ''
-      try {
-        $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $pidVal" -ErrorAction SilentlyContinue
-        if ($proc) {
-          if ($proc.ExecutablePath) { $exe = [string]$proc.ExecutablePath }
-          if ($proc.CommandLine) { $cmd = [string]$proc.CommandLine }
+        $detail = "$($_.Exception.Message) $($_.FullyQualifiedErrorId)"
+        if (Test-IsNoConnectionError $detail) {
+          $exactConns = @()
+          $exactOk = $true
         }
-      } catch {
+      }
+      if (-not $exactOk) { throw 'LISTENER_ENUM_FAILED' }
+
+      foreach ($conn in @($exactConns)) {
+        if (-not $conn) { continue }
+        $owning = $null
+        try {
+          $owning = $conn.OwningProcess
+        } catch {
+          throw 'LISTENER_PID_UNTRUSTED'
+        }
+        if ($null -eq $owning) { throw 'LISTENER_PID_UNTRUSTED' }
+        if ($owning -is [bool] -or $owning -is [string] -or
+            $owning -is [double] -or $owning -is [float] -or
+            $owning -is [single] -or $owning -is [decimal]) {
+          throw 'LISTENER_PID_UNTRUSTED'
+        }
+        try {
+          $pidVal = [int]$owning
+        } catch {
+          throw 'LISTENER_PID_UNTRUSTED'
+        }
+        if ($pidVal -le 0) { throw 'LISTENER_PID_UNTRUSTED' }
+        $dedupeKey = '{0}|{1}|{2}' -f [int]$port, $pidVal, [string]$addr
+        if ($seenPid.ContainsKey($dedupeKey)) { continue }
+        $seenPid[$dedupeKey] = $true
+
         $exe = ''
         $cmd = ''
+        try {
+          $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $pidVal" -ErrorAction SilentlyContinue
+          if ($proc) {
+            if ($proc.ExecutablePath) { $exe = [string]$proc.ExecutablePath }
+            if ($proc.CommandLine) { $cmd = [string]$proc.CommandLine }
+          }
+        } catch {
+          $exe = ''
+          $cmd = ''
+        }
+        $localAddr = [string]$addr
+        try {
+          if ($conn.LocalAddress) { $localAddr = [string]$conn.LocalAddress }
+        } catch { }
+        $records.Add([pscustomobject]@{
+            port           = [int]$port
+            pid            = $pidVal
+            executablePath = $exe
+            commandLine    = $cmd
+            localAddress   = $localAddr
+          }) | Out-Null
       }
-      $records.Add([pscustomobject]@{
-          port           = [int]$port
-          pid            = $pidVal
-          executablePath = $exe
-          commandLine    = $cmd
-        }) | Out-Null
     }
   }
   return $records
@@ -675,6 +871,15 @@ function Get-PortOwnership([int]$Port, $Records) {
       $ok = Test-BackendOwnership $rec.executablePath $rec.commandLine
     } elseif ($Port -eq $FrontendPort) {
       $ok = Test-FrontendOwnership $rec.executablePath $rec.commandLine
+      if ($ok) {
+        $la = ''
+        try {
+          if ($null -ne $rec.localAddress) { $la = [string]$rec.localAddress }
+        } catch { $la = '' }
+        if (-not (Test-FrontendBindHostMatch -CommandLine ([string]$rec.commandLine) -LocalAddress $la)) {
+          $ok = $false
+        }
+      }
     }
     if ($ok) { $ownedCount++ } else { $foreignCount++ }
   }
@@ -769,6 +974,10 @@ function Select-TopCode([string[]]$Codes) {
   $priority = @(
     'status_write_failed',
     'snapshot_invalid',
+    'listen_profile_invalid',
+    'lan_host_required',
+    'lan_host_invalid',
+    'lan_api_base_invalid',
     'venv_missing',
     'backend_entry_missing',
     'npm_missing',
@@ -776,6 +985,8 @@ function Select-TopCode([string[]]$Codes) {
     'frontend_deps_missing',
     'listener_unavailable',
     'backend_port_foreign',
+    'lan_backend_auth_unverified',
+    'lan_admin_not_bootstrapped',
     'frontend_port_foreign',
     'backend_not_ready',
     'frontend_not_ready',
@@ -838,12 +1049,25 @@ function Register-V1KStartCapture {
 function Start-BackendProcess {
   $argText = ($BackendStartArgs | ForEach-Object { [string]$_ }) -join ' '
   Initialize-V1KTestHookState
+  $hadAuth = $false
+  $prevAuth = ''
+  if ($ListenProfile -eq 'lan') {
+    $hadAuth = $null -ne (Get-Item -LiteralPath Env:AUTH_MODE -ErrorAction SilentlyContinue)
+    if ($hadAuth) { $prevAuth = [string]$env:AUTH_MODE }
+    $env:AUTH_MODE = 'required'
+  }
   try {
-    Start-Process -FilePath $BackendPython -ArgumentList $BackendStartArgs -WorkingDirectory $BackendDir -WindowStyle Hidden | Out-Null
-    Register-V1KStartCapture -FilePath $BackendPython -ArgumentList $argText -WorkingDirectory $BackendDir -WindowStyle 'Hidden'
-  } catch {
-    Register-V1KStartCapture -FilePath $BackendPython -ArgumentList $argText -WorkingDirectory $BackendDir -WindowStyle 'Hidden'
-    throw
+    try {
+      Start-Process -FilePath $BackendPython -ArgumentList $BackendStartArgs -WorkingDirectory $BackendDir -WindowStyle Hidden | Out-Null
+      Register-V1KStartCapture -FilePath $BackendPython -ArgumentList $argText -WorkingDirectory $BackendDir -WindowStyle 'Hidden'
+    } catch {
+      Register-V1KStartCapture -FilePath $BackendPython -ArgumentList $argText -WorkingDirectory $BackendDir -WindowStyle 'Hidden'
+      throw
+    }
+  } finally {
+    if ($ListenProfile -eq 'lan') {
+      Restore-EnvVar -Name 'AUTH_MODE' -Had $hadAuth -Previous $prevAuth
+    }
   }
 }
 
@@ -854,12 +1078,31 @@ function Start-FrontendProcess {
   }
   $argText = ($FrontendStartArgs | ForEach-Object { [string]$_ }) -join ' '
   Initialize-V1KTestHookState
+  $hadProfile = $false
+  $prevProfile = ''
+  $hadHost = $false
+  $prevHost = ''
+  if ($ListenProfile -eq 'lan') {
+    $hadProfile = $null -ne (Get-Item -LiteralPath Env:BIAOSHU_LISTEN_PROFILE -ErrorAction SilentlyContinue)
+    if ($hadProfile) { $prevProfile = [string]$env:BIAOSHU_LISTEN_PROFILE }
+    $hadHost = $null -ne (Get-Item -LiteralPath Env:BIAOSHU_LAN_HOST -ErrorAction SilentlyContinue)
+    if ($hadHost) { $prevHost = [string]$env:BIAOSHU_LAN_HOST }
+    $env:BIAOSHU_LISTEN_PROFILE = 'lan'
+    $env:BIAOSHU_LAN_HOST = $LanHost
+  }
   try {
-    Start-Process -FilePath $npmPath -ArgumentList $FrontendStartArgs -WorkingDirectory $FrontendDir -WindowStyle Hidden | Out-Null
-    Register-V1KStartCapture -FilePath $npmPath -ArgumentList $argText -WorkingDirectory $FrontendDir -WindowStyle 'Hidden'
-  } catch {
-    Register-V1KStartCapture -FilePath $npmPath -ArgumentList $argText -WorkingDirectory $FrontendDir -WindowStyle 'Hidden'
-    throw
+    try {
+      Start-Process -FilePath $npmPath -ArgumentList $FrontendStartArgs -WorkingDirectory $FrontendDir -WindowStyle Hidden | Out-Null
+      Register-V1KStartCapture -FilePath $npmPath -ArgumentList $argText -WorkingDirectory $FrontendDir -WindowStyle 'Hidden'
+    } catch {
+      Register-V1KStartCapture -FilePath $npmPath -ArgumentList $argText -WorkingDirectory $FrontendDir -WindowStyle 'Hidden'
+      throw
+    }
+  } finally {
+    if ($ListenProfile -eq 'lan') {
+      Restore-EnvVar -Name 'BIAOSHU_LISTEN_PROFILE' -Had $hadProfile -Previous $prevProfile
+      Restore-EnvVar -Name 'BIAOSHU_LAN_HOST' -Had $hadHost -Previous $prevHost
+    }
   }
 }
 
@@ -889,10 +1132,49 @@ $notSelected = New-ServiceResult 'not_selected' 'not_selected'
 $backendResult = $notSelected
 $frontendResult = $notSelected
 
+# V1-L：ListenProfile / LanHost 严格校验（未知/重复已在解析阶段记入 ArgError）
+if (-not [string]::IsNullOrWhiteSpace($ArgError)) {
+  Publish-StatusAndExit -Mode $mode -ComponentName $Component -Overall 'failed' -Code 'listen_profile_invalid' `
+    -BackendResult $notSelected -FrontendResult $notSelected -ExitCode 1 -ShowDiag:$showDiag
+}
+$profileNorm = ([string]$ListenProfileRaw).Trim().ToLowerInvariant()
+if ($profileNorm -ne 'loopback' -and $profileNorm -ne 'lan') {
+  Publish-StatusAndExit -Mode $mode -ComponentName $Component -Overall 'failed' -Code 'listen_profile_invalid' `
+    -BackendResult $notSelected -FrontendResult $notSelected -ExitCode 1 -ShowDiag:$showDiag
+}
+if ($profileNorm -eq 'loopback' -and $HasLanHost) {
+  Publish-StatusAndExit -Mode $mode -ComponentName $Component -Overall 'failed' -Code 'listen_profile_invalid' `
+    -BackendResult $notSelected -FrontendResult $notSelected -ExitCode 1 -ShowDiag:$showDiag
+}
+if ($profileNorm -eq 'lan') {
+  if (-not $HasLanHost) {
+    Publish-StatusAndExit -Mode $mode -ComponentName $Component -Overall 'failed' -Code 'lan_host_required' `
+      -BackendResult $notSelected -FrontendResult $notSelected -ExitCode 1 -ShowDiag:$showDiag
+  }
+  if (-not (Test-IsRfc1918IPv4 -HostText $LanHostRaw)) {
+    Publish-StatusAndExit -Mode $mode -ComponentName $Component -Overall 'failed' -Code 'lan_host_invalid' `
+      -BackendResult $notSelected -FrontendResult $notSelected -ExitCode 1 -ShowDiag:$showDiag
+  }
+  if (-not (Test-LanApiBaseValid)) {
+    Publish-StatusAndExit -Mode $mode -ComponentName $Component -Overall 'failed' -Code 'lan_api_base_invalid' `
+      -BackendResult $notSelected -FrontendResult $notSelected -ExitCode 1 -ShowDiag:$showDiag
+  }
+  $ListenProfile = 'lan'
+  $LanHost = $LanHostRaw
+  $FrontendBindHost = $LanHost
+  $FrontendProbeUrl = ('http://{0}:5173/create' -f $LanHost)
+  $FrontendStartArgs = @('run', 'dev', '--', '--host', $LanHost, '--port', '5173')
+} else {
+  $ListenProfile = 'loopback'
+  $LanHost = ''
+  $FrontendBindHost = '127.0.0.1'
+}
+
 $hasListenerSnap = -not [string]::IsNullOrWhiteSpace($ListenerSnapshotJson)
 $hasProbeSnap = -not [string]::IsNullOrWhiteSpace($ProbeSnapshotJson)
 $hasProcessSnap = -not [string]::IsNullOrWhiteSpace($ProcessSnapshotJson)
-$anySnap = $hasListenerSnap -or $hasProbeSnap -or $hasProcessSnap
+$hasAuthSnap = -not [string]::IsNullOrWhiteSpace($AuthSnapshotJson)
+$anySnap = $hasListenerSnap -or $hasProbeSnap -or $hasProcessSnap -or $hasAuthSnap
 
 if ($anySnap -and ($mode -eq 'start')) {
   Publish-StatusAndExit -Mode $mode -ComponentName $Component -Overall 'failed' -Code 'snapshot_invalid' `
@@ -946,6 +1228,7 @@ if (($wantBackend -and $backendPrereq) -or ($wantFrontend -and $frontendPrereq))
 
 if (-not $hasListenerSnap) {
   try {
+    Initialize-V1KTestHookState
     $listenerRecords = @(Get-LiveListenerRecords)
   } catch {
     $be = if ($wantBackend) { New-ServiceResult 'missing' 'listener_unavailable' } else { $notSelected }
@@ -1018,6 +1301,51 @@ if ($wantFrontend) {
   }
 } else {
   $frontendResult = $notSelected
+}
+
+# V1-L：LAN 前端路径鉴权门
+# - foreign 后端优先 backend_port_foreign
+# - start 且本轮将启动缺失后端：鉴权延后到 Hidden 启动 + health 之后
+# - 其余（diagnose / frontend-only / 已有 owned 后端）：必须 owned+ready 且 auth 证明后才可继续
+if ($ListenProfile -eq 'lan' -and $wantFrontend -and $mode -ne 'plan') {
+  $lanBeOwn = Get-PortOwnership -Port $BackendPort -Records $listenerRecords
+  if ($lanBeOwn.foreign) {
+    if ($wantBackend) {
+      $backendResult = New-ServiceResult 'foreign' 'backend_port_foreign'
+    }
+    $frontendResult = New-ServiceResult 'missing' 'lan_backend_auth_unverified'
+    Publish-StatusAndExit -Mode $mode -ComponentName $Component -Overall 'failed' -Code 'backend_port_foreign' `
+      -BackendResult $(if ($wantBackend) { $backendResult } else { $notSelected }) `
+      -FrontendResult $frontendResult -ExitCode 1 -ShowDiag:$showDiag
+  }
+  $lanBeReady = $false
+  if ($lanBeOwn.owned) {
+    if ($hasProbeSnap) {
+      $precBe = Get-ProbeForPort -Port $BackendPort -ProbeRecords $probeRecords
+      $lanBeReady = Test-BackendProbeReady $precBe
+    } else {
+      $lanBeReady = Invoke-LiveBackendProbe
+    }
+  }
+  $willStartBackend = ($mode -eq 'start') -and $wantBackend -and (-not $lanBeOwn.owned) -and (-not $lanBeOwn.foreign)
+  if ($willStartBackend) {
+    # 延后：先 Hidden 启后端，再 health → auth → 前端
+  } elseif ($lanBeOwn.owned -and (-not $lanBeReady) -and $wantBackend) {
+    # 交给后续 failCodes 的 backend_not_ready，避免抢成 lan_backend_auth_unverified
+  } elseif (-not ($lanBeOwn.owned -and $lanBeReady)) {
+    $frontendResult = New-ServiceResult 'missing' 'lan_backend_auth_unverified'
+    Publish-StatusAndExit -Mode $mode -ComponentName $Component -Overall 'failed' -Code 'lan_backend_auth_unverified' `
+      -BackendResult $(if ($wantBackend) { $backendResult } else { $notSelected }) `
+      -FrontendResult $frontendResult -ExitCode 1 -ShowDiag:$showDiag
+  } else {
+    $authCode = Resolve-LanAuthProofCode
+    if (-not [string]::IsNullOrWhiteSpace($authCode)) {
+      $frontendResult = New-ServiceResult 'missing' $authCode
+      Publish-StatusAndExit -Mode $mode -ComponentName $Component -Overall 'failed' -Code $authCode `
+        -BackendResult $(if ($wantBackend) { $backendResult } else { $notSelected }) `
+        -FrontendResult $frontendResult -ExitCode 1 -ShowDiag:$showDiag
+    }
+  }
 }
 
 $failCodes = New-Object System.Collections.Generic.List[string]
@@ -1098,12 +1426,9 @@ try {
   if ($startBackend) {
     Start-BackendProcess
   }
-  if ($startFrontend) {
-    Start-FrontendProcess
-  }
 } catch {
-  if ($startBackend) { $backendResult = New-ServiceResult 'not_ready' 'backend_not_ready' }
-  if ($startFrontend) { $frontendResult = New-ServiceResult 'not_ready' 'frontend_not_ready' }
+  $backendResult = New-ServiceResult 'not_ready' 'backend_not_ready'
+  if ($startFrontend) { $frontendResult = New-ServiceResult 'missing' 'lan_backend_auth_unverified' }
   $mix = New-Object System.Collections.Generic.List[string]
   $mix.Add([string]$backendResult.code) | Out-Null
   $mix.Add([string]$frontendResult.code) | Out-Null
@@ -1118,6 +1443,43 @@ if ($startBackend) {
     $backendResult = New-ServiceResult 'not_ready' 'backend_not_ready'
   }
 }
+
+# LAN：新启或既有后端 ready 后，在前端暴露前再次 live 证明 auth（start 无 AuthSnapshot）
+if ($ListenProfile -eq 'lan' -and $startFrontend) {
+  $beOkForLan = ($wantBackend -and ([string]$backendResult.state -eq 'ready' -or [string]$backendResult.state -eq 'already_running'))
+  if (-not $wantBackend) {
+    # frontend-only：上游门已验证 owned+ready+auth；此处仅防新启后状态漂移
+    $beOkForLan = $true
+  }
+  if ($wantBackend -and -not $beOkForLan) {
+    $frontendResult = New-ServiceResult 'missing' 'lan_backend_auth_unverified'
+    Publish-StatusAndExit -Mode $mode -ComponentName $Component -Overall 'failed' -Code 'lan_backend_auth_unverified' `
+      -BackendResult $backendResult -FrontendResult $frontendResult -ExitCode 1 -ShowDiag:$showDiag
+  }
+  if ($wantBackend -and $beOkForLan) {
+    # 若本轮刚启动后端，health 已在 Wait-BackendReady；再取 auth
+    $authAfter = Invoke-LiveLanAuthProof
+    if (-not [string]::IsNullOrWhiteSpace($authAfter)) {
+      $frontendResult = New-ServiceResult 'missing' $authAfter
+      Publish-StatusAndExit -Mode $mode -ComponentName $Component -Overall 'failed' -Code $authAfter `
+        -BackendResult $backendResult -FrontendResult $frontendResult -ExitCode 1 -ShowDiag:$showDiag
+    }
+  }
+}
+
+try {
+  if ($startFrontend) {
+    Start-FrontendProcess
+  }
+} catch {
+  if ($startFrontend) { $frontendResult = New-ServiceResult 'not_ready' 'frontend_not_ready' }
+  $mix = New-Object System.Collections.Generic.List[string]
+  $mix.Add([string]$backendResult.code) | Out-Null
+  $mix.Add([string]$frontendResult.code) | Out-Null
+  Publish-StatusAndExit -Mode $mode -ComponentName $Component -Overall 'failed' -Code (Select-TopCode ([string[]]$mix.ToArray())) `
+    -BackendResult $backendResult -FrontendResult $frontendResult -ExitCode 1 -ShowDiag:$showDiag
+}
+
 if ($startFrontend) {
   if (Wait-FrontendReady) {
     $frontendResult = New-ServiceResult 'ready' 'ready'

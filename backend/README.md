@@ -25,19 +25,22 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 - 探活：http://127.0.0.1:8000/api/health  
 - OpenAPI：http://127.0.0.1:8000/docs  
 
-## 前端对接
+## 前端对接（仅本机开发）
 
-开发期任选其一：
+本机开发任选其一（**不是**可信内网多人访问方式）：
 
 1. **Vite 代理**（推荐，前端默认 `API_BASE=/api`）  
    `frontend/vite.config.ts` 已配置 `/api` → `http://127.0.0.1:8000`。
+   后端与 OpenAPI/docs 仅本机回环可达。
 
-2. **直连**  
+2. **本机直连后端**（仅开发机；禁止用于局域网其它电脑）
    在 `frontend/.env.local`（勿提交）中：
    ```env
    VITE_API_BASE_URL=http://127.0.0.1:8000/api
    VITE_USE_API_PROJECTS=true
    ```
+
+可信内网 5–6 人访问见仓库根 `README.md` 的 V1-L 说明：只暴露 Vite `5173`，**禁止**内网浏览器直连 `:8000`。
 
 ## 主要接口
 
