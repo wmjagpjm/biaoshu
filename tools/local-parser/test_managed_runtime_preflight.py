@@ -44,6 +44,9 @@ _THIS_TEST_NAME = "test_managed_runtime_preflight.py"
 # 契约锚点：只允许出现在像素，禁止 PDF 文本层/metadata/文件名
 OCR_P1 = "BIAOSHU_OCR_P1_V1"
 OCR_P2 = "BIAOSHU_OCR_P2_V1"
+# Windows 中文 profile：两页不同中文短句 + 各自 ASCII 伴随锚点（契约 §6）
+ZH_SENTENCE_P1 = "封面验收短句甲"
+ZH_SENTENCE_P2 = "正文验收短句乙"
 
 JSON_KEYS = frozenset(
     {
@@ -835,6 +838,10 @@ class TestCollectionAndSelfGuard(unittest.TestCase):
     """用途：收集成功、无顶层生产 import、反假绿源码自检、文件边界。"""
 
     def test_no_toplevel_import_of_missing_production_module(self) -> None:
+        """
+        用途：证明「导入测试模块本身」不加载 managed 生产入口。
+        反假绿：不得依赖进程内全局 _preflight_cache（前序用例可合法按需加载）。
+        """
         src = Path(__file__).read_text(encoding="utf-8")
         tree = ast.parse(src)
         banned: list[str] = []
@@ -848,8 +855,66 @@ class TestCollectionAndSelfGuard(unittest.TestCase):
                 if mod.split(".")[0] == "managed_runtime_preflight":
                     banned.append(f"from {mod} import ...")
         self.assertEqual(banned, [], msg=f"禁止顶层 import 生产模块: {banned}")
-        # 模块对象在导入本测试后不得已加载生产缓存为成功
-        self.assertIsNone(_preflight_cache)
+
+        # 模块体顶层不得直接调用按需加载入口
+        top_calls: list[str] = []
+        for node in tree.body:
+            call_nodes: list[ast.Call] = []
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+                call_nodes.append(node.value)
+            elif isinstance(node, ast.Assign):
+                if isinstance(node.value, ast.Call):
+                    call_nodes.append(node.value)
+            for call in call_nodes:
+                func = call.func
+                if isinstance(func, ast.Name) and func.id in {
+                    "_load_preflight_module",
+                    "_require_preflight",
+                }:
+                    top_calls.append(f"L{node.lineno}:{func.id}")
+        self.assertEqual(top_calls, [], msg=f"顶层禁止按需加载生产: {top_calls}")
+
+        # fresh 隔离 import：仅 exec 本测试文件，证明不拉起生产模块
+        unique = (
+            f"_managed_preflight_test_import_guard_"
+            f"{os.getpid()}_{id(self)}_{len(sys.modules)}"
+        )
+        if unique in sys.modules:
+            del sys.modules[unique]
+        before_names = set(sys.modules.keys())
+        spec = importlib.util.spec_from_file_location(unique, Path(__file__))
+        self.assertIsNotNone(spec, msg="无法为测试文件构造 import spec")
+        assert spec is not None and spec.loader is not None
+        fresh = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fresh)
+        try:
+            self.assertIsNone(
+                getattr(fresh, "_preflight_cache", "missing"),
+                msg="fresh import 后 _preflight_cache 必须为 None",
+            )
+            self.assertIsNone(
+                getattr(fresh, "_preflight_load_error", "missing"),
+                msg="fresh import 后 _preflight_load_error 必须为 None",
+            )
+            newly = set(sys.modules.keys()) - before_names
+            for name in newly:
+                self.assertNotEqual(
+                    name.split(".")[0],
+                    "managed_runtime_preflight",
+                    msg=f"导入测试模块不得加载生产包: {name}",
+                )
+                self.assertNotIn(
+                    "managed_runtime_preflight_under_test",
+                    name,
+                    msg=f"导入测试模块不得注册生产 under_test: {name}",
+                )
+            # 行为：fresh 模块的加载函数在未调用前不得污染生产缓存字段
+            self.assertTrue(
+                callable(getattr(fresh, "_load_preflight_module", None)),
+                msg="fresh 模块必须暴露 _load_preflight_module",
+            )
+        finally:
+            sys.modules.pop(unique, None)
 
     def test_production_path_is_fixed_sibling(self) -> None:
         self.assertEqual(_PREFLIGHT_PATH.name, _PREFLIGHT_NAME)
@@ -1333,6 +1398,184 @@ class TestManifestStrictParsing(unittest.TestCase):
                     self.assertIs(data_r["didNotRunRealRuntime"], True)
                     _assert_hygiene(self, out_r + err_r)
 
+    def test_manifest_rejects_same_root_cli_marker_symlink_and_parent_reparse(
+        self,
+    ) -> None:
+        """
+        用途：Q9 同根 symlink/reparse 身份绕过门。
+        CLI/marker 即使 alias→root 内普通 target，或父目录 reparse，
+        也必须精确 runtime_manifest_invalid（不得 resolve 后丢 alias 身份变 static_ready）。
+        """
+        preflight = _require_preflight(self)
+        usage = mock.Mock(free=10**12, total=10**13, used=0)
+
+        def _disk_patches(mod: Any) -> list[Any]:
+            patches = [mock.patch.object(shutil, "disk_usage", return_value=usage)]
+            if hasattr(mod, "shutil"):
+                patches.append(
+                    mock.patch.object(mod.shutil, "disk_usage", return_value=usage)
+                )
+            return patches
+
+        with tempfile.TemporaryDirectory(prefix=TEMP_PREFIX) as td:
+            root = Path(td)
+
+            def _assert_invalid(
+                label: str,
+                manifest: Path,
+                extra_patches: list[Any] | None = None,
+            ) -> None:
+                patches = _disk_patches(preflight)
+                if extra_patches:
+                    patches.extend(extra_patches)
+                code, out, err = _run_main(
+                    preflight,
+                    [_PREFLIGHT_NAME, "--manifest", str(manifest), "--dry-run"],
+                    extra_patches=patches,
+                )
+                data = _parse_json_stdout(out)
+                self.assertEqual(
+                    data["diagnosticCode"],
+                    "runtime_manifest_invalid",
+                    msg=f"{label}: 期望 runtime_manifest_invalid，实际={data!r} out={out!r}",
+                )
+                self.assertEqual(code, DIAG_EXIT["runtime_manifest_invalid"])
+                self.assertIs(data["ok"], False)
+                self.assertIs(data["didNotRunRealRuntime"], True)
+                self.assertNotEqual(data.get("status"), "ready")
+                self.assertNotEqual(data.get("diagnosticCode"), "static_ready")
+                _assert_hygiene(self, out + err)
+
+            # --- CLI leaf：alias.exe → 同根 real.exe（真实 symlink 或 mock）---
+            case_cli = root / "same-root-cli-leaf"
+            case_cli.mkdir()
+            scripts = case_cli / "venv" / "Scripts"
+            scripts.mkdir(parents=True)
+            real_cli = scripts / "real_mineru.exe"
+            real_cli.write_bytes(b"MZ-real-not-alias")
+            alias_cli = scripts / "mineru.exe"
+            cli_linked = False
+            try:
+                os.symlink(str(real_cli), str(alias_cli))
+                cli_linked = True
+            except OSError:
+                alias_cli.write_bytes(b"MZ-alias-placeholder")
+            (case_cli / "models").mkdir()
+            (case_cli / "models" / ".biaoshu-ready").write_bytes(b"ready\n")
+            man_cli = _write_manifest(
+                case_cli,
+                _valid_manifest_dict(cli_rel="venv/Scripts/mineru.exe"),
+            )
+            cli_patches: list[Any] = []
+            if not cli_linked:
+
+                def is_cli_alias(self_path: Path) -> bool:
+                    return self_path.name.lower() == "mineru.exe"
+
+                cli_patches.append(mock.patch.object(Path, "is_symlink", is_cli_alias))
+            _assert_invalid("cli-same-root-leaf-symlink", man_cli, cli_patches)
+
+            # --- marker leaf：alias marker → 同根普通 target ---
+            case_mk = root / "same-root-marker-leaf"
+            case_mk.mkdir()
+            cli_ok = case_mk / "venv" / "Scripts" / "mineru.exe"
+            cli_ok.parent.mkdir(parents=True)
+            cli_ok.write_bytes(b"MZ-fake")
+            models = case_mk / "models"
+            models.mkdir()
+            real_marker = models / "real-ready-file"
+            real_marker.write_bytes(b"ready\n")
+            alias_marker = models / ".biaoshu-ready"
+            mk_linked = False
+            try:
+                os.symlink(str(real_marker), str(alias_marker))
+                mk_linked = True
+            except OSError:
+                alias_marker.write_bytes(b"ready\n")
+            man_mk = _write_manifest(
+                case_mk,
+                _valid_manifest_dict(model_rel="models/.biaoshu-ready"),
+            )
+            mk_patches: list[Any] = []
+            if not mk_linked:
+
+                def is_mk_alias(self_path: Path) -> bool:
+                    return self_path.name == ".biaoshu-ready"
+
+                mk_patches.append(mock.patch.object(Path, "is_symlink", is_mk_alias))
+            _assert_invalid("marker-same-root-leaf-symlink", man_mk, mk_patches)
+
+            # --- 父目录 symlink：venv 为同根 alias 目录 ---
+            case_parent = root / "same-root-parent-sym"
+            case_parent.mkdir()
+            real_venv = case_parent / "venv-real"
+            real_scripts = real_venv / "Scripts"
+            real_scripts.mkdir(parents=True)
+            (real_scripts / "mineru.exe").write_bytes(b"MZ-fake")
+            venv_alias = case_parent / "venv"
+            parent_linked = False
+            try:
+                os.symlink(str(real_venv), str(venv_alias), target_is_directory=True)
+                parent_linked = True
+            except OSError:
+                venv_alias.mkdir()
+                (venv_alias / "Scripts").mkdir()
+                (venv_alias / "Scripts" / "mineru.exe").write_bytes(b"MZ-fake")
+            (case_parent / "models").mkdir()
+            (case_parent / "models" / ".biaoshu-ready").write_bytes(b"ready\n")
+            man_parent = _write_manifest(
+                case_parent,
+                _valid_manifest_dict(cli_rel="venv/Scripts/mineru.exe"),
+            )
+            parent_patches: list[Any] = []
+            if not parent_linked:
+
+                def is_venv_alias(self_path: Path) -> bool:
+                    return self_path.name.lower() == "venv"
+
+                parent_patches.append(
+                    mock.patch.object(Path, "is_symlink", is_venv_alias)
+                )
+            _assert_invalid("cli-parent-dir-symlink", man_parent, parent_patches)
+
+            # --- 路径组件 FILE_ATTRIBUTE_REPARSE_POINT（Scripts 目录 reparse）---
+            case_rp = root / "parent-reparse-attr"
+            case_rp.mkdir()
+            scripts_rp = case_rp / "venv" / "Scripts"
+            scripts_rp.mkdir(parents=True)
+            (scripts_rp / "mineru.exe").write_bytes(b"MZ-fake")
+            (case_rp / "models").mkdir()
+            (case_rp / "models" / ".biaoshu-ready").write_bytes(b"ready\n")
+            man_rp = _write_manifest(
+                case_rp,
+                _valid_manifest_dict(cli_rel="venv/Scripts/mineru.exe"),
+            )
+            real_stat = Path.stat
+
+            def stat_parent_reparse(self_path: Path, *a: Any, **k: Any):
+                st = real_stat(self_path, *a, **k)
+                if self_path.name.lower() == "scripts":
+                    return types.SimpleNamespace(
+                        st_mode=st.st_mode,
+                        st_ino=getattr(st, "st_ino", 0),
+                        st_dev=getattr(st, "st_dev", 0),
+                        st_nlink=getattr(st, "st_nlink", 1),
+                        st_uid=getattr(st, "st_uid", 0),
+                        st_gid=getattr(st, "st_gid", 0),
+                        st_size=st.st_size,
+                        st_atime=st.st_atime,
+                        st_mtime=st.st_mtime,
+                        st_ctime=st.st_ctime,
+                        st_file_attributes=FILE_ATTRIBUTE_REPARSE_POINT,
+                    )
+                return st
+
+            _assert_invalid(
+                "cli-parent-reparse-attr",
+                man_rp,
+                [mock.patch.object(Path, "stat", stat_parent_reparse)],
+            )
+
     def test_cli_missing_and_model_missing(self) -> None:
         preflight = _require_preflight(self)
         with tempfile.TemporaryDirectory(prefix=TEMP_PREFIX) as td:
@@ -1574,17 +1817,25 @@ class TestCliArgsJsonAndNoPathExecutable(unittest.TestCase):
         code, out, err = _run_main(preflight, [_PREFLIGHT_NAME, "--dry-run"])
         data = _parse_json_stdout(out)
         self.assertEqual(data["diagnosticCode"], "argument_invalid")
+        self.assertEqual(code, DIAG_EXIT["argument_invalid"])
         self.assertNotEqual(code, 0)
         self.assertIs(data["didNotRunRealRuntime"], True)
+        self.assertEqual(data["mode"], "dry-run")
+        self.assertIn(data["mode"], MODE_VALUES)
         _assert_exact_json_keys(self, data)
         _assert_hygiene(self, out + err)
 
+        # 缺模式：JSON mode 固定 dry-run fallback，仍 argument_invalid
         code2, out2, err2 = _run_main(
             preflight,
             [_PREFLIGHT_NAME, "--manifest", "x.json"],
         )
         data2 = _parse_json_stdout(out2)
         self.assertEqual(data2["diagnosticCode"], "argument_invalid")
+        self.assertEqual(code2, DIAG_EXIT["argument_invalid"])
+        self.assertEqual(data2["mode"], "dry-run")
+        self.assertIn(data2["mode"], MODE_VALUES)
+        self.assertIs(data2["didNotRunRealRuntime"], True)
         _assert_hygiene(self, out2 + err2)
 
     def test_rejects_client_executable_and_path_lookup(self) -> None:
@@ -2040,6 +2291,395 @@ class TestWindowsZhQualityPrecondition(unittest.TestCase):
             self.assertNotIn("simhei", data["message"].lower())
             self.assertNotIn("msyh", data["message"].lower())
             _assert_hygiene(self, out + err)
+
+
+# ===========================================================================
+# G2：Q10 windows-zh 正向产品语义（mock 字体/绘制/假 runner；不计真实 quality）
+# ===========================================================================
+
+
+class TestWindowsZhForwardSemantics(unittest.TestCase):
+    """
+    用途：冻结 windows-zh 必须走中文像素生成 + 中文短句/ASCII 锚点顺序门。
+    反假绿：ASCII-only Markdown 不得 ocr_passed；mock 不得计为真实 quality。
+    """
+
+    _ZH_GEN_NAMES = (
+        "generate_windows_zh_image_only_pdf",
+        "generate_zh_ocr_fixture",
+        "generate_windows_zh_ocr_pdf",
+        "create_windows_zh_scan_pdf",
+        "build_windows_zh_ocr_fixture",
+        "generate_windows_zh_scan_pdf",
+    )
+    _ASCII_GEN_NAMES = (
+        "generate_ascii_image_only_pdf",
+        "build_ascii_ocr_fixture",
+        "generate_ocr_ascii_pdf",
+        "create_ascii_scan_pdf",
+    )
+
+    def _find_callable(self, mod: Any, names: Sequence[str]) -> tuple[str, Any] | None:
+        for name in names:
+            fn = getattr(mod, name, None)
+            if callable(fn):
+                return name, fn
+        return None
+
+    def _font_ready_patches(self, preflight: Any, root: Path) -> list[Any]:
+        """用途：mock Windows + 字体候选存在；禁止真实下载字体。"""
+        usage = mock.Mock(free=10**12, total=10**13, used=0)
+        fake_font = root / "Fonts" / "simhei.ttf"
+        fake_font.parent.mkdir(parents=True, exist_ok=True)
+        fake_font.write_bytes(b"FAKE-FONT-NOT-REAL")
+        patches: list[Any] = [
+            mock.patch.object(os, "name", "nt"),
+            mock.patch.object(shutil, "disk_usage", return_value=usage),
+        ]
+        if hasattr(preflight, "os"):
+            patches.append(mock.patch.object(preflight.os, "name", "nt"))
+        if hasattr(preflight, "shutil"):
+            patches.append(
+                mock.patch.object(preflight.shutil, "disk_usage", return_value=usage)
+            )
+        real_exists = Path.exists
+
+        def fake_exists(self_path: Path) -> bool:
+            s = str(self_path).replace("/", "\\").lower()
+            if s.endswith("simhei.ttf") or s.endswith("msyh.ttc"):
+                return True
+            return real_exists(self_path)
+
+        patches.append(mock.patch.object(Path, "exists", fake_exists))
+        if hasattr(preflight, "_windows_font_candidates"):
+            patches.append(
+                mock.patch.object(
+                    preflight,
+                    "_windows_font_candidates",
+                    return_value=[fake_font],
+                )
+            )
+        # truetype 不可用时回退 load_default，保证 mock 字体不炸；像素语义由 text 记录证明。
+        # 必须在 patch truetype 之前缓存 load_default 结果：当前 Pillow load_default
+        # 内部会再次调用 truetype，patch 后若再调 load_default 会 RecursionError。
+        try:
+            from PIL import ImageFont as _ImageFont  # noqa: WPS433
+
+            real_truetype = getattr(_ImageFont, "truetype", None)
+            if callable(real_truetype):
+                # 先取真实默认字体，再安装 truetype 补丁（Q13 反递归）
+                default_font = _ImageFont.load_default()
+
+                def safe_truetype(*_a: Any, **_k: Any) -> Any:
+                    return default_font
+
+                patches.append(
+                    mock.patch.object(_ImageFont, "truetype", side_effect=safe_truetype)
+                )
+        except Exception:
+            pass
+        return patches
+
+    def test_windows_zh_must_call_zh_generator_with_chinese_pixels(self) -> None:
+        """
+        用途：
+          1) 生产暴露 windows-zh 专用生成器；
+          2) 源码冻结两页中文短句 + ASCII 锚点；
+          3) ocr-check/windows-zh 运行时必须调用中文生成器；
+          4) 像素绘制记录含两页中文短句与 ASCII 锚点。
+        """
+        preflight = _require_preflight(self)
+        found = self._find_callable(preflight, self._ZH_GEN_NAMES)
+        self.assertIsNotNone(
+            found,
+            msg=(
+                "生产必须暴露 windows-zh image-only PDF 生成器（"
+                + "/".join(self._ZH_GEN_NAMES)
+                + "）"
+            ),
+        )
+        assert found is not None
+        zh_name, real_zh = found
+
+        prod_src = _PREFLIGHT_PATH.read_text(encoding="utf-8")
+        for token in (ZH_SENTENCE_P1, ZH_SENTENCE_P2, OCR_P1, OCR_P2):
+            self.assertIn(
+                token,
+                prod_src,
+                msg=f"生产源码必须冻结像素/Markdown 真值常量 {token!r}",
+            )
+
+        with tempfile.TemporaryDirectory(prefix=TEMP_PREFIX) as td:
+            root = Path(td)
+            runtime, manifest = _prepare_runtime_tree(root / "rt")
+            impl_dir = root / "impl"
+            impl_dir.mkdir()
+            md_ok = (
+                f"# zh\n{ZH_SENTENCE_P1}\n{OCR_P1}\n"
+                f"{ZH_SENTENCE_P2}\n{OCR_P2}\n"
+            )
+            impl = _write_fake_mineru_impl(
+                impl_dir,
+                mode="success",
+                markdown_text=md_ok,
+                require_valid_input_pdf=True,
+            )
+
+            zh_calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+            draw_texts: list[str] = []
+
+            def tracking_zh(*args: Any, **kwargs: Any) -> Any:
+                zh_calls.append((args, dict(kwargs)))
+                return real_zh(*args, **kwargs)
+
+            patches = self._font_ready_patches(preflight, root)
+            patches.append(
+                mock.patch.object(preflight, zh_name, side_effect=tracking_zh)
+            )
+            try:
+                from PIL import ImageDraw as _ImageDraw  # noqa: WPS433
+
+                real_text = _ImageDraw.ImageDraw.text
+
+                def tracking_text(
+                    self_draw: Any, xy: Any, text: Any, *a: Any, **k: Any
+                ) -> Any:
+                    draw_texts.append(str(text))
+                    return real_text(self_draw, xy, text, *a, **k)
+
+                patches.append(
+                    mock.patch.object(_ImageDraw.ImageDraw, "text", tracking_text)
+                )
+            except Exception:
+                pass
+
+            td_patch, created = _track_tempdirs(preflight)
+            patches.append(td_patch)
+            patches.extend(
+                _patch_popen_for_impl(preflight, impl, {"mineru.exe", "mineru"})
+            )
+
+            code, out, err = _run_main(
+                preflight,
+                [
+                    _PREFLIGHT_NAME,
+                    "--manifest",
+                    str(manifest),
+                    "--ocr-check",
+                    "--quality-profile",
+                    "windows-zh",
+                ],
+                extra_patches=patches,
+            )
+            data = _parse_json_stdout(out)
+            self.assertTrue(
+                zh_calls,
+                msg="run_ocr_check/windows-zh 必须调用中文 PDF 生成器",
+            )
+            # 绘制记录必须含两页不同中文短句与 ASCII 锚点（像素生成真值）
+            draw_blob = "\n".join(draw_texts)
+            for token in (ZH_SENTENCE_P1, ZH_SENTENCE_P2, OCR_P1, OCR_P2):
+                self.assertIn(
+                    token,
+                    draw_blob,
+                    msg=(
+                        f"像素绘制必须包含 {token!r}；"
+                        f"draw_texts={draw_texts!r} zh_calls={len(zh_calls)}"
+                    ),
+                )
+            self.assertNotEqual(ZH_SENTENCE_P1, ZH_SENTENCE_P2)
+            # Q12：无条件精确成功九键；mock/fake 仅作证据分层，不改变生产成功语义
+            _assert_exact_json_keys(self, data)
+            self.assertEqual(data["diagnosticCode"], "ocr_passed")
+            self.assertEqual(code, DIAG_EXIT["ocr_passed"])
+            self.assertEqual(code, 0)
+            self.assertEqual(data["status"], "passed")
+            self.assertIs(data["ok"], True)
+            self.assertIs(data["runtimeVerified"], True)
+            self.assertIs(data["didNotRunRealRuntime"], False)
+            self.assertEqual(data["mode"], "ocr-check")
+            self.assertEqual(data["qualityProfile"], "windows-zh")
+            # 成功亦为 fake-runtime 自动化证据，不得宣称真实中文质量
+            self.assertNotIn("真实中文", data.get("message", ""))
+            self.assertNotIn("真实 OCR 已通过", data.get("message", ""))
+            _assert_temp_cleaned(self, created)
+            _assert_hygiene(self, out + err, forbidden_substrings=[str(runtime)])
+
+    def test_windows_zh_ascii_only_markdown_is_ocr_marker_missing(self) -> None:
+        """
+        用途：windows-zh 下仅 ASCII 锚点的 fake Markdown 固定 ocr_marker_missing，
+        禁止 ocr_passed（不得把 ASCII 命中冒充中文质量）。
+        """
+        preflight = _require_preflight(self)
+        with tempfile.TemporaryDirectory(prefix=TEMP_PREFIX) as td:
+            root = Path(td)
+            runtime, manifest = _prepare_runtime_tree(root / "rt")
+            impl_dir = root / "impl"
+            impl_dir.mkdir()
+            impl = _write_fake_mineru_impl(
+                impl_dir,
+                mode="success",
+                markdown_text=f"# ascii only\n{OCR_P1}\n{OCR_P2}\n",
+                require_valid_input_pdf=True,
+            )
+            patches = self._font_ready_patches(preflight, root)
+            # 若中文生成器尚未实现，直接业务红；已实现则用其生成 PDF 结构
+            found = self._find_callable(preflight, self._ZH_GEN_NAMES)
+            self.assertIsNotNone(
+                found,
+                msg="生产必须暴露 windows-zh 生成器，才能判定 Markdown 中文门",
+            )
+            assert found is not None
+            zh_name, _zh_fn = found
+
+            # 保证走到 Markdown 门：中文生成器若因假字体失败，回退 ASCII 结构仅用于输入 PDF
+            ascii_found = self._find_callable(preflight, self._ASCII_GEN_NAMES)
+            self.assertIsNotNone(ascii_found, msg="测试需要 ASCII 生成器构造合法 PDF 输入")
+            assert ascii_found is not None
+            _ascii_name, ascii_fn = ascii_found
+
+            def zh_write_valid_pdf(*a: Any, **k: Any) -> Any:
+                try:
+                    return ascii_fn(*a, **k)
+                except TypeError:
+                    target = a[0] if a else (root / "zh.pdf")
+                    return ascii_fn(target)
+
+            patches.append(
+                mock.patch.object(preflight, zh_name, side_effect=zh_write_valid_pdf)
+            )
+            td_patch, created = _track_tempdirs(preflight)
+            patches.append(td_patch)
+            patches.extend(
+                _patch_popen_for_impl(preflight, impl, {"mineru.exe", "mineru"})
+            )
+            code, out, err = _run_main(
+                preflight,
+                [
+                    _PREFLIGHT_NAME,
+                    "--manifest",
+                    str(manifest),
+                    "--ocr-check",
+                    "--quality-profile",
+                    "windows-zh",
+                ],
+                extra_patches=patches,
+            )
+            data = _parse_json_stdout(out)
+            self.assertEqual(
+                data["diagnosticCode"],
+                "ocr_marker_missing",
+                msg=(
+                    "windows-zh + ASCII-only Markdown 必须 ocr_marker_missing，"
+                    f"不得 ocr_passed；实际={data!r}"
+                ),
+            )
+            self.assertEqual(code, DIAG_EXIT["ocr_marker_missing"])
+            self.assertIs(data["ok"], False)
+            self.assertIs(data["didNotRunRealRuntime"], True)
+            self.assertEqual(data["mode"], "ocr-check")
+            self.assertEqual(data["qualityProfile"], "windows-zh")
+            self.assertNotEqual(data["diagnosticCode"], "ocr_passed")
+            _assert_temp_cleaned(self, created)
+            _assert_hygiene(self, out + err)
+
+
+# ===========================================================================
+# G3：Q11 九键 mode 枚举门（缺模式 fallback dry-run）
+# ===========================================================================
+
+
+class TestJsonModeAlwaysAllowed(unittest.TestCase):
+    """用途：所有错误/非法参数输出 mode 必须精确属于 dry-run|ocr-check。"""
+
+    def test_missing_or_unknown_mode_falls_back_to_dry_run(self) -> None:
+        preflight = _require_preflight(self)
+        # 完全无模式
+        code, out, err = _run_main(preflight, [_PREFLIGHT_NAME])
+        data = _parse_json_stdout(out)
+        _assert_exact_json_keys(self, data)
+        self.assertEqual(data["diagnosticCode"], "argument_invalid")
+        self.assertEqual(code, DIAG_EXIT["argument_invalid"])
+        self.assertEqual(data["mode"], "dry-run")
+        self.assertIn(data["mode"], MODE_VALUES)
+        self.assertIs(data["didNotRunRealRuntime"], True)
+        self.assertIs(data["ok"], False)
+        _assert_hygiene(self, out + err)
+
+        # 有 manifest 字面量但仍缺模式
+        code2, out2, err2 = _run_main(
+            preflight,
+            [_PREFLIGHT_NAME, "--manifest", "not-a-real-manifest.json"],
+        )
+        data2 = _parse_json_stdout(out2)
+        self.assertEqual(data2["diagnosticCode"], "argument_invalid")
+        self.assertEqual(code2, DIAG_EXIT["argument_invalid"])
+        self.assertEqual(data2["mode"], "dry-run")
+        self.assertIn(data2["mode"], MODE_VALUES)
+        self.assertIs(data2["didNotRunRealRuntime"], True)
+        _assert_hygiene(self, out2 + err2)
+
+    def test_selected_modes_and_representative_errors_keep_mode_enum(self) -> None:
+        preflight = _require_preflight(self)
+        with tempfile.TemporaryDirectory(prefix=TEMP_PREFIX) as td:
+            root = Path(td)
+            runtime, manifest = _prepare_runtime_tree(root, write_cli=False)
+
+            cases: list[tuple[str, list[str], str]] = [
+                (
+                    "dry-run-missing-manifest-path",
+                    [_PREFLIGHT_NAME, "--dry-run"],
+                    "dry-run",
+                ),
+                (
+                    "ocr-check-missing-manifest-path",
+                    [_PREFLIGHT_NAME, "--ocr-check"],
+                    "ocr-check",
+                ),
+                (
+                    "dry-run-cli-missing",
+                    [
+                        _PREFLIGHT_NAME,
+                        "--manifest",
+                        str(manifest),
+                        "--dry-run",
+                        "--quality-profile",
+                        "ascii",
+                    ],
+                    "dry-run",
+                ),
+                (
+                    "reject-executable",
+                    [
+                        _PREFLIGHT_NAME,
+                        "--manifest",
+                        str(manifest),
+                        "--dry-run",
+                        "--executable",
+                        str(root / "evil.exe"),
+                    ],
+                    "dry-run",
+                ),
+            ]
+            for label, argv, expected_mode in cases:
+                with self.subTest(case=label):
+                    code, out, err = _run_main(preflight, argv)
+                    data = _parse_json_stdout(out)
+                    _assert_exact_json_keys(self, data)
+                    self.assertIn(
+                        data["mode"],
+                        MODE_VALUES,
+                        msg=f"{label}: mode 必须属于 {sorted(MODE_VALUES)}，实际={data['mode']!r}",
+                    )
+                    self.assertEqual(
+                        data["mode"],
+                        expected_mode,
+                        msg=f"{label}: mode 期望 {expected_mode!r}",
+                    )
+                    self.assertNotEqual(data["mode"], "")
+                    self.assertIs(data["didNotRunRealRuntime"], True)
+                    self.assertNotEqual(code, 0)
+                    _assert_hygiene(self, out + err)
 
 
 # ===========================================================================
