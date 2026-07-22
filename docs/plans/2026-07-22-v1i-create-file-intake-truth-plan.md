@@ -8,6 +8,7 @@
 # V1-I 创建页招标文件摄入真值实施计划
 
 > **执行代理要求：** 必须使用 `executing-plans`，逐项执行；用户已授权持续推进，但任何扩围或疑似问题仍须双确认。
+> **完成状态：** 2026-07-22 已完成并推送；冻结=`c1cde54`，测试=`35b0f6b`/`b8c9776`，生产=`4e7a3c3`。
 
 **目标：** 技术类创建入口使用真实 File，项目创建成功后完成真实 multipart 上传再导航；失败路径不伪造文件、不重复创建项目，技术工作区只展示服务端文件。
 
@@ -77,3 +78,10 @@
 2. 主协作分支从冻结提交快进到 A 分支，严禁 merge 到 `main`；只推送 `collab/grok-code-codex-review`。
 3. 更新契约/计划、`HANDOFF-next.md`、路线图和联调清单，记录真实红绿、消息链、五文件哈希与未运行项；中文提交并推送。
 4. 再只读审计 V1 首日主链的下一个单一断点，V2/V3 继续后置。
+
+### 完成记录
+
+1. B 生产未实现基线最终保持新专项 **8 failed / 0 passed**、P11A **1 failed / 9 passed**；Codex 独立复跑结果相同。两次 test-only 提交为 `35b0f6b` 与 `b8c9776`。
+2. A 生产实现只改三个白名单文件；Codex 独立 V1-I/P11A/技术 editor-state truth 为 **8/10/28 passed**，lint、build、diff-check、端口和产物门通过。
+3. 生产实现=`4e7a3c3` 已快进并推送 `collab/grok-code-codex-review`；`main` 未操作。完整消息链、五文件 blob/SHA-256 与未运行项见契约 §8。
+4. 所有测试强度、生产和注释问题均按 `question → Grok YES → task → review_request` 关闭；Grok A/B 全程未暂存、提交或推送。

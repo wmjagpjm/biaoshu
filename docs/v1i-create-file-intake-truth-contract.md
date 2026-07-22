@@ -7,9 +7,9 @@
 
 # V1-I 创建页招标文件摄入真值契约
 
-> **状态：已冻结，待 failure-first、生产实现和 Codex 独立验收。**
+> **状态：已完成 failure-first、生产实现、Codex 独立验收、提交与推送。**
 > **分支：** 仅 `collab/grok-code-codex-review`，严禁操作 `main`。
-> **基线：** `2c3b9222f9f19039af6015b72779c46a4eded411`；V1-A 至 V1-H2 已完成并推送。
+> **提交链：** 冻结=`c1cde54`；首轮 test-only=`35b0f6b`；test-only 假红修正=`b8c9776`；生产实现=`4e7a3c3`。
 
 ## 1. 问题真值
 
@@ -120,3 +120,31 @@ E2E 只能使用各自 worktree 相对 `backend/data/biaoshu-e2e.db`；8010/5174
 - 允许显示用户选择的 basename；禁止显示浏览器本地路径、服务端 storedName、异常原文、Cookie、CSRF 或身份信息。
 - 本包不自动解析、不自动调用 LLM、不安装 MinerU/Docling、不改变 50MB 后端上限、不做文件删除/去重/续传/并发上传、不清理创建后上传失败的真实项目。
 - 不修改商务标创建、工作区手工上传、解析、导出、备份、协作、V2 或 V3 能力。
+
+## 8. 完成记录
+
+### 8.1 测试与实现消息链
+
+- Grok B 测试任务/review=`msg_fe1d6d3ffbfc462ea550a0c726bdefbb`/`msg_e93f42a99f9b4cbd9e269ae1e87245e0`。首轮真实 failure-first 为新专项 **8 failed / 0 passed**、P11A **1 failed / 9 passed**。
+- 五项反假绿缺口经 Codex question=`msg_7fd86a54be8b4aeca4443d971e8506ad`、Grok B YES=`msg_1fe1d5bce6034bc4ae864fd08a84d31a` 确认后，才以 task/review=`msg_dbcd49f789ae4b15816b3d8b5aa5e6ac`/`msg_c185905baf9d48f49f651f299cad5868` 收紧路由、pending、锁定、探针集合和 multipart 全 part 断言。
+- A 首轮绿测暴露三类测试假红；Codex question=`msg_1f9523b1649b4eea8f605bca37afd399`、Grok B YES=`msg_87b0bc894db04c8aad6368c07864085f` 后，test-only task/review=`msg_6e9412ee3cbe476c8865de3053b5e30d`/`msg_0a4ad572a2e24ef4979f1c74e0f5637b`。修正后生产未实现基线仍为 **8 failed / 0 passed**、**1 failed / 9 passed**，证明未靠放宽变绿。
+- Grok A 生产任务=`msg_0138fd5cba934815ba7b2c11f7c4b962`。50MB 文案、input accept 与嵌套交互问题经 question/YES=`msg_737b232ebcde4b1ca3b33611c96a3508`/`msg_b8942008f0b54ae6995dbc6ff2cd3b18` 确认后，production-only task/review=`msg_d652fb78464f44d7a12c31432209d1b4`/`msg_827ab86431ad49db83eaa26dadb55d71`。
+- chip 迁出后的过时注释也严格走 question/YES/task/review=`msg_8e8d1842ddda490c917ab3084668b368`/`msg_f827e0fe2af34af9b189e89546a05fe6`/`msg_b630328326b048289466134741288ee8`/`msg_6c3138cad41546eaaec57556764bf86b`；只改一行中文注释，运行代码不变。
+
+### 8.2 最终验收
+
+Grok A 与 Codex 均严格串行、单 worker、零重试通过：V1-I 新专项 **8/8 passed**、P11A **10/10 passed**、技术 editor-state truth **28/28 passed**。Codex 的实测耗时分别约 14.8s、14.9s、56.8s；lint 与 build 通过，lint 只有 4 条既有 warning，build 只有既有 chunk 体积提示。`git diff --check`、严格五文件、空暂存、8010/5174 清理和无 Playwright 产物均通过。
+
+未运行后端 pytest、整仓 318 E2E、并发 Playwright、联网安装、真实数据库、真实 uploads 或真实标书；这些未运行项不得冒充通过。
+
+### 8.3 五文件真值
+
+稳定 Git blob（不受 Windows `core.autocrlf` 检出换行影响）：
+
+- `create-file-intake-truth.spec.ts`=`8ab484872bb2b1f80042c731040d3995ed4554e7`；
+- `core-project-data-truth.spec.ts`=`e874c46ed755db223e1be39e9ad93e8524e1a620`；
+- `CreatePage.tsx`=`013b4d9a27c9a0b60d5532a491e4dc85e5aec941`；
+- `projectStore.ts`=`42665600b02967a12af681806ccc81af77238dc8`；
+- `TechnicalPlanWorkspace.tsx`=`68f46b6aa4795c28c39791e1518e17b5909f14bd`。
+
+主工作树最终字节 SHA-256 依次为 `3919F9CD18B52F8FF752E297F3F6DC26412B5F23AB667F19815BED67D7C40A47`、`CDD5E408909F17EA031A5E8F5595DD6CE79BFCEAC5957346847F1410E094F64B`、`06A40D6ACBD8A5AD3246B452BB7327E2269F87E185EC8DF67BF081BEC057C718`、`1E2B1C2220E0FB1B88C0C563EF9EA7C6932C414657ACABF9FA8ED283A9AF78CD`、`D9867A1FA61F8FCB6126419534FE826E9A62463A75436A0104B4847C091E520F`。独立 worktree 可能因 LF/CRLF 得到不同字节 SHA-256，判定未篡改时以提交 blob 和 `git diff` 为准。
