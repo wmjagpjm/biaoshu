@@ -7,9 +7,9 @@
 
 # V1-H2 技术标导出正文完整性提醒契约
 
-> **状态：已冻结，待 failure-first、生产实现和 Codex 独立验收。**
+> **状态：已完成、独立验收并推送。**
 > **分支：** 仅 `collab/grok-code-codex-review`，严禁操作 `main`。
-> **基线：** `445c8783629c8c7dd3f223bbb0bb06442871b1ab`；V1-A 至 V1-H1 已完成并推送。
+> **冻结：** `73a76c6`；**实现：** `0047a46`；V1-A 至 V1-H2 已完成并推送。
 
 ## 1. 问题真值
 
@@ -111,3 +111,39 @@ git -C .. diff --check
 ## 8. 非目标
 
 本包不硬阻断导出、不自动补写、不评估极短章/文风/事实/合规质量、不改变 DOCX 占位或版式、不扩商务标、不改图片告警、下载链、保存门、任务协议通用 schema、数据库、V2 多人协作或 V3 SaaS。
+
+## 9. 完成证据
+
+### 9.1 failure-first 与双确认返修
+
+- 后端原始 failure-first 为 **5 failed / 0 passed**；前端原始 failure-first 为 **4 failed / 0 passed**。
+- 前端全页链接断言会误伤应用壳 21 个正常导航链接。Codex question=`msg_b3c4e06c956d4e47b6abd3d2f028495e`，Grok B 确认=`msg_9f179d47009548a39d1f4c09940504a4`，test-only 返修 task/review=`msg_834198ea12004c648c68f39c714cf746`/`msg_12330eb5542143689c4eb433fbb9254f`；最终只检查正文提醒区域零链接、零图片及恶意 HTML 精确文本。
+- API 合法接受没有有效章节字典的混合列表，旧实现仍会生成“四、正文”空壳标题。加固红测真实为 **1 failed / 5 passed**；Codex question=`msg_8079e82ce9b94a06969bed56103a6610`，Grok A 确认=`msg_de0a293bf55d40ad8fba3a01a6cec5cc`，test-only task/review=`msg_9790521a4f444ac39130aa0ec686199f`/`msg_7c5f2171e9e14aa793160c3eab7c2cfb`。
+- API 回读测试中的宽泛 `or` 经 `msg_f8c6b96bd34c4f0faeffcdd0e07a6f7c`/`msg_aaa1600b2f9a408d9f91042f037bf87f` 双确认后，改为精确断言；返修 task/review=`msg_7d4f4c8a5447459d8f2c5675bc627bab`/`msg_b7dbe4efafbd4d5fbf00d8091fc990f8`。
+- 生产仅在双方确认后返修，task/review=`msg_aa3881ec42674ea9b74ea66ecab64681`/`msg_3d9e21df0c4a46ffa87293d7d2f5474e`。
+
+### 9.2 Codex 独立验收
+
+- 后端 H2 专项 **6 passed**，定向回归 **35 passed**。
+- 前端 H2 专项、图片告警、导出前最新编辑态、稳健下载分别为 **4/4/18/14 passed**；Playwright 全部单 worker、零重试串行。
+- `npm run lint` 为 0 error、4 条既有 warning；`npm run build` 通过，仅既有包体积 warning；`py_compile` 与 `git diff --check` 通过。
+- 8010/5174 已清理；严格六文件、空暂存区通过。未运行后端全量或整仓 318 E2E。
+
+### 9.3 实现 worktree 验收哈希
+
+以下为 H2 实现 worktree 在验收时的磁盘 SHA-256。Windows 主工作树启用 `core.autocrlf=true`，新文件在不同 worktree 的 LF/CRLF 检出会改变磁盘哈希；跨工作树核验应以提交 `0047a46` 的 Git blob 和零代码 diff 为准，不得仅因行尾转换判定代码被修改。
+
+```text
+backend/app/services/export_service.py
+5ECFB427591AFBEAA70BA7AF34664F56D1A7D346F00600B5ABA1929B9FFFE898
+backend/app/services/task_service.py
+BD1A14975180F2195118BE3FB4AD1E31FB02EFDF0FC3E6B8D68702E0C7B8B4B0
+backend/tests/test_v1h2_export_content_warnings.py
+B60852171AD333155F2F4C6B542F33A759DB64F95A887EA6CA748612D1157588
+frontend/src/shared/components/ExportContentWarnings.tsx
+D09FE60E80C13891881385A15A8C8F7BDDFA4B314D9F1C7CFA0A434D7FA1AB1A
+frontend/src/features/technical-plan/pages/TechnicalPlanWorkspace.tsx
+86FDF5CB6B88DF6A552EB8517219624AD4F8A145D4C9DEDA4E41DEDE1F13C5D4
+frontend/e2e/export-content-warnings.spec.ts
+8FE7725C9E1D543B0E0060401941682EC7DD8397A8AB178EA2A6D083B15168B9
+```
