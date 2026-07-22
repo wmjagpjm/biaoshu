@@ -1308,11 +1308,14 @@ def build_docx_bytes(
     *,
     mode: str | None = None,
     image_warnings: list[str] | None = None,
+    content_warnings: list[str] | None = None,
 ) -> tuple[bytes, str]:
     """
     用途：生成 Word 文档（封面 + 正文及技术标响应矩阵，应用默认导出模板）。
     对接：export 同步/异步任务；settings.export_format_json。
     mode：technical（默认）| business（商务标册，读 business_json）。
+    content_warnings：调用方传入的列表；仅技术标在读取 chapters 后追加最多一条
+      正文完整性固定提醒；商务早退路径不写入。
     """
     try:
         from docx import Document  # type: ignore
@@ -1551,7 +1554,33 @@ def build_docx_bytes(
         walk(outline)
 
     chapters = _loads(state.chapters_json) if state else None
-    if isinstance(chapters, list) and chapters:
+    # V1-H2：仅技术标扫描有效章节 dict，向调用方列表最多追加一条固定脱敏提醒。
+    # 商务路径已早退，不写 content_warnings；Word 空章占位/无正文区语义保持不变。
+    resolved_content_warnings = (
+        content_warnings if content_warnings is not None else []
+    )
+    valid_chapters = (
+        [ch for ch in chapters if isinstance(ch, dict)]
+        if isinstance(chapters, list)
+        else []
+    )
+    if not valid_chapters:
+        if not resolved_content_warnings:
+            resolved_content_warnings.append(
+                "当前没有可导出的正文章节，导出的 Word 不包含正文部分，请补充后再定稿。"
+            )
+    else:
+        empty_n = sum(
+            1 for ch in valid_chapters if not str(ch.get("body") or "").strip()
+        )
+        if empty_n > 0 and not resolved_content_warnings:
+            resolved_content_warnings.append(
+                f"正文存在 {empty_n} 个空章节，导出的 Word 已保留空章占位，请补充后再定稿。"
+            )
+
+    # V1-H2：正文区仅在存在有效章节 dict 时输出；与 content_warnings 门控对齐。
+    # 非 dict 元素已在 valid_chapters 过滤，循环内不再重复 continue。
+    if valid_chapters:
         _add_heading(
             doc,
             "四、正文",
@@ -1561,9 +1590,7 @@ def build_docx_bytes(
         )
         chapter_num = HeadingNumberer(headings_cfg)
         first_ch = True
-        for ch in chapters:
-            if not isinstance(ch, dict):
-                continue
+        for ch in valid_chapters:
             if h1_page_break and not first_ch:
                 doc.add_page_break()
             first_ch = False

@@ -29,6 +29,10 @@ import {
 } from "lucide-react";
 import { AiFeedbackPanel } from "../../../shared/components/AiFeedbackPanel/AiFeedbackPanel";
 import {
+  ExportContentWarnings,
+  normalizeExportContentWarnings,
+} from "../../../shared/components/ExportContentWarnings";
+import {
   ExportImageWarnings,
   normalizeExportImageWarnings,
 } from "../../../shared/components/ExportImageWarnings";
@@ -277,7 +281,15 @@ export function TechnicalPlanWorkspace() {
     projectId: string;
     warnings: string[];
   } | null>(null);
-  /** P9D：导出告警代次；项目切换或新导出启动时递增，丢弃迟到 setState */
+  /**
+   * V1-H2：导出正文完整性提醒与 projectId 绑定（仅内存）。
+   * 与图片告警共用 exportImageWarningGenRef / 准备令牌；不接商务页。
+   */
+  const [exportContentWarningState, setExportContentWarningState] = useState<{
+    projectId: string;
+    warnings: string[];
+  } | null>(null);
+  /** P9D/V1-H2：导出告警代次；项目切换或新导出启动时递增，丢弃迟到 setState */
   const exportImageWarningGenRef = useRef(0);
   /**
    * V1-E：导出准备单飞令牌（项目绑定）。
@@ -308,6 +320,8 @@ export function TechnicalPlanWorkspace() {
     // 递增代次使飞行中的旧导出闭包无法再写入告警；下载语义保持既有行为
     exportImageWarningGenRef.current += 1;
     setExportImageWarningState(null);
+    // V1-H2：切项目同时清空正文提醒，避免首帧泄漏
+    setExportContentWarningState(null);
     // V1-E：显式作废旧导出准备令牌；不得只 setExportPreparing(false)
     exportPrepareTokenRef.current = null;
     setExportPreparing(false);
@@ -318,6 +332,11 @@ export function TechnicalPlanWorkspace() {
   const exportImageWarnings =
     exportImageWarningState?.projectId === projectId
       ? exportImageWarningState.warnings
+      : [];
+
+  const exportContentWarnings =
+    exportContentWarningState?.projectId === projectId
+      ? exportContentWarningState.warnings
       : [];
 
   /**
@@ -1840,8 +1859,9 @@ export function TechnicalPlanWorkspace() {
                     }
                     // 捕获启动时代次；成功返回后仅当前代次可写告警
                     const gen = ++exportImageWarningGenRef.current;
-                    // 每次导出开始前清空旧告警，避免短暂展示上一轮结果
+                    // 每次导出开始前同时清空图片/正文提醒，避免短暂展示上一轮结果
                     setExportImageWarningState(null);
+                    setExportContentWarningState(null);
                     const t = await pipeline.runTask("export");
                     if (t.status === "success") {
                       // 再次核对项目令牌 + 当前项目 ref，禁止 A 迟到 success 污染 B
@@ -1854,13 +1874,19 @@ export function TechnicalPlanWorkspace() {
                       ) {
                         return;
                       }
-                      // 契约：成功且代次仍匹配时先写 P9D 告警，再 await 下载；
-                      // 旧任务迟到不得写告警/下载，避免污染新项目页面
+                      // 契约：成功且代次仍匹配时先分别写图片/正文提醒，再 await 下载；
+                      // 下载失败不清已接受的提醒；旧任务迟到不得写告警/下载
                       if (exportImageWarningGenRef.current === gen) {
                         setExportImageWarningState({
                           projectId: startedProjectId,
                           warnings: normalizeExportImageWarnings(
                             t.result?.imageWarnings,
+                          ),
+                        });
+                        setExportContentWarningState({
+                          projectId: startedProjectId,
+                          warnings: normalizeExportContentWarnings(
+                            t.result?.contentWarnings,
                           ),
                         });
                       }
@@ -1906,6 +1932,7 @@ export function TechnicalPlanWorkspace() {
                   : "生成并下载 Word"}
             </button>
           </div>
+          <ExportContentWarnings warnings={exportContentWarnings} />
           <ExportImageWarnings warnings={exportImageWarnings} />
         </section>
       )}

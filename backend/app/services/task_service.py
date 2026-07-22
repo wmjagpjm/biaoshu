@@ -1921,12 +1921,15 @@ def _run_export(
     if not mode and getattr(project, "kind", None) == "business":
         mode = "business"
     image_warnings: list[str] = []
+    # V1-H2：正文完整性提醒独立列表；商务早退不写入，success 始终返回数组字段
+    content_warnings: list[str] = []
     data, filename = build_docx_bytes(
         db,
         workspace_id,
         project_id,
         mode=mode if mode else None,
         image_warnings=image_warnings,
+        content_warnings=content_warnings,
     )
     out_dir = file_service._upload_root(settings) / project_id / "exports"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1949,6 +1952,7 @@ def _run_export(
             "size": len(data),
             "mode": mode or "technical",
             "imageWarnings": image_warnings,
+            "contentWarnings": content_warnings,
         },
     )
 
