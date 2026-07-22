@@ -8,7 +8,7 @@
 # V1-M 管理式本机 OCR 自动解析实施计划
 
 > **执行要求：** Grok 承担限定实现和高耗费精确测试，Codex 负责批量举证、独立审查、一次串行终验、提交与推送；协作细则见 `docs/agent-collaboration.md`。
-> **状态：** M1 已完成并推送；M2 只读审计=`msg_cc5b585777684a5ebfa90cffcb62186c`，待冻结八项决策与精确白名单。M3/M4 未开始。
+> **状态：** M1 已完成并推送；M2 两路只读审计与十项批量确认已完成，决策和精确白名单已冻结，待 failure-first。M3/M4 未开始。
 > **基线：** 当前生产=`a7d640b`；仅协作分支，严禁 `main`。
 
 **目标：** 让扫描 PDF 在本机专用 MinerU runtime 中受控解析，并最终接入既有项目任务/editor-state，同时保留轻量与人工回传路径。
@@ -124,16 +124,20 @@ git diff --check
 2. 记录精确测试数字、消息 ID、哈希、未运行项和本机仍未就绪真值。
 3. M1 完成度不改变 V1 的 94% 粗估；只有 M2/M3/M4 全部完成后重新核算。
 
-## 阶段 6：M2 后端包（M1 后重新冻结）
+## 阶段 6：M2 后端包（决策与白名单已冻结）
 
-开工前重新只读审计并精确冻结文件。至少覆盖：
+只读审计：B=`msg_cc5b585777684a5ebfa90cffcb62186c`，A runtime 接口=`msg_348e0dc4ca974923843628fb0ff71a3a`；十项批量确认 question/YES=`msg_bd91defe184241b0ad99440301906e49`/`msg_ec9609ec6c40462983c938fb14dbbaaa`。D1-D10 全部 YES，无替代项。
 
-1. `engine=managed` 的服务端枚举与 runtime 未就绪固定失败；禁止客户端路径/命令/manifest。
-2. 所有 source 文件 `created_at ASC, id ASC`，10 文件/200 MiB/1,000,000 码点/2 MiB 总输出门。
-3. `lightweight` 与 `managed` 共享多文件聚合真值；managed 串行、全局并发 1、取消/超时/清理。
-4. parse 专用单事务 finalizer，revision source 继续 `task`，无新表/迁移/来源枚举。
-5. 任务错误固定脱敏；成功 result 不带 Markdown/路径/第三方日志。
-6. 独立 SQLite/uploads/TEMP，严禁与 A/B 或主仓测试数据库共用。
+冻结执行顺序：
+
+1. Grok B 仅在四个 test-only 文件建立 failure-first：共享 pure core、服务端 path-only locator、每任务/每文件 ready、ASC 全 source、10/200MiB、双输出上限、固定分隔符、no-follow、成功/失败 result 键、单事务 rollback、并发/超时/取消和全域脱敏。
+2. Codex 只核对真实红、反假绿与白名单，提交测试；不重复后端全量。
+3. Grok A 只在九个 production 文件抽取 `managed_ocr_runtime_core`、实现 managed service、parse 聚合与 finalizer；`parse_engines`/API/Schema/前端/迁移保持冻结。
+4. runtime core 由 M1 CLI 与 backend adapter 共用；backend 只按仓库根固定相对路径加载 pure core。manifest 只通过 `BIAOSHU_MANAGED_OCR_MANIFEST` path-only 服务端设置定位；客户端零路径，未配置固定失败且不降级。
+5. parse 专用 ASC 查询与 GET desc 分离；单文件正文原样，多文件只用 `\n\n<!-- BIAOSHU_SOURCE_SEPARATOR -->\n\n`。成功 result 精确 `engine/fileCount/chars`，managed 失败 result 精确 `engine/diagnosticCode`。
+6. finalizer 通过默认兼容的 `commit=False`/flush 复用 editor-state CAS、project update 与 task event，唯一 commit；任何失败先 rollback。进程内并发 1、每文件 30 分钟、任务 120 分钟、取消检查不高于 1 秒；跨进程与孙进程风险如实保留。
+7. 独立 SQLite/uploads/TEMP；禁止真实 CLI、模型、业务文件、HTTP 端口和联网。
+8. Grok 只跑精确测试；Codex 最后一次串行运行 M2 专项、parse_engines、parse_export 与 task/revision/security 代表回归，再做编译、diff、白名单和 TEMP 门。普通夹具/逻辑问题批量修，高风险新问题才重新 question。
 
 ## 阶段 7：M3 前端包（M2 后重新冻结）
 
