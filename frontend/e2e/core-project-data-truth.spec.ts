@@ -164,15 +164,25 @@ function isAllowedP11aApi(method: string, path: string): boolean {
   );
 }
 
+/**
+ * 用途：合法当前 EditorStateApi 空态桩，供工作区 GET 水合通过 stateVersion 门。
+ * 对接：useTechnicalPlanEditors / useBusinessBidWorkspace 要求 esv_ 版本；禁止 version:1。
+ */
 function emptyEditorState() {
   return {
     outline: [],
     chapters: [],
     mode: "ALIGNED",
     parsedMarkdown: "",
-    bidAnalysis: null,
     facts: [],
-    version: 1,
+    analysis: null,
+    analysisOverview: "",
+    responseMatrix: [],
+    responseMatrixVersion: null,
+    guidance: null,
+    // 合法 P12B 空态版本；禁止 version:1 冒充
+    stateVersion: "esv_00000000000000000000000000000001",
+    updatedAt: null,
   };
 }
 

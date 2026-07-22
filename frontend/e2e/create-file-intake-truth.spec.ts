@@ -174,15 +174,25 @@ function isAllowedV1iApi(method: string, path: string): boolean {
   );
 }
 
+/**
+ * 用途：合法当前 EditorStateApi 空态桩，供工作区 GET 水合通过 stateVersion 门。
+ * 对接：useTechnicalPlanEditors / useBusinessBidWorkspace 要求 esv_ 版本；禁止 version:1。
+ */
 function emptyEditorState() {
   return {
     outline: [],
     chapters: [],
     mode: "ALIGNED",
     parsedMarkdown: "",
-    bidAnalysis: null,
     facts: [],
-    version: 1,
+    analysis: null,
+    analysisOverview: "",
+    responseMatrix: [],
+    responseMatrixVersion: null,
+    guidance: null,
+    // 合法 P12B 空态版本；禁止 version:1 冒充
+    stateVersion: "esv_00000000000000000000000000000001",
+    updatedAt: null,
   };
 }
 
@@ -1011,11 +1021,17 @@ test.describe("V1-I 创建页招标文件摄入真值", () => {
 
     const { f1, f2 } = await selectTwoFilesViaChooser(page);
 
-    // 选择后：真实文件名与真实大小；零演示名
+    // 选择后：真实文件名与真实大小；按 .file-chip+filename 作用域（等长 64 B 不得全页唯一）
     await expect(page.getByText(FILE1_NAME)).toBeVisible();
     await expect(page.getByText(FILE2_NAME)).toBeVisible();
-    await expect(page.getByText(expectedSizeLabel(f1.buffer.length))).toBeVisible();
-    await expect(page.getByText(expectedSizeLabel(f2.buffer.length))).toBeVisible();
+    const chip1Ok = page.locator(".file-chip", { hasText: FILE1_NAME });
+    const chip2Ok = page.locator(".file-chip", { hasText: FILE2_NAME });
+    await expect(
+      chip1Ok.getByText(expectedSizeLabel(f1.buffer.length)),
+    ).toBeVisible();
+    await expect(
+      chip2Ok.getByText(expectedSizeLabel(f2.buffer.length)),
+    ).toBeVisible();
     await expect(page.getByText(DEMO_FILENAME)).toHaveCount(0);
     await expect(page.getByText(DEMO_SIZE)).toHaveCount(0);
 
@@ -1139,14 +1155,16 @@ test.describe("V1-I 创建页招标文件摄入真值", () => {
     await expect(page.getByText("/api/projects")).toHaveCount(0);
     await expect(page.getByText(REAL_CREATE_ID)).toHaveCount(0);
 
-    // 选择仍可重试：文件 chip 保留
+    // 选择仍可重试：文件 chip 保留；大小按 chip+filename 作用域（等长 64 B 不得全页唯一）
     await expect(page.getByText(FILE1_NAME)).toBeVisible();
     await expect(page.getByText(FILE2_NAME)).toBeVisible();
+    const chip1Fail = page.locator(".file-chip", { hasText: FILE1_NAME });
+    const chip2Fail = page.locator(".file-chip", { hasText: FILE2_NAME });
     await expect(
-      page.getByText(expectedSizeLabel(f1.buffer.length)),
+      chip1Fail.getByText(expectedSizeLabel(f1.buffer.length)),
     ).toBeVisible();
     await expect(
-      page.getByText(expectedSizeLabel(f2.buffer.length)),
+      chip2Fail.getByText(expectedSizeLabel(f2.buffer.length)),
     ).toBeVisible();
 
     await assertCreatePageBoundary(page, baseline, "create 失败后");
@@ -1239,8 +1257,8 @@ test.describe("V1-I 创建页招标文件摄入真值", () => {
     await expect(page.locator(".file-chip")).toHaveCount(3);
     expect(state.createPosts.length).toBe(1);
 
-    // 移除按钮不可改变三文件集合
-    const removeBtns = page.getByRole("button", { name: "移除" });
+    // 移除按钮不可改变三文件集合（.file-chip 内精确 aria-label，不依赖 upload-card 可访问名）
+    const removeBtns = page.locator('.file-chip button[aria-label="移除"]');
     await expect(removeBtns).toHaveCount(3);
     await expect(removeBtns.nth(0)).toBeDisabled();
     await removeBtns.nth(0).click({ force: true });
