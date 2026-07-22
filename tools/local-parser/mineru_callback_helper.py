@@ -20,7 +20,7 @@ import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Sequence  # Any：env 签名分派与 Popen 泛型
 from urllib.parse import urlparse
 
 
@@ -46,22 +46,37 @@ ALLOWED_EXTENSIONS = frozenset(
     {".pdf", ".png", ".jpg", ".jpeg", ".docx", ".pptx", ".xlsx"}
 )
 
-ENV_WHITELIST = frozenset(
+# 只读系统变量：可从父环境有限继承
+ENV_READONLY_WHITELIST = frozenset(
     {
         "PATH",
         "SystemRoot",
         "WINDIR",
-        "USERPROFILE",
-        "HOME",
-        "APPDATA",
-        "LOCALAPPDATA",
-        "TEMP",
-        "TMP",
-        "TMPDIR",
         "LANG",
         "LC_ALL",
     }
 )
+
+# 可写根：V1-M 绑定单次 runtime/output；V1-C 兼容路径仍可从父环境继承
+ENV_WRITABLE_KEYS: tuple[str, ...] = (
+    "HOME",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "XDG_CACHE_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "HF_HOME",
+    "TORCH_HOME",
+    "MPLCONFIGDIR",
+    "PYTHONPYCACHEPREFIX",
+)
+
+# 兼容旧名：只读 + 可写并集（V1-C dry-run 白名单语义）
+ENV_WHITELIST = frozenset(ENV_READONLY_WHITELIST | frozenset(ENV_WRITABLE_KEYS))
 
 DEFAULT_BACKEND_ORIGIN = "http://127.0.0.1:8000"
 CALLBACK_PATH = "/api/local-parser/callback"
@@ -258,19 +273,113 @@ def build_mineru_command(mineru: str, input_path: Path, output_dir: Path) -> lis
     ]
 
 
-def build_mineru_env(source_env: Mapping[str, str] | None = None) -> dict[str, str]:
-    """
-    用途：仅保留环境白名单，并强制本地离线变量；不继承代理/API Key/票据哨兵。
-    """
-    src = os.environ if source_env is None else source_env
-    env: dict[str, str] = {}
-    for key in ENV_WHITELIST:
-        if key in src and src[key] is not None:
-            env[key] = str(src[key])
+_ENV_ARG_UNSET = object()
+
+
+def _is_env_mapping(value: Any) -> bool:
+    """用途：区分 Mapping 与 Path/str，避免把路径当环境字典。"""
+    return isinstance(value, Mapping) and not isinstance(value, (str, bytes, bytearray))
+
+
+def _apply_offline_flags(env: dict[str, str]) -> dict[str, str]:
+    """用途：强制本地离线三键。"""
     env["MINERU_MODEL_SOURCE"] = "local"
     env["HF_HUB_OFFLINE"] = "1"
     env["TRANSFORMERS_OFFLINE"] = "1"
     return env
+
+
+def _build_legacy_mineru_env(source_env: Mapping[str, str]) -> dict[str, str]:
+    """
+    用途：V1-C 兼容——仅白名单继承，不强制改写 HOME/TEMP；剥离代理/Key/票据。
+    """
+    env: dict[str, str] = {}
+    for key in ENV_WHITELIST:
+        if key in source_env and source_env[key] is not None:
+            env[key] = str(source_env[key])
+    return _apply_offline_flags(env)
+
+
+def _resolve_existing_runtime_dir(runtime_dir: Path | str) -> Path:
+    """
+    用途：显式 runtime_dir 必须是已存在的普通目录；失败抛 HelperError。
+    二次开发：禁止静默回退用户 HOME/TEMP。
+    """
+    try:
+        path = Path(runtime_dir)
+    except TypeError as exc:
+        raise HelperError(MSG_ERR_MINERU_FAILED) from exc
+    try:
+        if path.is_symlink():
+            raise HelperError(MSG_ERR_MINERU_FAILED)
+        if not path.exists() or not path.is_dir():
+            raise HelperError(MSG_ERR_MINERU_FAILED)
+        resolved = path.resolve(strict=True)
+        if resolved.is_symlink() or not resolved.is_dir():
+            raise HelperError(MSG_ERR_MINERU_FAILED)
+    except HelperError:
+        raise
+    except OSError as exc:
+        raise HelperError(MSG_ERR_MINERU_FAILED) from exc
+    return resolved
+
+
+def _build_bound_mineru_env(
+    runtime_dir: Path | str,
+    source_env: Mapping[str, str] | None,
+) -> dict[str, str]:
+    """
+    用途：V1-M——全部可写根绑定到本次 runtime_dir；只读系统变量有限继承。
+    """
+    root = _resolve_existing_runtime_dir(runtime_dir)
+    src: Mapping[str, str] = os.environ if source_env is None else source_env
+    env: dict[str, str] = {}
+    for key in ENV_READONLY_WHITELIST:
+        if key in src and src[key] is not None:
+            env[key] = str(src[key])
+    root_s = str(root)
+    for key in ENV_WRITABLE_KEYS:
+        env[key] = root_s
+    return _apply_offline_flags(env)
+
+
+def build_mineru_env(
+    runtime_dir: Path | str | Mapping[str, str] | None = None,
+    source_env: Mapping[str, str] | None | object = _ENV_ARG_UNSET,
+) -> dict[str, str]:
+    """
+    用途：构造 MinerU 子进程环境。
+    签名兼容：
+      - build_mineru_env()：V1-C 零参，继承 os.environ 白名单；
+      - build_mineru_env(mapping)：V1-C 旧单 Mapping；
+      - build_mineru_env(runtime_dir)：显式绑定可写根（source=os.environ）；
+      - build_mineru_env(runtime_dir, source_env)：V1-M 双参；source_env 可为 None。
+    二次开发：不继承代理/API Key/Cookie/CSRF/票据；显式 runtime 缺失/非目录必须失败。
+    """
+    # 零参
+    if runtime_dir is None and source_env is _ENV_ARG_UNSET:
+        return _build_legacy_mineru_env(os.environ)
+
+    # 单参 Mapping（旧兼容）
+    if source_env is _ENV_ARG_UNSET and _is_env_mapping(runtime_dir):
+        return _build_legacy_mineru_env(runtime_dir)  # type: ignore[arg-type]
+
+    # 单参 Path/str，或双参 (runtime_dir, source_env)
+    if source_env is _ENV_ARG_UNSET:
+        if runtime_dir is None:
+            return _build_legacy_mineru_env(os.environ)
+        # 单参非 Mapping：视为 runtime_dir
+        return _build_bound_mineru_env(runtime_dir, os.environ)  # type: ignore[arg-type]
+
+    # 双参：runtime_dir 必须是路径；source_env 可为 None 或 Mapping
+    if runtime_dir is None or _is_env_mapping(runtime_dir):
+        raise HelperError(MSG_ERR_MINERU_FAILED)
+    if source_env is not None and not _is_env_mapping(source_env):
+        raise HelperError(MSG_ERR_MINERU_FAILED)
+    return _build_bound_mineru_env(
+        runtime_dir,  # type: ignore[arg-type]
+        source_env,  # type: ignore[arg-type]
+    )
 
 
 def terminate_process(proc: subprocess.Popen[Any] | Any) -> None:
@@ -304,19 +413,25 @@ def run_mineru_process(
     input_path: Path,
     output_dir: Path,
     *,
-    timeout_seconds: int | None = None,
+    timeout_seconds: int | float | None = None,
 ) -> None:
     """
-    用途：shell=False 参数数组启动 MinerU；丢弃 stdout/stderr；超时/中断终止进程。
+    用途：shell=False 参数数组启动 MinerU；cwd=output_dir；可写 env 绑定 output 根；
+      丢弃 stdout/stderr；超时/中断终止进程。
+    二次开发：禁止继承父 HOME/TEMP/代理/Key/票据；output_dir 必须已存在。
     """
     cmd = build_mineru_command(mineru, input_path, output_dir)
-    env = build_mineru_env()
+    # V1-M：全部可写目录与 cwd 绑定本次 output 根
+    out_resolved = Path(output_dir)
+    env = build_mineru_env(out_resolved, os.environ)
+    cwd = str(out_resolved.resolve())
     timeout = MINERU_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
     try:
         proc = subprocess.Popen(
             cmd,
             shell=False,
             env=env,
+            cwd=cwd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,

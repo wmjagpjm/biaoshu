@@ -1,11 +1,11 @@
 <!--
-模块：P8D/P8E 本机外置解析助手与 V1-C 运行时预检说明
-用途：说明 MinerU 与 Docling 双助手的人工安装、模型准备、复制即用命令、离线边界、失败排查与残余风险；并说明 V1-C 预检入口。
-对接：runtime_preflight.py；mineru_callback_helper.py；docling_callback_helper.py；P8C 一次性回调；docs/p8d / docs/p8e / docs/v1c 契约。
-二次开发：不提供自动安装器；不承诺清理解析器自建孙进程；不把票据写入参数/环境/文件/日志；真实模型未验收不得冒充自动化通过。
+模块：P8D/P8E 本机外置解析助手、V1-C 预检与 V1-M 管理式 OCR runtime 预检说明
+用途：说明 MinerU/Docling 人工安装、模型准备、复制即用命令、离线边界、失败排查；V1-C 六键预检；V1-M 仓外 manifest 与四层证据。
+对接：runtime_preflight.py；managed_runtime_preflight.py；mineru_callback_helper.py；docling_callback_helper.py；P8C 回调；docs/p8d / p8e / v1c / v1m 契约。
+二次开发：不提供自动安装器；不承诺清理解析器自建孙进程；不把票据写入参数/环境/文件/日志；假 runner 命中不得冒充真实 OCR 通过。
 -->
 
-# 本机外置解析助手（P8D MinerU / P8E Docling）与 V1-C 预检
+# 本机外置解析助手（P8D MinerU / P8E Docling）、V1-C 与 V1-M 预检
 
 本目录是**独立本机工具**，不嵌入后端进程。用户在浏览器为目标项目签发 P8C 一次性回传票据后，在本机**交互终端**显式选择源文件（Docling 还需本地模型目录），由助手调用 PATH 中已安装的解析 CLI，再向本机回环后端提交 Markdown。
 
@@ -13,7 +13,8 @@
 |------|------|----------------|
 | P8D MinerU | `mineru_callback_helper.py` | `mineru`（默认业务回传） |
 | P8E Docling | `docling_callback_helper.py` | `docling`（显式业务回传） |
-| V1-C 预检 | `runtime_preflight.py` | **不回调**；仅静态检查或合成样本真值门 |
+| V1-C 预检 | `runtime_preflight.py` | **不回调**；PATH 静态检查或合成 DOCX 真值门 |
+| V1-M 管理式 OCR 预检 | `managed_runtime_preflight.py` | **不回调**；仓外 manifest + image-only PDF 门 |
 
 两条业务路径共用已验收的输入校验、TTY 票据、Origin 归一化、Markdown 有界读取与无代理/无重定向回调原语；**不得**把 Docling 冒充成 MinerU，也不得由浏览器或后端自动拉起本助手。V1 默认解析器为 **MinerU**；Docling 为管理员显式选择的可选路径，V1 不要求安装。
 
@@ -81,6 +82,100 @@ backend\.venv\Scripts\python.exe tools\local-parser\runtime_preflight.py --engin
 
 ---
 
+## V1-M：管理式本机 OCR runtime 预检（M1）
+
+V1-M 在 **仓外专用 MinerU runtime** 上建立可判定门，与 V1-C（PATH `which`）互补。M1 **不**接线后端 `engine=managed`、不安装 CLI/模型、不读业务文件。
+
+### 四层证据（验收必须分开列，禁止合并分母）
+
+| 层级 | 含义 | M1 默认 |
+|------|------|--------|
+| `automated` | 参数、manifest、fixture、JSON、边界单测 | 可绿 |
+| `fake-runtime` | 假 exe / mock Popen，只证明包装安全 | 可绿 |
+| `real-runtime` | 真实 CLI + 模型 | **did-not-run**（未授权安装前） |
+| `quality` | ASCII / 中文 image-only PDF 真实质量 | **did-not-run**（同上） |
+
+**禁止**：把 `fake-runtime` 的 Markdown 锚点命中写成「真实 OCR 已通过」；禁止 skip/xfail 掩盖未安装。
+
+### 仓外 manifest（不得提交 Git）
+
+位于管理员选择的 runtime 根，精确五键 JSON 示例：
+
+```json
+{
+  "schemaVersion": 1,
+  "engine": "mineru",
+  "cliRelativePath": "venv/Scripts/mineru.exe",
+  "modelMarkerRelativePath": "models/.biaoshu-ready",
+  "requiredFreeBytes": 1
+}
+```
+
+规则摘要：
+
+- 仅相对路径，且必须解析在 runtime 根内；拒绝绝对路径、UNC、URL、`..`、symlink/reparse 逃逸。
+- Windows CLI 必须是普通非 reparse `.exe`；模型 marker 为根内普通小文件（≤64KiB）。
+- `requiredFreeBytes` 为严格正整数，预检检查 **manifest 所在目标卷** 可用空间。
+- 不从 PATH、API、浏览器、`.env` 接受任意 executable。
+
+### 复制即用
+
+静态就绪（本机无真实 runtime 时预期 `cli_missing` / `runtime_manifest_invalid` 等非零，属正确未安装真值）：
+
+```powershell
+backend\.venv\Scripts\python.exe tools\local-parser\managed_runtime_preflight.py `
+  --manifest "D:\biaoshu-mineru-runtime\runtime-manifest.json" `
+  --dry-run `
+  --quality-profile ascii
+```
+
+合成 image-only PDF OCR 门（仍只证明包装 + 假/真 CLI 输出标记；**不**等于业务自动解析完成）：
+
+```powershell
+backend\.venv\Scripts\python.exe tools\local-parser\managed_runtime_preflight.py `
+  --manifest "D:\biaoshu-mineru-runtime\runtime-manifest.json" `
+  --ocr-check `
+  --quality-profile ascii
+```
+
+- stdout **仅一个**九键 JSON：`ok`、`status`、`engine`、`mode`、`diagnosticCode`、`message`、`runtimeVerified`、`didNotRunRealRuntime`、`qualityProfile`
+- `status`：`ready|passed|not_ready|failed`；`mode` **永远只能** `dry-run|ocr-check`（缺模式/无法判定固定 `dry-run` fallback，仍 `argument_invalid`）
+- `qualityProfile`：`ascii|windows-zh`
+- `ascii`：两页 ASCII 锚点 image-only PDF；Markdown 须 `P1→P2` 顺序命中
+- `windows-zh`：非 Windows 或缺少 `simhei.ttf|msyh.ttc` → `quality_precondition_failed` + `didNotRunRealRuntime=true`，不计 passed；字体就绪时用系统 truetype 绘制两页中文短句（封面验收短句甲/正文验收短句乙）及各自 ASCII 伴随锚点；成功 Markdown 须按「中文P1→ASCII P1→中文P2→ASCII P2」全部命中；仅 ASCII 命中固定 `ocr_marker_missing`，不得 `ocr_passed`；假 runner 成功不得宣称真实中文质量
+- manifest 相对路径在 resolve 前逐组件拒绝同根 symlink/reparse（含 leaf alias、父目录 alias、Scripts reparse）→ `runtime_manifest_invalid`；真缺失仍分别 `cli_missing`/`model_missing`
+- **禁止** `--executable`、联网安装、把 runtime/模型放进仓库或 uploads
+
+### 未安装真值（当前机器诚实口径）
+
+若尚未准备仓外 manifest / CLI / 模型：
+
+- dry-run 应得非零与固定中文诊断（如 `cli_missing`、`model_missing`、`runtime_manifest_invalid`）
+- **不得**把缺 CLI 伪装成 `static_ready` / `ocr_passed`
+- 自动化验收应显式记录：`real-runtime did-not-run`、`quality did-not-run`
+
+### 管理员 M4 / 回滚边界
+
+- **M4 真实验收**（安装兼容 Python/MinerU/模型、写 manifest、跑真实 ASCII/中文扫描 PDF、隔离项目 managed 任务）必须由用户/管理员**单独明确授权**；Agent 与 M1–M3 代码任务**禁止**代装或联网下载。
+- 回滚：删除或移走仓外 runtime 根与 manifest 即可回到「未安装」；业务库与 uploads 不因 M1 预检改变。
+- M1 完成 ≠ 扫描 PDF 业务自动解析可用；须 M2/M3 接线且 M4 真实门通过后才可上调 V1 OCR 完成口径。
+
+### 主要诊断码（V1-M 摘要）
+
+| `diagnosticCode` | 含义 | 退出码 |
+|---|---|---:|
+| `static_ready` | dry-run 静态通过 | 0 |
+| `ocr_passed` | ocr-check 标记命中（含 fake-runtime） | 0 |
+| `argument_invalid` | 参数非法 | 2 |
+| `runtime_manifest_invalid` | 清单键/类型/路径形态非法 | 2 |
+| `cli_missing` / `model_missing` / `disk_insufficient` | 未就绪类 | 2 |
+| `quality_precondition_failed` | 中文 profile 前置失败 | 2 |
+| `parser_failed` / `parser_timeout` / `output_invalid` / `ocr_marker_missing` | 运行/输出门失败 | 2 |
+| `interrupted` | 用户中断 | 130 |
+| `internal_error` | 未预期兜底 | 1 |
+
+---
+
 ## 共用前置条件（业务回传助手）
 
 1. **本机后端已启动**
@@ -124,8 +219,8 @@ backend\.venv\Scripts\python.exe tools\local-parser\mineru_callback_helper.py `
   --backend-origin "http://127.0.0.1:8000"
 ```
 
-子进程环境：白名单系统变量 + `MINERU_MODEL_SOURCE=local` + `HF_HUB_OFFLINE=1` + `TRANSFORMERS_OFFLINE=1`；剥离代理与 API Key。
-固定命令：`mineru -p <绝对文件> -o <临时目录> -b pipeline`（`shell=False`）。
+子进程环境：只读系统变量有限继承 + **全部可写根（HOME/USERPROFILE/APPDATA/LOCALAPPDATA/TEMP/TMP/TMPDIR 及 HF/Torch/XDG/Matplotlib/pycache 缓存）绑定到本次 output 临时根** + `MINERU_MODEL_SOURCE=local` + `HF_HUB_OFFLINE=1` + `TRANSFORMERS_OFFLINE=1`；剥离代理、API Key、Cookie、CSRF 与票据。`Popen` 固定 `cwd=<output 临时根>`、`shell=False`。
+固定命令：`mineru -p <绝对文件> -o <临时目录> -b pipeline`。
 
 ---
 
