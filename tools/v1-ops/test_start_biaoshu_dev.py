@@ -107,7 +107,8 @@ _STATUS_WRITE_FAILED_CODE = "status_write_failed"
 
 # 原子覆盖：
 # - 初次无终稿：同目录临时文件 + Move-Item 到终稿
-# - 有终稿替换：冻结 [System.IO.File]::Replace(同目录临时, 终稿, $null)
+# - 有终稿替换：冻结 [System.IO.File]::Replace(同目录临时, 终稿, [NullString]::Value)
+#   （Windows PowerShell 5.1 无备份语义；禁止字面 $null / 双 Replace 异常回退）
 # 禁止先 Remove-Item 终稿再 Move-Item（半状态窗口 / 反假绿）
 _ATOMIC_MOVE_TRACE_MARKER = "V1K_ATOMIC_MOVE_TRACE="
 _STATUS_DIRECT_WRITE_MARKER = "V1K_STATUS_DIRECT_WRITE="
@@ -1043,9 +1044,13 @@ def _assert_ps_ast_no_io_file_direct_writes(
 
 
 # Write-StatusSidecar 冻结变量：有终稿 File.Replace 参数角色必须精确对齐
+# 第三参面向 Windows PowerShell 5.1：必须 [NullString]::Value（无备份语义），
+# 禁止字面 $null（5.1 会绑成空串并抛“路径格式不正确”）及双 Replace 异常回退。
 _FILE_REPLACE_STATUS_SRC_ARG = "$tempPath"
 _FILE_REPLACE_STATUS_DST_ARG = "$StatusFinal"
-_FILE_REPLACE_STATUS_BAK_ARG = "$null"
+_FILE_REPLACE_STATUS_BAK_ARG = "[NullString]::Value"
+# 字面 $null 仅作 wrong-backup 反例标识（不得充当合法第三参）
+_FILE_REPLACE_STATUS_WRONG_BAK_NULL = "$null"
 
 
 def _normalize_ps_arg_text(text: str) -> str:
@@ -1058,13 +1063,13 @@ def _assert_ps_ast_file_replace_for_status(
     source_text: str,
 ) -> None:
     """
-    PowerShell AST：有终稿时必须存在精确一个状态终稿 File.Replace 调用。
-    参数角色（精确三位，参数数必须 ==3，规范化后精确对齐 A 侧变量冻结）：
+    PowerShell AST：有终稿时 File.Replace 总调用数必须精确为 1，
+    且这一处参数角色必须精确对齐：
       0 = $tempPath
       1 = $StatusFinal
-      2 = $null（无备份）
-    禁止靠注释/死字符串/去字符串子串/无关三参/第四参充当主证据；
-    Replace 不得被误判为直写禁门。
+      2 = [NullString]::Value（无备份；规范化后精确匹配）
+    禁止字面 $null 第三参、双 Replace（$null + NullString）、注释/死字符串/
+    去字符串子串/无关三参/第四参充当主证据；Replace 不得被误判为直写禁门。
     """
     facts = _ps_ast_inspect(source_text)
     # 先证明 Replace 未被误伤为直写
@@ -1096,11 +1101,13 @@ def _assert_ps_ast_file_replace_for_status(
     else:
         replaces = [replaces_raw]
     replace_count = len(replaces)
-    tc.assertGreaterEqual(
+    # 总调用数精确为 1：禁止双 Replace（$null + NullString 异常回退）条件放行
+    tc.assertEqual(
         replace_count,
         1,
-        "真源 AST 缺少 [System.IO.File]::Replace($tempPath, $StatusFinal, $null) 有终稿原子替换"
-        f"（当前 io_file_replaces={replaces!r}）",
+        "真源 AST 必须精确一处 [System.IO.File]::Replace"
+        f"（$tempPath, $StatusFinal, [NullString]::Value）；"
+        f"当前总数={replace_count} io_file_replaces={replaces!r}",
     )
     legal: list[Any] = []
     for item in replaces:
@@ -1135,7 +1142,7 @@ def _assert_ps_ast_file_replace_for_status(
         src_arg = _normalize_ps_arg_text(arg_texts[0])
         dst_arg = _normalize_ps_arg_text(arg_texts[1])
         bak_arg = _normalize_ps_arg_text(arg_texts[2])
-        # PowerShell 变量名大小写不敏感；角色名必须精确对齐冻结变量
+        # PowerShell 变量名/类型加速器大小写不敏感；角色名必须精确对齐冻结表达式
         if (
             src_arg.casefold() == _FILE_REPLACE_STATUS_SRC_ARG.casefold()
             and dst_arg.casefold() == _FILE_REPLACE_STATUS_DST_ARG.casefold()
@@ -1146,7 +1153,7 @@ def _assert_ps_ast_file_replace_for_status(
         len(legal),
         1,
         "必须精确一个参数角色合法的 File.Replace"
-        f"（$tempPath, $StatusFinal, $null；参数数==3）："
+        f"（$tempPath, $StatusFinal, [NullString]::Value；参数数==3）："
         f"legal={legal!r} all={replaces!r}",
     )
 
@@ -2809,12 +2816,14 @@ class TestStatusJsonStrictAndAtomic(unittest.TestCase):
     def test_atomic_status_replace_uses_file_replace_no_final_remove(self) -> None:
         """
         有终稿替换行为（反假绿主证据）：
-        1) PowerShell AST 必须存在 [System.IO.File]::Replace(临时, 终稿, $null)
-           及正确参数角色；注释/死字符串不算；
+        1) PowerShell AST 必须精确一处
+           [System.IO.File]::Replace(临时, 终稿, [NullString]::Value)
+           及正确参数角色；注释/死字符串/字面 $null/双 Replace 不算；
         2) 受控 wrapper 捕获对终稿的 Remove-Item 并断言失败（禁止先删后移）；
         3) 禁止直写终稿；.wip 清理仍允许；
         4) Replace 不得被 IO.File 直写禁门误伤。
-        生产若仍 Remove-Item 终稿再 Move-Item，首红须指向删除终稿/缺少 Replace。
+        生产若仍 Remove-Item 终稿再 Move-Item，或双 Replace（$null + NullString），
+        首红须指向总数/参数角色不合法。
         """
         src = _require_true_source()
         raw, text = _read_text_with_bom_check(src)
@@ -3660,13 +3669,17 @@ class TestPsAstStaticBypassHelpers(unittest.TestCase):
         self.assertEqual(facts.get("invocation_ops"), [])
 
     def test_file_replace_ast_accepts_legal_atomic_roles(self) -> None:
-        """合法有终稿方案：File.Replace($tempPath, $StatusFinal, $null) 参数角色通过，且不进直写禁门。"""
+        """
+        合法有终稿方案：
+        File.Replace($tempPath, $StatusFinal, [NullString]::Value)
+        参数角色通过、总数精确 1，且不进直写禁门。
+        """
         good = (
             "$StatusFinal = Join-Path $StatusDir 'dev-start-status.json'\n"
             "$tempPath = Join-Path $StatusDir ('dev-start-status.' + [guid]::NewGuid().ToString('N') + '.wip')\n"
             "Set-Content -LiteralPath $tempPath -Value $json -Encoding utf8\n"
             "if (Test-Path -LiteralPath $StatusFinal) {\n"
-            "  [System.IO.File]::Replace($tempPath, $StatusFinal, $null)\n"
+            "  [System.IO.File]::Replace($tempPath, $StatusFinal, [NullString]::Value)\n"
             "} else {\n"
             "  Move-Item -LiteralPath $tempPath -Destination $StatusFinal -Force\n"
             "}\n"
@@ -3683,11 +3696,25 @@ class TestPsAstStaticBypassHelpers(unittest.TestCase):
         else:
             replaces_list = [replaces_fact]
         self.assertEqual(len(replaces_list), 1)
+        only = replaces_list[0]
+        self.assertIsInstance(only, dict)
+        args_raw = only.get("arguments")
+        if args_raw is None:
+            args: list[Any] = []
+        elif isinstance(args_raw, list):
+            args = args_raw
+        else:
+            args = [args_raw]
+        self.assertEqual(len(args), 3)
+        self.assertEqual(
+            _normalize_ps_arg_text(str(args[2])).casefold(),
+            _FILE_REPLACE_STATUS_BAK_ARG.casefold(),
+        )
 
     def test_file_replace_ast_rejects_comment_or_dead_string(self) -> None:
         """注释/死字符串中的 Replace 不得充当 AST 主证据。"""
         bad = (
-            "# [System.IO.File]::Replace($tempPath, $StatusFinal, $null)\n"
+            "# [System.IO.File]::Replace($tempPath, $StatusFinal, [NullString]::Value)\n"
             "$dead = '[System.IO.File]::Replace'\n"
             "Remove-Item -Path $StatusFinal -Force\n"
             "Move-Item -LiteralPath $tempPath -Destination $StatusFinal -Force\n"
@@ -3697,22 +3724,38 @@ class TestPsAstStaticBypassHelpers(unittest.TestCase):
         msg = str(ctx.exception)
         self.assertRegex(
             msg,
-            r"Replace|缺少",
-            f"首红应指向缺少 Replace，实际：{msg!r}",
+            r"Replace|精确一处|总数",
+            f"首红应指向缺少/总数非法的 Replace，实际：{msg!r}",
         )
 
     def test_file_replace_ast_rejects_wrong_backup_arg(self) -> None:
-        """第三参非 $null 的 Replace 不得过门。"""
-        bad = (
+        """
+        第三参非 [NullString]::Value 的 Replace 不得过门。
+        字面 $null 为 wrong-backup 主反例（PS5.1 绑成空串，语义不等于无备份调用）。
+        """
+        # 主反例：字面 $null（原合法第三参，现必须红）
+        bad_null = (
+            f"[IO.File]::Replace($tempPath, $StatusFinal, {_FILE_REPLACE_STATUS_WRONG_BAK_NULL})\n"
+        )
+        with self.assertRaises(AssertionError) as ctx_null:
+            _assert_ps_ast_file_replace_for_status(self, bad_null)
+        msg_null = str(ctx_null.exception)
+        self.assertRegex(
+            msg_null,
+            r"NullString|参数角色|legal",
+            f"$null 第三参必须红，实际：{msg_null!r}",
+        )
+        # 变量备份路径亦必须红
+        bad_path = (
             "[IO.File]::Replace($tempPath, $StatusFinal, $backupPath)\n"
         )
         with self.assertRaises(AssertionError):
-            _assert_ps_ast_file_replace_for_status(self, bad)
+            _assert_ps_ast_file_replace_for_status(self, bad_path)
 
     def test_file_replace_ast_rejects_wrong_source_arg(self) -> None:
         """第一参非 $tempPath 的无关 Replace 不得充当状态终稿主证据。"""
         bad = (
-            "[IO.File]::Replace($unrelatedA, $StatusFinal, $null)\n"
+            "[IO.File]::Replace($unrelatedA, $StatusFinal, [NullString]::Value)\n"
         )
         with self.assertRaises(AssertionError):
             _assert_ps_ast_file_replace_for_status(self, bad)
@@ -3720,7 +3763,7 @@ class TestPsAstStaticBypassHelpers(unittest.TestCase):
     def test_file_replace_ast_rejects_wrong_destination_arg(self) -> None:
         """第二参非 $StatusFinal 的无关 Replace 不得充当状态终稿主证据。"""
         bad = (
-            "[IO.File]::Replace($tempPath, $unrelatedB, $null)\n"
+            "[IO.File]::Replace($tempPath, $unrelatedB, [NullString]::Value)\n"
         )
         with self.assertRaises(AssertionError):
             _assert_ps_ast_file_replace_for_status(self, bad)
@@ -3728,10 +3771,48 @@ class TestPsAstStaticBypassHelpers(unittest.TestCase):
     def test_file_replace_ast_rejects_extra_fourth_arg(self) -> None:
         """第四参存在时参数数 !=3，不得充当合法 File.Replace 证据。"""
         bad = (
-            "[IO.File]::Replace($tempPath, $StatusFinal, $null, $extra)\n"
+            "[IO.File]::Replace($tempPath, $StatusFinal, [NullString]::Value, $extra)\n"
         )
         with self.assertRaises(AssertionError):
             _assert_ps_ast_file_replace_for_status(self, bad)
+
+    def test_file_replace_ast_rejects_dual_replace_null_then_nullstring(self) -> None:
+        """
+        双 Replace 反例（对应当前 A 生产 try/$null + catch/NullString）：
+        即使含一处合法 NullString，总调用数 !=1 必须业务红，禁止条件放行。
+        """
+        bad = (
+            "$StatusFinal = Join-Path $StatusDir 'dev-start-status.json'\n"
+            "$tempPath = Join-Path $StatusDir ('dev-start-status.' + [guid]::NewGuid().ToString('N') + '.wip')\n"
+            "try {\n"
+            "  [System.IO.File]::Replace($tempPath, $StatusFinal, $null)\n"
+            "} catch {\n"
+            "  [System.IO.File]::Replace($tempPath, $StatusFinal, [NullString]::Value)\n"
+            "}\n"
+        )
+        facts = _ps_ast_inspect(bad)
+        replaces_fact = facts.get("io_file_replaces")
+        if replaces_fact is None:
+            replaces_list: list[Any] = []
+        elif isinstance(replaces_fact, list):
+            replaces_list = replaces_fact
+        else:
+            replaces_list = [replaces_fact]
+        self.assertEqual(
+            len(replaces_list),
+            2,
+            f"样例须先产出两处 Replace AST 以便断言总数门：{replaces_list!r}",
+        )
+        with self.assertRaises(AssertionError) as ctx:
+            _assert_ps_ast_file_replace_for_status(self, bad)
+        msg = str(ctx.exception)
+        self.assertRegex(
+            msg,
+            r"精确一处|总数|==\s*1|当前总数",
+            f"双 Replace 首红应指向总数精确 1，实际：{msg!r}",
+        )
+        # 双 Replace 形态不得被误判为 IO.File 直写
+        _assert_ps_ast_no_io_file_direct_writes(self, bad)
 
     def test_remove_then_move_without_replace_is_not_legal_ast(self) -> None:
         """反假绿样例：先删终稿再 Move-Item，AST 无 Replace → 必须红。"""
