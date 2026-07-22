@@ -8,8 +8,8 @@
 # V1-M 管理式本机 OCR 自动解析实施计划
 
 > **执行要求：** Grok 承担限定实现和高耗费精确测试，Codex 负责批量举证、独立审查、一次串行终验、提交与推送；协作细则见 `docs/agent-collaboration.md`。
-> **状态：** M1 已完成并推送；M2 两路只读审计与十项批量确认已完成，决策和精确白名单已冻结，待 failure-first。M3/M4 未开始。
-> **基线：** 当前生产=`a7d640b`；仅协作分支，严禁 `main`。
+> **状态：** M1、M2 已完成并推送；M3/M4 未开始，下一步重新冻结 M3 前端白名单。M4 真实 runtime/quality 仍为 did-not-run。
+> **基线：** 当前生产=`86d5206`，M2 测试=`df85ac7`；仅协作分支，严禁 `main`。
 
 **目标：** 让扫描 PDF 在本机专用 MinerU runtime 中受控解析，并最终接入既有项目任务/editor-state，同时保留轻量与人工回传路径。
 
@@ -138,6 +138,14 @@ git diff --check
 6. finalizer 通过默认兼容的 `commit=False`/flush 复用 editor-state CAS、project update 与 task event，唯一 commit；任何失败先 rollback。进程内并发 1、每文件 30 分钟、任务 120 分钟、取消检查不高于 1 秒；跨进程与孙进程风险如实保留。
 7. 独立 SQLite/uploads/TEMP；禁止真实 CLI、模型、业务文件、HTTP 端口和联网。
 8. Grok 只跑精确测试；Codex 最后一次串行运行 M2 专项、parse_engines、parse_export 与 task/revision/security 代表回归，再做编译、diff、白名单和 TEMP 门。普通夹具/逻辑问题批量修，高风险新问题才重新 question。
+
+### M2 完成记录（2026-07-22）
+
+- test-only=`df85ac7`，production-only=`86d5206`，均已推送 `collab/grok-code-codex-review`；严格四测试、九生产文件，无 API/Schema/前端/迁移扩围。
+- Grok B 最终反假绿 review=`msg_01656c6a4a7c4a908c5ef3d59d8d65a9`；Grok A production task/review=`msg_65226f4569c944c080e7a2ec5c068739`/`msg_5064876c03ac4f8e89d4a03cab85f305`。
+- 高风险确认：P1-P4 question/YES=`msg_01b143ec00fc4f7e86c17324d2649201`/`msg_18c65c1b7b514c6bb603c52f8cad7755`；P5-P6=`msg_1e1ec101d60840f5879b28ac791e48a2`/`msg_6cbaf6a0df7248fe86ef0099e2165208`；P7=`msg_44d116a4b5934dbca3fa7a4e0299bc99`/`msg_c78b3d0521d9484b88f3a5a90013c1ac`。
+- Codex 独立串行：M2 三文件 **47 passed**、managed unittest **34 passed**、task/revision/security 代表回归 **65 passed**、settings **3 passed**、B1/B2 **2 passed**；`py_compile`、diff、白名单、唯一 env 名实测和 TEMP left=0 通过。
+- 真实 CLI、模型、联网、真实业务文件、real-runtime/quality 未运行。M2 不改变 V1 约 94% 口径。
 
 ## 阶段 7：M3 前端包（M2 后重新冻结）
 
