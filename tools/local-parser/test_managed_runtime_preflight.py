@@ -282,6 +282,47 @@ ASCII_PDF_IMG_MIN = 32
 ASCII_PDF_IMG_MAX = 2048
 
 
+def _stat_result_with_reparse(st: Any) -> types.SimpleNamespace:
+    """
+    用途：复制真实 stat_result 字段并仅叠加 FILE_ATTRIBUTE_REPARSE_POINT。
+    二次开发：必须保留 st_mode 等字段，避免 Path.is_symlink 因 mock 缺字段变 error。
+    """
+    return types.SimpleNamespace(
+        st_mode=st.st_mode,
+        st_ino=getattr(st, "st_ino", 0),
+        st_dev=getattr(st, "st_dev", 0),
+        st_nlink=getattr(st, "st_nlink", 1),
+        st_uid=getattr(st, "st_uid", 0),
+        st_gid=getattr(st, "st_gid", 0),
+        st_size=st.st_size,
+        st_atime=st.st_atime,
+        st_mtime=st.st_mtime,
+        st_ctime=st.st_ctime,
+        st_file_attributes=FILE_ATTRIBUTE_REPARSE_POINT,
+    )
+
+
+def _nofollow_reparse_patches(target_name: str) -> list[Any]:
+    """
+    用途：Q14 no-follow reparse 红门——只 mock Path.lstat 注入 reparse 属性；
+    跟随 Path.stat 保持未补丁的普通 target 属性，禁止 mock follow-stat 假绿。
+    行为：
+    - 生产仍 path.stat() 跟随 → 看不到 0x400 → 漏检 → 本门业务红；
+    - 生产改为 path.lstat()（或内部等价 no-follow）→ 可见 0x400 → runtime_manifest_invalid。
+    二次开发：不得再对 Path.stat 注入 st_file_attributes=REPARSE；is_symlink 不得因 mock 缺字段变 error。
+    """
+    real_lstat = Path.lstat
+    target_lower = target_name.lower()
+
+    def lstat_side(self_path: Path, *a: Any, **k: Any) -> Any:
+        st = real_lstat(self_path, *a, **k)
+        if self_path.name.lower() == target_lower:
+            return _stat_result_with_reparse(st)
+        return st
+
+    return [mock.patch.object(Path, "lstat", lstat_side)]
+
+
 def _write_fake_mineru_impl(
     bin_dir: Path,
     *,
@@ -1254,8 +1295,8 @@ class TestManifestStrictParsing(unittest.TestCase):
     def test_manifest_rejects_model_marker_dir_symlink_reparse_oversized(self) -> None:
         """
         用途：model marker 必须为根内普通小文件；目录/symlink/reparse/超大固定
-        runtime_manifest_invalid。CLI reparse 用 FILE_ATTRIBUTE_REPARSE_POINT 证据，
-        不依赖创建真实 junction 权限。
+        runtime_manifest_invalid。CLI/marker reparse 经 Path.lstat no-follow 注入
+        FILE_ATTRIBUTE_REPARSE_POINT，不依赖真实 junction，也不 mock 跟随 Path.stat。
         """
         preflight = _require_preflight(self)
         with tempfile.TemporaryDirectory(prefix=TEMP_PREFIX) as td:
@@ -1344,7 +1385,7 @@ class TestManifestStrictParsing(unittest.TestCase):
             self.assertEqual(code_s, DIAG_EXIT["runtime_manifest_invalid"])
             self.assertIs(data_s["didNotRunRealRuntime"], True)
 
-            # CLI + marker 的 FILE_ATTRIBUTE_REPARSE_POINT（不创建真实 junction）
+            # CLI + marker 的 FILE_ATTRIBUTE_REPARSE_POINT（只 mock lstat；不创建真实 junction）
             for kind in ("cli", "marker"):
                 with self.subTest(reparse=kind):
                     case = root / f"reparse-{kind}"
@@ -1363,30 +1404,10 @@ class TestManifestStrictParsing(unittest.TestCase):
                         ),
                     )
                     target_name = "mineru.exe" if kind == "cli" else ".biaoshu-ready"
-                    real_stat = Path.stat
-
-                    def stat_side(self_path: Path, *a: Any, **k: Any):
-                        st = real_stat(self_path, *a, **k)
-                        if self_path.name.lower() == target_name.lower():
-                            return types.SimpleNamespace(
-                                st_mode=st.st_mode,
-                                st_ino=getattr(st, "st_ino", 0),
-                                st_dev=getattr(st, "st_dev", 0),
-                                st_nlink=getattr(st, "st_nlink", 1),
-                                st_uid=getattr(st, "st_uid", 0),
-                                st_gid=getattr(st, "st_gid", 0),
-                                st_size=st.st_size,
-                                st_atime=st.st_atime,
-                                st_mtime=st.st_mtime,
-                                st_ctime=st.st_ctime,
-                                st_file_attributes=FILE_ATTRIBUTE_REPARSE_POINT,
-                            )
-                        return st
-
                     code_r, out_r, err_r = _run_main(
                         preflight,
                         [_PREFLIGHT_NAME, "--manifest", str(manifest), "--dry-run"],
-                        extra_patches=[mock.patch.object(Path, "stat", stat_side)],
+                        extra_patches=_nofollow_reparse_patches(target_name),
                     )
                     data_r = _parse_json_stdout(out_r)
                     self.assertEqual(
@@ -1538,7 +1559,7 @@ class TestManifestStrictParsing(unittest.TestCase):
                 )
             _assert_invalid("cli-parent-dir-symlink", man_parent, parent_patches)
 
-            # --- 路径组件 FILE_ATTRIBUTE_REPARSE_POINT（Scripts 目录 reparse）---
+            # --- 路径组件 FILE_ATTRIBUTE_REPARSE_POINT（Scripts 目录 reparse，只 mock lstat）---
             case_rp = root / "parent-reparse-attr"
             case_rp.mkdir()
             scripts_rp = case_rp / "venv" / "Scripts"
@@ -1550,30 +1571,10 @@ class TestManifestStrictParsing(unittest.TestCase):
                 case_rp,
                 _valid_manifest_dict(cli_rel="venv/Scripts/mineru.exe"),
             )
-            real_stat = Path.stat
-
-            def stat_parent_reparse(self_path: Path, *a: Any, **k: Any):
-                st = real_stat(self_path, *a, **k)
-                if self_path.name.lower() == "scripts":
-                    return types.SimpleNamespace(
-                        st_mode=st.st_mode,
-                        st_ino=getattr(st, "st_ino", 0),
-                        st_dev=getattr(st, "st_dev", 0),
-                        st_nlink=getattr(st, "st_nlink", 1),
-                        st_uid=getattr(st, "st_uid", 0),
-                        st_gid=getattr(st, "st_gid", 0),
-                        st_size=st.st_size,
-                        st_atime=st.st_atime,
-                        st_mtime=st.st_mtime,
-                        st_ctime=st.st_ctime,
-                        st_file_attributes=FILE_ATTRIBUTE_REPARSE_POINT,
-                    )
-                return st
-
             _assert_invalid(
                 "cli-parent-reparse-attr",
                 man_rp,
-                [mock.patch.object(Path, "stat", stat_parent_reparse)],
+                _nofollow_reparse_patches("Scripts"),
             )
 
     def test_cli_missing_and_model_missing(self) -> None:
