@@ -105,9 +105,13 @@ _ALLOWED_CODES = frozenset(
 # status_write_failed 唯一固定可观测文本（无宽 or；侧车缺失时也只认此 code 名）
 _STATUS_WRITE_FAILED_CODE = "status_write_failed"
 
-# 原子覆盖：冻结 PowerShell Move-Item 方案（同目录临时文件 → 终稿）
+# 原子覆盖：
+# - 初次无终稿：同目录临时文件 + Move-Item 到终稿
+# - 有终稿替换：冻结 [System.IO.File]::Replace(同目录临时, 终稿, $null)
+# 禁止先 Remove-Item 终稿再 Move-Item（半状态窗口 / 反假绿）
 _ATOMIC_MOVE_TRACE_MARKER = "V1K_ATOMIC_MOVE_TRACE="
 _STATUS_DIRECT_WRITE_MARKER = "V1K_STATUS_DIRECT_WRITE="
+_STATUS_FINAL_REMOVE_MARKER = "V1K_STATUS_FINAL_REMOVE="
 
 # 受控 start 命令捕获
 _START_PROCESS_CAPTURE_MARKER = "V1K_START_PROCESS_CAPTURE="
@@ -168,7 +172,8 @@ _EXPECTED_BACKEND_START_ARGS = (
 _EXPECTED_FRONTEND_START_ARGS = "run dev -- --host 127.0.0.1 --port 5173"
 _EXPECTED_WINDOW_STYLE = "Hidden"
 
-# 真源禁止的 .NET 直接文件写成员（冻结 cmdlet 临时文件 + Move-Item 方案）
+# 真源禁止的 .NET 直接文件写成员。
+# 注意：Replace 不是直写 API，属于有终稿时的合法原子替换，不得列入本禁门。
 _FORBIDDEN_IO_FILE_WRITE_MEMBERS = frozenset(
     {
         "WriteAllText",
@@ -183,6 +188,8 @@ _FORBIDDEN_IO_FILE_WRITE_MEMBERS = frozenset(
         "Create",
     }
 )
+# 合法有终稿原子替换成员（与禁门互斥）
+_ALLOWED_IO_FILE_ATOMIC_REPLACE_MEMBER = "Replace"
 
 # 假敏感标记：断言不得泄漏到状态 JSON / 诊断输出
 _FAKE_PID_TOKEN = "PID_SHOULD_NOT_LEAK_424242"
@@ -839,9 +846,12 @@ def _ps_ast_inspect(source_text: str) -> dict[str, Any]:
     - assignments: 字面量字符串赋值 [{left, value, rightText}]
     - invocation_ops: 调用/点源运算符 [{operator, text}]
     - io_file_writes: IO.File/System.IO.File 直接写成员 [{member, expression, text}]
+    - io_file_replaces: IO.File.Replace 调用及参数角色
+      [{member, expression, arguments, text}]
     不依赖去字符串后的子串扫描；注释与孤立死字符串不会生成目标赋值 AST。
     """
     members_ps = ",".join("'" + m.replace("'", "''") + "'" for m in sorted(_FORBIDDEN_IO_FILE_WRITE_MEMBERS))
+    replace_member = _ALLOWED_IO_FILE_ATOMIC_REPLACE_MEMBER.replace("'", "''")
     ps_body = (
         "param([Parameter(Mandatory=$true)][string]$SourcePath)\n"
         "$ErrorActionPreference = 'Stop'\n"
@@ -852,7 +862,14 @@ def _ps_ast_inspect(source_text: str) -> dict[str, Any]:
         "$assignments = New-Object System.Collections.Generic.List[object]\n"
         "$invops = New-Object System.Collections.Generic.List[object]\n"
         "$writes = New-Object System.Collections.Generic.List[object]\n"
+        "$replaces = New-Object System.Collections.Generic.List[object]\n"
         "$forbidMembers = @(" + members_ps + ")\n"
+        f"$replaceMember = '{replace_member}'\n"
+        "function script:__V1K_IsIoFile([string]$exprText) {\n"
+        "  $norm = ($exprText -replace '\\s','').ToLowerInvariant()\n"
+        "  return ($norm -eq '[io.file]') -or ($norm -eq '[system.io.file]') "
+        "-or ($norm -eq 'system.io.file') -or ($norm -eq 'io.file')\n"
+        "}\n"
         "foreach ($a in $ast.FindAll({\n"
         "  param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst]\n"
         "}, $true)) {\n"
@@ -881,12 +898,22 @@ def _ps_ast_inspect(source_text: str) -> dict[str, Any]:
         "  param($n) $n -is [System.Management.Automation.Language.InvokeMemberExpressionAst]\n"
         "}, $true)) {\n"
         "  $member = [string]$m.Member.Extent.Text\n"
-        "  if ($forbidMembers -notcontains $member) { continue }\n"
         "  $exprText = [string]$m.Expression.Extent.Text\n"
-        "  $norm = ($exprText -replace '\\s','').ToLowerInvariant()\n"
-        "  $isIoFile = ($norm -eq '[io.file]') -or ($norm -eq '[system.io.file]') "
-        "-or ($norm -eq 'system.io.file') -or ($norm -eq 'io.file')\n"
-        "  if (-not $isIoFile) { continue }\n"
+        "  if (-not (script:__V1K_IsIoFile $exprText)) { continue }\n"
+        "  if ($member -eq $replaceMember) {\n"
+        "    $argTexts = New-Object System.Collections.Generic.List[string]\n"
+        "    foreach ($arg in @($m.Arguments)) {\n"
+        "      $argTexts.Add([string]$arg.Extent.Text) | Out-Null\n"
+        "    }\n"
+        "    $replaces.Add(@{\n"
+        "      member = $member\n"
+        "      expression = $exprText\n"
+        "      arguments = [object[]]$argTexts.ToArray()\n"
+        "      text = [string]$m.Extent.Text\n"
+        "    }) | Out-Null\n"
+        "    continue\n"
+        "  }\n"
+        "  if ($forbidMembers -notcontains $member) { continue }\n"
         "  $writes.Add(@{\n"
         "    member = $member\n"
         "    expression = $exprText\n"
@@ -901,6 +928,7 @@ def _ps_ast_inspect(source_text: str) -> dict[str, Any]:
         "  assignments = [object[]]$assignments.ToArray()\n"
         "  invocation_ops = [object[]]$invops.ToArray()\n"
         "  io_file_writes = [object[]]$writes.ToArray()\n"
+        "  io_file_replaces = [object[]]$replaces.ToArray()\n"
         "}\n"
         "ConvertTo-Json -InputObject $out -Compress -Depth 8\n"
     )
@@ -934,7 +962,12 @@ def _ps_ast_inspect(source_text: str) -> dict[str, Any]:
         if not isinstance(data, dict):
             raise AssertionError(f"AST 检查结果必须为对象：{data!r}")
         # 规范化列表字段
-        for key in ("assignments", "invocation_ops", "io_file_writes"):
+        for key in (
+            "assignments",
+            "invocation_ops",
+            "io_file_writes",
+            "io_file_replaces",
+        ):
             val = data.get(key, [])
             if val is None:
                 data[key] = []
@@ -1009,6 +1042,115 @@ def _assert_ps_ast_no_io_file_direct_writes(
     )
 
 
+# Write-StatusSidecar 冻结变量：有终稿 File.Replace 参数角色必须精确对齐
+_FILE_REPLACE_STATUS_SRC_ARG = "$tempPath"
+_FILE_REPLACE_STATUS_DST_ARG = "$StatusFinal"
+_FILE_REPLACE_STATUS_BAK_ARG = "$null"
+
+
+def _normalize_ps_arg_text(text: str) -> str:
+    """参数文本规范化：去首尾空白并折叠内部空白，便于精确角色比对。"""
+    return re.sub(r"\s+", "", str(text).strip())
+
+
+def _assert_ps_ast_file_replace_for_status(
+    tc: unittest.TestCase,
+    source_text: str,
+) -> None:
+    """
+    PowerShell AST：有终稿时必须存在精确一个状态终稿 File.Replace 调用。
+    参数角色（精确三位，参数数必须 ==3，规范化后精确对齐 A 侧变量冻结）：
+      0 = $tempPath
+      1 = $StatusFinal
+      2 = $null（无备份）
+    禁止靠注释/死字符串/去字符串子串/无关三参/第四参充当主证据；
+    Replace 不得被误判为直写禁门。
+    """
+    facts = _ps_ast_inspect(source_text)
+    # 先证明 Replace 未被误伤为直写
+    writes_raw = facts.get("io_file_writes")
+    if writes_raw is None:
+        writes: list[Any] = []
+    elif isinstance(writes_raw, list):
+        writes = writes_raw
+    else:
+        writes = [writes_raw]
+    for w in writes:
+        if not isinstance(w, dict):
+            continue
+        member_raw = w.get("member")
+        if member_raw is None:
+            member_text = ""
+        else:
+            member_text = str(member_raw)
+        tc.assertNotEqual(
+            member_text,
+            _ALLOWED_IO_FILE_ATOMIC_REPLACE_MEMBER,
+            f"File.Replace 不得被记入 io_file_writes 直写禁门：{w!r}",
+        )
+    replaces_raw = facts.get("io_file_replaces")
+    if replaces_raw is None:
+        replaces: list[Any] = []
+    elif isinstance(replaces_raw, list):
+        replaces = replaces_raw
+    else:
+        replaces = [replaces_raw]
+    replace_count = len(replaces)
+    tc.assertGreaterEqual(
+        replace_count,
+        1,
+        "真源 AST 缺少 [System.IO.File]::Replace($tempPath, $StatusFinal, $null) 有终稿原子替换"
+        f"（当前 io_file_replaces={replaces!r}）",
+    )
+    legal: list[Any] = []
+    for item in replaces:
+        if not isinstance(item, dict):
+            continue
+        member_raw = item.get("member")
+        if member_raw is None:
+            member = ""
+        else:
+            member = str(member_raw).strip()
+        if member != _ALLOWED_IO_FILE_ATOMIC_REPLACE_MEMBER:
+            continue
+        expr_raw = item.get("expression")
+        if expr_raw is None:
+            expr = ""
+        else:
+            expr = str(expr_raw)
+        norm = re.sub(r"\s+", "", expr).lower()
+        if norm not in {"[io.file]", "[system.io.file]", "system.io.file", "io.file"}:
+            continue
+        args_raw = item.get("arguments")
+        if args_raw is None:
+            args = []
+        elif isinstance(args_raw, list):
+            args = args_raw
+        else:
+            args = [args_raw]
+        arg_texts = [str(a) for a in args]
+        # 参数数必须精确为 3；第四参及以上不得充当合法证据
+        if len(arg_texts) != 3:
+            continue
+        src_arg = _normalize_ps_arg_text(arg_texts[0])
+        dst_arg = _normalize_ps_arg_text(arg_texts[1])
+        bak_arg = _normalize_ps_arg_text(arg_texts[2])
+        # PowerShell 变量名大小写不敏感；角色名必须精确对齐冻结变量
+        if (
+            src_arg.casefold() == _FILE_REPLACE_STATUS_SRC_ARG.casefold()
+            and dst_arg.casefold() == _FILE_REPLACE_STATUS_DST_ARG.casefold()
+            and bak_arg.casefold() == _FILE_REPLACE_STATUS_BAK_ARG.casefold()
+        ):
+            legal.append(item)
+    tc.assertEqual(
+        len(legal),
+        1,
+        "必须精确一个参数角色合法的 File.Replace"
+        f"（$tempPath, $StatusFinal, $null；参数数==3）："
+        f"legal={legal!r} all={replaces!r}",
+    )
+
+
 def _assert_true_source_no_bypass_static(tc: unittest.TestCase, text: str) -> None:
     """
     真源辅助静态门：
@@ -1044,12 +1186,21 @@ def _run_ps1_with_atomic_move_trace(
     timeout: int = 45,
     env: dict[str, str] | None = None,
     final_status_rel: str = "tmp/dev-start-status.json",
-) -> tuple[subprocess.CompletedProcess[str], dict[str, int], list[dict[str, str]], list[str]]:
+) -> tuple[
+    subprocess.CompletedProcess[str],
+    dict[str, int],
+    list[dict[str, str]],
+    list[str],
+    list[str],
+]:
     """
-    PlanOnly 专用：在副作用护栏之上 trace Move-Item（module-qualified 真 cmdlet），
-    并拦截对终稿路径的 Set-Content/Out-File/Add-Content/Tee-Object 直接写入。
-    只允许写同目录临时文件后 Move-Item 到终稿。
-    返回 (proc, side_effect_counts, move_traces, direct_write_paths)。
+    PlanOnly 专用：在副作用护栏之上
+    - trace Move-Item（module-qualified 真 cmdlet；初建终稿仍合法）
+    - 拦截对终稿路径的 Set-Content/Out-File/Add-Content/Tee-Object 直接写入
+    - 受控捕获 Remove-Item：若目标为终稿 status 则记录并抛错（反假绿）；
+      临时 .wip 清理仍允许并委托真实 cmdlet
+    有终稿合法方案见 AST File.Replace 门（非本 wrapper 可 hook 的 .NET 静态方法）。
+    返回 (proc, side_effect_counts, move_traces, direct_write_paths, final_remove_paths)。
     """
     if not script_path.is_file():
         raise AssertionError(f"待包装脚本不存在：{script_path}")
@@ -1063,7 +1214,19 @@ def _run_ps1_with_atomic_move_trace(
         _ps_side_effect_counter_bootstrap()
         + "$script:__V1K_MOVES = New-Object System.Collections.Generic.List[object]; "
         + "$script:__V1K_DIRECT = New-Object System.Collections.Generic.List[string]; "
+        # 使用 global 列表：global:Remove-Item 内 $script: 会指向被测脚本作用域，
+        # 生产未同步 __V1K_REMOVES 时仍须可靠回传终稿删除证据。
+        + "$global:__V1K_FINAL_REMOVES = New-Object System.Collections.Generic.List[string]; "
         + f"$script:__V1K_FINAL_REL = '{final_lit}'; "
+        + "function script:__V1K_IsFinalStatusPath([string]$p) { "
+        + "  if ([string]::IsNullOrWhiteSpace($p)) { return $false } "
+        + "  $norm = ($p -replace '\\\\','/').ToLowerInvariant(); "
+        + "  $leaf = [System.IO.Path]::GetFileName($norm); "
+        + "  if ($leaf -match '\\.wip$') { return $false } "
+        + "  $final = ($script:__V1K_FINAL_REL -replace '\\\\','/').ToLowerInvariant(); "
+        + "  return ($norm.EndsWith('/' + $final) -or $norm.EndsWith($final) -or $norm -eq $final "
+        + "    -or $leaf -eq [System.IO.Path]::GetFileName($final)) "
+        + "}; "
         + "function global:Move-Item { "
         + "param("
         + "[Parameter(ValueFromPipeline=$true,Position=0)]$Path,"
@@ -1091,11 +1254,39 @@ def _run_ps1_with_atomic_move_trace(
         + "  } "
         + "} "
         + "}; "
-        + "function script:__V1K_IsFinalStatusPath([string]$p) { "
-        + "  if ([string]::IsNullOrWhiteSpace($p)) { return $false } "
-        + "  $norm = ($p -replace '\\\\','/').ToLowerInvariant(); "
-        + "  $final = ($script:__V1K_FINAL_REL -replace '\\\\','/').ToLowerInvariant(); "
-        + "  return ($norm.EndsWith('/' + $final) -or $norm.EndsWith($final) -or $norm -eq $final) "
+        + "function global:Remove-Item { "
+        + "param("
+        + "[Parameter(ValueFromPipeline=$true,Position=0)]$Path,"
+        + "$LiteralPath,"
+        + "[switch]$Force,"
+        + "[switch]$Recurse,"
+        + "[Parameter(ValueFromRemainingArguments=$true)]$Rest"
+        + ") "
+        + "begin { $items = @() } "
+        + "process { "
+        + "  if ($null -ne $LiteralPath) { $items += $LiteralPath } "
+        + "  elseif ($null -ne $Path) { $items += $Path } "
+        + "} "
+        + "end { "
+        + "  if ($items.Count -eq 0 -and $null -ne $LiteralPath) { $items = @($LiteralPath) } "
+        + "  if ($items.Count -eq 0 -and $null -ne $Path) { $items = @($Path) } "
+        + "  foreach ($target in $items) { "
+        + "    $t = [string]$target; "
+        + "    if (script:__V1K_IsFinalStatusPath $t) { "
+        + "      $global:__V1K_FINAL_REMOVES.Add($t) | Out-Null; "
+        + "      throw 'V1K_STATUS_FINAL_REMOVE_FORBIDDEN' "
+        + "    } "
+        + "    $ri = @{ }; "
+        + "    if ($PSBoundParameters.ContainsKey('LiteralPath') -and $null -ne $LiteralPath) { "
+        + "      $ri['LiteralPath'] = $target "
+        + "    } else { "
+        + "      $ri['Path'] = $target "
+        + "    } "
+        + "    if ($Force) { $ri['Force'] = $true } "
+        + "    if ($Recurse) { $ri['Recurse'] = $true } "
+        + "    Microsoft.PowerShell.Management\\Remove-Item @ri "
+        + "  } "
+        + "} "
         + "}; "
         + "function global:Set-Content { "
         + "param("
@@ -1170,6 +1361,7 @@ def _run_ps1_with_atomic_move_trace(
         + f"Write-Output ('{_SIDE_EFFECT_MARKER}' + ($script:__V1K_SC | ConvertTo-Json -Compress)); "
         + f"Write-Output ('{_ATOMIC_MOVE_TRACE_MARKER}' + (ConvertTo-Json -Compress @($script:__V1K_MOVES.ToArray()))); "
         + f"Write-Output ('{_STATUS_DIRECT_WRITE_MARKER}' + (ConvertTo-Json -Compress @($script:__V1K_DIRECT.ToArray()))); "
+        + f"Write-Output ('{_STATUS_FINAL_REMOVE_MARKER}' + (ConvertTo-Json -Compress @($global:__V1K_FINAL_REMOVES.ToArray()))); "
         + "exit $__v1k_code"
     )
     run_env = os.environ.copy()
@@ -1215,7 +1407,11 @@ def _run_ps1_with_atomic_move_trace(
     if not isinstance(direct_raw, list):
         raise AssertionError(f"direct-write trace 必须为数组：{direct_raw!r}")
     directs = [str(x) for x in direct_raw]
-    return proc, counts, moves, directs
+    removes_raw = _parse_json_marker_line(combined, _STATUS_FINAL_REMOVE_MARKER)
+    if not isinstance(removes_raw, list):
+        raise AssertionError(f"final-remove trace 必须为数组：{removes_raw!r}")
+    final_removes = [str(x) for x in removes_raw]
+    return proc, counts, moves, directs, final_removes
 
 
 def _run_ps1_with_start_process_capture(
@@ -2486,48 +2682,12 @@ class TestStatusJsonStrictAndAtomic(unittest.TestCase):
         # 确认契约要求的 code 池被生产侧使用（本路径 code 应可解析为合法字符串）
         self.assertIsInstance(status["code"], str)
 
-    def test_atomic_overwrite_no_half_file(self) -> None:
-        """
-        原子覆盖主证据：受控 PlanOnly wrapper 实际 trace Move-Item
-        （Microsoft.PowerShell.Management\\Move-Item），精确断言至少一次
-        source/destination 同目录、destination=tmp/dev-start-status.json、
-        source 为独立临时文件；禁止对终稿直接
-        Set-Content/Out-File/Add-Content/Tee-Object。
-        静态门辅助：AST 拒绝 IO.File 直写；去注释文本须含 Move-Item。
-        """
-        src = _require_true_source()
-        raw, text = _read_text_with_bom_check(src)
-        self.assertTrue(raw.startswith(_BOM))
-        cleaned = _ps_strip_comments_and_strings(text)
-        # 辅助静态门：去注释后须出现 Move-Item（冻结方案）
-        self.assertRegex(
-            cleaned,
-            r"(?i)\bMove-Item\b",
-            "真源（去注释后）必须使用 Move-Item 原子替换 status",
-        )
-
-        path = _status_path(self.tr.root)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text('{"schemaVersion":1,"partial":', encoding="utf-8")
-        listener = self.tr.write_listener_snapshot([])
-        probe = self.tr.write_probe_snapshot([])
-        script = self.tr.true_source()
-        proc, counts, moves, directs = _run_ps1_with_atomic_move_trace(
-            script,
-            [
-                "-Component",
-                "backend",
-                "-PlanOnly",
-                "-ListenerSnapshotJson",
-                str(listener),
-                "-ProbeSnapshotJson",
-                str(probe),
-            ],
-            cwd=self.tr.root,
-        )
-        self.assertEqual(proc.returncode, 0)
-        self.assertEqual(directs, [], f"禁止直接写终稿：{directs}")
-        self.assertGreaterEqual(len(moves), 1, "必须至少一次 Move-Item 原子替换")
+    def _assert_move_to_final(
+        self,
+        moves: list[dict[str, str]],
+        path: Path,
+    ) -> None:
+        """断言至少一次同目录临时文件 Move-Item 到终稿。"""
         final_name = path.name.lower()
         final_parent = path.parent.resolve()
         matched = False
@@ -2536,7 +2696,6 @@ class TestStatusJsonStrictAndAtomic(unittest.TestCase):
             dst_p = Path(mv["destination"])
             if dst_p.name.lower() != final_name:
                 continue
-            # destination 必须落在 tmp/dev-start-status.json
             dst_norm = str(dst_p).replace("\\", "/").lower()
             dst_is_final = dst_norm.endswith("tmp/dev-start-status.json")
             if not dst_is_final:
@@ -2544,22 +2703,23 @@ class TestStatusJsonStrictAndAtomic(unittest.TestCase):
                     dst_is_final = dst_p.resolve() == path.resolve()
                 except OSError:
                     dst_is_final = False
-            self.assertTrue(
-                dst_is_final,
-                f"destination 必须为终稿 status：{mv!r}",
-            )
-            # source 必须是独立临时文件（非终稿本身）
+            self.assertTrue(dst_is_final, f"destination 必须为终稿 status：{mv!r}")
             self.assertNotEqual(
                 src_p.name.lower(),
                 final_name,
                 f"source 不得直接是终稿文件名：{mv!r}",
             )
+            try:
+                src_resolved = str(src_p.resolve()).lower()
+                final_resolved = str(path.resolve()).lower()
+            except OSError:
+                src_resolved = str(src_p).lower()
+                final_resolved = str(path).lower()
             self.assertNotEqual(
-                str(src_p.resolve()).lower(),
-                str(path.resolve()).lower(),
+                src_resolved,
+                final_resolved,
                 f"source 不得等于终稿路径：{mv!r}",
             )
-            # source 与 destination 同目录
             try:
                 src_parent = src_p.parent.resolve()
             except OSError:
@@ -2573,7 +2733,6 @@ class TestStatusJsonStrictAndAtomic(unittest.TestCase):
                 str(dst_parent).lower(),
                 f"source/destination 必须同目录：{mv!r}",
             )
-            # destination 目录应对齐假仓 tmp
             self.assertEqual(
                 str(dst_parent).lower(),
                 str(final_parent).lower(),
@@ -2583,19 +2742,140 @@ class TestStatusJsonStrictAndAtomic(unittest.TestCase):
             break
         self.assertTrue(matched, f"未找到指向终稿的 Move-Item：{moves!r}")
 
+    def test_atomic_status_create_uses_move_item(self) -> None:
+        """
+        无终稿初建行为：受控 PlanOnly wrapper trace Move-Item，
+        同目录临时文件 → tmp/dev-start-status.json；禁止直写终稿；
+        禁止 Remove-Item 终稿（本路径终稿本不存在，列表须空）。
+        静态辅助：去注释后须含 Move-Item；AST 拒绝 IO.File 直写。
+        """
+        src = _require_true_source()
+        raw, text = _read_text_with_bom_check(src)
+        self.assertTrue(raw.startswith(_BOM))
+        cleaned = _ps_strip_comments_and_strings(text)
+        self.assertRegex(
+            cleaned,
+            r"(?i)\bMove-Item\b",
+            "真源（去注释后）必须保留初次创建 Move-Item 路径",
+        )
+        _assert_ps_ast_no_io_file_direct_writes(self, text)
+
+        path = _status_path(self.tr.root)
+        if path.exists():
+            path.unlink()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.assertFalse(path.exists(), "本用例要求运行前无终稿")
+        listener = self.tr.write_listener_snapshot([])
+        probe = self.tr.write_probe_snapshot([])
+        script = self.tr.true_source()
+        proc, counts, moves, directs, final_removes = _run_ps1_with_atomic_move_trace(
+            script,
+            [
+                "-Component",
+                "backend",
+                "-PlanOnly",
+                "-ListenerSnapshotJson",
+                str(listener),
+                "-ProbeSnapshotJson",
+                str(probe),
+            ],
+            cwd=self.tr.root,
+        )
+        self.assertEqual(
+            final_removes,
+            [],
+            f"禁止 Remove-Item 删除终稿（反假绿）：{final_removes!r}",
+        )
+        self.assertEqual(directs, [], f"禁止直接写终稿：{directs}")
+        self.assertEqual(proc.returncode, 0)
+        self.assertGreaterEqual(len(moves), 1, "无终稿初建必须至少一次 Move-Item")
+        self._assert_move_to_final(moves, path)
         raw_status = path.read_text(encoding="utf-8")
         data = json.loads(raw_status)
         _assert_status_schema(self, data, mode="plan", component="backend")
-        leftover_tokens = ("tmp", "temp", "partial", "writing", ".bak")
         leftovers = [
             p
             for p in path.parent.iterdir()
             if p.is_file()
             and p.name != path.name
-            and any(tok in p.name.lower() for tok in leftover_tokens)
+            and any(
+                tok in p.name.lower()
+                for tok in ("tmp", "temp", "partial", "writing", ".bak", ".wip")
+            )
         ]
-        self.assertEqual(leftovers, [], f"原子覆盖后不得残留半文件：{leftovers}")
+        self.assertEqual(leftovers, [], f"初建后不得残留半文件：{leftovers}")
         _assert_zero_side_effect_counts(self, counts)
+
+    def test_atomic_status_replace_uses_file_replace_no_final_remove(self) -> None:
+        """
+        有终稿替换行为（反假绿主证据）：
+        1) PowerShell AST 必须存在 [System.IO.File]::Replace(临时, 终稿, $null)
+           及正确参数角色；注释/死字符串不算；
+        2) 受控 wrapper 捕获对终稿的 Remove-Item 并断言失败（禁止先删后移）；
+        3) 禁止直写终稿；.wip 清理仍允许；
+        4) Replace 不得被 IO.File 直写禁门误伤。
+        生产若仍 Remove-Item 终稿再 Move-Item，首红须指向删除终稿/缺少 Replace。
+        """
+        src = _require_true_source()
+        raw, text = _read_text_with_bom_check(src)
+        self.assertTrue(raw.startswith(_BOM))
+        # 首红目标 1：缺少 File.Replace（参数角色 AST 门）
+        _assert_ps_ast_file_replace_for_status(self, text)
+        _assert_ps_ast_no_io_file_direct_writes(self, text)
+        cleaned = _ps_strip_comments_and_strings(text)
+        self.assertRegex(
+            cleaned,
+            r"(?i)\bMove-Item\b",
+            "真源（去注释后）仍须保留初次创建 Move-Item",
+        )
+
+        path = _status_path(self.tr.root)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # 预置半 JSON 终稿：合法实现须 File.Replace 覆盖，不得先删
+        path.write_text('{"schemaVersion":1,"partial":', encoding="utf-8")
+        listener = self.tr.write_listener_snapshot([])
+        probe = self.tr.write_probe_snapshot([])
+        script = self.tr.true_source()
+        proc, counts, moves, directs, final_removes = _run_ps1_with_atomic_move_trace(
+            script,
+            [
+                "-Component",
+                "backend",
+                "-PlanOnly",
+                "-ListenerSnapshotJson",
+                str(listener),
+                "-ProbeSnapshotJson",
+                str(probe),
+            ],
+            cwd=self.tr.root,
+        )
+        # 首红目标 2：删除终稿（Remove-Item 终稿）
+        self.assertEqual(
+            final_removes,
+            [],
+            "禁止 Remove-Item 删除终稿后再 Move-Item（半状态窗口/反假绿）；"
+            f"观测到 final_removes={final_removes!r}",
+        )
+        self.assertEqual(directs, [], f"禁止直接写终稿：{directs}")
+        self.assertEqual(proc.returncode, 0)
+        raw_status = path.read_text(encoding="utf-8")
+        data = json.loads(raw_status)
+        _assert_status_schema(self, data, mode="plan", component="backend")
+        leftovers = [
+            p
+            for p in path.parent.iterdir()
+            if p.is_file()
+            and p.name != path.name
+            and any(
+                tok in p.name.lower()
+                for tok in ("tmp", "temp", "partial", "writing", ".bak", ".wip")
+            )
+        ]
+        self.assertEqual(leftovers, [], f"替换后不得残留半文件：{leftovers}")
+        _assert_zero_side_effect_counts(self, counts)
+        # moves 在有终稿+Replace 路径上可为 0；若仍 Move-Item 到终稿也须同目录临时源
+        if moves:
+            self._assert_move_to_final(moves, path)
 
     def test_status_write_failed_when_status_dir_blocked(self) -> None:
         """
@@ -3313,7 +3593,7 @@ class TestSideEffectTokenHelperIsolation(unittest.TestCase):
 class TestPsAstStaticBypassHelpers(unittest.TestCase):
     """
     纯 helper 回归：不依赖生产真源。
-    证明旁路样例会红、正确形态（临时文件 + Move-Item / 冻结 URL 赋值）不误伤。
+    证明旁路样例会红、正确形态（临时文件 + Move-Item / File.Replace / 冻结 URL 赋值）不误伤。
     """
 
     def test_probe_url_assignment_ast_accepts_correct_literals(self) -> None:
@@ -3378,6 +3658,94 @@ class TestPsAstStaticBypassHelpers(unittest.TestCase):
         facts = _ps_ast_inspect(good)
         self.assertEqual(facts.get("io_file_writes"), [])
         self.assertEqual(facts.get("invocation_ops"), [])
+
+    def test_file_replace_ast_accepts_legal_atomic_roles(self) -> None:
+        """合法有终稿方案：File.Replace($tempPath, $StatusFinal, $null) 参数角色通过，且不进直写禁门。"""
+        good = (
+            "$StatusFinal = Join-Path $StatusDir 'dev-start-status.json'\n"
+            "$tempPath = Join-Path $StatusDir ('dev-start-status.' + [guid]::NewGuid().ToString('N') + '.wip')\n"
+            "Set-Content -LiteralPath $tempPath -Value $json -Encoding utf8\n"
+            "if (Test-Path -LiteralPath $StatusFinal) {\n"
+            "  [System.IO.File]::Replace($tempPath, $StatusFinal, $null)\n"
+            "} else {\n"
+            "  Move-Item -LiteralPath $tempPath -Destination $StatusFinal -Force\n"
+            "}\n"
+        )
+        _assert_ps_ast_file_replace_for_status(self, good)
+        _assert_ps_ast_no_io_file_direct_writes(self, good)
+        facts = _ps_ast_inspect(good)
+        self.assertEqual(facts.get("io_file_writes"), [])
+        replaces_fact = facts.get("io_file_replaces")
+        if replaces_fact is None:
+            replaces_list: list[Any] = []
+        elif isinstance(replaces_fact, list):
+            replaces_list = replaces_fact
+        else:
+            replaces_list = [replaces_fact]
+        self.assertEqual(len(replaces_list), 1)
+
+    def test_file_replace_ast_rejects_comment_or_dead_string(self) -> None:
+        """注释/死字符串中的 Replace 不得充当 AST 主证据。"""
+        bad = (
+            "# [System.IO.File]::Replace($tempPath, $StatusFinal, $null)\n"
+            "$dead = '[System.IO.File]::Replace'\n"
+            "Remove-Item -Path $StatusFinal -Force\n"
+            "Move-Item -LiteralPath $tempPath -Destination $StatusFinal -Force\n"
+        )
+        with self.assertRaises(AssertionError) as ctx:
+            _assert_ps_ast_file_replace_for_status(self, bad)
+        msg = str(ctx.exception)
+        self.assertRegex(
+            msg,
+            r"Replace|缺少",
+            f"首红应指向缺少 Replace，实际：{msg!r}",
+        )
+
+    def test_file_replace_ast_rejects_wrong_backup_arg(self) -> None:
+        """第三参非 $null 的 Replace 不得过门。"""
+        bad = (
+            "[IO.File]::Replace($tempPath, $StatusFinal, $backupPath)\n"
+        )
+        with self.assertRaises(AssertionError):
+            _assert_ps_ast_file_replace_for_status(self, bad)
+
+    def test_file_replace_ast_rejects_wrong_source_arg(self) -> None:
+        """第一参非 $tempPath 的无关 Replace 不得充当状态终稿主证据。"""
+        bad = (
+            "[IO.File]::Replace($unrelatedA, $StatusFinal, $null)\n"
+        )
+        with self.assertRaises(AssertionError):
+            _assert_ps_ast_file_replace_for_status(self, bad)
+
+    def test_file_replace_ast_rejects_wrong_destination_arg(self) -> None:
+        """第二参非 $StatusFinal 的无关 Replace 不得充当状态终稿主证据。"""
+        bad = (
+            "[IO.File]::Replace($tempPath, $unrelatedB, $null)\n"
+        )
+        with self.assertRaises(AssertionError):
+            _assert_ps_ast_file_replace_for_status(self, bad)
+
+    def test_file_replace_ast_rejects_extra_fourth_arg(self) -> None:
+        """第四参存在时参数数 !=3，不得充当合法 File.Replace 证据。"""
+        bad = (
+            "[IO.File]::Replace($tempPath, $StatusFinal, $null, $extra)\n"
+        )
+        with self.assertRaises(AssertionError):
+            _assert_ps_ast_file_replace_for_status(self, bad)
+
+    def test_remove_then_move_without_replace_is_not_legal_ast(self) -> None:
+        """反假绿样例：先删终稿再 Move-Item，AST 无 Replace → 必须红。"""
+        bad = (
+            "if (Test-Path -Path $StatusFinal) {\n"
+            "  Remove-Item -Path $StatusFinal -Force -ErrorAction Stop\n"
+            "}\n"
+            "Move-Item -Path $tempPath -Destination $StatusFinal -Force\n"
+        )
+        with self.assertRaises(AssertionError) as ctx:
+            _assert_ps_ast_file_replace_for_status(self, bad)
+        self.assertIn("Replace", str(ctx.exception))
+        # 同时该形态不得被误判为 IO.File 直写
+        _assert_ps_ast_no_io_file_direct_writes(self, bad)
 
 
 class TestUnchangedStopHostPortsEvidence(unittest.TestCase):
