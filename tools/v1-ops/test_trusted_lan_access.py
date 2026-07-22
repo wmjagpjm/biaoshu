@@ -131,12 +131,52 @@ _CONTROLLED_ENV_KEYS = (
     "VITE_API_PROXY_TARGET",
 )
 
-# helper 自检用例名（不计业务覆盖）
+# helper 自检用例名（不计业务覆盖；含 Q5 作用域元检查）
 _HELPER_SELF_CHECK_TESTS = frozenset(
     {
         "test_capture_records_vite_api_base_presence_true",
         "test_capture_records_vite_api_base_presence_false_when_unset",
+        "test_global_stub_writeback_from_true_source_script",
+        "test_global_stub_adjacent_runs_isolated_same_process",
     }
+)
+
+# inject 引入的 global 函数（仅删除函数覆盖层，不得 Remove-Command 真 cmdlet）
+_INJECTED_GLOBAL_FUNCTION_NAMES = (
+    "Start-Process",
+    "Stop-Process",
+    "Invoke-WebRequest",
+    "Invoke-RestMethod",
+    "Get-NetTCPConnection",
+    "Get-NetUDPEndpoint",
+    "Get-Process",
+    "Get-CimInstance",
+    "Get-WmiObject",
+    "netstat",
+    "netstat.exe",
+    "taskkill",
+    "taskkill.exe",
+    "curl",
+    "curl.exe",
+    "wget",
+    "wget.exe",
+    "__V1L_RecordHttp",
+)
+
+# inject 引入的 global 捕获变量
+_INJECTED_GLOBAL_VARIABLE_NAMES = (
+    "__V1K_SC",
+    "__V1L_SC",
+    "__V1K_SP",
+    "__V1L_HTTP",
+    "__V1L_TCP",
+    "__V1L_TRACE",
+    "__V1L_SEQ",
+    "__V1L_TCP_ROWS",
+    "__V1L_HTTP_MAP",
+    "__V1L_PROC_META",
+    "__V1L_ENV_BEFORE",
+    "__V1L_ENV_AFTER",
 )
 
 # 契约冻结 URL / 方法（注入观测，零 live HTTP）
@@ -400,12 +440,24 @@ def _ps_arg_list_literal(args: list[str]) -> str:
     return "@(" + ",".join(parts) + ")" if parts else "@()"
 
 
+def _ps_inc_sc(name: str) -> str:
+    """
+    副作用计数：global 函数内统一写 $global:__V1K_SC。
+    外层 bootstrap 将 $script:__V1K_SC 与 global 设为同一引用，供 marker 读回；
+    生产脚本自有 $script:__V1K_SC 由 Sync-V1KTestHookState 合并，不得依赖其非 null。
+    """
+    return f"$global:__V1K_SC['{name}']++; "
+
+
 def _ps_side_effect_counter_bootstrap() -> str:
     keys_ps = "; ".join(f"'{k}' = 0" for k in _SIDE_EFFECT_KEYS)
     parts = [
         "$ErrorActionPreference = 'Continue'; ",
-        f"$script:__V1K_SC = @{{ {keys_ps} }}; ",
-        f"$script:__V1L_SC = $script:__V1K_SC; ",
+        # global 为主容器；script 别名供 -Command 外层与 V1-K Sync 父作用域读回
+        f"$global:__V1K_SC = @{{ {keys_ps} }}; ",
+        f"$script:__V1K_SC = $global:__V1K_SC; ",
+        f"$script:__V1L_SC = $global:__V1K_SC; ",
+        f"$global:__V1L_SC = $global:__V1K_SC; ",
     ]
     for name in (
         "Start-Process",
@@ -416,7 +468,7 @@ def _ps_side_effect_counter_bootstrap() -> str:
         parts.append(
             f"function global:{name} {{ "
             f"param([Parameter(ValueFromRemainingArguments=$true)]$Rest) "
-            f"$script:__V1K_SC['{name}']++; "
+            f"{_ps_inc_sc(name)}"
             f"throw '{_SIDE_EFFECT_FORBIDDEN_PREFIX}{name}' "
             f"}}; "
         )
@@ -424,11 +476,32 @@ def _ps_side_effect_counter_bootstrap() -> str:
         parts.append(
             f"function global:{name} {{ "
             f"param([Parameter(ValueFromRemainingArguments=$true)]$Rest) "
-            f"$script:__V1K_SC['{name}']++; "
+            f"{_ps_inc_sc(name)}"
             f"throw '{_SIDE_EFFECT_FORBIDDEN_PREFIX}{name}' "
             f"}}; "
         )
     return "".join(parts)
+
+
+def _ps_injected_globals_cleanup() -> str:
+    """
+    清理本次 harness 注入的 global 函数/变量。
+    仅 Remove-Item Function: 覆盖层与 Remove-Variable Global 捕获键；
+    不调用 Remove-Command，避免误删系统真 cmdlet。
+    """
+    fn_parts = []
+    for name in _INJECTED_GLOBAL_FUNCTION_NAMES:
+        lit = name.replace("'", "''")
+        fn_parts.append(
+            f"Remove-Item -LiteralPath 'Function:\\{lit}' -ErrorAction SilentlyContinue; "
+        )
+    var_parts = []
+    for name in _INJECTED_GLOBAL_VARIABLE_NAMES:
+        lit = name.replace("'", "''")
+        var_parts.append(
+            f"Remove-Variable -Name '{lit}' -Scope Global -ErrorAction SilentlyContinue; "
+        )
+    return "".join(fn_parts) + "".join(var_parts)
 
 
 def _parse_json_marker_line(combined: str, marker: str) -> Any:
@@ -478,11 +551,16 @@ def _run_ps1_guarded(
     ps1_lit = str(script_path.resolve()).replace("'", "''")
     args_ps = _ps_arg_list_literal(args)
     command = (
-        _ps_side_effect_counter_bootstrap()
+        "$__v1l_code = 1; "
+        + "try { "
+        + _ps_side_effect_counter_bootstrap()
         + f"$__v1l_args = {args_ps}; "
         + f"& '{ps1_lit}' @__v1l_args; "
         + "$__v1l_code = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }; "
-        + f"Write-Output ('{_SIDE_EFFECT_MARKER}' + ($script:__V1K_SC | ConvertTo-Json -Compress)); "
+        + f"Write-Output ('{_SIDE_EFFECT_MARKER}' + ($global:__V1K_SC | ConvertTo-Json -Compress)); "
+        + "} finally { "
+        + _ps_injected_globals_cleanup()
+        + "}; "
         + "exit $__v1l_code"
     )
     run_env = _build_run_env(env)
@@ -514,7 +592,9 @@ def _run_ps1_guarded(
 def _ps_start_process_capture_body() -> str:
     """
     Start-Process 捕获体：记录环境存在性与值，首次后抛错阻断真实派生。
-    若脚本侧已初始化 $script:__V1L_SEQ / __V1L_TRACE，则写入统一单调序号。
+    SC 写 $global:__V1K_SC；SP 优先写调用方 $script:__V1K_SP（生产 Sync 路径），
+    否则写 $global:__V1K_SP（meta 探针 / 无生产预初始化）。
+    若已初始化 $global:__V1L_SEQ / __V1L_TRACE，则写入统一单调序号。
     """
     return (
         "function global:Start-Process { "
@@ -528,7 +608,7 @@ def _ps_start_process_capture_body() -> str:
         "    [switch]$NoNewWindow, "
         "    [Parameter(ValueFromRemainingArguments=$true)]$Rest "
         "  ) "
-        "  $script:__V1K_SC['Start-Process']++; "
+        f"  {_ps_inc_sc('Start-Process')}"
         "  $argText = if ($null -eq $ArgumentList) { '' } "
         "    elseif ($ArgumentList -is [System.Array]) { "
         "      ($ArgumentList | ForEach-Object { [string]$_ }) -join ' ' "
@@ -536,11 +616,11 @@ def _ps_start_process_capture_body() -> str:
         "  $vitePresent = $null -ne (Get-Item -LiteralPath Env:VITE_API_BASE_URL "
         "    -ErrorAction SilentlyContinue); "
         "  $seq = $null; "
-        "  if ($null -ne $script:__V1L_SEQ) { "
-        "    $script:__V1L_SEQ = [int]$script:__V1L_SEQ + 1; "
-        "    $seq = [int]$script:__V1L_SEQ; "
-        "    if ($null -ne $script:__V1L_TRACE) { "
-        "      $script:__V1L_TRACE.Add(@{ "
+        "  if ($null -ne $global:__V1L_SEQ) { "
+        "    $global:__V1L_SEQ = [int]$global:__V1L_SEQ + 1; "
+        "    $seq = [int]$global:__V1L_SEQ; "
+        "    if ($null -ne $global:__V1L_TRACE) { "
+        "      $global:__V1L_TRACE.Add(@{ "
         "        kind = 'start'; "
         "        seq = $seq; "
         "        FilePath = [string]$FilePath; "
@@ -548,7 +628,7 @@ def _ps_start_process_capture_body() -> str:
         "      }) | Out-Null "
         "    } "
         "  }; "
-        "  $script:__V1K_SP.Add(@{ "
+        "  $__v1l_sp_entry = @{ "
         "    FilePath = [string]$FilePath; "
         "    ArgumentList = $argText; "
         "    WorkingDirectory = [string]$WorkingDirectory; "
@@ -559,7 +639,13 @@ def _ps_start_process_capture_body() -> str:
         "    EnvViteApiBase = if ($vitePresent) { [string]$env:VITE_API_BASE_URL } else { $null }; "
         "    EnvViteApiBasePresent = [bool]$vitePresent; "
         "    seq = $seq "
-        "  }) | Out-Null; "
+        "  }; "
+        # 生产脚本作用域已 Initialize 时写 script:，供 Sync 回推；否则写 global harness
+        "  if ($null -ne $script:__V1K_SP) { "
+        "    $script:__V1K_SP.Add($__v1l_sp_entry) | Out-Null "
+        "  } elseif ($null -ne $global:__V1K_SP) { "
+        "    $global:__V1K_SP.Add($__v1l_sp_entry) | Out-Null "
+        "  } else { throw 'V1L_SP_CONTAINER_MISSING' }; "
         "  throw 'V1L_START_PROCESS_CAPTURED' "
         "}; "
     )
@@ -606,7 +692,7 @@ def _ps_cim_process_meta_stub() -> str:
         "    $pidVal = [int]$Matches[1] "
         "  }; "
         "  if ($null -eq $pidVal) { return @() }; "
-        "  foreach ($row in @($script:__V1L_PROC_META)) { "
+        "  foreach ($row in @($global:__V1L_PROC_META)) { "
         "    if ([int]$row.ProcessId -eq $pidVal) { "
         "      return @([pscustomobject]@{ "
         "        ProcessId = [int]$row.ProcessId; "
@@ -685,8 +771,11 @@ def _run_ps1_start_capture(
     ps1_lit = str(script_path.resolve()).replace("'", "''")
     args_ps = _ps_arg_list_literal(args)
     command = (
-        _ps_side_effect_counter_bootstrap()
-        + "$script:__V1K_SP = New-Object System.Collections.Generic.List[object]; "
+        "$__v1l_code = 1; "
+        + "try { "
+        + _ps_side_effect_counter_bootstrap()
+        + "$global:__V1K_SP = New-Object System.Collections.Generic.List[object]; "
+        + "$script:__V1K_SP = $global:__V1K_SP; "
         + "function global:Get-NetTCPConnection { "
         "param([Parameter(ValueFromRemainingArguments=$true)]$Rest) @() }; "
         + _ps_empty_live_stubs()
@@ -712,11 +801,14 @@ def _run_ps1_start_capture(
         "  LanHost = [string]$env:BIAOSHU_LAN_HOST "
         "}; "
         + "$__v1l_code = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 }; "
-        + f"Write-Output ('{_SIDE_EFFECT_MARKER}' + ($script:__V1K_SC | ConvertTo-Json -Compress)); "
+        + f"Write-Output ('{_SIDE_EFFECT_MARKER}' + ($global:__V1K_SC | ConvertTo-Json -Compress)); "
         + f"Write-Output ('{_START_PROCESS_CAPTURE_MARKER}' + "
-        "(ConvertTo-Json -Compress @($script:__V1K_SP.ToArray()))); "
+        "(ConvertTo-Json -Compress @($global:__V1K_SP.ToArray()))); "
         + f"Write-Output ('{_ENV_BRIDGE_MARKER}' + "
         "(ConvertTo-Json -Compress @{ before = $script:__V1L_ENV_BEFORE; after = $script:__V1L_ENV_AFTER })); "
+        + "} finally { "
+        + _ps_injected_globals_cleanup()
+        + "}; "
         + "exit $__v1l_code"
     )
     run_env = _build_run_env(env)
@@ -804,126 +896,19 @@ def _run_ps1_start_inject(
         raise AssertionError("start 模式不得投稿 snapshot 参数（应用注入夹具）")
 
     # TCP 注入行不得把进程元数据伪装成 NetTCP 字段；元数据只进 Cim 表
-    tcp_for_net: list[dict[str, Any]] = []
-    for row in tcp_rows or []:
-        tcp_for_net.append(
-            {
-                "LocalAddress": row.get("LocalAddress"),
-                "LocalPort": row.get("LocalPort"),
-                "State": row.get("State", "Listen"),
-                "OwningProcess": row.get("OwningProcess"),
-            }
-        )
-    proc_meta = _process_meta_from_tcp_rows(tcp_rows)
-
-    tcp_json = json.dumps(tcp_for_net, ensure_ascii=False)
-    http_json = json.dumps(http_map or {}, ensure_ascii=False)
-    proc_json = json.dumps(proc_meta, ensure_ascii=False)
-    tcp_b64 = base64.b64encode(tcp_json.encode("utf-8")).decode("ascii")
-    http_b64 = base64.b64encode(http_json.encode("utf-8")).decode("ascii")
-    proc_b64 = base64.b64encode(proc_json.encode("utf-8")).decode("ascii")
+    tcp_b64, http_b64, proc_b64, _proc_meta = _encode_inject_payloads(tcp_rows, http_map)
     ps1_lit = str(script_path.resolve()).replace("'", "''")
     args_ps = _ps_arg_list_literal(args)
     multi_flag = "$true" if allow_multiple_starts else "$false"
 
     command = (
-        _ps_side_effect_counter_bootstrap()
-        + "$script:__V1K_SP = New-Object System.Collections.Generic.List[object]; "
-        + "$script:__V1L_HTTP = New-Object System.Collections.Generic.List[object]; "
-        + "$script:__V1L_TCP = New-Object System.Collections.Generic.List[object]; "
-        + "$script:__V1L_TRACE = New-Object System.Collections.Generic.List[object]; "
-        + "$script:__V1L_SEQ = 0; "
-        + f"$script:__V1L_TCP_ROWS = "
-        f"[System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{tcp_b64}')) "
-        f"| ConvertFrom-Json; "
-        + f"$script:__V1L_HTTP_MAP = "
-        f"[System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{http_b64}')) "
-        f"| ConvertFrom-Json; "
-        + f"$script:__V1L_PROC_META = @("
-        f"[System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{proc_b64}')) "
-        f"| ConvertFrom-Json); "
-        + "function global:Get-NetTCPConnection { "
-        "  [CmdletBinding()] "
-        "  param( "
-        "    $LocalAddress, "
-        "    $LocalPort, "
-        "    $State, "
-        "    [Parameter(ValueFromRemainingArguments=$true)]$Rest "
-        "  ) "
-        "  $script:__V1L_TCP.Add(@{ "
-        "    LocalAddress = if ($null -eq $LocalAddress) { $null } else { [string]$LocalAddress }; "
-        "    LocalPort = if ($null -eq $LocalPort) { $null } else { [int]$LocalPort }; "
-        "    State = if ($null -eq $State) { $null } else { [string]$State } "
-        "  }) | Out-Null; "
-        "  $out = New-Object System.Collections.Generic.List[object]; "
-        "  foreach ($row in @($script:__V1L_TCP_ROWS)) { "
-        "    $ok = $true; "
-        "    if ($PSBoundParameters.ContainsKey('LocalPort') -and "
-        "        ([int]$row.LocalPort) -ne ([int]$LocalPort)) { $ok = $false }; "
-        "    if ($ok -and $PSBoundParameters.ContainsKey('LocalAddress') -and "
-        "        ([string]$row.LocalAddress) -ne ([string]$LocalAddress)) { $ok = $false }; "
-        "    if ($ok -and $PSBoundParameters.ContainsKey('State') -and $null -ne $State -and "
-        "        ([string]$row.State) -ne ([string]$State)) { $ok = $false }; "
-        "    if ($ok) { "
-        "      $out.Add([pscustomobject]@{ "
-        "        LocalAddress = [string]$row.LocalAddress; "
-        "        LocalPort = [int]$row.LocalPort; "
-        "        State = if ($null -eq $row.State) { 'Listen' } else { [string]$row.State }; "
-        "        OwningProcess = [int]$row.OwningProcess "
-        "      }) | Out-Null "
-        "    } "
-        "  }; "
-        "  return @($out.ToArray()) "
-        "}; "
-        + _ps_empty_live_stubs()
-        + _ps_cim_process_meta_stub()
-        + "function script:__V1L_RecordHttp([string]$Method, [string]$Uri) { "
-        "  $script:__V1K_SC['Invoke-WebRequest']++; "
-        "  $script:__V1L_SEQ = [int]$script:__V1L_SEQ + 1; "
-        "  $seq = [int]$script:__V1L_SEQ; "
-        "  $script:__V1L_HTTP.Add(@{ method = $Method; url = $Uri; "
-        "    order = $script:__V1L_HTTP.Count; seq = $seq }) | Out-Null; "
-        "  $script:__V1L_TRACE.Add(@{ kind = 'http'; method = $Method; "
-        "    url = $Uri; seq = $seq }) | Out-Null; "
-        "  $map = $script:__V1L_HTTP_MAP; "
-        "  $hit = $null; "
-        "  if ($null -ne $map) { "
-        "    foreach ($p in $map.PSObject.Properties) { "
-        "      if ([string]$p.Name -eq $Uri) { $hit = $p.Value; break } "
-        "    } "
-        "  }; "
-        "  if ($null -eq $hit) { throw \"V1L_HTTP_UNMAPPED:$Method $Uri\" }; "
-        "  $code = 200; if ($null -ne $hit.StatusCode) { $code = [int]$hit.StatusCode }; "
-        "  $content = if ($null -eq $hit.Content) { '' } else { [string]$hit.Content }; "
-        "  return [pscustomobject]@{ StatusCode = $code; Content = $content } "
-        "}; "
-        + "function global:Invoke-WebRequest { "
-        "  [CmdletBinding()] param( "
-        "    $Uri, $Method = 'GET', "
-        "    [Parameter(ValueFromRemainingArguments=$true)]$Rest "
-        "  ) "
-        "  $m = if ($null -eq $Method -or [string]$Method -eq '') { 'GET' } else { "
-        "    ([string]$Method).ToUpperInvariant() }; "
-        "  return script:__V1L_RecordHttp -Method $m -Uri ([string]$Uri) "
-        "}; "
-        + "function global:Invoke-RestMethod { "
-        "  [CmdletBinding()] param( "
-        "    $Uri, $Method = 'GET', "
-        "    [Parameter(ValueFromRemainingArguments=$true)]$Rest "
-        "  ) "
-        "  $m = if ($null -eq $Method -or [string]$Method -eq '') { 'GET' } else { "
-        "    ([string]$Method).ToUpperInvariant() }; "
-        "  $resp = script:__V1L_RecordHttp -Method $m -Uri ([string]$Uri); "
-        "  try { return ($resp.Content | ConvertFrom-Json) } catch { return $resp.Content } "
-        "}; "
-        + (
-            _ps_start_process_capture_body().replace(
-                "throw 'V1L_START_PROCESS_CAPTURED'",
-                (
-                    f"if (-not {multi_flag}) {{ throw 'V1L_START_PROCESS_CAPTURED' }} "
-                    "else { return [pscustomobject]@{ Id = 900000 + $script:__V1K_SC['Start-Process'] } }"
-                ),
-            )
+        "$__v1l_code = 1; "
+        + "try { "
+        + _ps_inject_stub_block(
+            tcp_b64=tcp_b64,
+            http_b64=http_b64,
+            proc_b64=proc_b64,
+            multi_flag=multi_flag,
         )
         + "$script:__V1L_ENV_BEFORE = @{ "
         "  ListenProfilePresent = $null -ne (Get-Item -LiteralPath Env:BIAOSHU_LISTEN_PROFILE -ErrorAction SilentlyContinue); "
@@ -947,17 +932,12 @@ def _run_ps1_start_inject(
         "  LanHost = [string]$env:BIAOSHU_LAN_HOST "
         "}; "
         + "$__v1l_code = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 }; "
-        + f"Write-Output ('{_SIDE_EFFECT_MARKER}' + ($script:__V1K_SC | ConvertTo-Json -Compress)); "
-        + f"Write-Output ('{_START_PROCESS_CAPTURE_MARKER}' + "
-        "(ConvertTo-Json -Compress @($script:__V1K_SP.ToArray()))); "
-        + f"Write-Output ('{_HTTP_EVENT_MARKER}' + "
-        "(ConvertTo-Json -Compress @($script:__V1L_HTTP.ToArray()))); "
-        + f"Write-Output ('{_TCP_QUERY_MARKER}' + "
-        "(ConvertTo-Json -Compress @($script:__V1L_TCP.ToArray()))); "
-        + f"Write-Output ('{_UNIFIED_TRACE_MARKER}' + "
-        "(ConvertTo-Json -Compress @($script:__V1L_TRACE.ToArray()))); "
+        + _ps_emit_inject_markers()
         + f"Write-Output ('{_ENV_BRIDGE_MARKER}' + "
         "(ConvertTo-Json -Compress @{ before = $script:__V1L_ENV_BEFORE; after = $script:__V1L_ENV_AFTER })); "
+        + "} finally { "
+        + _ps_injected_globals_cleanup()
+        + "}; "
         + "exit $__v1l_code"
     )
     run_env = _build_run_env(env)
@@ -983,6 +963,157 @@ def _run_ps1_start_inject(
         stderr=_decode_ps_output(raw.stderr),
     )
     combined = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    captures, counts, http_events, tcp_queries, unified_trace = _parse_inject_markers(
+        combined
+    )
+    return proc, captures, counts, http_events, tcp_queries, unified_trace
+
+
+def _ps_inject_stub_block(
+    *,
+    tcp_b64: str,
+    http_b64: str,
+    proc_b64: str,
+    multi_flag: str = "$false",
+) -> str:
+    """构建 inject 共享 global 容器 + global stub（供业务 harness 与 meta 复用）。"""
+    return (
+        _ps_side_effect_counter_bootstrap()
+        + "$global:__V1K_SP = New-Object System.Collections.Generic.List[object]; "
+        + "$script:__V1K_SP = $global:__V1K_SP; "
+        + "$global:__V1L_HTTP = New-Object System.Collections.Generic.List[object]; "
+        + "$global:__V1L_TCP = New-Object System.Collections.Generic.List[object]; "
+        + "$global:__V1L_TRACE = New-Object System.Collections.Generic.List[object]; "
+        + "$global:__V1L_SEQ = 0; "
+        + f"$global:__V1L_TCP_ROWS = "
+        f"[System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{tcp_b64}')) "
+        f"| ConvertFrom-Json; "
+        + f"$global:__V1L_HTTP_MAP = "
+        f"[System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{http_b64}')) "
+        f"| ConvertFrom-Json; "
+        + f"$global:__V1L_PROC_META = @("
+        f"[System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{proc_b64}')) "
+        f"| ConvertFrom-Json); "
+        + "function global:Get-NetTCPConnection { "
+        "  [CmdletBinding()] "
+        "  param( "
+        "    $LocalAddress, "
+        "    $LocalPort, "
+        "    $State, "
+        "    [Parameter(ValueFromRemainingArguments=$true)]$Rest "
+        "  ) "
+        "  $global:__V1L_TCP.Add(@{ "
+        "    LocalAddress = if ($null -eq $LocalAddress) { $null } else { [string]$LocalAddress }; "
+        "    LocalPort = if ($null -eq $LocalPort) { $null } else { [int]$LocalPort }; "
+        "    State = if ($null -eq $State) { $null } else { [string]$State } "
+        "  }) | Out-Null; "
+        "  $out = New-Object System.Collections.Generic.List[object]; "
+        "  foreach ($row in @($global:__V1L_TCP_ROWS)) { "
+        "    $ok = $true; "
+        "    if ($PSBoundParameters.ContainsKey('LocalPort') -and "
+        "        ([int]$row.LocalPort) -ne ([int]$LocalPort)) { $ok = $false }; "
+        "    if ($ok -and $PSBoundParameters.ContainsKey('LocalAddress') -and "
+        "        ([string]$row.LocalAddress) -ne ([string]$LocalAddress)) { $ok = $false }; "
+        "    if ($ok -and $PSBoundParameters.ContainsKey('State') -and $null -ne $State -and "
+        "        ([string]$row.State) -ne ([string]$State)) { $ok = $false }; "
+        "    if ($ok) { "
+        "      $out.Add([pscustomobject]@{ "
+        "        LocalAddress = [string]$row.LocalAddress; "
+        "        LocalPort = [int]$row.LocalPort; "
+        "        State = if ($null -eq $row.State) { 'Listen' } else { [string]$row.State }; "
+        "        OwningProcess = [int]$row.OwningProcess "
+        "      }) | Out-Null "
+        "    } "
+        "  }; "
+        "  return @($out.ToArray()) "
+        "}; "
+        + _ps_empty_live_stubs()
+        + _ps_cim_process_meta_stub()
+        + "function global:__V1L_RecordHttp([string]$Method, [string]$Uri) { "
+        f"  {_ps_inc_sc('Invoke-WebRequest')}"
+        "  $global:__V1L_SEQ = [int]$global:__V1L_SEQ + 1; "
+        "  $seq = [int]$global:__V1L_SEQ; "
+        "  $global:__V1L_HTTP.Add(@{ method = $Method; url = $Uri; "
+        "    order = $global:__V1L_HTTP.Count; seq = $seq }) | Out-Null; "
+        "  $global:__V1L_TRACE.Add(@{ kind = 'http'; method = $Method; "
+        "    url = $Uri; seq = $seq }) | Out-Null; "
+        "  $map = $global:__V1L_HTTP_MAP; "
+        "  $hit = $null; "
+        "  if ($null -ne $map) { "
+        "    foreach ($p in $map.PSObject.Properties) { "
+        "      if ([string]$p.Name -eq $Uri) { $hit = $p.Value; break } "
+        "    } "
+        "  }; "
+        "  if ($null -eq $hit) { throw \"V1L_HTTP_UNMAPPED:$Method $Uri\" }; "
+        "  $code = 200; if ($null -ne $hit.StatusCode) { $code = [int]$hit.StatusCode }; "
+        "  $content = if ($null -eq $hit.Content) { '' } else { [string]$hit.Content }; "
+        "  return [pscustomobject]@{ StatusCode = $code; Content = $content } "
+        "}; "
+        + "function global:Invoke-WebRequest { "
+        "  [CmdletBinding()] param( "
+        "    $Uri, $Method = 'GET', "
+        "    [Parameter(ValueFromRemainingArguments=$true)]$Rest "
+        "  ) "
+        "  $m = if ($null -eq $Method -or [string]$Method -eq '') { 'GET' } else { "
+        "    ([string]$Method).ToUpperInvariant() }; "
+        "  return global:__V1L_RecordHttp -Method $m -Uri ([string]$Uri) "
+        "}; "
+        + "function global:Invoke-RestMethod { "
+        "  [CmdletBinding()] param( "
+        "    $Uri, $Method = 'GET', "
+        "    [Parameter(ValueFromRemainingArguments=$true)]$Rest "
+        "  ) "
+        "  $m = if ($null -eq $Method -or [string]$Method -eq '') { 'GET' } else { "
+        "    ([string]$Method).ToUpperInvariant() }; "
+        "  $resp = global:__V1L_RecordHttp -Method $m -Uri ([string]$Uri); "
+        "  try { return ($resp.Content | ConvertFrom-Json) } catch { return $resp.Content } "
+        "}; "
+        + (
+            _ps_start_process_capture_body().replace(
+                "throw 'V1L_START_PROCESS_CAPTURED'",
+                (
+                    f"if (-not {multi_flag}) {{ throw 'V1L_START_PROCESS_CAPTURED' }} "
+                    "else { return [pscustomobject]@{ Id = 900000 + $global:__V1K_SC['Start-Process'] } }"
+                ),
+            )
+        )
+    )
+
+
+def _encode_inject_payloads(
+    tcp_rows: list[dict[str, Any]] | None,
+    http_map: dict[str, dict[str, Any]] | None,
+) -> tuple[str, str, str, list[dict[str, Any]]]:
+    """编码 TCP/HTTP/Cim 注入载荷；TCP 行剥离进程元数据假字段。"""
+    tcp_for_net: list[dict[str, Any]] = []
+    for row in tcp_rows or []:
+        tcp_for_net.append(
+            {
+                "LocalAddress": row.get("LocalAddress"),
+                "LocalPort": row.get("LocalPort"),
+                "State": row.get("State", "Listen"),
+                "OwningProcess": row.get("OwningProcess"),
+            }
+        )
+    proc_meta = _process_meta_from_tcp_rows(tcp_rows)
+    tcp_json = json.dumps(tcp_for_net, ensure_ascii=False)
+    http_json = json.dumps(http_map or {}, ensure_ascii=False)
+    proc_json = json.dumps(proc_meta, ensure_ascii=False)
+    tcp_b64 = base64.b64encode(tcp_json.encode("utf-8")).decode("ascii")
+    http_b64 = base64.b64encode(http_json.encode("utf-8")).decode("ascii")
+    proc_b64 = base64.b64encode(proc_json.encode("utf-8")).decode("ascii")
+    return tcp_b64, http_b64, proc_b64, proc_meta
+
+
+def _parse_inject_markers(
+    combined: str,
+) -> tuple[
+    list[dict[str, Any]],
+    dict[str, int],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
     counts = _parse_side_effect_counts(combined)
     captures_raw = _parse_json_marker_line(combined, _START_PROCESS_CAPTURE_MARKER)
     http_raw = _parse_json_marker_line(combined, _HTTP_EVENT_MARKER)
@@ -1008,7 +1139,240 @@ def _run_ps1_start_inject(
     unified_trace = [dict(x) for x in trace_raw if isinstance(x, dict)]
     if len(unified_trace) != len(trace_raw):
         raise AssertionError(f"统一 trace 项必须全为对象：{trace_raw!r}")
-    return proc, captures, counts, http_events, tcp_queries, unified_trace
+    return captures, counts, http_events, tcp_queries, unified_trace
+
+
+def _ps_emit_inject_markers() -> str:
+    return (
+        f"Write-Output ('{_SIDE_EFFECT_MARKER}' + ($global:__V1K_SC | ConvertTo-Json -Compress)); "
+        + f"Write-Output ('{_START_PROCESS_CAPTURE_MARKER}' + "
+        "(ConvertTo-Json -Compress @($global:__V1K_SP.ToArray()))); "
+        + f"Write-Output ('{_HTTP_EVENT_MARKER}' + "
+        "(ConvertTo-Json -Compress @($global:__V1L_HTTP.ToArray()))); "
+        + f"Write-Output ('{_TCP_QUERY_MARKER}' + "
+        "(ConvertTo-Json -Compress @($global:__V1L_TCP.ToArray()))); "
+        + f"Write-Output ('{_UNIFIED_TRACE_MARKER}' + "
+        "(ConvertTo-Json -Compress @($global:__V1L_TRACE.ToArray()))); "
+    )
+
+
+def _run_ps1_scope_meta_probe(
+    probe_ps1: Path,
+    *,
+    tcp_rows: list[dict[str, Any]] | None = None,
+    http_map: dict[str, dict[str, Any]] | None = None,
+    timeout: int = 45,
+) -> tuple[
+    list[dict[str, Any]],
+    dict[str, int],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    str,
+]:
+    """
+    helper/meta：同一 PowerShell 进程内用 & 调用独立 .ps1（跨脚本作用域），
+    证明 global stub 写回捕获容器；不计入业务覆盖。
+    """
+    tcp_b64, http_b64, proc_b64, _meta = _encode_inject_payloads(tcp_rows, http_map)
+    ps1_lit = str(probe_ps1.resolve()).replace("'", "''")
+    command = (
+        "$__v1l_code = 1; "
+        + "try { "
+        + _ps_inject_stub_block(
+            tcp_b64=tcp_b64, http_b64=http_b64, proc_b64=proc_b64, multi_flag="$false"
+        )
+        + f"try {{ & '{ps1_lit}' }} catch {{ "
+        "  $__msg = \"$_\"; "
+        "  if ($__msg -notmatch 'V1L_START_PROCESS_CAPTURED' "
+        f"      -and $__msg -notmatch '{_SIDE_EFFECT_FORBIDDEN_PREFIX}' "
+        "      -and $__msg -notmatch 'V1L_HTTP_UNMAPPED') { "
+        "    Write-Error $_ "
+        "  } "
+        "}; "
+        + _ps_emit_inject_markers()
+        + "$__v1l_code = 0; "
+        + "} finally { "
+        + _ps_injected_globals_cleanup()
+        + "}; "
+        + "exit $__v1l_code"
+    )
+    raw = subprocess.run(
+        [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            command,
+        ],
+        cwd=str(probe_ps1.parent),
+        capture_output=True,
+        timeout=timeout,
+        check=False,
+        env=_build_run_env(None),
+    )
+    combined = (
+        _decode_ps_output(raw.stdout) + "\n" + _decode_ps_output(raw.stderr)
+    )
+    caps, counts, http_events, tcp_queries, unified_trace = _parse_inject_markers(
+        combined
+    )
+    return caps, counts, http_events, tcp_queries, unified_trace, combined
+
+
+def _run_ps1_scope_meta_adjacent_twice(
+    probe_ps1: Path,
+    *,
+    tcp_rows_a: list[dict[str, Any]],
+    http_map_a: dict[str, dict[str, Any]],
+    tcp_rows_b: list[dict[str, Any]],
+    http_map_b: dict[str, dict[str, Any]],
+    timeout: int = 60,
+) -> tuple[dict[str, Any], dict[str, Any], str]:
+    """
+    helper/meta：同一 PowerShell 进程连续两次 inject 探测，中间 finally 清理。
+    证明相邻运行计数/映射/trace 独立、无状态泄漏。
+    """
+    a_tcp, a_http, a_proc, _ = _encode_inject_payloads(tcp_rows_a, http_map_a)
+    b_tcp, b_http, b_proc, _ = _encode_inject_payloads(tcp_rows_b, http_map_b)
+    ps1_lit = str(probe_ps1.resolve()).replace("'", "''")
+
+    def _one_run(tcp_b64: str, http_b64: str, proc_b64: str, tag: str) -> str:
+        return (
+            "try { "
+            + _ps_inject_stub_block(
+                tcp_b64=tcp_b64,
+                http_b64=http_b64,
+                proc_b64=proc_b64,
+                multi_flag="$false",
+            )
+            + f"try {{ & '{ps1_lit}' }} catch {{ "
+            "  $__msg = \"$_\"; "
+            "  if ($__msg -notmatch 'V1L_START_PROCESS_CAPTURED' "
+            f"      -and $__msg -notmatch '{_SIDE_EFFECT_FORBIDDEN_PREFIX}' "
+            "      -and $__msg -notmatch 'V1L_HTTP_UNMAPPED') { Write-Error $_ } "
+            "}; "
+            + f"Write-Output ('V1L_META_TAG={tag}'); "
+            + _ps_emit_inject_markers()
+            + "} finally { "
+            + _ps_injected_globals_cleanup()
+            + "}; "
+            # 清理后残留检查：global 变量与覆盖函数必须消失
+            + "$__resid = @(); "
+            + "foreach ($vn in @("
+            + ",".join(f"'{n}'" for n in _INJECTED_GLOBAL_VARIABLE_NAMES)
+            + ")) { "
+            "  if ($null -ne (Get-Variable -Name $vn -Scope Global -ErrorAction SilentlyContinue)) { "
+            "    $__resid += ('var:' + $vn) "
+            "  } "
+            "}; "
+            + "foreach ($fn in @("
+            + ",".join(f"'{n}'" for n in ("__V1L_RecordHttp",))
+            + ")) { "
+            "  if (Test-Path -LiteralPath ('Function:\\' + $fn)) { $__resid += ('fn:' + $fn) } "
+            "}; "
+            + f"Write-Output ('V1L_META_RESIDUAL_{tag}=' + "
+            "(($__resid -join ',') )); "
+        )
+
+    command = (
+        _one_run(a_tcp, a_http, a_proc, "A")
+        + _one_run(b_tcp, b_http, b_proc, "B")
+        + "exit 0"
+    )
+    raw = subprocess.run(
+        [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            command,
+        ],
+        cwd=str(probe_ps1.parent),
+        capture_output=True,
+        timeout=timeout,
+        check=False,
+        env=_build_run_env(None),
+    )
+    combined = (
+        _decode_ps_output(raw.stdout) + "\n" + _decode_ps_output(raw.stderr)
+    )
+
+    def _split_tag(text: str, tag: str) -> str:
+        marker = f"V1L_META_TAG={tag}"
+        idx = text.find(marker)
+        if idx < 0:
+            raise AssertionError(f"缺少 meta tag {tag!r}；输出：{text[:800]!r}")
+        rest = text[idx + len(marker) :]
+        other = "V1L_META_TAG=B" if tag == "A" else None
+        if other and other in rest:
+            rest = rest.split(other, 1)[0]
+        return rest
+
+    part_a = _split_tag(combined, "A")
+    part_b = _split_tag(combined, "B")
+    caps_a, counts_a, http_a, tcp_a, trace_a = _parse_inject_markers(part_a)
+    caps_b, counts_b, http_b, tcp_b, trace_b = _parse_inject_markers(part_b)
+    residual_a = ""
+    residual_b = ""
+    for line in combined.splitlines():
+        if line.startswith("V1L_META_RESIDUAL_A="):
+            residual_a = line.split("=", 1)[1]
+        if line.startswith("V1L_META_RESIDUAL_B="):
+            residual_b = line.split("=", 1)[1]
+    return (
+        {
+            "captures": caps_a,
+            "counts": counts_a,
+            "http_events": http_a,
+            "tcp_queries": tcp_a,
+            "unified_trace": trace_a,
+            "residual": residual_a,
+        },
+        {
+            "captures": caps_b,
+            "counts": counts_b,
+            "http_events": http_b,
+            "tcp_queries": tcp_b,
+            "unified_trace": trace_b,
+            "residual": residual_b,
+        },
+        combined,
+    )
+
+
+def _write_scope_meta_probe_ps1(path: Path) -> None:
+    """
+    写入跨脚本 meta 探针：顺序调用 TCP 查询、Cim 元数据、health→auth、唯一 frontend Start-Process。
+    仅用于作用域夹具证明，零 live 副作用（全部走 global stub）。
+    """
+    body = (
+        "# V1-L Q5 scope meta probe — do not use outside tests\n"
+        f"$tcp = @(Get-NetTCPConnection -LocalAddress '{_EXPECTED_BACKEND_HOST}' "
+        f"-LocalPort {_EXPECTED_BACKEND_PORT} -State Listen -ErrorAction Stop)\n"
+        "if ($tcp.Count -lt 1) { throw 'V1L_META_TCP_EMPTY' }\n"
+        f"$pidVal = [int]$tcp[0].OwningProcess\n"
+        "$cim = @(Get-CimInstance -ClassName Win32_Process "
+        '-Filter "ProcessId = $pidVal" -ErrorAction SilentlyContinue)\n'
+        "if ($cim.Count -lt 1) { throw 'V1L_META_CIM_EMPTY' }\n"
+        "if ([string]::IsNullOrWhiteSpace([string]$cim[0].ExecutablePath) -and "
+        "[string]::IsNullOrWhiteSpace([string]$cim[0].CommandLine)) { "
+        "throw 'V1L_META_CIM_NO_META' }\n"
+        f"$null = Invoke-WebRequest -Uri '{_EXPECTED_BACKEND_HEALTH_URL}' "
+        f"-Method {_EXPECTED_AUTH_HTTP_METHOD}\n"
+        f"$null = Invoke-WebRequest -Uri '{_EXPECTED_AUTH_BOOTSTRAP_URL}' "
+        f"-Method {_EXPECTED_AUTH_HTTP_METHOD}\n"
+        "try {\n"
+        "  Start-Process -FilePath 'npm.cmd' "
+        f"-ArgumentList '{_EXPECTED_FRONTEND_START_ARGS_LAN}' "
+        "-WorkingDirectory 'C:\\meta-frontend' -WindowStyle Hidden\n"
+        "} catch {\n"
+        "  if (\"$_\" -notmatch 'V1L_START_PROCESS_CAPTURED') { throw }\n"
+        "}\n"
+    )
+    path.write_text(body, encoding="utf-8")
 
 
 def _owned_backend_tcp_row(repo: Path, pid: int = 710001) -> dict[str, Any]:
@@ -2948,6 +3312,158 @@ class TestLanEnvBridgeAndViteBasePresence(unittest.TestCase):
         self.assertIs(caps[0].get("EnvViteApiBasePresent"), False)
 
 
+class TestScopeFixtureMeta(unittest.TestCase):
+    """
+    Q5 helper/meta 作用域反假绿（不计业务覆盖）。
+    证明 global stub 在 & 真源/独立 .ps1 调用后写回同一捕获容器，
+    且同一进程相邻两次运行无状态泄漏。
+    """
+
+    def setUp(self) -> None:
+        _require_true_source()
+        self.tr = _TempRepo()
+        self._meta_dirs: list[Path] = []
+
+    def tearDown(self) -> None:
+        self.tr.cleanup()
+        for d in self._meta_dirs:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def _new_meta_probe(self) -> Path:
+        d = Path(tempfile.mkdtemp(prefix="v1l-scope-meta-"))
+        self._meta_dirs.append(d)
+        probe = d / "scope_meta_probe.ps1"
+        _write_scope_meta_probe_ps1(probe)
+        return probe
+
+    def test_global_stub_writeback_from_true_source_script(self) -> None:
+        """
+        【helper 自检 / 不计业务覆盖】
+        1) 真源 Start-Biaoshu-Dev.ps1 经 & 调用后，Get-NetTCPConnection 查询写回 global 容器；
+        2) 独立 .ps1 探针证明 listener 返回、Cim 元数据、health→auth、唯一 frontend_start
+           均写回同一捕获容器（跨脚本作用域，非 -Command 本地假绿）。
+        """
+        # --- 真源路径：listener 查询写回 ---
+        tcp = [_owned_backend_tcp_row(self.tr.root, pid=710001)]
+        http = _ready_http_map(auth_required=True, bootstrapped=True)
+        _proc, _caps, counts_src, _http_src, tcp_src, _trace_src = _run_ps1_start_inject(
+            self.tr.true_source(),
+            ["-Component", "backend"],
+            cwd=self.tr.root,
+            env=self.tr.npm_env(),
+            tcp_rows=tcp,
+            http_map=http,
+        )
+        self.assertGreater(
+            len(tcp_src),
+            0,
+            f"真源脚本调用后 TCP 查询必须写回 global 容器：{tcp_src!r}",
+        )
+        ports_hit = []
+        for q in tcp_src:
+            raw_port = q.get("LocalPort")
+            if raw_port is None:
+                continue
+            ports_hit.append(int(raw_port))
+        self.assertIn(
+            _EXPECTED_BACKEND_PORT,
+            ports_hit,
+            f"真源必须触发 backend 端口查询：{tcp_src!r}",
+        )
+        # 副作用计数容器本身也必须可共享（非 null 假绿）
+        self.assertIn("Start-Process", counts_src)
+        self.assertIsInstance(counts_src["Start-Process"], int)
+
+        # --- 跨脚本探针：完整 health→auth→frontend_start + Cim ---
+        probe = self._new_meta_probe()
+        caps, counts, http_events, tcp_queries, unified_trace, combined = (
+            _run_ps1_scope_meta_probe(
+                probe,
+                tcp_rows=tcp,
+                http_map=http,
+            )
+        )
+        self.assertGreater(
+            len(tcp_queries), 0, f"探针 TCP 查询写回失败：{combined[:600]!r}"
+        )
+        self.assertEqual(
+            int(tcp_queries[0].get("LocalPort")),
+            _EXPECTED_BACKEND_PORT,
+        )
+        # listener 返回非空：探针在空返回时会 throw V1L_META_TCP_EMPTY
+        self.assertNotIn("V1L_META_TCP_EMPTY", combined)
+        self.assertNotIn("V1L_META_CIM_EMPTY", combined)
+        self.assertNotIn("V1L_META_CIM_NO_META", combined)
+        self.assertEqual(len(http_events), 2, http_events)
+        self.assertEqual(http_events[0].get("url"), _EXPECTED_BACKEND_HEALTH_URL)
+        self.assertEqual(http_events[1].get("url"), _EXPECTED_AUTH_BOOTSTRAP_URL)
+        self.assertEqual(http_events[0].get("method"), _EXPECTED_AUTH_HTTP_METHOD)
+        self.assertEqual(http_events[1].get("method"), _EXPECTED_AUTH_HTTP_METHOD)
+        self.assertEqual(counts.get("Start-Process"), 1)
+        self.assertEqual(len(caps), 1, caps)
+        self.assertIn(_VALID_LAN_HOST, str(caps[0].get("ArgumentList", "")))
+        # 统一 seq：health < auth < start
+        http_trace = [t for t in unified_trace if t.get("kind") == "http"]
+        start_trace = [t for t in unified_trace if t.get("kind") == "start"]
+        self.assertEqual(len(http_trace), 2, unified_trace)
+        self.assertEqual(len(start_trace), 1, unified_trace)
+        self.assertLess(int(http_trace[0]["seq"]), int(http_trace[1]["seq"]))
+        self.assertLess(int(http_trace[1]["seq"]), int(start_trace[0]["seq"]))
+
+    def test_global_stub_adjacent_runs_isolated_same_process(self) -> None:
+        """
+        【helper 自检 / 不计业务覆盖】
+        同一 PowerShell 进程连续两次 inject 探测；finally 清理后无 residual；
+        第二次计数/映射/trace 不继承第一次。
+        """
+        probe = self._new_meta_probe()
+        tcp_a = [_owned_backend_tcp_row(self.tr.root, pid=710001)]
+        tcp_b = [_owned_backend_tcp_row(self.tr.root, pid=710099)]
+        http_a = _ready_http_map(auth_required=True, bootstrapped=True)
+        # B 轮使用不同 Content 标记映射独立性（URL 仍 health→auth）
+        http_b = {
+            _EXPECTED_BACKEND_HEALTH_URL: {
+                "StatusCode": 200,
+                "Content": json.dumps(
+                    {"status": "ok", "dbOk": True, "metaRound": "B"},
+                    ensure_ascii=False,
+                ),
+            },
+            _EXPECTED_AUTH_BOOTSTRAP_URL: {
+                "StatusCode": 200,
+                "Content": _auth_http_content(
+                    auth_required=True, bootstrapped=True
+                ),
+            },
+        }
+        run_a, run_b, combined = _run_ps1_scope_meta_adjacent_twice(
+            probe,
+            tcp_rows_a=tcp_a,
+            http_map_a=http_a,
+            tcp_rows_b=tcp_b,
+            http_map_b=http_b,
+        )
+        self.assertEqual(run_a["residual"], "", f"A 轮清理残留：{run_a['residual']}")
+        self.assertEqual(run_b["residual"], "", f"B 轮清理残留：{run_b['residual']}")
+        self.assertEqual(run_a["counts"].get("Start-Process"), 1)
+        self.assertEqual(run_b["counts"].get("Start-Process"), 1)
+        self.assertEqual(len(run_a["http_events"]), 2)
+        self.assertEqual(len(run_b["http_events"]), 2)
+        self.assertEqual(len(run_a["captures"]), 1)
+        self.assertEqual(len(run_b["captures"]), 1)
+        # 各自独立：seq 均从 1 起（health=1, auth=2, start=3），不累加到 4+
+        seqs_a = [int(t["seq"]) for t in run_a["unified_trace"]]
+        seqs_b = [int(t["seq"]) for t in run_b["unified_trace"]]
+        self.assertEqual(sorted(seqs_a), [1, 2, 3], run_a["unified_trace"])
+        self.assertEqual(sorted(seqs_b), [1, 2, 3], run_b["unified_trace"])
+        # TCP 查询各自非空且不共享同一列表对象累积（B 轮条数不大于合理单轮）
+        self.assertGreater(len(run_a["tcp_queries"]), 0)
+        self.assertGreater(len(run_b["tcp_queries"]), 0)
+        self.assertLessEqual(len(run_b["tcp_queries"]), 4)
+        self.assertNotIn("V1L_META_TCP_EMPTY", combined)
+        self.assertNotIn("V1L_META_CIM_EMPTY", combined)
+
+
 # ===========================================================================
 # 6. V1-K 兼容：七键/原子/隐私/零真实副作用
 # ===========================================================================
@@ -3082,16 +3598,42 @@ class TestV1kCompatibilityPrivacyAndZeroEffects(unittest.TestCase):
             if "executablePath" in block or "commandLine" in block:
                 bad.append("Get-NetTCPConnection 输出不得含 executablePath/commandLine")
 
-        # helper 自检集合必须覆盖两项 EnvViteApiBasePresent stub
+        # helper 自检集合必须覆盖 EnvViteApiBasePresent stub + Q5 作用域元检查
         if "_HELPER_SELF_CHECK_TESTS" not in source:
             bad.append("缺少 _HELPER_SELF_CHECK_TESTS")
         else:
-            for name in (
-                "test_capture_records_vite_api_base_presence_true",
-                "test_capture_records_vite_api_base_presence_false_when_unset",
-            ):
+            for name in sorted(_HELPER_SELF_CHECK_TESTS):
                 if name not in source:
                     bad.append(f"缺少 helper 用例 {name}")
+        # V1L 跨脚本捕获容器必须 global（扫描时剔除本自检方法，避免字面量自伤）
+        src_no_self = re.sub(
+            r"def test_self_module_no_multi_code_conditional_return_or_wide_except\([\s\S]*?"
+            r"(?=\nclass |\nif __name__)",
+            "",
+            source,
+            count=1,
+        )
+        for token in (
+            "__V1L_TCP",
+            "__V1L_HTTP",
+            "__V1L_TRACE",
+            "__V1L_SEQ",
+            "__V1L_TCP_ROWS",
+            "__V1L_HTTP_MAP",
+            "__V1L_PROC_META",
+        ):
+            if f"$script:{token}" in src_no_self:
+                bad.append(f"inject V1L 捕获不得使用 $script:{token}（须 $global:）")
+            if f"$global:{token}" not in src_no_self:
+                bad.append(f"inject 必须使用 $global:{token}")
+        if "function script:__V1L_RecordHttp" in src_no_self:
+            bad.append("__V1L_RecordHttp 必须为 global 函数")
+        if "function global:__V1L_RecordHttp" not in src_no_self:
+            bad.append("缺少 function global:__V1L_RecordHttp")
+        if "def _ps_injected_globals_cleanup" not in source:
+            bad.append("缺少 _ps_injected_globals_cleanup（try/finally 清理）")
+        if "def _ps_inc_sc" not in source:
+            bad.append("缺少 _ps_inc_sc（global SC 计数）")
 
         def _is_multi_container(node: ast.AST) -> bool:
             if isinstance(node, (ast.Set, ast.List, ast.Tuple)):
