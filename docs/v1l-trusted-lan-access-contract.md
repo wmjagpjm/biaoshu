@@ -7,12 +7,14 @@
 
 # V1-L 可信内网访问契约
 
-> **状态：已冻结，尚未实现。**
-> **基线：** `ca7223a`；初始冻结=`2d7dd55`。仅允许 `collab/grok-code-codex-review`，严禁操作 `main`。
+> **状态：生产实现、隔离测试、回归与发布说明已完成并推送。**
+> **基线：** `ca7223a`；初始冻结=`2d7dd55`；测试冻结=`ea01c48`；测试夹具修正=`7c9266e`/`b0f197e`；生产实现=`10b5f3e`。仅允许 `collab/grok-code-codex-review`，严禁操作 `main`。
 > **审计：** A task/review=`msg_dd6c70f130fa4d0e96f3a495fde42f0f`/`msg_092d74fd43f2402bb6f8a783d65274f3`；B task/review=`msg_d4469f174c324471a76a5269f7697caa`/`msg_7d4576573bd049e68d828ed1e3ea5c74`。
 > **双确认：** A question/YES=`msg_9c5880199caa482f88461364fceb1918`/`msg_33d84617361f434e93d6913c2968e15c`；B question/YES=`msg_e424521a7e674153958e331084461021`/`msg_0a67657dd9df443ba1e9eeddfb95409a`。
 > **Q2 反假绿范围修订：** B failure-first/review=`msg_8f1542dacb14405292ca4064d9614af0`/`msg_fe023d1222a7465cb9670f07c94054aa`；Codex question/B YES=`msg_100daab91dec454e8a6a6238407f1d71`/`msg_4745e5c01b2046a6bf74d0ec9fa0ec78`。
 > **Q3 精确语义：** Codex question/B YES=`msg_c3a68603ba344b46aaa30a0eb52f4969`/`msg_0af2ec045e904cd4b2272a4aeef3d3ca`。
+> **最终自动化验收：** V1-L `56 passed / 68 subtests passed`，V1-K `67 passed / 19 subtests passed`，Q8 定点 `5 passed`；前端 lint/build、`py_compile`、两个 PS1 ParseFile/UTF-8 BOM、`git diff --check`、严格白名单、状态七键/单次 Replace 与 TEMP 清理均通过。
+> **未验证：** 未启动真实 LAN 服务，未创建或验证真实 Windows 防火墙规则，未使用隔离数据库/uploads 与真实管理员登录，也未从第二台内网设备验证可达性；这些部署验收不得由自动化测试冒充。
 
 ## 1. 问题真值
 
