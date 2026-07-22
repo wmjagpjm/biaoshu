@@ -7,8 +7,8 @@
 
 # V1-J lightweight 无有效正文解析质量门契约
 
-> **状态：已冻结，待 failure-first、生产实现和 Codex 独立验收。**
-> **基线：** `54eb128e72d286b8f711c6fda7eca41d14de1d9e`；仅 `collab/grok-code-codex-review`，严禁操作 `main`。
+> **状态：已完成、独立验收并推送。**
+> **基线：** `54eb128e72d286b8f711c6fda7eca41d14de1d9e`；冻结=`1e33f1b`，测试=`3917c3a`，实现=`f9562a5`；仅 `collab/grok-code-codex-review`，严禁操作 `main`。
 
 ## 1. 问题真值与优先级
 
@@ -114,3 +114,13 @@ git -C .. diff --check
 - 不改变已上传源文件、失败文档保留、项目手工上传、导出、备份、协作、V2/V3。
 - 启动失败诊断另包设计，默认日用启动继续后台静默、不弹终端/浏览器、不抢焦点。
 - 测试不得读取真实业务文件；合成根清理后必须不存在，消息箱不得写文件内容或敏感信息。
+
+## 9. 完成证据
+
+Grok B 原任务/review_request=`msg_f5f61e84acd248b2a529a901dc14edcd`/`msg_2721edbd24b14ea582fadbc06e0c83c5`。生产未改时新专项真实 **6 failed / 4 passed**，V1-D 真实 **2 failed / 8 passed**；Codex 独立复跑数字一致，均为业务红点。
+
+Codex 审查发现完整 editor-state 指纹漏字段、零 analyze/outline 调用未直接设钩。question/确认=`msg_ad190c69b3c5485da46203af2390f29d`/`msg_f022456ba93948ee8e235c71fdb15fa2`，确认后返修 task/review_request=`msg_14773be035df4aab92cf4d352a4def59`/`msg_34573b6f1457404cbee4902074ffa2d2`。最终测试改为完整 GET 响应深拷贝精确比较，并分别锁定 analyze、outline、LLM 零调用。
+
+Grok A 生产 task/review_request=`msg_9bbf84bad2f94718a01a46341bd37eb0`/`msg_adfaa73157f9476ea33a3a9b66703abb`。Grok A 与 Codex 独立结果一致：V1-J **10 passed**、V1-D **10 passed**、解析引擎/导出/知识库代表回归 **38 passed**；`py_compile`、`git diff --check`、严格四文件和空暂存区通过。未运行后端全量、前端 E2E、真实数据库/uploads、真实 CLI/模型或联网安装。
+
+主协作 worktree 最终 SHA-256：`parse_service.py=32C8B254F479B20D578F673AF1BDB83C4792D38E856D0056948ED02F93C77945`，`knowledge_service.py=FE2B47CC361573E27592518C64B851C13838E0E2737CAD10F2AEF2FFDA75AA66`，V1-J 测试=`913F77EF42BCF183769F251B8BE543E862D80717BD3B4642E4C0F434E3A02BD1`，V1-D 测试=`4E98BC35B39831E09CC7E327C4DB2620F860D4DEDD5FEB83FEBD7207BE721142`。对应 Git blob 依次为 `0ef1e7a429e3d3dd8643503ab9874446b8e4a64b`、`b68d5432855f89f5068b1d57d2a954aa77ac859f`、`8780cfc7687f1920fee2d0f315a47d0b34ace4f6`、`5f966c98b8832b7061795d498106132b2937062d`。B 提交前新测试为 LF，A/主仓检出为 CRLF，原始字节 SHA 因此不同；Git blob 和内容差异均一致，测试未被修改。
