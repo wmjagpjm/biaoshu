@@ -48,3 +48,15 @@ $read = "C:\Users\Administrator\biaoshu\tools\agent-collaboration\Read-AgentMail
 ## Codex 约定
 
 Codex 读取 Grok 的消息后，负责审查范围、风险、diff 和验证结果；需要补充或返工时写入 `codex-to-grok.jsonl`。Codex 不把 API Key、令牌、真实业务数据或外部链接凭据写入消息箱。
+
+## 简化交付流程（2026-07-22 起）
+
+默认采用“Codex 批量举证 → Grok 确认并一次修完 → Codex 单次终验”：
+
+1. Codex 一次性汇总同批问题、证据、风险等级和文件边界，禁止可合并问题逐项往返。
+2. Grok 在同一任务内逐项回答 YES/NO；确认 YES 后直接补 failure-first、修生产并运行精确受影响测试，无须等待第二次授权。
+3. Grok 不重复运行完整回归；Codex 只在最终阶段独立审查 diff，并串行运行一次与风险相称的相关回归。
+4. Codex 仍按 `test-only → production → docs` 分层提交和推送；“一次修完”不表示允许混淆提交层或扩大白名单。
+5. 权限、认证、事务原子性、隐私泄漏、数据损坏和真实安全边界属于高风险例外，继续使用“question → YES → 单独授权返修”；但最终完整回归仍只保留一方独立执行，避免双方重复。
+
+不得取消最终独立验收，也不得由实现者自己的绿测直接替代 Codex 审查。本规则自 V1-M M2 起执行；M1 的历史消息链按当时规则保留。

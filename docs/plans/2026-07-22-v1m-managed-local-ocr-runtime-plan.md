@@ -2,20 +2,28 @@
 模块：V1-M 管理式本机 OCR 自动解析实施计划
 用途：把 OCR 真值、专用 runtime、后端多文件原子接线、前端策略与真实安装拆为可独立验收的四段。
 对接：docs/v1m-managed-local-ocr-runtime-contract.md、P8B/P8C/P8D/P8E、V1-C、V1 路线图。
-二次开发：每阶段只执行已冻结白名单；疑似问题先 question/YES，Grok 不提交，Codex 独立验收和推送。
+二次开发：每阶段只执行已冻结白名单；默认批量举证、Grok 确认并一次修完、Codex 单次终验；高风险问题保留 question/YES/单独授权。
 -->
 
 # V1-M 管理式本机 OCR 自动解析实施计划
 
-> **执行要求：** 使用 `executing-plans`；Grok B 负责 failure-first/高耗费测试，Grok A 负责限定生产实现，Codex 负责独立审查、串行验收、提交与推送。
-> **状态：** A/B 只读审计与 Q1 双确认已完成；当前只冻结契约和 M1 计划，生产未授权。
-> **基线：** `4631d68`；仅协作分支，严禁 `main`。
+> **执行要求：** Grok 承担限定实现和高耗费精确测试，Codex 负责批量举证、独立审查、一次串行终验、提交与推送；协作细则见 `docs/agent-collaboration.md`。
+> **状态：** M1 已完成并推送；M2 只读审计=`msg_cc5b585777684a5ebfa90cffcb62186c`，待冻结八项决策与精确白名单。M3/M4 未开始。
+> **基线：** 当前生产=`a7d640b`；仅协作分支，严禁 `main`。
 
 **目标：** 让扫描 PDF 在本机专用 MinerU runtime 中受控解析，并最终接入既有项目任务/editor-state，同时保留轻量与人工回传路径。
 
 **架构：** M1 先用 image-only PDF 和仓外 manifest 建立真实可判定的 runtime 门，并修复 MinerU 可写根；M2 再让后端按项目权限顺序解析全部 source 文件并单事务落库；M3 增加 `managed` 前端策略；M4 最后由管理员显式安装并运行真实烟测。
 
 **技术栈：** Python 标准库、Pillow、pypdf、SQLAlchemy、FastAPI、React/TypeScript、PowerShell；真实 MinerU 与模型保持仓外独立运行时。
+
+## M1 完成记录（2026-07-22）
+
+- 提交：契约=`9ed3a06`；测试=`3be6d19`/`3b8e42e`/`61dbe38`；生产=`a7d640b`。
+- Codex 独立串行：managed **29 passed**、MinerU **56 passed**、V1-C runtime_preflight **26 passed**、Docling **46 passed**。
+- 真实 Windows junction 只读探针：follow `stat=0x10`、no-follow `lstat=0x2416`，生产 reparse 检测为 true；TEMP left=0。
+- automated/fake-runtime 已通过；真实 CLI/模型、real-runtime/quality 均 did-not-run。M1 不改变 V1 约 94% 口径。
+- M2 起采用简化流程：普通问题批量确认并一次修完，只由 Codex 做一次最终相关回归；权限、事务、隐私、数据损坏和真实安全边界仍保留分段授权。
 
 ---
 
