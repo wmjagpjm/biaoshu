@@ -440,42 +440,325 @@ class HelperUnitTests(unittest.TestCase):
                 ],
             )
 
+    # V1-M M1：子进程可写目录必须全部强制到本次 runtime/output 根，不得继承父环境固定缓存
+    WRITABLE_RUNTIME_ENV_KEYS = (
+        "HOME",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "TEMP",
+        "TMP",
+        "TMPDIR",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "HF_HOME",
+        "TORCH_HOME",
+        "MPLCONFIGDIR",
+        "PYTHONPYCACHEPREFIX",
+    )
+    READONLY_RUNTIME_ENV_KEYS = (
+        "PATH",
+        "SystemRoot",
+        "WINDIR",
+        "LANG",
+        "LC_ALL",
+    )
+
     def test_build_mineru_env_whitelist_offline_and_strips_secrets(self) -> None:
-        parent = {
-            "PATH": "C:\\bin",
-            "SystemRoot": "C:\\Windows",
-            "TEMP": "C:\\Temp",
-            "HTTP_PROXY": "http://proxy.example:8080",
-            "HTTPS_PROXY": "http://proxy.example:8080",
-            "ALL_PROXY": "socks5://proxy.example:1080",
-            "http_proxy": "http://proxy.example:8080",
-            "OPENAI_API_KEY": "sk-test",
-            "ANTHROPIC_API_KEY": "sk-ant",
-            "MINERU_API_KEY": "mk-test",
-            "X_LOCAL_PARSE_TICKET": SENTINEL_TICKET,
-            "RANDOM_SENTINEL": SENTINEL_TICKET,
-            "TICKET": SENTINEL_TICKET,
-            "USERPROFILE": "C:\\Users\\x",
-            "HOME": "/home/x",
-            "NOT_ALLOWED": "drop-me",
-        }
-        env = helper.build_mineru_env(parent)
-        self.assertEqual(env["PATH"], "C:\\bin")
-        self.assertEqual(env["MINERU_MODEL_SOURCE"], "local")
-        self.assertEqual(env["HF_HUB_OFFLINE"], "1")
-        self.assertEqual(env["TRANSFORMERS_OFFLINE"], "1")
-        self.assertNotIn("HTTP_PROXY", env)
-        self.assertNotIn("HTTPS_PROXY", env)
-        self.assertNotIn("ALL_PROXY", env)
-        self.assertNotIn("http_proxy", env)
-        self.assertNotIn("OPENAI_API_KEY", env)
-        self.assertNotIn("ANTHROPIC_API_KEY", env)
-        self.assertNotIn("MINERU_API_KEY", env)
-        self.assertNotIn("X_LOCAL_PARSE_TICKET", env)
-        self.assertNotIn("RANDOM_SENTINEL", env)
-        self.assertNotIn("TICKET", env)
-        self.assertNotIn("NOT_ALLOWED", env)
-        self.assertNotIn(SENTINEL_TICKET, json.dumps(env, ensure_ascii=False))
+        """
+        用途：V1-M 收紧——build_mineru_env(runtime_dir, source_env) 必须绑定本次运行根；
+        可写目录全部等于 runtime_dir；代理/Key/票据不继承；只读系统变量可有限继承。
+        """
+        with tempfile.TemporaryDirectory(prefix="biaoshu-mineru-env-") as td:
+            runtime = Path(td)
+            parent = {
+                "PATH": "C:\\bin",
+                "SystemRoot": "C:\\Windows",
+                "WINDIR": "C:\\Windows",
+                "LANG": "en_US.UTF-8",
+                "LC_ALL": "C",
+                "TEMP": "C:\\Temp\\sentinel-parent",
+                "TMP": "C:\\Temp\\sentinel-parent-tmp",
+                "TMPDIR": "/tmp/sentinel-parent-tmpdir",
+                "HTTP_PROXY": "http://proxy.example:8080",
+                "HTTPS_PROXY": "http://proxy.example:8080",
+                "ALL_PROXY": "socks5://proxy.example:1080",
+                "http_proxy": "http://proxy.example:8080",
+                "OPENAI_API_KEY": "sk-test",
+                "ANTHROPIC_API_KEY": "sk-ant",
+                "MINERU_API_KEY": "mk-test",
+                "X_LOCAL_PARSE_TICKET": SENTINEL_TICKET,
+                "RANDOM_SENTINEL": SENTINEL_TICKET,
+                "TICKET": SENTINEL_TICKET,
+                "CSRF_TOKEN": "csrf-sentinel",
+                "COOKIE": "session=evil",
+                "USERPROFILE": "C:\\Users\\sentinel-user",
+                "HOME": "/home/sentinel-home",
+                "APPDATA": "C:\\Users\\sentinel-user\\AppData\\Roaming",
+                "LOCALAPPDATA": "C:\\Users\\sentinel-user\\AppData\\Local",
+                "XDG_CACHE_HOME": "/home/sentinel-home/.cache",
+                "XDG_CONFIG_HOME": "/home/sentinel-home/.config",
+                "XDG_DATA_HOME": "/home/sentinel-home/.local/share",
+                "HF_HOME": "/home/sentinel-home/.cache/huggingface",
+                "TORCH_HOME": "/home/sentinel-home/.cache/torch",
+                "MPLCONFIGDIR": "/home/sentinel-home/.config/matplotlib",
+                "PYTHONPYCACHEPREFIX": "/home/sentinel-home/.cache/pycache",
+                "NOT_ALLOWED": "drop-me",
+            }
+            try:
+                env = helper.build_mineru_env(runtime, parent)
+            except TypeError as exc:
+                # failure-first：旧签名只接受 0~1 参 → 记为可计数业务 FAIL，而非 ERROR
+                self.fail(
+                    "build_mineru_env 尚未切换为 (runtime_dir, source_env) 双参签名"
+                    f"（failure-first）：{exc}"
+                )
+            self.assertEqual(env["PATH"], "C:\\bin")
+            self.assertEqual(env["SystemRoot"], "C:\\Windows")
+            self.assertEqual(env["MINERU_MODEL_SOURCE"], "local")
+            self.assertEqual(env["HF_HUB_OFFLINE"], "1")
+            self.assertEqual(env["TRANSFORMERS_OFFLINE"], "1")
+            expected = str(runtime.resolve())
+            for key in self.WRITABLE_RUNTIME_ENV_KEYS:
+                with self.subTest(writable=key):
+                    self.assertIn(key, env)
+                    self.assertEqual(str(Path(env[key]).resolve()), expected)
+                    if key in parent:
+                        self.assertNotEqual(env[key], parent[key])
+            for banned in (
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "ALL_PROXY",
+                "http_proxy",
+                "OPENAI_API_KEY",
+                "ANTHROPIC_API_KEY",
+                "MINERU_API_KEY",
+                "X_LOCAL_PARSE_TICKET",
+                "RANDOM_SENTINEL",
+                "TICKET",
+                "CSRF_TOKEN",
+                "COOKIE",
+                "NOT_ALLOWED",
+            ):
+                self.assertNotIn(banned, env)
+            blob = json.dumps(env, ensure_ascii=False)
+            self.assertNotIn(SENTINEL_TICKET, blob)
+            self.assertNotIn("sentinel-parent", blob)
+            self.assertNotIn("sentinel-user", blob)
+            self.assertNotIn("sentinel-home", blob)
+
+    def test_build_mineru_env_requires_existing_runtime_dir(self) -> None:
+        """
+        用途：V1-C 零参/旧单 Mapping 保持兼容；显式 runtime_dir 缺失/非目录必须失败。
+        说明：禁止循环/break/任一异常成功；三种坏路径调用各自独立执行。
+        显式双参必须以 HelperError/ValueError/OSError 业务校验失败；
+        禁止仅因旧签名 TypeError 被当作门已满足；valid 双参仍为主 failure-first。
+        """
+        business_errors = (helper.HelperError, ValueError, OSError)
+
+        # V1-C 兼容：零参 dry-run 合法，只校验离线/白名单语义
+        env0 = helper.build_mineru_env()
+        self.assertEqual(env0["MINERU_MODEL_SOURCE"], "local")
+        self.assertEqual(env0["HF_HUB_OFFLINE"], "1")
+        self.assertEqual(env0["TRANSFORMERS_OFFLINE"], "1")
+        # 旧单 Mapping 兼容：剥离密钥，不得因 V1-M 收紧而硬崩
+        env1 = helper.build_mineru_env(
+            {
+                "PATH": "C:\\compat-bin",
+                "OPENAI_API_KEY": "sk-must-strip",
+                "HTTP_PROXY": "http://proxy.example:1",
+            }
+        )
+        self.assertEqual(env1.get("PATH"), "C:\\compat-bin")
+        self.assertNotIn("OPENAI_API_KEY", env1)
+        self.assertNotIn("HTTP_PROXY", env1)
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            missing = root / "no-such-runtime"
+            file_path = root / "not-a-dir.bin"
+            file_path.write_bytes(b"x")
+            valid = root / "valid-runtime"
+            valid.mkdir()
+
+            # valid 双参：新签名 failure-first 主红（TypeError=签名未切换）
+            try:
+                env_valid = helper.build_mineru_env(valid, {"PATH": "C:\\valid-bin"})
+            except TypeError as exc:
+                self.fail(
+                    "build_mineru_env 尚未切换为 (runtime_dir, source_env) 双参签名"
+                    f"（failure-first）：{exc}"
+                )
+            # 若新签名已就绪：可写根必须绑定 valid，不得静默继承父 HOME/TEMP
+            self.assertEqual(env_valid.get("PATH"), "C:\\valid-bin")
+            self.assertEqual(env_valid.get("MINERU_MODEL_SOURCE"), "local")
+            expected_root = str(valid.resolve())
+            for key in (
+                "HOME",
+                "USERPROFILE",
+                "APPDATA",
+                "LOCALAPPDATA",
+                "TEMP",
+                "TMP",
+                "TMPDIR",
+            ):
+                self.assertIn(key, env_valid)
+                self.assertEqual(str(Path(env_valid[key]).resolve()), expected_root)
+
+            # 坏 runtime：三种调用各自独立执行，禁止 break/条件成功
+            for bad, bad_label in (
+                (missing, "missing"),
+                (file_path, "not_a_dir"),
+            ):
+                # 1) 单参 Path：必须失败（业务异常或旧签名 TypeError 均可计红/绿分支外的失败）
+                with self.subTest(form="single_path", bad=bad_label):
+                    raised_single = False
+                    try:
+                        helper.build_mineru_env(bad)
+                    except business_errors:
+                        raised_single = True
+                    except TypeError:
+                        # 旧签名把 Path 当 Mapping 的 TypeError：仍视为该调用失败
+                        raised_single = True
+                    self.assertTrue(
+                        raised_single,
+                        msg="单参显式 runtime_dir 缺失/非目录必须失败"
+                        "（不得静默回退用户 HOME/TEMP）",
+                    )
+
+                # 2) 显式双参 (bad, None)：必须业务校验失败；TypeError=签名未就绪=failure-first 红
+                with self.subTest(form="dual_none", bad=bad_label):
+                    try:
+                        helper.build_mineru_env(bad, None)
+                        self.fail(
+                            "显式双参 build_mineru_env(bad, None) 必须对坏 runtime 失败"
+                        )
+                    except TypeError as exc:
+                        self.fail(
+                            "显式双参签名未就绪或把 Path 当 Mapping"
+                            f"（failure-first，禁止 TypeError 冒充门通过）：{exc}"
+                        )
+                    except business_errors:
+                        pass
+
+                # 3) 显式双参 (bad, {})：同上，独立执行
+                with self.subTest(form="dual_empty_env", bad=bad_label):
+                    try:
+                        helper.build_mineru_env(bad, {})
+                        self.fail(
+                            "显式双参 build_mineru_env(bad, {}) 必须对坏 runtime 失败"
+                        )
+                    except TypeError as exc:
+                        self.fail(
+                            "显式双参签名未就绪或把 Path 当 Mapping"
+                            f"（failure-first，禁止 TypeError 冒充门通过）：{exc}"
+                        )
+                    except business_errors:
+                        pass
+
+    def test_run_mineru_process_popen_kwargs_bind_cwd_and_writable_env(self) -> None:
+        """
+        用途：V1-M M1 H 主证据——真实 mock Popen kwargs 证明：
+        1) cwd 精确等于本次 output_dir；
+        2) env 中 USERPROFILE/HOME/APPDATA/LOCALAPPDATA/TEMP/TMP/TMPDIR 全部等于 output 根；
+        3) shell=False，且父环境代理/Key/票据哨兵不进入 kwargs.env。
+        counts/kwargs 是主证据；源码字符串扫描仅辅助。
+        """
+        with tempfile.TemporaryDirectory(prefix="biaoshu-mineru-cwd-") as td:
+            root = Path(td)
+            output_dir = root / "out-root"
+            output_dir.mkdir()
+            input_path = root / "sample.pdf"
+            input_path.write_bytes(b"%PDF-1.4 fake")
+            parent_env = {
+                "PATH": "C:\\bin",
+                "SystemRoot": "C:\\Windows",
+                "USERPROFILE": "C:\\Users\\popen-sentinel-user",
+                "HOME": "/home/popen-sentinel-home",
+                "APPDATA": "C:\\Users\\popen-sentinel-user\\AppData\\Roaming",
+                "LOCALAPPDATA": "C:\\Users\\popen-sentinel-user\\AppData\\Local",
+                "TEMP": "C:\\Temp\\popen-sentinel-parent",
+                "TMP": "C:\\Temp\\popen-sentinel-parent-tmp",
+                "TMPDIR": "/tmp/popen-sentinel-parent-tmpdir",
+                "HTTP_PROXY": "http://proxy.example:8080",
+                "OPENAI_API_KEY": "sk-popen-should-not-leak",
+                "X_LOCAL_PARSE_TICKET": SENTINEL_TICKET,
+            }
+            recorded: list[dict[str, Any]] = []
+
+            class _FakeProc:
+                def __init__(self) -> None:
+                    self.returncode = 0
+
+                def wait(self, timeout: float | None = None) -> int:
+                    self.returncode = 0
+                    return 0
+
+                def poll(self) -> int | None:
+                    return self.returncode
+
+                def terminate(self) -> None:
+                    self.returncode = -15
+
+                def kill(self) -> None:
+                    self.returncode = -9
+
+            def spy_popen(cmd: Any, *args: Any, **kwargs: Any):
+                recorded.append(
+                    {
+                        "cmd": list(cmd) if isinstance(cmd, (list, tuple)) else cmd,
+                        "args": args,
+                        "kwargs": kwargs,
+                    }
+                )
+                return _FakeProc()
+
+            with mock.patch.dict(os.environ, parent_env, clear=False):
+                with mock.patch.object(
+                    helper.subprocess, "Popen", side_effect=spy_popen
+                ) as popen_mock:
+                    # 允许实现通过 build_mineru_env(output_dir, ...) 绑定；此处直接跑真实入口
+                    helper.run_mineru_process(
+                        str(root / "mineru.exe"),
+                        input_path,
+                        output_dir,
+                        timeout_seconds=5,
+                    )
+
+            self.assertEqual(popen_mock.call_count, 1, msg="Popen 必须恰好调用 1 次")
+            self.assertEqual(len(recorded), 1)
+            kwargs = recorded[0]["kwargs"]
+            self.assertIs(kwargs.get("shell"), False)
+            # 主证据：cwd 精确 output_dir
+            cwd_raw = kwargs.get("cwd")
+            self.assertIsNotNone(cwd_raw, msg="run_mineru_process 必须向 Popen 传 cwd")
+            self.assertEqual(str(Path(cwd_raw).resolve()), str(output_dir.resolve()))
+            env = kwargs.get("env")
+            self.assertIsInstance(env, dict)
+            expected = str(output_dir.resolve())
+            for key in (
+                "HOME",
+                "USERPROFILE",
+                "APPDATA",
+                "LOCALAPPDATA",
+                "TEMP",
+                "TMP",
+                "TMPDIR",
+            ):
+                with self.subTest(popen_env=key):
+                    self.assertIn(key, env)
+                    self.assertEqual(str(Path(env[key]).resolve()), expected)
+                    self.assertNotEqual(env[key], parent_env.get(key))
+            blob = json.dumps(env, ensure_ascii=False)
+            self.assertNotIn("popen-sentinel-user", blob)
+            self.assertNotIn("popen-sentinel-home", blob)
+            self.assertNotIn("popen-sentinel-parent", blob)
+            self.assertNotIn(SENTINEL_TICKET, blob)
+            self.assertNotIn("sk-popen-should-not-leak", blob)
+            self.assertNotIn("HTTP_PROXY", env)
+            self.assertNotIn("OPENAI_API_KEY", env)
+            self.assertNotIn("X_LOCAL_PARSE_TICKET", env)
 
     def test_validate_filename_basename(self) -> None:
         self.assertEqual(helper.validate_filename_basename("a.pdf"), "a.pdf")
