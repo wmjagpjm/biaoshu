@@ -1,7 +1,8 @@
 """
-模块：V1-D 合成文档结构质量门（failure-first）
-用途：用系统 TEMP 合成 DOCX/PDF/TXT/MD 锁定 lightweight 标题/表格/页序与扫描提示契约。
-对接：app.services.parse_service.parse_file_to_markdown；V1-D 契约 §3–§7。
+模块：V1-D 合成文档结构质量门（含 V1-J 空文失败语义更新）
+用途：用系统 TEMP 合成 DOCX/PDF/TXT/MD 锁定 lightweight 标题/表格/页序与扫描提示契约；
+  V1-J 起全空 DOCX/全 blank PDF 改为精确 NoUsableTextError，混合页与正文+空表反误伤。
+对接：app.services.parse_service.parse_file_to_markdown；V1-D/V1-J 契约。
 二次开发：仅合成数据与标准库/既有依赖；禁止 skip/xfail、fake engine、真实业务样本与数据库。
 """
 
@@ -12,9 +13,11 @@ import shutil
 import tempfile
 from pathlib import Path
 
+import pytest
 from docx import Document
 from pypdf import PdfWriter
 
+from app.services import parse_service
 from app.services.parse_service import parse_file_to_markdown
 
 # ---------------------------------------------------------------------------
@@ -55,6 +58,10 @@ EMPTY_DOCX_PLACEHOLDER = "（DOCX 无段落文本）"
 EMPTY_TABLE_PLACEHOLDER = "（空表）"
 SCAN_HINT = "（本页未提取到文本，可能是扫描件，请用本地 MinerU）"
 GFM_SEP_2 = "| --- | --- |"
+# V1-J 固定中文：全空 DOCX/全 blank PDF 必须抛此错误（继承 ValueError 的 NoUsableTextError）
+FIXED_NO_USABLE_TEXT_ERR = (
+    "未提取到可用正文，请检查文件是否为空；扫描版 PDF 请使用本地 MinerU"
+)
 
 # 本模块创建的全部 TEMP 根；清理后必须为空存在性，且不得用空列表假绿
 _TEMP_ROOTS: list[Path] = []
@@ -303,15 +310,19 @@ def test_docx_empty_cell_pipe_escape_and_newline_fold():
         _assert_temp_gone(root)
 
 
-def test_docx_empty_keeps_placeholder():
-    """空 DOCX 保持既有「（DOCX 无段落文本）」。"""
+def test_docx_empty_raises_no_usable_text():
+    """V1-J：全空 DOCX 必须抛精确 NoUsableTextError（取代旧占位 success）。"""
     root = _make_temp_dir()
     try:
         name = "synth_empty.docx"
         path = root / name
         _write_empty_docx(path)
-        md = parse_file_to_markdown(path, name)
-        assert md == f"{HEADER_PREFIX}{name}\n\n{EMPTY_DOCX_PLACEHOLDER}\n"
+        with pytest.raises(ValueError, match=re.escape(FIXED_NO_USABLE_TEXT_ERR)) as ei:
+            parse_file_to_markdown(path, name)
+        assert str(ei.value) == FIXED_NO_USABLE_TEXT_ERR
+        assert type(ei.value) is parse_service.NoUsableTextError
+        # 不得再返回旧占位 success 串
+        assert EMPTY_DOCX_PLACEHOLDER not in str(ei.value)
     finally:
         _cleanup_temp_root(root)
         _assert_temp_gone(root)
@@ -393,8 +404,8 @@ def test_pdf_two_page_text_order_without_scan_hint():
         _assert_temp_gone(root)
 
 
-def test_pdf_two_blank_pages_scan_hint_count_exactly_two():
-    """PdfWriter 两页 blank：扫描提示 count=2 且严格 p1<hint1<p2<hint2。"""
+def test_pdf_two_blank_pages_raises_no_usable_text():
+    """V1-J：PdfWriter 两页全 blank 必须抛精确 NoUsableTextError（取代旧 SCAN_HINT success）。"""
     root = _make_temp_dir()
     try:
         name = "synth_two_blank.pdf"
@@ -406,19 +417,42 @@ def test_pdf_two_blank_pages_scan_hint_count_exactly_two():
             writer.write(fh)
         assert path.is_file() and path.stat().st_size > 0
 
+        with pytest.raises(ValueError, match=re.escape(FIXED_NO_USABLE_TEXT_ERR)) as ei:
+            parse_file_to_markdown(path, name)
+        assert str(ei.value) == FIXED_NO_USABLE_TEXT_ERR
+        assert type(ei.value) is parse_service.NoUsableTextError
+        assert SCAN_HINT not in str(ei.value)
+    finally:
+        _cleanup_temp_root(root)
+        _assert_temp_gone(root)
+
+
+def test_pdf_mixed_text_and_blank_keeps_scan_hint_order():
+    """
+    V1-J 反误伤：混合 PDF（页1真实锚点 + 页2 空）继续 success；
+    空页 SCAN_HINT 恰好 1 次，顺序 p1 < 锚点 < p2 < hint。
+    """
+    root = _make_temp_dir()
+    try:
+        name = "synth_mixed_text_blank.pdf"
+        path = root / name
+        path.write_bytes(build_two_page_text_pdf(ANCHOR_PAGE1, ""))
+        assert path.is_file() and path.stat().st_size > 0
+
         md = parse_file_to_markdown(path, name)
         assert md.startswith(f"{HEADER_PREFIX}{name}\n\n")
         p1 = "## 第 1 页"
         p2 = "## 第 2 页"
         assert p1 in md
         assert p2 in md
-        assert md.count(SCAN_HINT) == 2
-        # 严格页内顺序：第1页标题 < 第1页提示 < 第2页标题 < 第2页提示
+        assert ANCHOR_PAGE1 in md
+        assert md.count(SCAN_HINT) == 1
+        assert FIXED_NO_USABLE_TEXT_ERR not in md
         i_p1 = md.index(p1)
-        i_hint1 = md.index(SCAN_HINT)
+        i_a1 = md.index(ANCHOR_PAGE1)
         i_p2 = md.index(p2)
-        i_hint2 = md.index(SCAN_HINT, i_hint1 + 1)
-        assert i_p1 < i_hint1 < i_p2 < i_hint2
+        i_hint = md.index(SCAN_HINT)
+        assert i_p1 < i_a1 < i_p2 < i_hint
     finally:
         _cleanup_temp_root(root)
         _assert_temp_gone(root)
