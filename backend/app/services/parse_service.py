@@ -10,12 +10,21 @@ DOCX 结构边界（V1-D）：
 - 普通表格输出 GFM pipe table（首行表头、--- 分隔、最大列数右侧补空）；空表固定「（空表）」。
 - 复杂合并单元格/嵌套表仅接受 python-docx 展平视图，不声明 rowspan/colspan 支持；
   图片、图表、SmartArt、文本框、页眉页脚、脚注等均不处理。
+
+V1-J 无有效正文质量门：
+- 各格式在结构提取完成后、return Markdown 之前判定；禁止扫描最终 Markdown/标题/占位串。
+- 无有效正文统一抛 NoUsableTextError（继承 ValueError），固定中文错误文案。
 """
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
+
+# 无有效正文固定中文（契约精确相等；不得拼接路径/类名/堆栈）
+_NO_USABLE_TEXT_MSG = (
+    "未提取到可用正文，请检查文件是否为空；扫描版 PDF 请使用本地 MinerU"
+)
 
 # Heading 样式名 → Markdown 标题前缀（精确匹配，含末尾空格占位由调用方拼）
 _HEADING_STYLE_PREFIX: dict[str, str] = {
@@ -29,6 +38,18 @@ _HEADING_STYLE_PREFIX: dict[str, str] = {
 
 # 单元格内空白：CR/LF/制表/连续空白统一折叠为单个 ASCII 空格
 _CELL_WS_RE = re.compile(r"[ \t\r\n]+")
+
+
+class NoUsableTextError(ValueError):
+    """
+    用途：lightweight 解析未提取到任何可用正文时抛出。
+    契约：继承 ValueError；str(exc) 必须为固定中文，不含路径/类名/堆栈。
+    """
+
+
+def _raise_no_usable_text() -> None:
+    """用途：统一抛出固定中文 NoUsableTextError。"""
+    raise NoUsableTextError(_NO_USABLE_TEXT_MSG)
 
 
 def _normalize_cell_text(raw: str | None) -> str:
@@ -119,12 +140,39 @@ def _docx_body_to_markdown_blocks(doc) -> list[str]:
     return parts
 
 
+def _docx_has_usable_text(doc) -> bool:
+    """
+    用途：基于 DOCX 结构真值判断是否存在有效正文。
+    规则：至少一个段落 text.strip() 非空，或至少一个表格单元格 text.strip() 非空。
+    说明：不得把 GFM 分隔线或「（空表）」占位当正文；仅看原始段落/单元格。
+    """
+    from docx.oxml.ns import qn  # type: ignore
+    from docx.table import Table  # type: ignore
+    from docx.text.paragraph import Paragraph  # type: ignore
+
+    body = doc.element.body
+    tag_p = qn("w:p")
+    tag_tbl = qn("w:tbl")
+    for child in body.iterchildren():
+        if child.tag == tag_p:
+            text = (Paragraph(child, doc).text or "").strip()
+            if text:
+                return True
+        elif child.tag == tag_tbl:
+            table = Table(child, doc)
+            for row in table.rows:
+                for cell in row.cells:
+                    if (cell.text or "").strip():
+                        return True
+    return False
+
+
 def parse_file_to_markdown(path: Path, original_name: str) -> str:
     """
     用途：按扩展名选择解析器，输出 Markdown 字符串。
 
     DOCX：按 document.element.body 的 w:p / w:tbl 原始顺序构造块；
-    Heading 1–6 映射标题，普通表格转 GFM，空文档保持「（DOCX 无段落文本）」。
+    Heading 1–6 映射标题，普通表格转 GFM；无有效正文抛 NoUsableTextError。
     复杂版式（合并单元格语义、嵌套表、图片等）不在本函数还原范围内。
     """
     suffix = path.suffix.lower()
@@ -132,7 +180,10 @@ def parse_file_to_markdown(path: Path, original_name: str) -> str:
 
     if suffix in {".txt", ".md", ".markdown"}:
         text = path.read_text(encoding="utf-8", errors="replace")
-        return header + text.strip() + "\n"
+        stripped = text.strip()
+        if not stripped:
+            _raise_no_usable_text()
+        return header + stripped + "\n"
 
     if suffix == ".docx":
         try:
@@ -140,6 +191,9 @@ def parse_file_to_markdown(path: Path, original_name: str) -> str:
         except ImportError as exc:
             raise RuntimeError("未安装 python-docx，无法解析 DOCX") from exc
         doc = Document(str(path))
+        # 结构真值质量门：至少一个非空段落或单元格，禁止扫描最终 Markdown
+        if not _docx_has_usable_text(doc):
+            _raise_no_usable_text()
         parts = _docx_body_to_markdown_blocks(doc)
         body = "\n\n".join(parts) if parts else "（DOCX 无段落文本）"
         return header + body + "\n"
@@ -150,20 +204,33 @@ def parse_file_to_markdown(path: Path, original_name: str) -> str:
         except ImportError as exc:
             raise RuntimeError("未安装 pypdf，无法解析 PDF") from exc
         reader = PdfReader(str(path))
-        pages: list[str] = []
-        for i, page in enumerate(reader.pages, start=1):
+        # 逐页 extract_text 结构真值；至少一页 strip 非空才 success
+        page_texts: list[str] = []
+        has_usable = False
+        for page in reader.pages:
             try:
                 t = (page.extract_text() or "").strip()
             except Exception:
                 t = ""
             if t:
+                has_usable = True
+            page_texts.append(t)
+        if not has_usable:
+            # 零页或全 blank
+            _raise_no_usable_text()
+        pages: list[str] = []
+        for i, t in enumerate(page_texts, start=1):
+            if t:
                 pages.append(f"## 第 {i} 页\n\n{t}")
             else:
-                pages.append(f"## 第 {i} 页\n\n（本页未提取到文本，可能是扫描件，请用本地 MinerU）")
-        body = "\n\n".join(pages) if pages else "（PDF 无页面）"
+                pages.append(
+                    f"## 第 {i} 页\n\n"
+                    "（本页未提取到文本，可能是扫描件，请用本地 MinerU）"
+                )
+        body = "\n\n".join(pages)
         return header + body + "\n"
 
-    # 未知类型：尝试按文本读
+    # 未知类型：尝试按文本读（降级策略不变；本包不收紧未知扩展名）
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
         return header + f"> 未识别扩展名 `{suffix}`，按文本读取\n\n" + text[:50000]

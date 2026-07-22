@@ -399,6 +399,16 @@ def index_document(
         db.commit()
         db.refresh(doc)
         return doc
+    except parse_service.NoUsableTextError as exc:
+        # V1-J：无有效正文 → 物理删除该文档全部旧 chunk；保留文档行与磁盘文件
+        _replace_chunks(db, workspace_id, doc, [])
+        doc.status = "failed"
+        doc.status_message = str(exc)
+        doc.chunk_count = 0
+        doc.updated_at = _now()
+        db.commit()
+        db.refresh(doc)
+        return doc
     except Exception as exc:  # noqa: BLE001
         doc.status = "failed"
         doc.status_message = f"{type(exc).__name__}: {exc}"[:1000]
