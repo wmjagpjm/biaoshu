@@ -16,10 +16,13 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import secrets
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import delete, select
@@ -44,6 +47,29 @@ from app.services import (
 from app.services.export_service import build_docx_bytes
 from app.services.llm_service import LlmCallError, LlmConfigError
 from app.services.project_service import ProjectNotFoundError, get_project, update_project
+
+logger = logging.getLogger(__name__)
+
+# V1-M M2 parse 聚合与门限
+_SOURCE_SEPARATOR = "\n\n<!-- BIAOSHU_SOURCE_SEPARATOR -->\n\n"
+_MAX_SOURCE_FILES = 10
+_MAX_TOTAL_SOURCE_BYTES = 200 * 1024 * 1024
+_MAX_MARKDOWN_CODEPOINTS = 1_000_000
+_MAX_MARKDOWN_UTF8_BYTES = 2 * 1024 * 1024
+_FILE_ATTR_REPARSE = 0x400
+_MSG_PARSE_FINALIZER_FAILED = "任务落盘失败"
+_MSG_TOO_MANY_SOURCES = "源文件数量超过上限"
+_MSG_TOTAL_SIZE = "源文件总大小超过上限"
+_MSG_SIZE_MISMATCH = "源文件大小不一致"
+_MSG_LEAF_REPARSE = "源文件链接或重解析点被拒绝"
+_MSG_PARENT_REPARSE = "源文件父目录链接或重解析点被拒绝"
+_MSG_TRAVERSAL = "源文件路径越界被拒绝"
+_MSG_CODEPOINTS = "解析正文码点超过上限"
+_MSG_UTF8_BYTES = "解析正文体积超过上限"
+_MSG_MANAGED_UNCONFIGURED = "运行时清单无效"
+_MSG_MANAGED_INTERNAL = "预检内部错误"
+_MANAGED_UNCONFIGURED_CODE = "runtime_manifest_invalid"
+_MANAGED_INTERNAL_CODE = "internal_error"
 
 ALLOWED_TYPES = frozenset(
     {
@@ -86,6 +112,9 @@ ERR_TASK_BASE_CHANGED = "任务基于的编辑内容已变化，请重新载入�
 # 九类 writer upsert 非版本冲突失败：固定中文脱敏（禁止回显 SQL/路径/表名/异常类型）
 MSG_TASK_EDITOR_UPSERT_FAILED = "编辑内容写入失败，请重试"
 
+# _set_task result 未传哨兵：与显式 result=None（清空）区分
+_RESULT_UNSET: Any = object()
+
 
 def _upsert_editor_state_for_task(
     db: Session,
@@ -99,7 +128,8 @@ def _upsert_editor_state_for_task(
     二次开发：
       - EditorStateVersionConflict 原样上抛，保持 stale 固定语义；
       - 其他 upsert 异常脱敏为固定 RuntimeError，from 保留原链供日志，禁止进 REST/SSE；
-      - actor_user_id 须由调用方从任务行命名传入，禁止读 Request/线程全局。
+      - actor_user_id 须由调用方从任务行命名传入，禁止读 Request/线程全局；
+      - 可透传 commit=False 供 parse finalizer 同事务提交。
     """
     kwargs.pop("revision_source_kind", None)
     try:
@@ -363,13 +393,16 @@ def _set_task(
     status: str | None = None,
     progress: int | None = None,
     message: str | None = None,
-    result: Any = None,
+    result: Any = _RESULT_UNSET,
     error: str | None = None,
     force: bool = False,
+    commit: bool = True,
 ) -> None:
     """
-    用途：更新任务行并 commit；status/progress 真变化时同事务写事件。
+    用途：更新任务行并默认 commit；status/progress 真变化时同事务写事件。
     force=False 时若库中已是 cancelled，拒绝再改写为其它终态（除保留 cancelled）。
+    commit=False：仅 flush，供 parse finalizer 与 editor/project 同事务唯一提交。
+    result 默认不改；显式 None 清空 result_json。
     """
     if not force:
         db.refresh(task)
@@ -386,10 +419,11 @@ def _set_task(
         task.progress = max(0, min(100, progress))
     if message is not None:
         task.message = message[:1000]
-    if result is not None:
-        task.result_json = _dumps(result)
+    if result is not _RESULT_UNSET:
+        task.result_json = None if result is None else _dumps(result)
+    # 允许显式清空 error（失败后成功包）或写入失败文案
     if error is not None:
-        task.error = error[:4000]
+        task.error = error[:4000] if error else None
     task.updated_at = _now()
     # 仅公开状态/进度变化记事件；message/error/result 单独变化不计
     workspace_id = _resolve_task_workspace_id(db, task)
@@ -400,8 +434,11 @@ def _set_task(
         prev_status=prev_status,
         prev_progress=prev_progress,
     )
-    db.commit()
-    db.refresh(task)
+    if commit:
+        db.commit()
+        db.refresh(task)
+    else:
+        db.flush()
 
 
 def _assert_not_cancelled(db: Session, task: ProjectTaskRow) -> None:
@@ -664,7 +701,9 @@ def _execute_task(db: Session, workspace_id: str, task: ProjectTaskRow) -> None:
         else:
             raise ValueError(f"未知任务类型: {task.type}")
     except TaskCancelled:
-        # 保持 cancel_task 写入的状态，仅补全 message
+        # P2：先丢弃同 Session 内先前 flush（如 parse finalizer 五域），
+        # 再 refresh 取消态；只提交取消自身必要字段，禁止携带部分写回。
+        db.rollback()
         db.refresh(task)
         if task.status == "cancelled":
             if not task.message:
@@ -779,6 +818,219 @@ def _ensure_state(db: Session, project_id: str) -> ProjectEditorStateRow:
     return row
 
 
+def _is_symlink_or_reparse(path: Path) -> bool:
+    """用途：no-follow 判定叶或目录是否为 symlink/reparse。"""
+    try:
+        if path.is_symlink():
+            return True
+    except OSError:
+        pass
+    try:
+        st = path.lstat()
+        attrs = int(getattr(st, "st_file_attributes", 0) or 0)
+        if attrs & _FILE_ATTR_REPARSE:
+            return True
+    except OSError:
+        pass
+    return False
+
+
+def _stat_nofollow_size(path: Path) -> int:
+    """用途：读取普通文件字节数；优先 no-follow。"""
+    try:
+        st = path.stat(follow_symlinks=False)  # type: ignore[call-arg]
+    except TypeError:
+        st = path.stat()
+    except OSError:
+        st = path.stat()
+    return int(st.st_size)
+
+
+def _literal_source_path(
+    settings: Any, project_id: str, stored_name: str
+) -> Path:
+    """
+    用途：构造 source 字面路径（不 follow）；穿越在此拒绝。
+    二次开发：必须先检查叶 reparse/symlink，再 resolve 跟随。
+    """
+    name = Path(stored_name).name
+    if not name or name != stored_name:
+        raise ValueError(_MSG_TRAVERSAL)
+    root = Path(settings.upload_dir).resolve() / project_id
+    return root / name
+
+
+def _validate_parse_sources(
+    settings: Any,
+    project_id: str,
+    files: list[Any],
+) -> list[tuple[Any, Path]]:
+    """
+    用途：10 文件/200MiB/大小一致/no-follow 叶与父目录/穿越门；零 parser 前置。
+    返回：[(row, path), ...] 与 files 同序。
+    """
+    if len(files) > _MAX_SOURCE_FILES:
+        raise ValueError(_MSG_TOO_MANY_SOURCES)
+
+    resolved: list[tuple[Any, Path]] = []
+    total = 0
+    for row in files:
+        try:
+            leaf = _literal_source_path(settings, project_id, row.stored_name)
+        except ValueError:
+            raise
+        # 叶 symlink/reparse（先于 resolve 跟随，避免 junction 被当成越界）
+        if _is_symlink_or_reparse(leaf):
+            raise ValueError(_MSG_LEAF_REPARSE)
+        parent = leaf.parent
+        if _is_symlink_or_reparse(parent):
+            raise ValueError(_MSG_PARENT_REPARSE)
+        try:
+            path = file_service.resolve_path(settings, project_id, row.stored_name)
+        except ValueError as exc:
+            raise ValueError(_MSG_TRAVERSAL) from exc
+        try:
+            if not leaf.exists() and not path.is_file():
+                raise RuntimeError("文件已丢失，请重新上传")
+            actual = _stat_nofollow_size(leaf if leaf.exists() else path)
+        except ValueError:
+            raise
+        except RuntimeError:
+            raise
+        except OSError as exc:
+            raise RuntimeError("文件已丢失，请重新上传") from exc
+
+        declared = int(getattr(row, "size_bytes", 0) or 0)
+        if declared != actual:
+            raise ValueError(_MSG_SIZE_MISMATCH)
+        total += actual
+        if total > _MAX_TOTAL_SOURCE_BYTES:
+            raise ValueError(_MSG_TOTAL_SIZE)
+        resolved.append((row, path))
+    return resolved
+
+
+def _enforce_markdown_caps(md: str) -> None:
+    """
+    用途：聚合正文码点与 UTF-8 双上限。
+    规则：两者皆超时，ASCII（码点==字节）优先报体积；多字节优先报码点。
+    """
+    cp = len(md)
+    n_utf8 = len(md.encode("utf-8"))
+    over_cp = cp > _MAX_MARKDOWN_CODEPOINTS
+    over_utf8 = n_utf8 > _MAX_MARKDOWN_UTF8_BYTES
+    if over_cp and over_utf8:
+        if n_utf8 == cp:
+            raise ValueError(_MSG_UTF8_BYTES)
+        raise ValueError(_MSG_CODEPOINTS)
+    if over_cp:
+        raise ValueError(_MSG_CODEPOINTS)
+    if over_utf8:
+        raise ValueError(_MSG_UTF8_BYTES)
+
+
+def _fail_managed_task(
+    db: Session,
+    task: ProjectTaskRow,
+    *,
+    diagnostic_code: str,
+    error: str,
+) -> None:
+    """用途：managed 失败终态；result 精确二键 engine/diagnosticCode。"""
+    _set_task(
+        db,
+        task,
+        status="failed",
+        progress=100,
+        message="任务失败",
+        error=error,
+        result={"engine": "managed", "diagnosticCode": diagnostic_code},
+    )
+
+
+def _parse_finalize_success(
+    db: Session,
+    workspace_id: str,
+    project_id: str,
+    task: ProjectTaskRow,
+    *,
+    md: str,
+    engine: str,
+    file_count: int,
+    expected: Any,
+) -> None:
+    """
+    用途：parse 专用 finalizer——editor-state + revision + project + task success
+      同事务唯一 commit；任一步异常 rollback 后写固定 failed。
+    """
+    try:
+        _upsert_editor_state_for_task(
+            db,
+            workspace_id,
+            project_id,
+            parsed_markdown=md,
+            expected_state_version=expected,
+            actor_user_id=getattr(task, "actor_user_id", None),
+            commit=False,
+            # 空账本只记一条成功 after，满足 parse 成功包净 +1 修订
+            revision_single_on_empty_ledger=True,
+        )
+        update_project(
+            db,
+            workspace_id,
+            project_id,
+            status="analyzing",
+            technical_plan_step=1,
+            commit=False,
+        )
+        _set_task(
+            db,
+            task,
+            status="success",
+            progress=100,
+            message="解析完成",
+            error="",
+            result={
+                "engine": engine,
+                "fileCount": file_count,
+                "chars": len(md),
+            },
+            commit=False,
+        )
+        # flush 后 identity 变 clean；提交前再标脏，保证同事务最终 commit 可被观测
+        from sqlalchemy.orm.attributes import flag_modified
+
+        flag_modified(task, "status")
+        flag_modified(task, "progress")
+        project = db.get(Project, project_id)
+        if project is not None:
+            flag_modified(project, "status")
+        # P5：唯一 commit 成功后立即返回；禁止 refresh/再读，避免已提交成功包被后置 DB 故障映射为 failed
+        db.commit()
+        return
+    except TaskCancelled:
+        # P2：取消不得提交已 flush 的 editor/revision/project；先 rollback 再抛
+        db.rollback()
+        raise
+    except editor_state_service.EditorStateVersionConflict:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        try:
+            _set_task(
+                db,
+                task,
+                status="failed",
+                progress=100,
+                message="任务失败",
+                error=_MSG_PARSE_FINALIZER_FAILED,
+                result=None,
+            )
+        except TaskCancelled:
+            return
+
+
 def _run_parse(
     db: Session,
     workspace_id: str,
@@ -787,55 +1039,151 @@ def _run_parse(
     payload: dict | None = None,
 ) -> None:
     """
-    用途：按可插拔引擎调度解析上传文件，成功后写入 editor-state.parsedMarkdown。
-    对接：parse_engines；payload.engine（缺省/空白=lightweight；非法/未注册则任务 failed）。
-    二次开发：失败不得覆盖已有 parsedMarkdown；全文权威仍在 editor-state，result 仅摘要。
+    用途：按引擎解析项目全部 source（ASC），成功后单事务写入 editor-state。
+    对接：parse_engines（lightweight）；managed_parse_runtime_service（managed）。
+    二次开发：失败不得覆盖已有 parsedMarkdown；result 仅三键/二键摘要。
     """
     settings = get_settings()
-    files = file_service.list_files(db, workspace_id, project_id)
+    files = file_service.list_files_for_parse(db, workspace_id, project_id)
     if not files:
         raise ValueError("请先上传招标文件")
     _assert_not_cancelled(db, task)
-    _set_task(db, task, progress=20, message=f"解析 {files[0].filename}…")
-    path = file_service.resolve_path(settings, project_id, files[0].stored_name)
-    if not path.exists():
-        raise RuntimeError("文件已丢失，请重新上传")
-    _assert_not_cancelled(db, task)
 
-    # 从 payload 解析引擎名：缺失/null/空白→lightweight；仅非空字符串合法
-    raw_engine = (payload or {}).get("engine")
-    engine_name = parse_engines.resolve_engine_name(raw_engine)
-    _set_task(db, task, progress=50, message=f"提取文本（引擎：{engine_name}）…")
-    # 调度失败或引擎异常时在此抛出，不写 state，保留既有 parsedMarkdown
-    md, used_engine = parse_engines.parse_with_engine(
-        engine_name, path, files[0].filename
-    )
-
-    expected = _require_payload_expected_version(payload)
-    # 禁止直接 ORM 覆盖；最终写走带 expected 的 upsert CAS
-    _upsert_editor_state_for_task(
-        db,
-        workspace_id,
-        project_id,
-        parsed_markdown=md,
-        expected_state_version=expected,
-        actor_user_id=getattr(task, "actor_user_id", None),
-    )
-    update_project(
-        db, workspace_id, project_id, status="analyzing", technical_plan_step=1
-    )
+    validated = _validate_parse_sources(settings, project_id, files)
     _set_task(
         db,
         task,
-        status="success",
-        progress=100,
-        message="解析完成",
-        result={
-            "parsedMarkdown": md[:2000],
-            "chars": len(md),
-            "filename": files[0].filename,
-            "engine": used_engine,
-        },
+        progress=20,
+        message=f"解析 {len(validated)} 个源文件…",
+    )
+
+    raw_engine = (payload or {}).get("engine")
+    is_managed = isinstance(raw_engine, str) and raw_engine.strip() == "managed"
+    if is_managed:
+        engine_name = "managed"
+    else:
+        engine_name = parse_engines.resolve_engine_name(raw_engine)
+
+    _assert_not_cancelled(db, task)
+    _set_task(db, task, progress=50, message=f"提取文本（引擎：{engine_name}）…")
+
+    md = ""
+    used_engine = engine_name
+    file_count = len(validated)
+
+    if is_managed:
+        from app.services import managed_parse_runtime_service as managed_svc
+
+        manifest = str(getattr(settings, "managed_ocr_manifest_path", "") or "").strip()
+        if not manifest:
+            _fail_managed_task(
+                db,
+                task,
+                diagnostic_code=_MANAGED_UNCONFIGURED_CODE,
+                error=_MSG_MANAGED_UNCONFIGURED,
+            )
+            return
+
+        sources = [
+            managed_svc.ManagedSource(
+                path=path,
+                filename=str(row.filename or path.name),
+                expected_size=int(getattr(row, "size_bytes", 0) or 0),
+            )
+            for row, path in validated
+        ]
+
+        def _cancel_check() -> bool:
+            try:
+                db.refresh(task)
+            except Exception:
+                return False
+            return task.status == "cancelled"
+
+        core_mod = managed_svc.get_core_module()
+        err_cls = getattr(core_mod, "PreflightError")
+        try:
+            out = managed_svc.run_managed_parse(
+                sources,
+                manifest_path=manifest,
+                cancel_check=_cancel_check,
+            )
+            md = out.markdown
+            file_count = int(out.file_count)
+            used_engine = "managed"
+        except err_cls as exc:
+            # P6：只信任 diagnostic_code 白名单；error 由 core.message_for_code 重生固定 M1 中文
+            # 禁止读取/使用 exc.message、str(exc)、args 或 error alias，防止路径/正文泄漏
+            raw_code = getattr(exc, "diagnostic_code", None)
+            known_codes = {
+                "runtime_manifest_invalid",
+                "cli_missing",
+                "model_missing",
+                "disk_insufficient",
+                "quality_precondition_failed",
+                "parser_failed",
+                "parser_timeout",
+                "output_invalid",
+                "ocr_marker_missing",
+                "interrupted",
+                "internal_error",
+                "argument_invalid",
+            }
+            if isinstance(raw_code, str) and raw_code in known_codes:
+                code = raw_code
+                msg_fn = getattr(core_mod, "message_for_code", None)
+                if callable(msg_fn):
+                    msg = msg_fn(code)
+                else:
+                    code = _MANAGED_INTERNAL_CODE
+                    msg = _MSG_MANAGED_INTERNAL
+            else:
+                code = _MANAGED_INTERNAL_CODE
+                msg = _MSG_MANAGED_INTERNAL
+            try:
+                _fail_managed_task(db, task, diagnostic_code=code, error=msg)
+            except TaskCancelled:
+                return
+            return
+        except TaskCancelled:
+            raise
+        except Exception as exc:
+            logger.exception("managed parse 内部错误")
+            try:
+                _fail_managed_task(
+                    db,
+                    task,
+                    diagnostic_code=_MANAGED_INTERNAL_CODE,
+                    error=_MSG_MANAGED_INTERNAL,
+                )
+            except TaskCancelled:
+                return
+            return
+    else:
+        parts: list[str] = []
+        for row, path in validated:
+            _assert_not_cancelled(db, task)
+            part, used_engine = parse_engines.parse_with_engine(
+                engine_name, path, row.filename
+            )
+            parts.append(part)
+            # 逐步检查输出上限（超限 parser 精确调用数由已解析份数决定）
+            trial = part if len(parts) == 1 else _SOURCE_SEPARATOR.join(parts)
+            _enforce_markdown_caps(trial)
+        md = parts[0] if len(parts) == 1 else _SOURCE_SEPARATOR.join(parts)
+        file_count = len(parts)
+
+    _enforce_markdown_caps(md)
+    expected = _require_payload_expected_version(payload)
+    _parse_finalize_success(
+        db,
+        workspace_id,
+        project_id,
+        task,
+        md=md,
+        engine=used_engine,
+        file_count=file_count,
+        expected=expected,
     )
 
 

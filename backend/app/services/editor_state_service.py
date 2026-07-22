@@ -699,6 +699,8 @@ def upsert_editor_state(
     business_commit: Any = ...,
     revision_source_kind: str | None = None,
     actor_user_id: str | None = None,
+    commit: bool = True,
+    revision_single_on_empty_ledger: bool = False,
 ) -> dict:
     """
     用途：部分更新；analysis 与 analysis_overview 双写；商务字段合并进 business_json。
@@ -840,18 +842,38 @@ def upsert_editor_state(
             from app.services.editor_state_revision_service import (
                 record_editor_state_transition,
             )
+            from app.models.entities import EditorStateRevisionRow
+            from sqlalchemy import select as _sa_select
+
+            before_for_rev = current_state
+            # V1-M parse 成功包：空账本时只记一条 after，避免 before 补账把净增计成 2
+            if revision_single_on_empty_ledger and current_state is not None:
+                has_any = db.execute(
+                    _sa_select(EditorStateRevisionRow.id)
+                    .where(
+                        EditorStateRevisionRow.workspace_id == workspace_id,
+                        EditorStateRevisionRow.project_id == project_id,
+                    )
+                    .limit(1)
+                ).first()
+                if has_any is None:
+                    before_for_rev = response
 
             record_editor_state_transition(
                 db,
                 workspace_id,
                 project_id,
-                before_state=current_state,
+                before_state=before_for_rev,
                 after_state=response,
                 source_kind=revision_source_kind,
                 actor_user_id=actor_user_id,
             )
 
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            # parse finalizer：只 flush，由调用方唯一 commit
+            db.flush()
     except EditorStateVersionConflict:
         db.rollback()
         raise

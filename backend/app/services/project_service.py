@@ -164,10 +164,11 @@ def update_project(
     word_count: int | None = None,
     kind: str | None = None,
     linked_project_id: str | None = ...,  # type: ignore[assignment]
+    commit: bool = True,
 ) -> Project:
     """
     用途：部分更新项目；仅非 None 字段生效；自动刷新 updated_at。
-    对接：PATCH /api/projects/{id}
+    对接：PATCH /api/projects/{id}；parse finalizer 传 commit=False 后唯一提交。
     异常：ProjectNotFoundError；非法 status 时 ValueError
     说明：linked_project_id 传 ... 表示不改；传 None 表示清空关联。
     """
@@ -191,8 +192,11 @@ def update_project(
     if linked_project_id is not ...:
         project.linked_project_id = linked_project_id
     project.updated_at = datetime.now(timezone.utc)
-    db.commit()
-    db.refresh(project)
+    if commit:
+        db.commit()
+        db.refresh(project)
+    else:
+        db.flush()
     return project
 
 

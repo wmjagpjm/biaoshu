@@ -33,6 +33,30 @@ from mineru_callback_helper import (
     run_mineru_process,
 )
 
+# V1-M M2：manifest/path/ready 唯一真源在 pure core；经模块属性委托，禁止双份漂移
+import managed_ocr_runtime_core as _ocr_core
+from managed_ocr_runtime_core import PreflightError  # noqa: E402
+
+
+def load_manifest(*args, **kwargs):  # type: ignore[no-untyped-def]
+    """用途：委托 pure core.load_manifest（可被 patch core 侧观测）。"""
+    return _ocr_core.load_manifest(*args, **kwargs)
+
+
+def resolve_under_runtime_root(*args, **kwargs):  # type: ignore[no-untyped-def]
+    """用途：委托 pure core.resolve_under_runtime_root。"""
+    return _ocr_core.resolve_under_runtime_root(*args, **kwargs)
+
+
+def validate_runtime_ready(*args, **kwargs):  # type: ignore[no-untyped-def]
+    """用途：委托 pure core.validate_runtime_ready。"""
+    return _ocr_core.validate_runtime_ready(*args, **kwargs)
+
+
+def check_disk_free(*args, **kwargs):  # type: ignore[no-untyped-def]
+    """用途：委托 pure core.check_disk_free。"""
+    return _ocr_core.check_disk_free(*args, **kwargs)
+
 # ---------------------------------------------------------------------------
 # 契约常量
 # ---------------------------------------------------------------------------
@@ -137,19 +161,6 @@ _HELPER_MSG_TO_DIAG: dict[str, str] = {
 
 # Windows 中文质量仅只读系统字体候选（禁止下载）
 _WIN_FONT_NAMES = ("simhei.ttf", "msyh.ttc")
-
-
-class PreflightError(Exception):
-    """用途：预检固定诊断码 + 中文消息，禁止携带路径或敏感上下文。"""
-
-    def __init__(self, diagnostic_code: str, message: str | None = None) -> None:
-        if diagnostic_code not in DIAG_EXIT:
-            diagnostic_code = "internal_error"
-        self.diagnostic_code = diagnostic_code
-        self.message = message or _DIAG_DEFAULT_MESSAGE.get(
-            diagnostic_code, MSG_INTERNAL_ERROR
-        )
-        super().__init__(self.message)
 
 
 class QuietArgumentParser(argparse.ArgumentParser):
@@ -290,229 +301,10 @@ def validate_parsed_args(args: argparse.Namespace) -> tuple[str, str, Path]:
 
 
 # ---------------------------------------------------------------------------
-# Manifest 严格解析
+# Manifest 严格解析：委托 managed_ocr_runtime_core（M2 单一真源）
+# load_manifest / resolve_under_runtime_root / validate_runtime_ready / check_disk_free
+# 已在模块顶部从 core 导入（同对象 re-export）。
 # ---------------------------------------------------------------------------
-
-
-def _is_reparse_point(path: Path) -> bool:
-    """
-    用途：no-follow 检测 Windows reparse 属性；无属性平台恒 False。
-    二次开发：必须读字面路径自身属性。path.stat() 会跟随 junction 丢失 0x400；
-    主证据为 path.lstat()（或等价 stat(follow_symlinks=False)）。
-    """
-    try:
-        # 主证据：lstat 不跟随 reparse，保留 FILE_ATTRIBUTE_REPARSE_POINT
-        st = path.lstat()
-    except OSError:
-        return False
-    attrs = int(getattr(st, "st_file_attributes", 0) or 0)
-    if attrs & FILE_ATTRIBUTE_REPARSE_POINT:
-        return True
-    # 可选辅助：不得替代 lstat；新 API 缺失时静默忽略
-    try:
-        is_junc = getattr(path, "is_junction", None)
-        if callable(is_junc) and bool(is_junc()):
-            return True
-    except OSError:
-        pass
-    return False
-
-
-def _reject_relative_path_string(rel: str) -> None:
-    """用途：拒绝绝对/UNC/URL/穿越/空等非法相对路径字面量。"""
-    if not isinstance(rel, str) or not rel or not rel.strip():
-        raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID)
-    if "\x00" in rel or "\r" in rel or "\n" in rel:
-        raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID)
-    text = rel.strip()
-    lower = text.lower()
-    if "://" in text or lower.startswith("file:"):
-        raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID)
-    if text.startswith("\\\\") or text.startswith("//"):
-        raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID)
-    # 盘符绝对路径
-    if len(text) >= 2 and text[1] == ":" and text[0].isalpha():
-        raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID)
-    if text.startswith("/") or text.startswith("\\"):
-        raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID)
-    try:
-        if Path(text).is_absolute():
-            raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID)
-    except PreflightError:
-        raise
-    except Exception as exc:
-        raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID) from exc
-    # 分段拒绝 .. 与空段（保留 . 归一）
-    normalized = text.replace("\\", "/")
-    parts = [p for p in normalized.split("/") if p not in ("", ".")]
-    if any(p == ".." for p in parts):
-        raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID)
-    if not parts:
-        raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID)
-
-
-def _path_is_symlink_or_reparse(path: Path) -> bool:
-    """
-    用途：在 resolve 前判定字面路径身份是否为 symlink 或 reparse。
-    二次开发：不得先 follow 再判定；缺失路径恒 False（留给 cli_missing/model_missing）。
-    """
-    try:
-        if path.is_symlink():
-            return True
-    except OSError:
-        pass
-    return _is_reparse_point(path)
-
-
-def resolve_under_runtime_root(runtime_root: Path, rel: str) -> Path:
-    """
-    用途：将相对路径解析到 runtime 根内；逃逸固定 runtime_manifest_invalid。
-    Q9：保留 manifest 相对路径字面身份——resolve 前从 runtime_root 到 leaf
-    逐组件拒绝 symlink 与 FILE_ATTRIBUTE_REPARSE_POINT，再 resolve 校验仍在根内。
-    不得检查根外祖先；缺文件不在此映射为 invalid（由 CLI/marker 门分别处理）。
-    """
-    _reject_relative_path_string(rel)
-    try:
-        root = runtime_root.resolve()
-    except OSError as exc:
-        raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID) from exc
-    parts = [p for p in rel.replace("\\", "/").split("/") if p not in ("", ".")]
-    if not parts or any(p == ".." for p in parts):
-        raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID)
-
-    # 逐组件字面身份检查（仅 runtime 根内路径；不检查根外祖先）
-    cursor = root
-    for part in parts:
-        cursor = cursor / part
-        if _path_is_symlink_or_reparse(cursor):
-            raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID)
-
-    try:
-        resolved = cursor.resolve(strict=False)
-        resolved.relative_to(root)
-    except (OSError, ValueError) as exc:
-        raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID) from exc
-    # resolve 后再次拒绝身份异常（防御 follow 后仍可见的 reparse）
-    if _path_is_symlink_or_reparse(resolved):
-        raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID)
-    return resolved
-
-
-def load_manifest(manifest_path: Path) -> dict[str, Any]:
-    """
-    用途：读取并严格校验五键 manifest；返回含 runtime 根与已解析路径的内部字典。
-    二次开发：禁止额外键、bool 冒充 int、客户端路径反射。
-    """
-    try:
-        if manifest_path.is_symlink() or _is_reparse_point(manifest_path):
-            raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID)
-        if not manifest_path.is_file():
-            raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID)
-        raw_text = manifest_path.read_text(encoding="utf-8")
-        data = json.loads(raw_text)
-    except PreflightError:
-        raise
-    except Exception as exc:
-        raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID) from exc
-
-    if not isinstance(data, dict):
-        raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID)
-    if set(data.keys()) != MANIFEST_KEYS:
-        raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID)
-
-    schema = data.get("schemaVersion")
-    if type(schema) is not int or schema != 1:
-        raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID)
-
-    engine = data.get("engine")
-    if engine != "mineru":
-        raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID)
-
-    free = data.get("requiredFreeBytes")
-    if type(free) is not int or free <= 0:
-        raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID)
-
-    cli_rel = data.get("cliRelativePath")
-    model_rel = data.get("modelMarkerRelativePath")
-    if not isinstance(cli_rel, str) or not isinstance(model_rel, str):
-        raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID)
-
-    try:
-        runtime_root = manifest_path.resolve(strict=True).parent
-    except OSError as exc:
-        raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID) from exc
-
-    cli_path = resolve_under_runtime_root(runtime_root, cli_rel)
-    model_path = resolve_under_runtime_root(runtime_root, model_rel)
-
-    # CLI 形态门：后缀/链接/reparse 在存在前也可判定（路径已解析）
-    if cli_path.suffix.lower() != ".exe":
-        raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID)
-
-    return {
-        "runtime_root": runtime_root,
-        "cli_path": cli_path,
-        "model_path": model_path,
-        "required_free_bytes": free,
-        "cli_rel": cli_rel,
-        "model_rel": model_rel,
-    }
-
-
-def _validate_cli_file(cli_path: Path) -> None:
-    """用途：CLI 必须是根内普通非 symlink/reparse 的 .exe；缺失→cli_missing。"""
-    try:
-        if not cli_path.exists():
-            raise PreflightError("cli_missing", MSG_CLI_MISSING)
-        if cli_path.is_symlink() or _is_reparse_point(cli_path):
-            raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID)
-        if not cli_path.is_file():
-            raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID)
-        if cli_path.suffix.lower() != ".exe":
-            raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID)
-    except PreflightError:
-        raise
-    except OSError as exc:
-        raise PreflightError("cli_missing", MSG_CLI_MISSING) from exc
-
-
-def _validate_model_marker(model_path: Path) -> None:
-    """用途：marker 必须是根内普通小文件；缺失→model_missing；形态非法→manifest_invalid。"""
-    try:
-        if not model_path.exists():
-            raise PreflightError("model_missing", MSG_MODEL_MISSING)
-        if model_path.is_symlink() or _is_reparse_point(model_path):
-            raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID)
-        if model_path.is_dir() or not model_path.is_file():
-            raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID)
-        size = int(model_path.stat().st_size)
-        if size <= 0 or size > MODEL_MARKER_MAX_BYTES:
-            raise PreflightError("runtime_manifest_invalid", MSG_MANIFEST_INVALID)
-    except PreflightError:
-        raise
-    except OSError as exc:
-        raise PreflightError("model_missing", MSG_MODEL_MISSING) from exc
-
-
-def check_disk_free(runtime_root: Path, required_free_bytes: int) -> None:
-    """用途：对 manifest 所在目标卷检查 available >= requiredFreeBytes。"""
-    try:
-        usage = shutil.disk_usage(str(runtime_root))
-        free = int(usage.free)
-    except Exception as exc:
-        raise PreflightError("disk_insufficient", MSG_DISK_INSUFFICIENT) from exc
-    if free < int(required_free_bytes):
-        raise PreflightError("disk_insufficient", MSG_DISK_INSUFFICIENT)
-
-
-def validate_runtime_ready(manifest_info: Mapping[str, Any]) -> None:
-    """用途：CLI + model + disk 串行门。"""
-    _validate_cli_file(Path(manifest_info["cli_path"]))
-    _validate_model_marker(Path(manifest_info["model_path"]))
-    check_disk_free(
-        Path(manifest_info["runtime_root"]),
-        int(manifest_info["required_free_bytes"]),
-    )
 
 
 # ---------------------------------------------------------------------------

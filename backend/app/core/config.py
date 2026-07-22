@@ -12,7 +12,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # P10A：AUTH_MODE 白名单；未知值必须在配置加载时拒绝，禁止静默降级为 disabled
@@ -41,6 +41,8 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        # False：禁止 env 按字段名回退读取；managed 仅接受 BIAOSHU 别名
+        populate_by_name=False,
     )
 
     # 服务标识，出现在 /api/health
@@ -102,6 +104,15 @@ class Settings(BaseSettings):
     auth_cookie_secure: bool = False
     # 变更请求 CSRF 头名；原始值仅存浏览器内存，库内仅 SHA-256 摘要
     auth_csrf_header_name: str = "X-CSRF-Token"
+    # V1-M：管理式 OCR 仓外 manifest 仅 path-only；空=未配置（不得降级 light）
+    # 禁止 executable/argv/model 覆盖；客户端 payload/query/header 零路径
+    # 环境仅接受 BIAOSHU_MANAGED_OCR_MANIFEST（validation_alias 唯一）；
+    # 不支持 Settings(managed_ocr_manifest_path=...) 字段名构造；
+    # 必要显式构造时使用 alias 关键字 BIAOSHU_MANAGED_OCR_MANIFEST=...。
+    managed_ocr_manifest_path: str = Field(
+        default="",
+        validation_alias="BIAOSHU_MANAGED_OCR_MANIFEST",
+    )
 
     @field_validator("auth_mode", mode="before")
     @classmethod

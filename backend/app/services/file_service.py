@@ -75,6 +75,28 @@ def list_files(
     return list(db.scalars(stmt).all())
 
 
+def list_files_for_parse(
+    db: Session,
+    workspace_id: str,
+    project_id: str,
+) -> list[ProjectFileRow]:
+    """
+    用途：parse 专用 source 列表（旧→新）；ORDER BY created_at ASC, id ASC。
+    对接：task_service._run_parse；对外 GET /files 仍用 list_files desc。
+    二次开发：禁止与公开列表混用排序；仅 role=source。
+    """
+    get_project(db, workspace_id, project_id)
+    stmt = (
+        select(ProjectFileRow)
+        .where(
+            ProjectFileRow.project_id == project_id,
+            _role_condition(FILE_ROLE_SOURCE),
+        )
+        .order_by(ProjectFileRow.created_at.asc(), ProjectFileRow.id.asc())
+    )
+    return list(db.scalars(stmt).all())
+
+
 def list_images(
     db: Session, workspace_id: str, project_id: str
 ) -> list[ProjectFileRow]:
