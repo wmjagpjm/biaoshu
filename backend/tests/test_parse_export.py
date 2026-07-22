@@ -1,6 +1,7 @@
 """
 模块：上传解析与导出任务测试（不调用外网 LLM）
-用途：验收 parse / export 任务闭环；parse 默认引擎 lightweight 可追溯。
+用途：验收 parse / export 任务闭环；parse 默认引擎 lightweight 可追溯；
+  V1-M M2 起成功 result 精确三键 engine/fileCount/chars。
 对接：task_service parse/export；parse_engines.lightweight。
 二次开发：勿在此引入真实 MinerU/Docling 或外网 Key。
 """
@@ -29,11 +30,38 @@ def test_upload_parse_and_export(client):
     body = parse_task.json()
     assert body["status"] == "success"
     assert body["type"] == "parse"
+    # V1-M M2：成功 result 精确三键；正文只在 editor-state
+    assert set(body["result"].keys()) == {"engine", "fileCount", "chars"}
     assert body["result"]["engine"] == "lightweight"
+    assert body["result"]["fileCount"] == 1
+    assert isinstance(body["result"]["chars"], int) and body["result"]["chars"] > 0
+    assert "parsedMarkdown" not in body["result"]
+    assert "filename" not in body["result"]
 
     state = client.get(f"/api/projects/{pid}/editor-state").json()
-    assert state.get("parsedMarkdown")
-    assert "智慧城市" in state["parsedMarkdown"]
+    md = state.get("parsedMarkdown") or ""
+    # V1-M M2 反假绿：单文件正文完全相等（已知 lightweight 输出），不只子串
+    from pathlib import Path
+
+    from app.core.config import get_settings
+    from app.core.database import SessionLocal
+    from app.models.entities import ProjectFileRow
+    from app.services import file_service, parse_service
+    from sqlalchemy import select
+
+    db = SessionLocal()
+    try:
+        row = db.scalars(
+            select(ProjectFileRow).where(ProjectFileRow.project_id == pid)
+        ).first()
+        assert row is not None
+        path = file_service.resolve_path(get_settings(), pid, row.stored_name)
+        expected = parse_service.parse_file_to_markdown(path, row.filename)
+    finally:
+        db.close()
+    assert md == expected
+    assert "智慧城市" in md
+    assert body["result"]["chars"] == len(expected)
 
     # 写入一点正文便于导出
     client.put(

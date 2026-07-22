@@ -2701,5 +2701,207 @@ class TestRealRuntimeDidNotRunLayer(unittest.TestCase):
         self.assertNotRegex(src, r"@pytest\.mark\.(skip|xfail)\b")
 
 
+# ===========================================================================
+# V1-M M2：shared pure core 抽取后门面不变（failure-first）
+# ===========================================================================
+
+_CORE_NAME = "managed_ocr_runtime_core.py"
+_CORE_PATH = _HERE / _CORE_NAME
+_M1_PUBLIC_TEST_COUNT = 29
+
+
+def _load_core_module_for_m2() -> Any:
+    """用途：按需加载 pure core；缺失抛 FileNotFoundError（业务红）。"""
+    if not _CORE_PATH.is_file():
+        raise FileNotFoundError(f"缺少 shared pure core: {_CORE_PATH}")
+    unique = f"_managed_ocr_core_m2_{os.getpid()}_{id(_CORE_PATH)}"
+    spec = importlib.util.spec_from_file_location(unique, _CORE_PATH)
+    if spec is None or spec.loader is None:
+        raise ImportError("无法构造 core import spec")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[unique] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class TestSharedPureCoreExtractionM2(unittest.TestCase):
+    """
+    用途：锁定 M2 抽取 managed_ocr_runtime_core 后 M1 对外语义不变。
+    规则：core 缺失=业务 failed；抽取后 preflight 必须委托 core，禁止双份逻辑漂移。
+    """
+
+    def test_m2_shared_core_module_exists(self) -> None:
+        self.assertTrue(
+            _CORE_PATH.is_file(),
+            msg="业务红：缺少 tools/local-parser/managed_ocr_runtime_core.py",
+        )
+
+    def test_m2_core_exposes_manifest_path_ready_surface(self) -> None:
+        try:
+            core = _load_core_module_for_m2()
+        except FileNotFoundError as exc:
+            self.fail(f"业务红：{exc}")
+        for name in (
+            "load_manifest",
+            "resolve_under_runtime_root",
+            "validate_runtime_ready",
+            "check_disk_free",
+        ):
+            self.assertTrue(
+                callable(getattr(core, name, None)),
+                msg=f"业务红：core 缺少 {name}",
+            )
+        # S10/S1：core runner 唯一名
+        self.assertTrue(
+            callable(getattr(core, "parse_one_file_with_manifest_cli", None)),
+            msg="业务红：core 缺少唯一 runner parse_one_file_with_manifest_cli",
+        )
+        for banned in ("run_single_file", "run_mineru_on_file", "parse_source_file"):
+            self.assertFalse(
+                callable(getattr(core, banned, None)),
+                msg=f"业务红：core 不得暴露别名 runner {banned}",
+            )
+
+    def test_m2_preflight_delegates_to_core_not_duplicate(self) -> None:
+        """
+        用途：S10 — 四个 helper 逐项同对象或真实委托；只 patch core 模块绑定；
+          调用原 pf_fn；每项 marker=1。删除 patch preflight.name 本身的无效分支。
+        """
+        try:
+            preflight = _require_preflight(self)
+            core = _load_core_module_for_m2()
+        except FileNotFoundError as exc:
+            self.fail(f"业务红：{exc}")
+
+        helpers = (
+            "load_manifest",
+            "resolve_under_runtime_root",
+            "validate_runtime_ready",
+            "check_disk_free",
+        )
+        missing_core = [n for n in helpers if not callable(getattr(core, n, None))]
+        self.assertEqual(
+            missing_core,
+            [],
+            msg=f"业务红：core 缺少 helper: {missing_core}",
+        )
+
+        results: dict[str, str] = {}
+        for name in helpers:
+            core_fn = getattr(core, name)
+            pf_fn = getattr(preflight, name, None)
+            if callable(pf_fn) and pf_fn is core_fn:
+                results[name] = "same_object"
+                continue
+
+            self.assertTrue(
+                callable(pf_fn),
+                msg=f"业务红：preflight 必须导出 {name} 以便逐项证明委托/同对象",
+            )
+            marker = {"called": 0}
+
+            def _boom(*a, _m=marker, _n=name, **k):
+                _m["called"] += 1
+                raise RuntimeError(f"core_{_n}_delegated")
+
+            # 定位 preflight 内绑定的 core 模块（若与加载实例不同）
+            core_mod_in_pf = None
+            for _attr_name, attr_val in vars(preflight).items():
+                if attr_val is core:
+                    core_mod_in_pf = attr_val
+                    break
+                file_attr = getattr(attr_val, "__file__", None)
+                if file_attr and Path(str(file_attr)).name == "managed_ocr_runtime_core.py":
+                    core_mod_in_pf = attr_val
+                    break
+
+            # S10：只 patch core 模块绑定，禁止 patch preflight.name 本身
+            patches: list[Any] = [
+                mock.patch.object(core, name, side_effect=_boom),
+            ]
+            if core_mod_in_pf is not None and core_mod_in_pf is not core:
+                patches.append(
+                    mock.patch.object(core_mod_in_pf, name, side_effect=_boom)
+                )
+
+            for p in patches:
+                p.start()
+            try:
+                try:
+                    pf_fn(Path("."))
+                except RuntimeError as exc:
+                    self.assertIn(f"core_{name}_delegated", str(exc))
+            finally:
+                for p in reversed(patches):
+                    p.stop()
+
+            # 四 helper 逐项 marker 精确 = 1
+            self.assertEqual(
+                marker["called"],
+                1,
+                msg=(
+                    f"业务红：helper {name} 必须与 core 同对象，"
+                    f"或 monkeypatch core 后 preflight 实际委托 marker=1，"
+                    f"actual={marker['called']}"
+                ),
+            )
+            results[name] = "delegated"
+
+        self.assertEqual(
+            set(results.keys()),
+            set(helpers),
+            msg=f"业务红：四个 helper 必须全部举证，results={results}",
+        )
+        for name, how in results.items():
+            self.assertIn(how, ("same_object", "delegated"), msg=f"{name}={how}")
+
+    def test_m2_m1_external_test_method_count_frozen_at_29(self) -> None:
+        """
+        用途：M1 对外 29 项语义计数冻结；本类为 M2 增量，不计入 29。
+        说明：统计本文件中 TestSharedPureCoreExtractionM2 之外的 test_* 方法数。
+        """
+        import unittest as _ut
+
+        loader = _ut.TestLoader()
+        suite = loader.loadTestsFromModule(sys.modules[__name__])
+        names: list[str] = []
+
+        def _walk(s: _ut.TestSuite) -> None:
+            for item in s:
+                if isinstance(item, _ut.TestSuite):
+                    _walk(item)
+                else:
+                    id_ = item.id()
+                    if "TestSharedPureCoreExtractionM2" in id_:
+                        continue
+                    if ".test_" in id_:
+                        names.append(id_)
+
+        _walk(suite)
+        self.assertEqual(
+            len(names),
+            _M1_PUBLIC_TEST_COUNT,
+            msg=(
+                f"业务红：M1 对外 test 数应为 {_M1_PUBLIC_TEST_COUNT}，"
+                f"实际={len(names)}（抽取 core 不得删改 M1 语义项）"
+            ),
+        )
+
+    def test_m2_no_toplevel_import_of_core_in_this_file(self) -> None:
+        src = Path(__file__).read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        banned: list[str] = []
+        for node in tree.body:
+            if isinstance(node, ast.ImportFrom):
+                mod = node.module or ""
+                if mod.split(".")[0] == "managed_ocr_runtime_core":
+                    banned.append(mod)
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name.split(".")[0] == "managed_ocr_runtime_core":
+                        banned.append(alias.name)
+        self.assertEqual(banned, [], msg=f"禁止顶层 import core: {banned}")
+
+
 if __name__ == "__main__":
     unittest.main()
