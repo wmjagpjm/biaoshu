@@ -7,12 +7,13 @@
 
 # V1-M 管理式本机 OCR 自动解析契约
 
-> **状态：M1 与 M2 automated/fake-runtime 已完成、独立验收并推送；M3/M4 未开始。M4 真实 runtime/quality 仍为 did-not-run。**
+> **状态：M1 与 M2 automated/fake-runtime 已完成、独立验收并推送；M3 决策与白名单已冻结，待 failure-first；M4 未开始。M4 真实 runtime/quality 仍为 did-not-run。**
 > **基线：** 契约=`9ed3a06`；M1 测试=`3be6d19`/`3b8e42e`/`61dbe38`、生产=`a7d640b`；M2 测试=`df85ac7`、生产=`86d5206`；只允许 `collab/grok-code-codex-review`，严禁操作 `main`。
 > **A 审计：** task=`msg_b32147f62fba43229ea58abbe6903340`，review=`msg_e978430b73074df49d57cd7b6acd1e50`。
 > **B 审计：** task=`msg_e2bdf5e1122d4ba7b4dfe59c61d3c7a5`，review=`msg_6d7d74ca5b964ca9987779080ead3d67`。
 > **Q1 双确认：** A question/YES=`msg_d9e3c5b69e34444196173bf1b59c27ac`/`msg_91b3078bdf0c432ba05b8b584f448d79`；B question/YES=`msg_35addd2168654b7fb0cc800d39c966f1`/`msg_71b72f88d8c8482092081bbb6cb416e7`。
 > **M1 验收：** Codex 独立串行 managed/MinerU/V1-C/Docling=`29/56/26/46 passed`；真实 Windows junction no-follow 探针通过，TEMP left=0。真实 CLI、模型、real-runtime 与 quality 均 did-not-run。
+> **M3 只读审计：** A task/review=`msg_a379fa7ebeb946988d7327b0d3e867a6`/`msg_bc1b63b2d26d4ea4afdd0960cebda35c`；B task/review=`msg_45c01e65f51a4178932075677309f7dc`/`msg_818f3a125b804aafa6d67c61dcf29306`；两路均基于 `fe1b00e`、零文件写入、零测试。
 
 ## 1. 当前真值
 
@@ -129,6 +130,50 @@ M2 自动测试使用 TEMP、假 runtime、独立 SQLite/uploads；不得安装/
 - `ask`：明确三选一，不回写默认策略。
 
 禁止把 `local` 偷换为自动 runtime。设置页与解析按钮必须区分“轻量解析”“本机自动 OCR”“人工本地回传”；不得显示绝对路径、模型目录或命令。管理式 runtime 未就绪时固定提示并保留人工回传入口，不得静默降级 light。
+
+#### M3 冻结决策
+
+1. 后端 `ALLOWED_PARSE` 与前端两个策略联合只增加 `managed`；默认仍为 `light`。`managed` 只通过既有 `POST /projects/{id}/tasks` 发送精确 `{type:"parse",payload:{engine:"managed"}}`，禁止进入 `parse_engines` 注册表。
+2. 权威 `GET /api/settings/parse-strategy` 对无设置行仍返回 `light` 且零写；对合法四值原样返回；对非法存量固定 `500`、`detail={code:"workspace_parse_strategy_corrupt",message:"解析策略配置损坏"}`、`Cache-Control:no-store`，零 commit、零值回显，禁止回退 `light`。完整 owner-only `GET /api/settings` 保持原样，使所有者仍可把旧值改回合法四值；它不得驱动解析动作。
+3. `PUT /api/settings` 继续由 service 校验：四值成功，其他值固定拒绝且不得污染已保存策略。Schema 继续为字符串，不增加 `Literal`，避免把既有 `400` 改成通用 `422`；无迁移、无 DB check。
+4. 技术标 `managed` 必须复用 `runWriterTaskWithSuccessReload`，商务标必须复用 `runBizTask`；成功仍走 V1-G 的项目 ID、任务代次与编辑态水合围栏。禁止复制或修改 `useProjectPipeline`、SSE、任务 API 与 M2 finalizer。
+5. `ask` 精确提供轻量解析、本机自动 OCR、人工本地回传三种一次性选择和取消；选择与取消均不得 PUT 设置或写浏览器策略缓存。`local` 始终零任务并导航编码后的 `/local-parser?projectId=`。
+6. managed 任务失败时，两页只按当前项目的 `type=parse/status=failed/result.engine=managed` 与当前 `pipeline.error` 关联识别，统一显示“本机自动 OCR 暂不可用，可改用人工本地回传”并提供“前往人工本地回传”链接。不得显示或拼接 `diagnosticCode`、task.error、路径、命令、模型目录或第三方原文；不得自动或二次发送 `engine=lightweight`。
+7. 技术标上传提示与解析按钮使用中性“开始解析”，不得在 managed/local/ask 设置下继续误称“轻量解析”。设置页和 ask 对话框必须使用四种语义清晰的中文标签；不新增 readiness API，不声称真实 OCR 已安装。
+8. 普通 Playwright E2E 必须把 `BIAOSHU_MANAGED_OCR_MANIFEST` 固定为空白，确保不调用用户机器上的真实 runtime；真实 runtime/quality 仍只属于 M4。
+
+#### M3 精确白名单
+
+test-only 仅允许：
+
+1. `backend/tests/test_parse_strategy_read.py`
+2. `backend/tests/test_settings_and_revise.py`
+3. `frontend/e2e/parse-strategy-wiring.spec.ts`
+4. `frontend/e2e/v1g-writer-task-soft-switch-hydration.spec.ts`
+5. `frontend/playwright.config.ts`
+
+production-only 仅允许：
+
+1. `backend/app/services/settings_service.py`
+2. `backend/app/api/settings.py`
+3. `backend/app/models/entities.py`（只同步四值注释）
+4. `frontend/src/features/settings/types.ts`
+5. `frontend/src/features/settings/pages/SettingsPage.tsx`
+6. `frontend/src/features/parse-strategy/lib/parseStrategyApi.ts`
+7. `frontend/src/features/parse-strategy/lib/managedParseTask.ts`（新纯函数与固定中文）
+8. `frontend/src/features/parse-strategy/components/ParseStrategyChoiceDialog.tsx`
+9. `frontend/src/features/technical-plan/pages/TechnicalPlanWorkspace.tsx`
+10. `frontend/src/features/business-bid/pages/BusinessBidWorkspace.tsx`
+
+冻结不改：`schemas.py`、`useWorkspaceParseStrategy.ts`、`ParseStrategyChoiceDialog.css`、`useProjectPipeline.ts`、tasks API、`task_service.py`、`managed_parse_runtime_service.py`、`managed_ocr_runtime_core.py`、`parse_engines.py`、迁移、依赖、启动脚本、真实配置、数据库和 uploads。任何新增必要性必须先由 Codex 举证并重新冻结，不能由实现阶段自行扩围。
+
+#### M3 failure-first 与验收门
+
+1. 后端先证明：PUT/GET `managed` 往返；四值精确集合；非法写拒绝零污染；ORM 直写非法存量后权威 GET 固定 corrupt、no-store、零写、零原值泄漏。生产未改时首个有效失败必须来自缺少 `managed` 或旧 soft fallback，不接受收集/导入失败。
+2. P8B E2E 先证明：设置页可选 managed；技术标与商务标精确一次 `engine=managed`；ask 三选一与取消零副作用；local 仍零任务；真实空 manifest 失败显示固定中文与项目化人工入口；所有 task POST 中 `lightweight` 增量为零。
+3. V1-G E2E 只扩现有 HoldGate：至少覆盖同项目 managed success 精确 `editor-state GET +1` 水合，以及 A managed running 后切 B、再释放 A success 的 A/B GET 零增量、B 零污染和零 sticky loading；成功桩 result 必须精确 `engine/fileCount/chars`。禁止复制整份桩到新文件。
+4. 反假绿禁止：skip/xfail/条件 return、宽泛 `or`、只查文案不查请求、只 mock 不断言 payload/次数、读生产源码自证、用 light 成功冒充 managed、固定 sleep 充当完成证据。
+5. Grok 只跑新增聚焦红测和受影响精确套件；Codex 最终一次串行运行两个后端文件、P8B 完整 E2E、M3 新增 V1-G 用例、lint/build、Python/TypeScript 静态门、diff/白名单/泄漏扫描。Playwright 固定 `--workers=1 --retries=0`，禁止整仓 318 E2E 和并发 pytest。
 
 ### M4：管理员安装与真实烟测
 

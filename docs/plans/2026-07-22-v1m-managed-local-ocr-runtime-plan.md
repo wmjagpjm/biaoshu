@@ -8,8 +8,8 @@
 # V1-M 管理式本机 OCR 自动解析实施计划
 
 > **执行要求：** Grok 承担限定实现和高耗费精确测试，Codex 负责批量举证、独立审查、一次串行终验、提交与推送；协作细则见 `docs/agent-collaboration.md`。
-> **状态：** M1、M2 已完成并推送；M3/M4 未开始，下一步重新冻结 M3 前端白名单。M4 真实 runtime/quality 仍为 did-not-run。
-> **基线：** 当前生产=`86d5206`，M2 测试=`df85ac7`；仅协作分支，严禁 `main`。
+> **状态：** M1、M2 已完成并推送；M3 决策与白名单已冻结，待 failure-first；M4 未开始。M4 真实 runtime/quality 仍为 did-not-run。
+> **基线：** 当前生产=`86d5206`，M2 测试=`df85ac7`，M2 文档闭环=`fe1b00e`；仅协作分支，严禁 `main`。
 
 **目标：** 让扫描 PDF 在本机专用 MinerU runtime 中受控解析，并最终接入既有项目任务/editor-state，同时保留轻量与人工回传路径。
 
@@ -149,11 +149,16 @@ git diff --check
 
 ## 阶段 7：M3 前端包（M2 后重新冻结）
 
-1. 后端与前端策略精确扩为 `light|managed|local|ask`；非法值 fail-closed。
-2. `managed` 创建 `engine=managed` 任务并沿用 V1-G 项目/任务代次成功水合。
-3. `local` 保持人工回传零任务；`ask` 三选一且取消零副作用。
-4. runtime 未就绪显示固定中文并提供人工回传入口；禁止静默 light。
-5. lint/build 和受影响 E2E 串行，`--workers=1 --retries=0`。
+只读审计基线=`fe1b00e`：A task/review=`msg_a379fa7ebeb946988d7327b0d3e867a6`/`msg_bc1b63b2d26d4ea4afdd0960cebda35c`；B task/review=`msg_45c01e65f51a4178932075677309f7dc`/`msg_818f3a125b804aafa6d67c61dcf29306`。旧 `msg_30e4...` 基于 M2 前代码，只保留历史，不作为 M3 行号或事实依据。
+
+1. 后端与前端策略精确扩为 `light|managed|local|ask`；无设置行仍默认 light，非法存量在权威策略 GET 固定 `500 workspace_parse_strategy_corrupt`、no-store、零写与零回显，禁止 soft fallback light。完整 owner 设置页保留修复入口；Schema/迁移不改。
+2. `managed` 精确创建 `engine=managed` 任务；技术标复用 `runWriterTaskWithSuccessReload`，商务标复用 `runBizTask`，沿用 V1-G 项目/任务代次成功水合。共享 pipeline、任务 API、M2 service/core/finalizer 全部冻结。
+3. `local` 保持人工回传零任务；`ask` 三选一且取消零副作用，不 PUT 设置、不写策略缓存。技术标入口使用中性“开始解析”。
+4. 当前项目 managed 失败统一显示“本机自动 OCR 暂不可用，可改用人工本地回传”和项目化人工回传链接；不得显示 diagnosticCode/task.error，不得二次发送 lightweight。
+5. test-only 精确五文件：两个后端测试、P8B E2E、既有 V1-G 水合 E2E、Playwright 配置；普通 E2E 强制空白 manifest，禁止真实 runtime。
+6. production-only 精确十文件：settings service/API、实体四值注释、设置类型/页面、策略 API、新 managed task 纯函数、ask 对话框、技术/商务工作台。完整路径见契约；不得自行扩围。
+7. Grok B 先写 test-only 并只跑新增聚焦红测；Codex 审查后分层提交。Grok A 再基于 test-only 提交写 production，并跑精确后端与前端套件。普通问题一次批量确认修完，高风险边界仍单独确认。
+8. Codex 最终一次串行运行后端双文件、P8B 完整 E2E、M3 新增 V1-G 用例、lint/build、编译、diff、白名单、泄漏和真实进程隔离门；Playwright 固定 `--workers=1 --retries=0`，禁止整仓 318 E2E、并发 pytest 和双方重复全量。
 
 ## 阶段 8：M4 真实安装与发布验收
 
