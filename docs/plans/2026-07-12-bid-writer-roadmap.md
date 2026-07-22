@@ -7,7 +7,7 @@
 
 # 标书制作者能力补全与角色化演进路线图
 
-> **状态**：P11A/B/C、P12A 至 P12N、P13-A 至 P13-I4、V1-A 至 V1-L 均已完成。V1-L 生产实现、隔离测试、回归与发布说明已推送；当前 V1 产品覆盖率粗估约 94%，下一包继续处理真实使用阻断。
+> **状态**：P11A/B/C、P12A 至 P12N、P13-A 至 P13-I4、V1-A 至 V1-L 均已完成。V1-L 已推送；V1-M 管理式本机 OCR 自动解析已完成两路审计与契约冻结，尚未实现。当前 V1 产品覆盖率粗估约 94%。
 > **当前分支**：`collab/grok-code-codex-review`
 > **协作方式**：Grok 负责限定范围的实现与测试；Codex 负责范围、审查、验收和提交授权。
 
@@ -671,4 +671,4 @@ V1-K 七键状态和单次原子替换保持；防火墙只文档化 Private/Loc
 
 Codex 最终独立 Q8 定点 **5 passed**、V1-L **56 passed / 68 subtests passed**、V1-K **67 passed / 19 subtests passed**；前端 lint/build、编译、PS1 Parse/BOM、diff、白名单、状态原子门和 TEMP 清理通过。未运行真实 LAN 服务、防火墙、隔离数据库/uploads、真实管理员登录或第二台设备可达性验证，部署验收不得假绿。
 
-**下一步**：V1 产品覆盖率粗估由 93% 更新为约 **94%**。下一包从真实 LAN 烟测/发布验证、扫描 PDF OCR/解析器部署或最终版式中选择一个真实使用阻断；V2/V3 继续后置。
+**下一步**：V1 产品覆盖率粗估由 93% 更新为约 **94%**。已选择 V1-M“管理式本机 OCR 自动解析”：A/B 审计与 Q1 双确认完成，先按 M1 OCR 真值/runtime 安全、M2 后端多文件原子接线、M3 前端 `managed`、M4 管理员真实安装与烟测推进。契约=`docs/v1m-managed-local-ocr-runtime-contract.md`，计划=`docs/plans/2026-07-22-v1m-managed-local-ocr-runtime-plan.md`；M4 前禁止盲装，V2/V3 继续后置。
