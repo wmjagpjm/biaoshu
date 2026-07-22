@@ -21,6 +21,9 @@ const backendEnv = {
   DEFAULT_WORKSPACE_NAME: "E2E 工作空间",
   DEFAULT_OWNER_USER_ID: "user_e2e",
   SEED_SAMPLE_OPPORTUNITIES: "false",
+  // M3：普通 E2E 固定空白 manifest，确保不调用本机真实 managed OCR runtime；
+  // 真实 runtime / 质量门仅属 M4 另验，禁止在此注入用户机器路径。
+  BIAOSHU_MANAGED_OCR_MANIFEST: " ",
 };
 
 export default defineConfig({

@@ -124,6 +124,11 @@ type ProbeState = {
   taskDetailGate: Record<string, HoldGate>;
   taskSeq: number;
   versionSeq: number;
+  /**
+   * M3：可注入权威 parseStrategy（light|managed|local|ask）。
+   * 默认 light，保持既有用例语义。
+   */
+  parseStrategy: "light" | "managed" | "local" | "ask";
 };
 
 function createHoldGate(): HoldGate {
@@ -268,7 +273,10 @@ function baseEditor(projectId: string, kind: Kind, version: string): EditorState
   };
 }
 
-function createProbeState(projects: ProjectStub[]): ProbeState {
+function createProbeState(
+  projects: ProjectStub[],
+  opts?: { parseStrategy?: ProbeState["parseStrategy"] },
+): ProbeState {
   const editorById: Record<string, EditorState> = {};
   let versionSeq = 0;
   for (const p of projects) {
@@ -290,6 +298,7 @@ function createProbeState(projects: ProjectStub[]): ProbeState {
     taskDetailGate: {},
     taskSeq: 0,
     versionSeq,
+    parseStrategy: opts?.parseStrategy ?? "light",
   };
 }
 
@@ -448,6 +457,11 @@ async function installRoutes(page: Page, state: ProbeState) {
       });
       return;
     }
+    // M3：权威策略脱敏 GET 与完整 settings 分离
+    if (path === "/api/settings/parse-strategy" && method === "GET") {
+      await json(route, { parseStrategy: state.parseStrategy });
+      return;
+    }
     if (
       path.startsWith("/api/settings") &&
       (method === "GET" || method === "PUT")
@@ -457,7 +471,7 @@ async function installRoutes(page: Page, state: ProbeState) {
         apiBaseUrl: "",
         apiKey: "",
         model: "",
-        parseStrategy: "light",
+        parseStrategy: state.parseStrategy,
       });
       return;
     }
@@ -769,11 +783,13 @@ async function waitTaskRunningHeld(
 
 /**
  * 用途：B 就绪后释放 A 任务 success；返回释放前 A/B getLog 基线。
+ * M3：可选 result 精确注入（managed 成功须 engine/fileCount/chars 三键）。
  */
 async function releaseTaskSuccess(
   state: ProbeState,
   taskId: string,
   message: string,
+  result?: Record<string, unknown> | null,
 ): Promise<{ getsA: number; getsB: number; getsAll: number }> {
   const row = state.activeTasks[taskId];
   expect(row, "任务必须存在").toBeTruthy();
@@ -786,15 +802,25 @@ async function releaseTaskSuccess(
   row.status = "success";
   row.progress = 100;
   row.message = message;
-  row.result = {
-    generated: 1,
-    note: "v1g-success",
-  };
+  row.result =
+    result !== undefined
+      ? result
+      : {
+          generated: 1,
+          note: "v1g-success",
+        };
   const gate = state.taskDetailGate[taskId];
   expect(gate, "详情 HoldGate 必须存在").toBeTruthy();
   gate.release();
   return { getsA, getsB, getsAll };
 }
+
+/** M3 managed 成功 result 精确三键。 */
+const MANAGED_SUCCESS_RESULT = {
+  engine: "managed",
+  fileCount: 1,
+  chars: 128,
+} as const;
 
 /**
  * 用途：软切红测核心断言——释放后 A/B editor-state GET 增量均为 0，B 无 sticky loading。
@@ -1439,5 +1465,282 @@ test.describe("V1-G writer 任务迟到 success 软切水合", () => {
         (t) => t.projectId === TECH_A && t.type === "analyze",
       ).length,
     ).toBe(1);
+  });
+
+  // ---------- M3：managed 成功水合与软切（复用既有 HoldGate，禁止复制桩） ----------
+
+  test("M3 同项目技术 managed success：payload 精确、result 三键、editor-state GET +1 水合正文", async ({
+    page,
+  }) => {
+    const projectA = makeProject({
+      id: TECH_A,
+      name: "V1G M3 同项目技术 managed",
+      kind: "technical",
+    });
+    const state = createProbeState([projectA], { parseStrategy: "managed" });
+    collectConsole(page);
+    await installRoutes(page, state);
+
+    await page.goto(`/technical-plan/${TECH_A}/document`);
+    await expectTechReady(page, "V1G M3 同项目技术 managed");
+    await expect(page.getByText(PARSE_MD_A)).toBeVisible();
+
+    // M3 技术入口 exact「开始解析」（禁止宽正则旧 UI 冒充）
+    await page.getByRole("button", { name: "开始解析", exact: true }).click();
+    const post = await waitTaskRunningHeld(state, TECH_A, "parse");
+    // 精确 payload；禁止 lightweight 冒充
+    expect(post.payload).toEqual({ engine: "managed" });
+    expect(post.type).toBe("parse");
+    expect(
+      state.taskPosts.filter(
+        (t) => t.projectId === TECH_A && t.type === "parse",
+      ).length,
+    ).toBe(1);
+
+    const baseline = countGets(state, TECH_A);
+    await waitStableExactCount(
+      () => countGets(state, TECH_A),
+      baseline,
+      ZERO_STABLE_MS,
+    );
+
+    const HYDRATED_MD = "V1G_M3_MANAGED_SAME_PROJECT_HYDRATED_MD";
+    state.editorById[TECH_A] = {
+      ...state.editorById[TECH_A],
+      parsedMarkdown: HYDRATED_MD,
+    };
+
+    await releaseTaskSuccess(
+      state,
+      post.taskId,
+      "解析完成，请查看右侧预览",
+      { ...MANAGED_SUCCESS_RESULT },
+    );
+
+    // result 精确三键（释放后任务详情可读）
+    const done = state.activeTasks[post.taskId];
+    expect(done.result).toEqual({
+      engine: "managed",
+      fileCount: 1,
+      chars: 128,
+    });
+    expect(Object.keys(done.result || {}).sort()).toEqual(
+      ["chars", "engine", "fileCount"].sort(),
+    );
+
+    await expect
+      .poll(() => countGets(state, TECH_A), { timeout: 15_000 })
+      .toBe(baseline + 1);
+    await waitStableExactCount(
+      () => countGets(state, TECH_A),
+      baseline + 1,
+      ZERO_STABLE_MS,
+    );
+
+    await expect(page.getByText(HYDRATED_MD)).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("technical-editor-loading")).toHaveCount(0);
+    await expectTechReady(page, "V1G M3 同项目技术 managed");
+    // 全程不得出现 lightweight parse POST
+    expect(
+      state.taskPosts.filter(
+        (t) =>
+          t.projectId === TECH_A &&
+          t.type === "parse" &&
+          t.payload &&
+          (t.payload as { engine?: string }).engine === "lightweight",
+      ).length,
+    ).toBe(0);
+    expect(state.externalHits).toEqual([]);
+  });
+
+  test("M3 技术 A managed running→切 B→释放 A success：A/B GET 零增量、B 零污染、零 sticky loading", async ({
+    page,
+  }) => {
+    const projectA = makeProject({
+      id: TECH_A,
+      name: "V1G M3 技术甲 managed",
+      kind: "technical",
+    });
+    const projectB = makeProject({
+      id: TECH_B,
+      name: "V1G M3 技术乙 managed",
+      kind: "technical",
+    });
+    const state = createProbeState([projectA, projectB], {
+      parseStrategy: "managed",
+    });
+    collectConsole(page);
+    await installRoutes(page, state);
+
+    await page.goto(`/technical-plan/${TECH_A}/document`);
+    await expectTechReady(page, "V1G M3 技术甲 managed");
+    await expect(page.getByText(PARSE_MD_A)).toBeVisible();
+
+    // M3 技术入口 exact「开始解析」
+    await page.getByRole("button", { name: "开始解析", exact: true }).click();
+    const post = await waitTaskRunningHeld(state, TECH_A, "parse");
+    expect(post.payload).toEqual({ engine: "managed" });
+
+    await softNavigate(page, `/technical-plan/${TECH_B}/document`);
+    await expectTechReady(page, "V1G M3 技术乙 managed");
+    await expect(page.getByText(PARSE_MD_B)).toBeVisible();
+    await waitStableExactCount(
+      () => countGets(state, TECH_B),
+      countGets(state, TECH_B),
+      ZERO_STABLE_MS,
+    );
+
+    const baselineA = countGets(state, TECH_A);
+    const baselineB = countGets(state, TECH_B);
+    expect(baselineA).toBeGreaterThanOrEqual(1);
+    expect(baselineB).toBeGreaterThanOrEqual(1);
+
+    // 毒化 A 正文：若迟到 success 错误水合到 B 或粘住 loading 可观测
+    state.editorById[TECH_A] = {
+      ...state.editorById[TECH_A],
+      parsedMarkdown: "V1G_M3_LATE_A_SHOULD_NOT_LEAK_TO_B",
+    };
+
+    await releaseTaskSuccess(
+      state,
+      post.taskId,
+      "解析完成，请查看右侧预览",
+      { ...MANAGED_SUCCESS_RESULT },
+    );
+
+    await assertSoftSwitchNoLateHydration({
+      page,
+      state,
+      projectA: TECH_A,
+      projectB: TECH_B,
+      baselineA,
+      baselineB,
+      bName: "V1G M3 技术乙 managed",
+      kind: "technical",
+      forbidTexts: [
+        PARSE_MD_A,
+        "V1G_M3_LATE_A_SHOULD_NOT_LEAK_TO_B",
+        "解析完成，请查看右侧预览",
+      ],
+    });
+    await expect(page.getByText(PARSE_MD_B)).toBeVisible();
+    expect(
+      state.taskPosts.filter(
+        (t) => t.projectId === TECH_A && t.type === "parse",
+      ).length,
+    ).toBe(1);
+    expect(state.externalHits).toEqual([]);
+  });
+
+  test("M3 同项目商务 managed success：payload 精确、GET +1 水合、步进精确 1", async ({
+    page,
+  }) => {
+    const projectA = makeProject({
+      id: BIZ_A,
+      name: "V1G M3 同项目商务 managed",
+      kind: "business",
+      technicalPlanStep: 1,
+    });
+    const state = createProbeState([projectA], { parseStrategy: "managed" });
+    await installRoutes(page, state);
+
+    await page.goto(`/business-bid/${BIZ_A}/parse`);
+    await expectBizReady(page, "V1G M3 同项目商务 managed");
+    // 初始：aria-label 精确 textbox value（禁止仅 getByText 冒充水合）
+    await expect(
+      page.getByRole("textbox", { name: "商务条款解析 Markdown" }),
+    ).toHaveValue(MARKDOWN_A);
+
+    // 商务标「整段重解析」走 managed
+    await page.getByRole("button", { name: "整段重解析" }).click();
+    const post = await waitTaskRunningHeld(state, BIZ_A, "parse");
+    expect(post.payload).toEqual({ engine: "managed" });
+    expect(
+      state.taskPosts.filter(
+        (t) => t.projectId === BIZ_A && t.type === "parse",
+      ).length,
+    ).toBe(1);
+
+    const baseline = countGets(state, BIZ_A);
+    await waitStableExactCount(
+      () => countGets(state, BIZ_A),
+      baseline,
+      ZERO_STABLE_MS,
+    );
+
+    const HYDRATED_BIZ = "V1G_M3_BIZ_MANAGED_HYDRATED_MD";
+    state.editorById[BIZ_A] = {
+      ...state.editorById[BIZ_A],
+      parsedMarkdown: HYDRATED_BIZ,
+    };
+
+    const patchBefore = state.patchLog.length;
+    await releaseTaskSuccess(
+      state,
+      post.taskId,
+      "解析完成",
+      { ...MANAGED_SUCCESS_RESULT },
+    );
+
+    const done = state.activeTasks[post.taskId];
+    expect(done.result).toEqual({
+      engine: "managed",
+      fileCount: 1,
+      chars: 128,
+    });
+
+    await expect
+      .poll(() => countGets(state, BIZ_A), { timeout: 15_000 })
+      .toBe(baseline + 1);
+    await waitStableExactCount(
+      () => countGets(state, BIZ_A),
+      baseline + 1,
+      ZERO_STABLE_MS,
+    );
+
+    // 水合：textbox value 精确等于新正文
+    await expect(
+      page.getByRole("textbox", { name: "商务条款解析 Markdown" }),
+    ).toHaveValue(HYDRATED_BIZ);
+    await expect(page.getByText("加载商务标工作区…")).toHaveCount(0);
+    await expectBizReady(page, "V1G M3 同项目商务 managed");
+
+    // 本轮 step PATCH 精确 1 条：projectId=BIZ_A，technicalPlanStep=1（禁止空循环假绿）
+    await expect
+      .poll(
+        () =>
+          state.patchLog.slice(patchBefore).filter((p) => p.projectId === BIZ_A)
+            .length,
+        { timeout: 10_000 },
+      )
+      .toBe(1);
+    const onlyPatch = state.patchLog
+      .slice(patchBefore)
+      .find((p) => p.projectId === BIZ_A);
+    expect(onlyPatch, "须存在 BIZ_A step PATCH").toBeTruthy();
+    expect(onlyPatch!.projectId).toBe(BIZ_A);
+    expect(onlyPatch!.body.technicalPlanStep).toBe(1);
+    const bodyKeys = Object.keys(onlyPatch!.body).sort();
+    if (bodyKeys.length === 1) {
+      expect(onlyPatch!.body).toEqual({ technicalPlanStep: 1 });
+    } else {
+      // 多键时：精确 technicalPlanStep，并锁允许键集合
+      const allowed = new Set(["technicalPlanStep"]);
+      for (const k of bodyKeys) {
+        expect(allowed.has(k), `PATCH body 含未允许键: ${k}`).toBe(true);
+      }
+    }
+    // 本轮不得 PATCH 到其他项目
+    expect(state.patchLog.slice(patchBefore).length).toBe(1);
+    expect(projectA.technicalPlanStep).toBe(1);
+    expect(
+      state.taskPosts.filter(
+        (t) =>
+          t.type === "parse" &&
+          t.payload &&
+          (t.payload as { engine?: string }).engine === "lightweight",
+      ).length,
+    ).toBe(0);
+    expect(state.externalHits).toEqual([]);
   });
 });

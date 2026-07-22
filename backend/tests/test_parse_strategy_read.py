@@ -151,29 +151,104 @@ def _settings_row_count(workspace_id: str | None = None) -> int:
         db.close()
 
 
+_SECRET_API_KEY = "sk-secret-must-not-leak"
+_SECRET_MODEL = "secret-model"
+_SECRET_PROVIDER = "deepseek"
+_SECRET_BASE = "https://api.example.com/v1"
+_SECRET_EMBED = "secret-embed"
+# 非法存量标记：须出现在 ORM 行内，但权威 GET 响应零泄漏；长度 ≤ String(32)
+_CORRUPT_PARSE = "SECRET_CORRUPT_mgd_x_bad"
+assert len(_CORRUPT_PARSE) <= 32
+_FOUR_VALUES = ("light", "managed", "local", "ask")
+
+
 def _seed_parse_strategy(workspace_id: str, strategy: str) -> None:
-    """用途：直接写入策略行，避免经 GET /api/settings 产生副作用。"""
+    """用途：经 service 写入合法策略行（含敏感字段，验证脱敏）。"""
     db = SessionLocal()
     try:
         settings_service.update_settings(
             db,
             workspace_id,
             parse_strategy=strategy,
-            api_key="sk-secret-must-not-leak",
-            provider="deepseek",
-            api_base_url="https://api.example.com/v1",
-            model="secret-model",
-            embedding_model="secret-embed",
+            api_key=_SECRET_API_KEY,
+            provider=_SECRET_PROVIDER,
+            api_base_url=_SECRET_BASE,
+            model=_SECRET_MODEL,
+            embedding_model=_SECRET_EMBED,
         )
     finally:
         db.close()
 
 
-def _assert_no_leak(payload: object) -> None:
+def _orm_write_parse_strategy(
+    workspace_id: str,
+    strategy: str,
+    *,
+    api_key: str = _SECRET_API_KEY,
+    model: str = _SECRET_MODEL,
+) -> WorkspaceSettingsRow:
+    """
+    用途：绕过 service 校验直接写 ORM 行（合法四值或非法存量）。
+    对接：M3 权威 GET corrupt / managed 回显 failure-first。
+    二次开发：禁止改生产；仅测试夹具。
+    """
+    from datetime import datetime, timezone
+
+    db = SessionLocal()
+    try:
+        row = db.get(WorkspaceSettingsRow, workspace_id)
+        if row is None:
+            row = WorkspaceSettingsRow(
+                workspace_id=workspace_id,
+                provider=_SECRET_PROVIDER,
+                api_base_url=_SECRET_BASE,
+                api_key=api_key,
+                model=model,
+                parse_strategy=strategy,
+                embedding_model=_SECRET_EMBED,
+                updated_at=datetime.now(timezone.utc),
+            )
+            db.add(row)
+        else:
+            row.parse_strategy = strategy
+            row.api_key = api_key
+            row.model = model
+            row.provider = _SECRET_PROVIDER
+            row.api_base_url = _SECRET_BASE
+            row.embedding_model = _SECRET_EMBED
+            row.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(row)
+        # 脱离会话后仍可比较字段
+        db.expunge(row)
+        return row
+    finally:
+        db.close()
+
+
+def _read_orm_parse_row(workspace_id: str) -> WorkspaceSettingsRow | None:
+    """用途：读取当前 ORM 行快照（零 HTTP）。"""
+    db = SessionLocal()
+    try:
+        row = db.get(WorkspaceSettingsRow, workspace_id)
+        if row is None:
+            return None
+        db.expunge(row)
+        return row
+    finally:
+        db.close()
+
+
+def _assert_no_leak(payload: object, *extra_markers: str) -> None:
     text = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
     lower = text.lower()
     for marker in _FORBIDDEN_MARKERS:
         assert marker.lower() not in lower, f"响应泄漏敏感标记: {marker}"
+    for marker in extra_markers:
+        if not marker:
+            continue
+        assert marker not in text, f"响应泄漏原值/哨兵: {marker}"
+        assert marker.lower() not in lower, f"响应泄漏原值/哨兵(大小写): {marker}"
 
 
 def _assert_strategy_body(body: dict, expected: str) -> None:
@@ -205,20 +280,150 @@ def test_disabled_default_no_row_returns_light_without_create(client):
     assert after == 0
 
 
-@pytest.mark.parametrize("strategy", ["light", "local", "ask"])
+@pytest.mark.parametrize("strategy", list(_FOUR_VALUES))
 def test_disabled_saved_strategy_returned(client, strategy: str):
     """
-    模块：已保存策略回显
-    用途：三种合法 parseStrategy 原样返回。
-    对接：settings_service.update_settings；GET parse-strategy。
-    二次开发：不得返回完整设置。
+    模块：已保存策略回显（M3 四值）
+    用途：light|managed|local|ask 原样返回；managed 经 ORM 直写避免 PUT 路径干扰。
+    对接：ORM WorkspaceSettingsRow；GET parse-strategy。
+    二次开发：不得返回完整设置；禁止 soft fallback 吞掉 managed。
     """
     ws = get_settings().default_workspace_id
-    _seed_parse_strategy(ws, strategy)
+    # managed 与其余四值统一 ORM 写入，保证生产未扩 ALLOWED_PARSE 时仍可红测 GET
+    _orm_write_parse_strategy(ws, strategy)
     res = client.get(_PATH)
     assert res.status_code == 200, res.text
     _assert_strategy_body(res.json(), strategy)
     assert "no-store" in (res.headers.get("cache-control") or "").lower()
+
+
+def test_disabled_managed_orm_roundtrip_exact(client):
+    """
+    模块：M3 managed 权威 GET
+    用途：ORM 直写 managed 后 GET 精确回显 managed，且 no-store。
+    对接：GET /api/settings/parse-strategy。
+    二次开发：禁止回退 light。
+    """
+    ws = get_settings().default_workspace_id
+    _orm_write_parse_strategy(ws, "managed")
+    res = client.get(_PATH)
+    assert res.status_code == 200, res.text
+    _assert_strategy_body(res.json(), "managed")
+    cache = (res.headers.get("cache-control") or "").lower()
+    assert "no-store" in cache
+
+
+def test_disabled_corrupt_stock_fixed_500_no_store_no_leak_no_commit(
+    client, monkeypatch
+):
+    """
+    模块：M3 非法存量 corrupt
+    用途：ORM 直写 secret 非法策略后，权威 GET 固定 500 + 精确 detail，
+          Cache-Control=no-store，零 commit（Session.commit 计数=0），
+          原值/Key/model 零泄漏。
+    对接：契约 M3 冻结决策 §2；GET /api/settings/parse-strategy。
+    二次开发：禁止 soft fallback light；禁止 detail 回显原值；
+              commit 计数须继续调用原实现，禁止抛异常制造 500 假绿。
+    """
+    from sqlalchemy.orm import Session
+
+    ws = get_settings().default_workspace_id
+    before_row = _orm_write_parse_strategy(ws, _CORRUPT_PARSE)
+    before_updated = before_row.updated_at
+    before_count = _settings_row_count(ws)
+    assert before_row.parse_strategy == _CORRUPT_PARSE
+    assert before_row.api_key == _SECRET_API_KEY
+    assert before_row.model == _SECRET_MODEL
+
+    # seed 之后再 monkeypatch：计数真实 commit 调用，并转发原实现
+    commit_calls = {"n": 0}
+    original_commit = Session.commit
+
+    def counting_commit(self, *args, **kwargs):
+        commit_calls["n"] += 1
+        return original_commit(self, *args, **kwargs)
+
+    monkeypatch.setattr(Session, "commit", counting_commit)
+
+    res = client.get(_PATH)
+    assert res.status_code == 500, res.text
+    body = res.json()
+    detail = body.get("detail")
+    assert isinstance(detail, dict), body
+    assert set(detail.keys()) == {"code", "message"}
+    assert detail["code"] == "workspace_parse_strategy_corrupt"
+    assert detail["message"] == "解析策略配置损坏"
+    cache = (res.headers.get("cache-control") or "").lower()
+    assert "no-store" in cache
+    _assert_no_leak(
+        body,
+        _CORRUPT_PARSE,
+        _SECRET_API_KEY,
+        _SECRET_MODEL,
+        _SECRET_PROVIDER,
+        _SECRET_BASE,
+        _SECRET_EMBED,
+        "sk-",
+    )
+    # 响应体不得误回退 light，也不得出现 parseStrategy 键或原非法值
+    raw_text = res.text
+    assert "parseStrategy" not in raw_text
+    assert '"light"' not in raw_text
+    assert _CORRUPT_PARSE not in raw_text
+
+    # 权威 GET 路径零 commit（契约硬锁，非仅零可见写）
+    assert commit_calls["n"] == 0
+
+    after_row = _read_orm_parse_row(ws)
+    assert after_row is not None
+    assert after_row.parse_strategy == _CORRUPT_PARSE
+    assert after_row.api_key == _SECRET_API_KEY
+    assert after_row.model == _SECRET_MODEL
+    assert after_row.updated_at == before_updated
+    assert _settings_row_count(ws) == before_count
+
+
+def test_disabled_owner_full_get_readable_and_put_repairs_corrupt(client):
+    """
+    模块：M3 所有者修复入口
+    用途：非法存量时完整 GET /api/settings 仍可读；合法 PUT 可修复；
+          修复后权威 GET 恢复合法四值。
+    对接：GET|PUT /api/settings；GET parse-strategy。
+    二次开发：完整设置不得驱动解析动作，但须保留修复能力。
+    """
+    ws = get_settings().default_workspace_id
+    _orm_write_parse_strategy(ws, _CORRUPT_PARSE)
+
+    full = client.get("/api/settings")
+    assert full.status_code == 200, full.text
+    full_body = full.json()
+    assert full_body["parseStrategy"] == _CORRUPT_PARSE
+    # 所有者可读完整行，但权威策略接口仍应 corrupt
+    bad = client.get(_PATH)
+    assert bad.status_code == 500, bad.text
+    assert bad.json()["detail"]["code"] == "workspace_parse_strategy_corrupt"
+
+    put = client.put(
+        "/api/settings",
+        json={
+            "provider": "openai-compatible",
+            "apiBaseUrl": "https://api.deepseek.com/v1",
+            "apiKey": "",
+            "model": "deepseek-chat",
+            "parseStrategy": "managed",
+        },
+    )
+    assert put.status_code == 200, put.text
+    assert put.json()["parseStrategy"] == "managed"
+
+    fixed = client.get(_PATH)
+    assert fixed.status_code == 200, fixed.text
+    _assert_strategy_body(fixed.json(), "managed")
+    assert "no-store" in (fixed.headers.get("cache-control") or "").lower()
+
+    row = _read_orm_parse_row(ws)
+    assert row is not None
+    assert row.parse_strategy == "managed"
 
 
 def test_disabled_response_whitelist_and_no_store(client):
