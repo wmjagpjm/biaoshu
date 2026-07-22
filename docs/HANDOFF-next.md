@@ -22,6 +22,8 @@
 > **V1-J 增量基线**：lightweight 无有效正文质量门已完成；冻结=`1e33f1b`、测试=`3917c3a`、实现=`f9562a5`。全空 PDF/DOCX/TXT/MD 统一 failed；混合 PDF 和有正文文件保持；知识库物理清旧 chunk 并显示固定中文。Codex 独立 V1-J/V1-D/代表回归=`10/10/38 passed`。
 > **V1-K 增量基线**：静默启动诚实诊断已完成；冻结=`8f0c137`、测试=`8f0c366`/`1fdea4c`/`997b57c`、实现=`cd4102f`。五入口委托唯一真源，有限状态侧车使用单次原子替换，显式诊断只读；Codex 独立 V1-K/V1-A 回归=`67/65 passed`。下一包为 V1-L 可信内网访问只读审计。
 > **V1-L 当前状态**：A/B 只读审计与 Q1 九项边界均已双确认，契约=`docs/v1l-trusted-lan-access-contract.md`，计划=`docs/plans/2026-07-22-v1l-trusted-lan-access-plan.md`。冻结方案只暴露显式 RFC1918 IPv4 上的 Vite 5173，后端恒回环，LAN 强制 required，同源 `/api`，防火墙仅手工 Private/LocalSubnet；**尚未写 failure-first 或生产代码，不得计为完成功能**。
+> **V1-L Q2 范围修订**：B 首版 failure-first 为 **61 failed / 15 passed**，但 Codex 发现正向启动链、LanHost listener/探针幂等、精确 code、外部 proxy 与 auth 快照反假绿缺口；B 已逐项 YES，question/review=`msg_100daab91dec454e8a6a6238407f1d71`/`msg_4745e5c01b2046a6bf74d0ec9fa0ec78`。当前只授权新测试文件返修，生产仍未授权。
+> **V1-L Q3 精确语义**：LAN 暴露前 `authRequired` 与 `bootstrapped` 必须均为真，后者为假固定 `lan_admin_not_bootstrapped`；`VITE_API_BASE_URL` 未设置可回退 `/api`，显式空白或非 `/api` 必须失败。question/review=`msg_c3a68603ba344b46aaa30a0eb52f4969`/`msg_0af2ec045e904cd4b2272a4aeef3d3ca`。
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
 > **P12M 完成状态**：冻结=`95b298f`、实现=`cc23542`。首轮七文件实现后，受影响回归准确暴露两份旧七键测试；经 Codex 明确 test-only 扩围后闭环，生产边界未扩大。
 > **P12M 最终生产哈希**：schemas=`76633E2BFF418A9FBBD0DD3AD18164C62496340AB4AD30BCCD7BDE2918DDF39D`；route=`3CC358D8280F3C6579261F88848D986E0A5A929D46D09F81FD378E7A9F23EF0C`；service=`F8D373B8DCCACB5B0921D4F972F0B85B29AAAAF82CFA0BE8E3D08AC2D107C1FA`；前端 API=`CEDCC06FDCB9B0743BEE2A5A019003D19145B2837BBB273226C15E7EFFD45BA3`；面板=`5C41D4A3C2807B1A69DB40D34F22E40A7A664280765A3F8D7C7DFCE3EB25E31D`。

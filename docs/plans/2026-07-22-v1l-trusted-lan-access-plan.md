@@ -9,7 +9,7 @@
 
 > **执行方式：** 使用 `executing-plans`；Grok 承担高耗费测试/实现，Codex 独立审查、验收、提交与推送。
 > **状态：** 契约已冻结，生产尚未实现。
-> **基线：** `ca7223a`；A/B 审计和 Q1 九项决策均已双确认。
+> **基线：** `ca7223a`；初始冻结=`2d7dd55`。A/B 审计、Q1 九项决策、Q2 七项反假绿修订与 Q3 bootstrap/API base 精确语义均已双确认。
 
 **目标：** 保持默认本机回环的同时，允许运维者显式选择一个 RFC1918 IPv4，只暴露 Vite 5173，并以 required 会话、同源 `/api` 代理和手工最小防火墙规则供 5–6 人可信内网使用。
 
@@ -22,8 +22,8 @@
 ### 任务 2：Grok B failure-first
 
 1. B 只写契约 §9 的两个测试文件；先报告生产未改时的真实业务红。
-2. 用 TEMP 假仓、严格 listener/probe/process/auth 快照验证参数、绑定、required 握手、启动顺序、状态隐私与零副作用。
-3. Vite 配置必须通过模块加载或等价结构化行为读取验证，不接受 README、正则包含或只看命令字符串。
+2. 用 TEMP 假仓、严格 listener/probe/process/auth 快照验证参数、LanHost listener/探针、required 握手、正向启动顺序、幂等、状态隐私与零副作用。
+3. Vite 配置必须成功模块加载并结构化读取；LAN 外部 proxy 覆盖必须仍得到精确回环 target，不接受“任意加载失败也通过”、README、正则包含或只看命令字符串。
 4. 禁止 skip/xfail、宽泛 `or`、条件跳过、真实 `Start-Process`、live HTTP、防火墙、浏览器、数据库或联网。
 5. 完成后只发 `review_request`，报告首红、passed/failed/did-not-run、文件哈希、TEMP 清理和未运行项；不提交。
 
@@ -37,8 +37,8 @@
 ### 任务 4：Grok A production-only
 
 1. A 只写契约 §9 的五个生产/说明文件，禁止改测试。
-2. 真源实现 profile/IPv4 严格解析、后端回环、required 子进程、authRequired 握手和“后端先证明、前端后暴露”。
-3. Vite 实现精确 bind、有限 allowedHosts 与固定回环 proxy；默认 loopback 行为不变。
+2. 真源实现 profile/IPv4 严格解析、后端回环、required 子进程、authRequired+bootstrapped 握手、LanHost listener/探针和“后端先证明、前端后暴露”。
+3. Vite 实现精确 bind、有限 allowedHosts 与固定回环 proxy；`BIAOSHU_LISTEN_PROFILE`/`BIAOSHU_LAN_HOST` 只作短生命周期子进程桥接并及时恢复，默认 loopback 行为不变。
 4. `.env.example` 与 README 说明管理员 bootstrap、同源地址、防火墙 Private/LocalSubnet/5173 和精确回滚；不得包含口令、密钥或真实人员数据。
 5. 完成后只发 `review_request`，报告 diff、测试、Parse/BOM、lint/build、风险与未运行项；不提交。
 

@@ -8,9 +8,11 @@
 # V1-L 可信内网访问契约
 
 > **状态：已冻结，尚未实现。**
-> **基线：** `ca7223a`，仅允许 `collab/grok-code-codex-review`，严禁操作 `main`。
+> **基线：** `ca7223a`；初始冻结=`2d7dd55`。仅允许 `collab/grok-code-codex-review`，严禁操作 `main`。
 > **审计：** A task/review=`msg_dd6c70f130fa4d0e96f3a495fde42f0f`/`msg_092d74fd43f2402bb6f8a783d65274f3`；B task/review=`msg_d4469f174c324471a76a5269f7697caa`/`msg_7d4576573bd049e68d828ed1e3ea5c74`。
 > **双确认：** A question/YES=`msg_9c5880199caa482f88461364fceb1918`/`msg_33d84617361f434e93d6913c2968e15c`；B question/YES=`msg_e424521a7e674153958e331084461021`/`msg_0a67657dd9df443ba1e9eeddfb95409a`。
+> **Q2 反假绿范围修订：** B failure-first/review=`msg_8f1542dacb14405292ca4064d9614af0`/`msg_fe023d1222a7465cb9670f07c94054aa`；Codex question/B YES=`msg_100daab91dec454e8a6a6238407f1d71`/`msg_4745e5c01b2046a6bf74d0ec9fa0ec78`。
+> **Q3 精确语义：** Codex question/B YES=`msg_c3a68603ba344b46aaa30a0eb52f4969`/`msg_0af2ec045e904cd4b2272a4aeef3d3ca`。
 
 ## 1. 问题真值
 
@@ -34,7 +36,7 @@ FastAPI：始终 127.0.0.1:8000
 
 1. 浏览器只能访问 Vite 单入口，禁止直连 `:8000`。
 2. 后端、后端 health、OpenAPI、`/docs`、`/redoc` 与公开解析回调继续只在本机回环可达。
-3. 前端业务请求必须保持相对 `/api`；`VITE_API_BASE_URL` 在内网模式为空或非 `/api` 时启动失败。
+3. 前端业务请求必须保持相对 `/api`；`VITE_API_BASE_URL` 未设置时允许前端既有 `/api` 回退，显式存在但为空、纯空白或非精确 `/api` 时启动失败。
 4. Vite proxy target 必须精确回环 `http://127.0.0.1:8000`，禁止环境变量把代理指向外部主机。
 5. 同源拓扑不扩 `CORS_ORIGINS`，不改 Cookie `HttpOnly`、`SameSite=Strict`、`Path=/api`，不新增浏览器跨源兼容分支。
 
@@ -60,17 +62,21 @@ FastAPI：始终 127.0.0.1:8000
 4. `loopback` 携带 `LanHost`、`lan` 缺 `LanHost`、重复参数或冲突 profile 均固定失败，不得启动任一新进程。
 5. 不自动枚举并信任全部网卡，不把动态探测地址写回仓库或 `.env`。
 
-固定新增失败 code 至少包括：`listen_profile_invalid`、`lan_host_required`、`lan_host_invalid`、`lan_auth_required`、`lan_backend_auth_unverified`、`lan_api_base_invalid`。中文诊断必须固定、有限、无原始异常。
+固定新增失败 code 精确包括：`listen_profile_invalid`、`lan_host_required`、`lan_host_invalid`、`lan_backend_auth_unverified`、`lan_admin_not_bootstrapped`、`lan_api_base_invalid`。`lan_auth_required` 没有区别于 `lan_backend_auth_unverified` 的独立可达语义，禁止保留死 code。中文诊断必须固定、有限、无原始异常。
+
+错误优先级冻结为：未知、重复或冲突 profile/参数=`listen_profile_invalid`；LAN 缺 host=`lan_host_required`；host 非法=`lan_host_invalid`；8000 foreign/mixed=`backend_port_foreign`；frontend-only 没有可证明 required 的 owned 后端=`lan_backend_auth_unverified`；required 已证明但管理员未 bootstrap=`lan_admin_not_bootstrapped`；LAN API base 显式空白或非精确 `/api`=`lan_api_base_invalid`。测试不得接受多选 code 集合。
 
 ## 4. 鉴权与既有进程门
 
 1. `lan` 模式必须让新启动后端进程以 `AUTH_MODE=required` 运行；`disabled` 与 LAN 前端监听不得同时生效。
-2. 启动前必须通过回环 `GET /api/auth/bootstrap-status` 证明运行后端返回精确布尔 `authRequired=true`。只有 health 成功不足以证明鉴权。
-3. 8000 已有本仓 owned 后端时，只有 health ready 且 `authRequired=true` 才允许继续启动或复用 LAN 前端；响应缺失、非法、超时、false 或不可验证均 `lan_backend_auth_unverified`。
+2. 启动前必须通过回环 `GET /api/auth/bootstrap-status` 证明运行后端返回精确布尔 `authRequired=true` 且 `bootstrapped=true`。只有 health 成功不足以证明鉴权和可登录性。
+3. 8000 已有本仓 owned 后端时，只有 health ready、`authRequired=true` 且 `bootstrapped=true` 才允许继续启动或复用 LAN 前端；响应缺失、非法、超时或 authRequired=false 固定 `lan_backend_auth_unverified`，仅 bootstrapped=false 固定 `lan_admin_not_bootstrapped`。
 4. 8000 为 foreign/mixed listener 时沿用 V1-K 失败语义，不启动 LAN 前端。
 5. 新启动后端在 required 握手未成功前，禁止启动 LAN 前端，避免短暂暴露无证明入口。
 6. V1-L 不自动创建管理员、不接收或保存口令。发布说明必须先引导运维者用既有本机脚本完成管理员 bootstrap，再开放 5173。
 7. 登录后继续依赖 P10A Cookie、CSRF、workspace 成员与 RBAC；不得新增共享口令、URL token 或 localStorage token。
+
+正向启动事件顺序必须可验证且精确为：后端 owned 或 Hidden 启动完成 → 回环 health ready → 回环 `GET /api/auth/bootstrap-status` 返回 HTTP 200、精确两键且 `authRequired`/`bootstrapped` 均为真 → 唯一一次 LAN 前端 Hidden 启动。禁止把“始终拒绝 LAN 前端”当安全成功，也禁止在鉴权和 bootstrap 证明前短暂监听 5173。若本轮刚启动的 required 后端尚未 bootstrap，允许它保持回环运行，运维者本机执行既有 bootstrap 后重试 LAN 启动。
 
 ## 5. Vite Host 与绑定边界
 
@@ -80,6 +86,8 @@ FastAPI：始终 127.0.0.1:8000
 4. 禁止 `allowedHosts=true`、点前缀通配、任意域名、自动枚举全部网卡或信任环境中的不受控 Host。
 5. Vite 仍只代理 `/api`；不得代理 `/docs`、`/redoc`、`/openapi.json` 或任意根路径到后端。
 6. 后端保持回环且 proxy `changeOrigin=true`，本包不新增 `TrustedHostMiddleware`；未来若后端监听面改变，必须另包重审。
+7. LAN listener 枚举必须对 5173 使用精确 `LanHost`，后端 8000 仍使用 `127.0.0.1`；不能继续只枚举回环，也不能把其它接口 listener 当 owned。
+8. LAN 前端就绪探针必须精确 `http://<LanHost>:5173/create`。已 owned+ready 时必须 `already_running` 且零重复启动；owned 但未 ready 继续固定失败。
 
 ## 6. V1-K 兼容与诊断
 
@@ -88,6 +96,8 @@ FastAPI：始终 127.0.0.1:8000
 3. 后端探针始终走 `127.0.0.1:8000`；LAN 前端探针可从显式 `LanHost` 确定，但诊断输出不得回显完整 URL 或接口信息。
 4. `-PlanOnly`/`-DiagnoseOnly` 必须零 `Start-Process`、零真实端口 bind、零防火墙、零浏览器、零停止；测试注入只允许这两种模式。
 5. 默认五入口、Hidden、无浏览器、无 pause、V1-A Stop 归属与状态原子性全部保持。
+6. `BIAOSHU_LISTEN_PROFILE` 与 `BIAOSHU_LAN_HOST` 是启动脚本向 Vite 子进程传递 profile/host 的唯一环境桥接；只在派生子进程前短暂设置，调用后恢复原值，不写真实 `.env`，也不得继承为后端业务配置。
+7. `AuthSnapshotJson` 只允许 `-PlanOnly`/`-DiagnoseOnly`，start 模式携带时与其它快照一样 `snapshot_invalid`。快照必须是精确 `{port,httpStatus,authRequired,bootstrapped}` 对象：port 精确 8000、HTTP 状态为严格整数、两个布尔字段为严格布尔，拒绝额外/缺失键与非对象。
 
 ## 7. Windows 防火墙与发布说明
 
@@ -133,12 +143,14 @@ Failure-first 阶段唯一可写：
 1. loopback 默认参数和 V1-K 七键/原子/Hidden 全部不回归；
 2. profile/host 缺失、重复、未知、通配、IPv6、非 RFC1918 与 URL 注入全部 fail-closed；
 3. LAN 后端参数始终回环，前端 bind 精确私有 IPv4；
-4. 新后端继承 required，握手 false/缺键/非布尔/失败/超时均不启动前端；
+4. 新后端继承 required；正向测试必须证明 health → 精确 auth URL/方法/两键均为真 → frontend start 的事件顺序，握手 false/缺键/额外键/非布尔/错误 port/失败/超时均不启动前端；bootstrapped=false 必须精确 `lan_admin_not_bootstrapped`；
 5. owned required 后端可复用，foreign/mixed 继续失败；
-6. API base 非相对 `/api`、proxy target 非回环与 allowedHosts 过宽全部拒绝；
+6. API base 非相对 `/api`、proxy target 非回环与 allowedHosts 过宽全部拒绝；LAN 配置必须成功结构化加载并忽略外部 `VITE_API_PROXY_TARGET`，loopback/E2E 继续允许既有显式 8010 覆盖；
 7. Vite 配置以实际模块加载结果验证，不得仅用 README 或字符串包含假证明；
-8. 状态仍精确七键、有限 code、无 IP/URL/环境/秘密，写入仍单次原子替换；
-9. 测试零真实服务、端口、HTTP、数据库/uploads、防火墙、浏览器与联网；TEMP 根清理；
-10. PowerShell 5.1 ParseFile/UTF-8 BOM、TypeScript build/lint、`py_compile`、`git diff --check` 和严格白名单通过。
+8. LAN 5173 listener 必须按精确 LanHost 枚举并用 LanHost URL 探测；owned+ready 幂等零启动，错误地址、foreign 或 not-ready 不得冒充；
+9. 状态仍精确七键、有限 code、无 IP/URL/环境/秘密，写入仍单次原子替换；
+10. 测试零真实服务、端口、HTTP、数据库/uploads、防火墙、浏览器与联网；TEMP 根清理；
+11. 反假绿自检必须拒绝测试方法中的多 code 断言、条件成功 `return` 和捕获任意加载异常即通过；
+12. PowerShell 5.1 ParseFile/UTF-8 BOM、TypeScript build/lint、`py_compile`、`git diff --check` 和严格白名单通过。
 
 最终真实烟测必须另用隔离数据库/uploads、临时账号与明确私有 IPv4，串行且 Hidden；不得接触用户真实标书或密钥。若没有第二台内网设备，必须诚实记录“远端设备可达性未验证”，不得用本机请求冒充远端验收。
