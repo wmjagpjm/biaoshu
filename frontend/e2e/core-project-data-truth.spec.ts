@@ -50,13 +50,42 @@ type ProjectStub = {
   linkedProjectId?: string | null;
 };
 
+/** multipart 全部有效 part（含普通字段与文件字段） */
+type MultipartPart = {
+  fieldName: string;
+  filename: string | null;
+  partBody: Buffer;
+};
+
+/** 项目文件 POST multipart 记录（V1-I：真实字节锚点，禁止仅 filename 冒充） */
+type FilePostRecord = {
+  path: string;
+  projectId: string;
+  fieldName: string;
+  filename: string;
+  body: Buffer;
+  contentType: string;
+  /** 本请求全部有效 part；契约要求恰好 1 个 file part */
+  parts: MultipartPart[];
+};
+
+type ProjectFileInfo = {
+  id: string;
+  filename: string;
+  sizeBytes: number;
+  createdAt: string;
+};
+
 type ProbeState = {
   projects: ProjectStub[];
+  /** 服务端项目文件列表（GET/POST /files） */
+  serverFiles: ProjectFileInfo[];
   /** 列表 GET 失败开关 */
   listFail: boolean;
   /** 创建 POST 失败开关 */
   createFail: boolean;
   createPosts: Array<{ path: string; body: Record<string, unknown> }>;
+  filePosts: FilePostRecord[];
   projectGets: string[];
   listGets: string[];
   forbiddenHits: string[];
@@ -167,15 +196,109 @@ function makeProject(
 function createProbeState(seed: ProjectStub[] = []): ProbeState {
   return {
     projects: [...seed],
+    serverFiles: [],
     listFail: false,
     createFail: false,
     createPosts: [],
+    filePosts: [],
     projectGets: [],
     listGets: [],
     forbiddenHits: [],
     externalHits: [],
     orderLog: [],
     clipboard: { installed: false, read: 0, write: 0 },
+  };
+}
+
+/**
+ * 用途：从 multipart 请求体解析全部有效 part（按 boundary 精确切分）。
+ * 反假绿：返回全部 name= part；禁止只取第一个 filename 而吞掉额外 part。
+ */
+function parseMultipartParts(
+  body: Buffer,
+  contentType: string,
+): MultipartPart[] {
+  const boundaryMatch = /boundary=(?:"([^"]+)"|([^;\s]+))/i.exec(contentType);
+  if (!boundaryMatch) {
+    throw new Error("multipart 缺少 boundary");
+  }
+  const boundary = boundaryMatch[1] || boundaryMatch[2];
+  const delim = Buffer.from(`--${boundary}`);
+  const rawParts: Buffer[] = [];
+  let start = body.indexOf(delim);
+  if (start < 0) {
+    throw new Error("multipart 未找到首 boundary");
+  }
+  start += delim.length;
+  if (body[start] === 0x0d && body[start + 1] === 0x0a) start += 2;
+  while (start < body.length) {
+    const next = body.indexOf(delim, start);
+    if (next < 0) break;
+    let part = body.subarray(start, next);
+    if (
+      part.length >= 2 &&
+      part[part.length - 2] === 0x0d &&
+      part[part.length - 1] === 0x0a
+    ) {
+      part = part.subarray(0, part.length - 2);
+    }
+    if (
+      part.length === 0 ||
+      (part.length === 2 && part[0] === 0x2d && part[1] === 0x2d)
+    ) {
+      break;
+    }
+    if (!(part.length === 2 && part[0] === 0x2d && part[1] === 0x2d)) {
+      rawParts.push(part);
+    }
+    start = next + delim.length;
+    if (body[start] === 0x0d && body[start + 1] === 0x0a) start += 2;
+    if (body[start] === 0x2d && body[start + 1] === 0x2d) break;
+  }
+
+  const parsed: MultipartPart[] = [];
+  for (const part of rawParts) {
+    const headerEnd = part.indexOf(Buffer.from("\r\n\r\n"));
+    if (headerEnd < 0) continue;
+    const headerText = part.subarray(0, headerEnd).toString("utf8");
+    const partBody = part.subarray(headerEnd + 4);
+    const nameMatch = /name="([^"]+)"/i.exec(headerText);
+    if (!nameMatch) continue;
+    const fileMatch = /filename="([^"]*)"/i.exec(headerText);
+    parsed.push({
+      fieldName: nameMatch[1],
+      filename: fileMatch ? fileMatch[1] : null,
+      partBody,
+    });
+  }
+  if (parsed.length === 0) {
+    throw new Error("multipart 未解析到任何有效 part");
+  }
+  return parsed;
+}
+
+/**
+ * 用途：要求恰好一个 part、且为 field=file 的文件字段；无额外普通/文件 part。
+ */
+function requireExactSingleFilePart(parts: MultipartPart[]): {
+  fieldName: string;
+  filename: string;
+  partBody: Buffer;
+} {
+  if (parts.length !== 1) {
+    throw new Error(`multipart 期望恰好 1 个 part，实际 ${parts.length}`);
+  }
+  const only = parts[0];
+  if (only.filename === null) {
+    throw new Error("multipart 唯一 part 缺少 filename（非文件字段）");
+  }
+  if (only.fieldName !== "file") {
+    throw new Error(`multipart 字段名须为 file，实际 ${only.fieldName}`);
+  }
+  return {
+    fieldName: only.fieldName,
+    filename: only.filename,
+    partBody: only.partBody,
   };
 }
 
@@ -413,17 +536,67 @@ async function installP11aRoutes(page: Page, state: ProbeState) {
       return;
     }
 
-    // files / tasks 列表
-    if (
-      /\/api\/projects\/[^/]+\/(files|tasks)\/?$/.test(path) &&
-      method === "GET"
-    ) {
+    // GET /files：返回项目文件形态列表（V1-I 服务端真值）
+    const filesMatch = path.match(/^\/api\/projects\/([^/]+)\/files\/?$/);
+    if (filesMatch && method === "GET") {
+      await json(route, state.serverFiles);
+      return;
+    }
+
+    // POST /files：记录真实 multipart（全部 part + 恰好单 file 字段），返回项目文件形态
+    if (filesMatch && method === "POST") {
+      const pid = decodeURIComponent(filesMatch[1]);
+      const contentType = req.headers()["content-type"] || "";
+      const rawBody = req.postDataBuffer() ?? Buffer.alloc(0);
+      let parts: MultipartPart[] = [];
+      let fieldName = "";
+      let filename = "";
+      let partBody = Buffer.alloc(0);
+      try {
+        parts = parseMultipartParts(rawBody, contentType);
+        const single = requireExactSingleFilePart(parts);
+        fieldName = single.fieldName;
+        filename = single.filename;
+        partBody = single.partBody;
+      } catch {
+        state.forbiddenHits.push(`${method} ${path} multipart-parse-failed`);
+        await json(
+          route,
+          { detail: { code: "p11a_multipart_invalid", message: SECRET } },
+          400,
+        );
+        return;
+      }
+      const rec: FilePostRecord = {
+        path,
+        projectId: pid,
+        fieldName,
+        filename,
+        body: partBody,
+        contentType,
+        parts,
+      };
+      state.filePosts.push(rec);
+      state.orderLog.push(`file-post:${filename}`);
+      const row: ProjectFileInfo = {
+        id: `file_${pid}_${state.filePosts.length}`,
+        filename,
+        sizeBytes: partBody.length,
+        createdAt: "2026-07-22T12:00:00.000Z",
+      };
+      state.serverFiles = [...state.serverFiles, row];
+      await json(route, row, 201);
+      return;
+    }
+
+    // tasks 列表
+    if (/\/api\/projects\/[^/]+\/tasks\/?$/.test(path) && method === "GET") {
       await json(route, []);
       return;
     }
 
     if (
-      /\/api\/projects\/[^/]+\/(files|tasks|images)\/?$/.test(path) &&
+      /\/api\/projects\/[^/]+\/(tasks|images)\/?$/.test(path) &&
       method === "POST"
     ) {
       await json(route, { id: "task_stub", status: "success", progress: 100 });
@@ -826,7 +999,7 @@ test.describe("P11A 核心项目真实数据收口", () => {
     assertCleanConsole(consoleLines);
   });
 
-  test("创建方案页创建失败不导航；成功 POST 精确并绑定 pending", async ({
+  test("创建方案页创建失败不导航；成功后真实 multipart 且零 pending", async ({
     page,
   }) => {
     const state = createProbeState([]);
@@ -842,10 +1015,23 @@ test.describe("P11A 核心项目真实数据收口", () => {
       timeout: 20_000,
     });
 
-    // 提交前页面必须有非空文件名数组，成功后 pending.fileNames 精确相等
+    // V1-I：真实 file input 选择合成 File；禁止演示 chip / pending 成功依据
+    const P11A_FILE = "p11a-create-intake.txt";
+    const P11A_ANCHOR = "P11A_BYTE_ANCHOR_create_intake_9c2e";
+    const filePayload = {
+      name: P11A_FILE,
+      mimeType: "text/plain",
+      buffer: Buffer.from(
+        `# P11A 合成文件\n${P11A_ANCHOR}\ncreate-page\n`,
+        "utf8",
+      ),
+    };
+    const chooserPromise = page.waitForEvent("filechooser", { timeout: 5_000 });
     await page.locator(".upload-card").click();
-    await expect(page.getByText("招标文件-正式稿.pdf")).toBeVisible();
-    const pageFileNames = ["招标文件-正式稿.pdf"];
+    const chooser = await chooserPromise;
+    await chooser.setFiles([filePayload]);
+    await expect(page.getByText(P11A_FILE)).toBeVisible();
+    await expect(page.getByText("招标文件-正式稿.pdf")).toHaveCount(0);
 
     const baseline = await readStorageSnapshot(page);
     assertProjectMetaKeysOnlyLegacyV1(baseline);
@@ -857,11 +1043,24 @@ test.describe("P11A 核心项目真实数据收口", () => {
     });
     await expect(page).toHaveURL(/\/create/);
     expect(state.createPosts.length).toBe(1);
+    expect(Object.keys(state.createPosts[0].body).sort()).toEqual(
+      [
+        "industry",
+        "kind",
+        "name",
+        "status",
+        "technicalPlanStep",
+      ].sort(),
+    );
+    expect(state.filePosts.length).toBe(0);
+    // 失败后选择仍在，可重试
+    await expect(page.getByText(P11A_FILE)).toBeVisible();
     const failSnap = await readStorageSnapshot(page);
     assertStorageSnapshotEqual(failSnap, baseline, "创建方案失败后");
     assertProjectMetaKeysOnlyLegacyV1(failSnap);
+    expect(failSnap.ssKeys.includes(PENDING_SS_KEY)).toBe(false);
 
-    // 成功路径
+    // 成功路径：create 一次（累计 2）→ 精确一次 multipart → 导航真实 ID；零 pending
     state.createFail = false;
     await cta.click();
     await expect(page).toHaveURL(
@@ -883,27 +1082,38 @@ test.describe("P11A 核心项目真实数据收口", () => {
     expect(typeof okBody.name).toBe("string");
     expect(String(okBody.name).length).toBeGreaterThan(0);
 
-    await expect
-      .poll(async () => {
-        const s = await readStorageSnapshot(page);
-        return s.ss[PENDING_SS_KEY] || "";
-      })
-      .toContain(REAL_CREATE_ID);
+    expect(state.filePosts.length).toBe(1);
+    expect(state.filePosts[0].projectId).toBe(REAL_CREATE_ID);
+    expect(state.filePosts[0].fieldName).toBe("file");
+    expect(state.filePosts[0].filename).toBe(P11A_FILE);
+    // 恰好一个 part、一个 file 字段、无额外普通/文件 part
+    expect(state.filePosts[0].parts.length).toBe(1);
+    expect(
+      state.filePosts[0].parts.filter((p) => p.filename !== null).length,
+    ).toBe(1);
+    expect(
+      state.filePosts[0].parts.filter((p) => p.filename === null).length,
+    ).toBe(0);
+    expect(state.filePosts[0].parts[0].fieldName).toBe("file");
+    expect(state.filePosts[0].parts[0].filename).toBe(P11A_FILE);
+    expect(
+      state.filePosts[0].body.includes(Buffer.from(P11A_ANCHOR, "utf8")),
+    ).toBe(true);
+    expect(
+      state.filePosts[0].parts[0].partBody.includes(
+        Buffer.from(P11A_ANCHOR, "utf8"),
+      ),
+    ).toBe(true);
+    expect(state.orderLog.filter((x) => x === "create-post" || x.startsWith("file-post:"))).toEqual(
+      ["create-post", "create-post", `file-post:${P11A_FILE}`],
+    );
+
     const okSnap = await readStorageSnapshot(page);
     // 项目元数据键族仍只 v1；允许技术标 editor/guidance 既有本地键
     assertTechWorkspaceLocalKeys(okSnap, REAL_CREATE_ID);
-    // sessionStorage 键集合精确只有 pending
-    expect(okSnap.ssKeys).toEqual([PENDING_SS_KEY]);
-    const pending = JSON.parse(okSnap.ss[PENDING_SS_KEY]) as {
-      projectId: string;
-      fileNames: string[];
-    };
-    expect(Object.keys(pending).sort()).toEqual(
-      ["fileNames", "projectId"].sort(),
-    );
-    expect(pending.projectId).toBe(REAL_CREATE_ID);
-    expect(pending.fileNames).toEqual(pageFileNames);
-    expect(pending.fileNames.length).toBeGreaterThan(0);
+    // V1-I：成功后零 pending（session 不得再以 pending 冒充已上传）
+    expect(okSnap.ssKeys.includes(PENDING_SS_KEY)).toBe(false);
+    expect(okSnap.ss[PENDING_SS_KEY] ?? null).toBe(null);
 
     expect(await readIdbNames(page)).toEqual([]);
     expect(okSnap.cookies).toBe("");
