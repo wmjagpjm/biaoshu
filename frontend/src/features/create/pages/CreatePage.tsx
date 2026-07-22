@@ -1,4 +1,20 @@
-import { useMemo, useState, type ReactNode } from "react";
+/**
+ * 模块：创建投标方案页（V1-I 真实文件摄入）
+ * 用途：选开工能力 → 持有真实 File → 技术类一次 create 后串行 multipart 上传 → 再进入工作区。
+ * 布局：左侧功能入口轨 + 右侧标题/亮点/上传区 + 底部主操作（对齐喜鹊式交互）。
+ * 对接：
+ *   - createProjectAsync（技术标等）→ 仅 POST /api/projects，失败固定中文且不导航
+ *   - uploadProjectFileAsync → POST /projects/{id}/files，字段 file；串行、遇首失败停止
+ *   - 商务类能力直接 navigate 到 /business-bid
+ * 二次开发：禁止演示文件名/pending/本地假 ID；错误仅固定中文常量；上传经 projectStore 薄门面。
+ */
+import {
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type ReactNode,
+} from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Briefcase,
@@ -17,6 +33,7 @@ import {
 import {
   createProjectAsync,
   industryFromFeature,
+  uploadProjectFileAsync,
 } from "../../technical-plan/lib/projectStore";
 import {
   featureGroups,
@@ -39,22 +56,42 @@ const iconMap: Record<string, ReactNode> = {
 };
 
 function FeatureIcon({ id, color }: { id: string; color: FeatureColor }) {
-  return <span className={`feature-item__icon color-${color}`}>{iconMap[id] ?? <Sparkles size={20} />}</span>;
+  return (
+    <span className={`feature-item__icon color-${color}`}>
+      {iconMap[id] ?? <Sparkles size={20} />}
+    </span>
+  );
 }
 
-type LocalFile = { id: string; name: string; sizeLabel: string };
+/** 与知识库上传一致的真实大小展示（B / x.x KB / x.x MB） */
+function formatSizeLabel(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** 单文件本地项：持有真实 File 与上传状态（仅内存） */
+type LocalFile = {
+  id: string;
+  file: File;
+  name: string;
+  sizeLabel: string;
+  status: "pending" | "uploaded" | "failed";
+};
 
 const CREATE_ERROR = "项目创建失败，请稍后重试";
+const UPLOAD_ERROR = "文件上传失败，请重试";
 
-/**
- * 模块：创建投标方案页
- * 用途：选开工能力 → 选/模拟招标文件 → 真实 POST 创建项目并进入对应工作区。
- * 布局：左侧功能入口轨 + 右侧标题/亮点/上传区 + 底部主操作（对齐喜鹊式交互）。
- * 对接：
- *   - createProjectAsync（技术标等）→ 仅 POST /api/projects，失败固定中文且不导航
- *   - 商务类能力直接 navigate 到 /business-bid
- * 二次开发：真实文件上传改为 multipart + 后端解析任务，勿在页面散落 API；禁止本地假 ID。
- */
+function makeLocalFile(file: File): LocalFile {
+  return {
+    id: `f_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+    file,
+    name: file.name,
+    sizeLabel: formatSizeLabel(file.size),
+    status: "pending",
+  };
+}
+
 export function CreatePage() {
   const navigate = useNavigate();
   const [activeId, setActiveId] = useState("core");
@@ -62,55 +99,116 @@ export function CreatePage() {
   const [dragOver, setDragOver] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** 真实 POST 成功后的 projectId；create 失败保持空 */
+  const [createdProjectId, setCreatedProjectId] = useState<string | null>(null);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  /** 同步单飞：同拍双击不得依赖 React 下一帧 disabled */
+  const inflightRef = useRef(false);
+  const filesRef = useRef<LocalFile[]>([]);
+  const createdProjectIdRef = useRef<string | null>(null);
 
   const feature: CreateFeature = useMemo(() => findFeature(activeId), [activeId]);
 
-  function pickDemoFile() {
-    setFiles((prev) => [
-      ...prev,
-      {
-        id: `f_${Date.now()}`,
-        name: "招标文件-正式稿.pdf",
-        sizeLabel: "12.4 MB",
-      },
-    ]);
+  /** 项目已创建后锁定能力/文件集合（上传失败可重试，不可改选） */
+  const selectionLocked = createdProjectId != null;
+
+  function syncFiles(next: LocalFile[]) {
+    filesRef.current = next;
+    setFiles(next);
+  }
+
+  function appendFiles(fileList: File[]) {
+    if (selectionLocked || fileList.length === 0) return;
+    const additions = fileList.map(makeLocalFile);
+    syncFiles([...filesRef.current, ...additions]);
   }
 
   function removeFile(id: string) {
-    setFiles((prev) => prev.filter((f) => f.id !== id));
+    if (selectionLocked) return;
+    syncFiles(filesRef.current.filter((f) => f.id !== id));
+  }
+
+  function openFilePicker() {
+    if (selectionLocked || inflightRef.current) return;
+    fileInputRef.current?.click();
+  }
+
+  function onFileInputChange(e: ChangeEvent<HTMLInputElement>) {
+    if (selectionLocked) {
+      e.target.value = "";
+      return;
+    }
+    const list = e.target.files;
+    if (list && list.length > 0) {
+      appendFiles(Array.from(list));
+    }
+    // 允许再次选择相同文件
+    e.target.value = "";
   }
 
   async function handleStart() {
-    // 商务类：进入商务标工作区入口
+    // 商务类：进入商务标工作区入口（不创建技术项目、不上传）
     if (feature.id === "business" || feature.id === "business-list") {
       navigate("/business-bid");
       return;
     }
-    if (submitting) return;
+    // 同步单飞：不依赖 submitting 状态帧
+    if (inflightRef.current) return;
+    inflightRef.current = true;
     setSubmitting(true);
     setError(null);
 
-    // 技术标类 / 完整投标 / 框架等：创建项目并进入文档解析步
-    const fileNames = files.map((f) => f.name);
-    const baseName =
-      fileNames[0]?.replace(/\.[^.]+$/, "") ||
-      feature.title.replace(/生成$/, "");
     try {
-      const project = await createProjectAsync({
-        name: `${baseName} · ${feature.title}`,
-        industry: industryFromFeature(feature.id),
-        featureId: feature.id,
-        fileNames: fileNames.length
-          ? fileNames
-          : ["招标文件-正式稿.pdf"],
-        technicalPlanStep: feature.id === "framework" ? 3 : 1,
-        status: "draft",
-      });
+      const currentFiles = filesRef.current;
+      const baseName =
+        currentFiles[0]?.name.replace(/\.[^.]+$/, "") ||
+        feature.title.replace(/生成$/, "");
+
+      // 无已有项目时精确一次 create；失败零上传、选择保留
+      let projectId = createdProjectIdRef.current;
+      if (!projectId) {
+        try {
+          const project = await createProjectAsync({
+            name: `${baseName} · ${feature.title}`,
+            industry: industryFromFeature(feature.id),
+            featureId: feature.id,
+            technicalPlanStep: feature.id === "framework" ? 3 : 1,
+            status: "draft",
+          });
+          projectId = project.id;
+          createdProjectIdRef.current = project.id;
+          setCreatedProjectId(project.id);
+        } catch {
+          setError(CREATE_ERROR);
+          return;
+        }
+      }
+
+      // 有文件：按稳定顺序串行上传 failed+未尝试；uploaded 不重传；遇首失败停止
+      for (const item of filesRef.current) {
+        if (item.status === "uploaded") continue;
+        try {
+          await uploadProjectFileAsync(projectId, item.file);
+          const next = filesRef.current.map((f) =>
+            f.id === item.id ? { ...f, status: "uploaded" as const } : f,
+          );
+          syncFiles(next);
+        } catch {
+          const next = filesRef.current.map((f) =>
+            f.id === item.id ? { ...f, status: "failed" as const } : f,
+          );
+          syncFiles(next);
+          setError(UPLOAD_ERROR);
+          return;
+        }
+      }
+
+      // 全部成功（或无文件零 upload）后才导航
       const step = feature.id === "framework" ? "outline" : "document";
-      navigate(`/technical-plan/${project.id}/${step}`);
-    } catch {
-      setError(CREATE_ERROR);
+      navigate(`/technical-plan/${projectId}/${step}`);
     } finally {
+      inflightRef.current = false;
       setSubmitting(false);
     }
   }
@@ -132,9 +230,15 @@ export function CreatePage() {
                         type="button"
                         key={f.id}
                         className={`feature-item${active ? " is-active" : ""}`}
-                        onClick={() => setActiveId(f.id)}
+                        disabled={selectionLocked}
+                        onClick={() => {
+                          if (selectionLocked) return;
+                          setActiveId(f.id);
+                        }}
                       >
-                        <span className={`feature-item__indicator color-${f.color}`} />
+                        <span
+                          className={`feature-item__indicator color-${f.color}`}
+                        />
                         <FeatureIcon id={f.id} color={f.color} />
                         <div className="feature-item__body">
                           <div className="feature-item__title-row">
@@ -186,7 +290,10 @@ export function CreatePage() {
                     "正文撰写",
                     "导出交付",
                   ].map((label, i, arr) => (
-                    <span key={label} style={{ display: "inline-flex", alignItems: "center" }}>
+                    <span
+                      key={label}
+                      style={{ display: "inline-flex", alignItems: "center" }}
+                    >
                       <span className="flow-step">
                         <span className="flow-step__n">{i + 1}</span>
                         {label}
@@ -214,34 +321,47 @@ export function CreatePage() {
             </header>
 
             <div className="upload-stage">
+              {/* 隐藏真实多选 input；点击/键盘上传区触发；accept 仅为选择器软过滤 */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept=".pdf,.docx,.txt,.md,.markdown,application/pdf"
+                style={{ display: "none" }}
+                tabIndex={-1}
+                disabled={selectionLocked}
+                onChange={onFileInputChange}
+              />
               <div
                 className={`upload-card${dragOver ? " is-drag" : ""}`}
                 role="button"
-                tabIndex={0}
-                onClick={() => pickDemoFile()}
+                tabIndex={selectionLocked ? -1 : 0}
+                // 为 role=button 的上传区提供明确可访问名称
+                aria-label={feature.uploadTitle}
+                aria-disabled={selectionLocked ? true : undefined}
+                onClick={() => openFilePicker()}
                 onKeyDown={(e) => {
+                  if (selectionLocked) return;
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
-                    pickDemoFile();
+                    openFilePicker();
                   }
                 }}
                 onDragOver={(e) => {
                   e.preventDefault();
-                  setDragOver(true);
+                  if (!selectionLocked) setDragOver(true);
                 }}
                 onDragLeave={() => setDragOver(false)}
                 onDrop={(e) => {
                   e.preventDefault();
                   setDragOver(false);
-                  const name = e.dataTransfer.files?.[0]?.name;
-                  if (name) {
-                    setFiles((prev) => [
-                      ...prev,
-                      { id: `f_${Date.now()}`, name, sizeLabel: "本地文件" },
-                    ]);
-                  } else {
-                    pickDemoFile();
-                  }
+                  if (selectionLocked) return;
+                  const list = e.dataTransfer.files
+                    ? Array.from(e.dataTransfer.files)
+                    : [];
+                  // 空 drop 零动作，不得注入演示文件；类型/大小仍交后端权威校验
+                  if (list.length === 0) return;
+                  appendFiles(list);
                 }}
               >
                 <div className="upload-card__icon">
@@ -250,22 +370,31 @@ export function CreatePage() {
                 <h3 className="upload-card__title">{feature.uploadTitle}</h3>
                 <p className="upload-card__desc">{feature.uploadDesc}</p>
                 <div className="upload-card__types">
-                  支持格式：{feature.fileTypes} · 单文件建议 ≤ 100MB
+                  支持格式：{feature.fileTypes} · 单文件默认 ≤ 50MB
                 </div>
-                {files.length > 0 && (
-                  <div className="file-chip-row" onClick={(e) => e.stopPropagation()}>
-                    {files.map((f) => (
-                      <span className="file-chip" key={f.id}>
-                        <span>{f.name}</span>
-                        <span style={{ color: "var(--text-tertiary)" }}>{f.sizeLabel}</span>
-                        <button type="button" aria-label="移除" onClick={() => removeFile(f.id)}>
-                          <X size={14} />
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-                )}
               </div>
+
+              {/* chip 行迁出 role=button 的 upload-card，仍为 upload-stage 直接子级 */}
+              {files.length > 0 && (
+                <div className="file-chip-row">
+                  {files.map((f) => (
+                    <span className="file-chip" key={f.id}>
+                      <span>{f.name}</span>
+                      <span style={{ color: "var(--text-tertiary)" }}>
+                        {f.sizeLabel}
+                      </span>
+                      <button
+                        type="button"
+                        aria-label="移除"
+                        disabled={selectionLocked}
+                        onClick={() => removeFile(f.id)}
+                      >
+                        <X size={14} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
 
               <div className="privacy-bar">
                 <ShieldCheck size={14} color="var(--primary)" />
@@ -295,7 +424,6 @@ export function CreatePage() {
               {submitting ? "创建中…" : feature.cta}
             </button>
           </footer>
-
         </section>
       </div>
     </div>

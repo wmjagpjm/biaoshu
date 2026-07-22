@@ -1,22 +1,19 @@
 /**
  * 模块：技术方案项目存储（前端数据门面）
  * 用途：list/get/create 只认服务端 /api/projects*；真实 200 [] 保持空；失败显式抛出或返回空，零 mock/localStorage 回退。
- * 对接：GET|POST /api/projects；GET|PATCH /api/projects/{id}；sessionStorage 仅作待上传文件名交接。
+ * 对接：GET|POST /api/projects；GET|PATCH /api/projects/{id}；POST /projects/{id}/files 经 uploadProjectFileAsync 薄门面。
  * 二次开发：禁止恢复 biaoshu.projects.v1、mock 合并、VITE_USE_API_PROJECTS / VITE_MERGE_MOCK_PROJECTS 真值开关；
- *       不得读取/写入/删除/迁移旧项目键；创建失败不得生成 proj_* 本地 ID 或导航假工作区。
+ *       不得读取/写入/删除/迁移旧项目键或 pending 文件名键；创建失败不得生成 proj_* 本地 ID 或导航假工作区；
+ *       禁止在 CreatePage 散落 FormData/API 基址，上传一律走本门面。
  */
 
-import { apiFetch } from "../../../shared/lib/api";
+import { apiFetch, apiUploadFile } from "../../../shared/lib/api";
 import type { Project, ProjectStatus } from "../../../shared/types/workspace";
-
-/** 创建成功后待上传文件名交接键（仅 sessionStorage，projectId 必须为真实 POST 返回值） */
-const PENDING_FILES_KEY = "biaoshu.pendingProjectFiles";
 
 export type CreateProjectInput = {
   name: string;
   industry?: string;
   featureId?: string;
-  fileNames?: string[];
   technicalPlanStep?: number;
   status?: ProjectStatus;
   kind?: "technical" | "business";
@@ -37,22 +34,6 @@ function sortByUpdatedAt(projects: Project[]): Project[] {
     (a, b) =>
       new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
   );
-}
-
-/**
- * 用途：创建成功后把待上传文件名写入 sessionStorage；仅绑定真实 projectId。
- * 失败路径不得调用本函数。
- */
-function rememberPendingFiles(projectId: string, fileNames?: string[]) {
-  if (!fileNames?.length) return;
-  try {
-    sessionStorage.setItem(
-      PENDING_FILES_KEY,
-      JSON.stringify({ projectId, fileNames }),
-    );
-  } catch {
-    /* 配额等忽略；不得回退到 localStorage 项目键 */
-  }
 }
 
 /**
@@ -92,7 +73,7 @@ export async function getProjectAsync(
 
 /**
  * 用途：每次显式提交只 POST 一次；成功返回服务端项目；失败直接抛出，不生成本地 ID。
- * 待上传文件名仅在 POST 成功后写入 sessionStorage。
+ * 不接收 fileNames，不写 sessionStorage pending。
  */
 export async function createProjectAsync(
   input: CreateProjectInput,
@@ -100,7 +81,7 @@ export async function createProjectAsync(
   const kind = input.kind ?? "technical";
   const defaultName =
     kind === "business" ? "未命名商务标项目" : "未命名技术标项目";
-  const project = await apiFetch<Project>("/projects", {
+  return apiFetch<Project>("/projects", {
     method: "POST",
     body: JSON.stringify({
       name: input.name.trim() || defaultName,
@@ -111,8 +92,21 @@ export async function createProjectAsync(
       linkedProjectId: input.linkedProjectId ?? undefined,
     }),
   });
-  rememberPendingFiles(project.id, input.fileNames);
-  return project;
+}
+
+/**
+ * 用途：项目文件 multipart 上传薄门面；内部复用 apiUploadFile，编码 projectId。
+ * 对接：POST /projects/{id}/files，字段名固定 file。
+ * 调用方不得自建 FormData 或拼接未编码路径。
+ */
+export async function uploadProjectFileAsync<T = unknown>(
+  projectId: string,
+  file: File,
+): Promise<T> {
+  return apiUploadFile<T>(
+    `/projects/${encodeURIComponent(projectId)}/files`,
+    file,
+  );
 }
 
 /**
@@ -134,24 +128,6 @@ export async function updateProjectAsync(
     });
   } catch {
     return null;
-  }
-}
-
-/**
- * 用途：读取创建成功后写入的待上传文件名；projectId 不匹配则返回空。
- */
-export function getPendingFileNames(projectId: string): string[] {
-  try {
-    const raw = sessionStorage.getItem(PENDING_FILES_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as {
-      projectId?: string;
-      fileNames?: string[];
-    };
-    if (parsed.projectId !== projectId) return [];
-    return parsed.fileNames ?? [];
-  } catch {
-    return [];
   }
 }
 

@@ -1,10 +1,11 @@
 /**
- * 模块：技术标分步工作区（含 P13-B/C/D2/H3 版本、P13-F2 近期成员、P13-G2 章节意图、P13-I3/I4 任务事件提示、V1-G 任务成功刷新围栏）
+ * 模块：技术标分步工作区（含 P13-B/C/D2/H3 版本、P13-F2 近期成员、P13-G2 章节意图、P13-I3/I4 任务事件提示、V1-G 任务成功刷新围栏、V1-I 服务端文件真值）
  * 用途：技术标流水线工作区；标题区展示版本与项目近期成员；content 步展示章节处理意图提示；
  *       薄挂载 EditorStateEventUpdatePanel 做远端版本变化提示；
  *       薄挂载 ProjectTaskEventPanel 做项目任务事件安全提示（不自动请求详情）；
  *       P13-I4 经 onSafeTaskEvent 接入 useProjectPipeline.reconcileCurrentTaskStatus，仅做当前任务安全状态对账；
- *       V1-G：parse/analyze/outline/chapters/chapter 经统一 task-success-reload 门禁，锁迟到 success 副作用。
+ *       V1-G：parse/analyze/outline/chapters/chapter 经统一 task-success-reload 门禁，锁迟到 success 副作用；
+ *       V1-I：文档步 displayFiles 仅取 pipeline.files（服务端真值），禁止 pending 回退。
  * 对接：useTechnicalPlanEditors、useProjectPipeline.reconcileCurrentTaskStatus、EditorStateVersionFreshness、
  *       ProjectPresencePanel（testid=technical-project-presence）、ChapterEditIntentPanel
  *       （testid=technical-chapter-edit-intent，仅 content 薄挂载）、
@@ -12,7 +13,8 @@
  *       ProjectTaskEventPanel（testid=technical-project-task-event-update，onSafeTaskEvent）。
  * 二次开发：禁止改 editor-state 保存/冲突/任务路由；presence/意图/任务事件提示仅薄挂载；
  *       任务事件安全对账仅限 reconcileCurrentTaskStatus，不自动拉详情、不进 editor Hook；意图不是强制锁；
- *       禁止修改 useProjectPipeline/I4/SSE 返回语义；content_fuse/response_match/export 不得并入 V1-G helper。
+ *       禁止修改 useProjectPipeline/I4/SSE 返回语义；content_fuse/response_match/export 不得并入 V1-G helper；
+ *       禁止恢复 getPendingFileNames / sessionStorage pending 文件名展示。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
@@ -71,10 +73,7 @@ import {
   mergeResponseMatrixSuggestions,
   normalizeResponseMatrixSuggestions,
 } from "../lib/responseMatrix";
-import {
-  getPendingFileNames,
-  getProjectAsync,
-} from "../lib/projectStore";
+import { getProjectAsync } from "../lib/projectStore";
 import type { ResponseMatrixSuggestion, TechnicalPlanStepId } from "../types";
 import { serializeBidAnalysis } from "../types";
 import "./TechnicalPlan.css";
@@ -567,13 +566,8 @@ export function TechnicalPlanWorkspace() {
 项目：${project.name}
 `;
 
-  const pendingFiles = getPendingFileNames(project.id);
-  const displayFiles =
-    pipeline.files.length > 0
-      ? pipeline.files.map((f) => f.filename)
-      : pendingFiles.length > 0
-        ? pendingFiles
-        : [];
+  // V1-I：仅服务端 pipeline.files；零文件时空态，不读 pending
+  const displayFiles = pipeline.files.map((f) => f.filename);
 
   if (!step) {
     const defaultStep =
