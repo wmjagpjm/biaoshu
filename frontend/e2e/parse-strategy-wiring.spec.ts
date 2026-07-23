@@ -1069,7 +1069,7 @@ async function releaseAndAwaitHeldStrategyContinuation(
   await waitPageContinuationBarrier(page);
 }
 
-/** 用途：列出项目任务，供引擎/error/diagnosticCode 与是否创建断言。 */
+/** 用途：列出项目任务，供引擎/error/message/diagnosticCode 与是否创建断言。 */
 async function listTasks(
   request: APIRequestContext,
   projectId: string,
@@ -1078,6 +1078,7 @@ async function listTasks(
     id: string;
     type: string;
     status: string;
+    message?: string | null;
     error?: string | null;
     result?: { engine?: string; diagnosticCode?: string } | null;
   }>
@@ -1088,6 +1089,7 @@ async function listTasks(
     id: string;
     type: string;
     status: string;
+    message?: string | null;
     error?: string | null;
     result?: { engine?: string; diagnosticCode?: string } | null;
   }>;
@@ -1124,6 +1126,82 @@ async function awaitManagedFailedPrivacyMarkers(
     .toBe("failed-managed");
   expect(markers).toEqual([REAL_MANIFEST_TASK_ERROR, RUNTIME_MANIFEST_INVALID]);
   return markers;
+}
+
+/**
+ * 用途：等待 managed failed 并锁定真实 lastTask.message（禁止仅用 error/diagnosticCode 代替）。
+ * 对接：P2 old-lastTask 混显；返回 { id, message } 供 UI 可见基线与 API 仍存在证明。
+ */
+async function awaitManagedFailedWithMessage(
+  request: APIRequestContext,
+  projectId: string,
+): Promise<{ id: string; message: string }> {
+  let out: { id: string; message: string } | null = null;
+  await expect
+    .poll(async () => {
+      const tasks = await listTasks(request, projectId);
+      const failed = tasks.find(
+        (t) =>
+          t.type === "parse" &&
+          t.status === "failed" &&
+          t.result?.engine === "managed",
+      );
+      if (!failed) return "pending";
+      if (failed.error !== REAL_MANIFEST_TASK_ERROR) {
+        return `error:${failed.error ?? "null"}`;
+      }
+      if (failed.result?.diagnosticCode !== RUNTIME_MANIFEST_INVALID) {
+        return `code:${failed.result?.diagnosticCode ?? "null"}`;
+      }
+      const msg =
+        typeof failed.message === "string" ? failed.message.trim() : "";
+      if (!msg) return "no-message";
+      out = { id: failed.id, message: msg };
+      return "failed-managed-message";
+    })
+    .toBe("failed-managed-message");
+  expect(out, "managed failed 必须含非空 message").toBeTruthy();
+  return out!;
+}
+
+/**
+ * P2：读取/失败期 UI 零泄漏计数快照。
+ * 用途：locator.count() 不抛，避免读取期 expect(toHaveCount(0)) 提前卡住，
+ *       保证可先 release Hold 500、采失败期与 API 证据，finally 后再统一断言为零。
+ */
+type P2UiLeakSnapshot = {
+  lastTaskMessage: number;
+  recentTasksLabel: number;
+  recentTasksList: number;
+  managedFailMsg: number;
+  managedFailLink: number;
+  realManifestError: number;
+  runtimeManifestInvalid: number;
+  sensitiveLeak: number;
+};
+
+async function captureP2UiLeakSnapshot(
+  page: Page,
+  lastTaskMessage: string,
+): Promise<P2UiLeakSnapshot> {
+  return {
+    lastTaskMessage: await page
+      .getByText(lastTaskMessage, { exact: false })
+      .count(),
+    recentTasksLabel: await page.getByText("最近任务", { exact: false }).count(),
+    recentTasksList: await page
+      .getByText("最近任务列表", { exact: true })
+      .count(),
+    managedFailMsg: await page.getByText(MANAGED_FAIL_MSG).count(),
+    managedFailLink: await page
+      .getByRole("link", { name: MANAGED_FAIL_LINK })
+      .count(),
+    realManifestError: await page.getByText(REAL_MANIFEST_TASK_ERROR).count(),
+    runtimeManifestInvalid: await page
+      .getByText(RUNTIME_MANIFEST_INVALID)
+      .count(),
+    sensitiveLeak: await page.getByText(SENSITIVE_LEAK).count(),
+  };
 }
 
 test.describe("P8B 解析策略接线", () => {
@@ -2599,6 +2677,343 @@ test.describe("P8B M3 managed 解析策略接线", () => {
     const probe = await readDomPrivacyProbe(page);
     expect(probe.callbackCount).toBeGreaterThan(0);
     expect(probe.hitMarkers).toEqual([]);
+    expect(net.taskPosts.length).toBe(postsBefore);
+    expect(countEngineParsePosts(net.taskPosts, "managed")).toBe(managedBefore);
+    expect(countLightweightParsePosts(net.taskPosts)).toBe(lightBefore);
+    expect(net.externalHits).toEqual([]);
+  });
+
+  test("T5+ P2 技术 old-lastTask 混显：Hold 读取期与 500 失败期零 message，API 任务仍在", async ({
+    page,
+    request,
+  }) => {
+    /**
+     * 模块：P2 old-lastTask-mixed-with-new-strategy（技术）
+     * 用途：真实 managed failed 取得 lastTask.message 并证明动作前 UI 可见；
+     *       下一次策略 GET 可释放 HoldGate：读取期仅用 count 快照（不抛），
+     *       再 release 500 采失败期快照 + API 旧任务仍在 + POST/隐私；
+     *       finally 释放 Hold/断 probe 后，统一断言读取期与失败期均为零。
+     * 探针：须在新读取开始后才 arm，禁止把动作前允许展示的旧任务误记为泄漏。
+     * 清理：任一意外异常也须 finally 释放 Hold / 断开 probe。
+     */
+    const projectId = await createProject(
+      request,
+      "technical",
+      "E2E M3 T5+ P2 技术混显",
+    );
+    const net = await installNetworkGuard(page);
+    await injectParseStrategyGet(page, "managed");
+
+    await page.goto(`/technical-plan/${projectId}/document`);
+    await expect(
+      page.getByRole("heading", { name: "E2E M3 T5+ P2 技术混显" }),
+    ).toBeVisible({ timeout: 20_000 });
+    await uploadTxtViaHiddenInput(page, "e2e-t5p2-tech.txt");
+    await expect(
+      page.locator(".file-chip", { hasText: "e2e-t5p2-tech.txt" }),
+    ).toBeVisible({ timeout: 15_000 });
+
+    // 兼容本 worktree 旧「轻量解析」与中性「开始解析」（不改全局 parseActionButton）
+    const techParseBtn = page.getByRole("button", {
+      name: /^(轻量解析|开始解析)$/,
+    });
+    await techParseBtn.click();
+    await expect(page.getByText(MANAGED_FAIL_MSG)).toBeVisible({
+      timeout: 45_000,
+    });
+    const failedTask = await awaitManagedFailedWithMessage(request, projectId);
+    const lastTaskMessage = failedTask.message;
+    expect(lastTaskMessage.length).toBeGreaterThan(0);
+    // 动作前：真实 lastTask.message 必须可见（不得只用 error/diagnosticCode 代替）
+    await expect(
+      page.getByText(lastTaskMessage, { exact: false }).first(),
+    ).toBeVisible({
+      timeout: 15_000,
+    });
+
+    const postsBefore = net.taskPosts.length;
+    const managedBefore = countEngineParsePosts(net.taskPosts, "managed");
+    const lightBefore = countLightweightParsePosts(net.taskPosts);
+    const strategyGetBaseline = countStrategyGets(net.apiHits);
+
+    await page.unroute("**/api/settings/parse-strategy");
+    const gate = createHoldGate();
+    const hold = await installParseStrategyGetHold(page, gate, {
+      status: 500,
+      body: {
+        detail: { code: "internal_error", message: SENSITIVE_LEAK },
+      },
+    });
+    const fulfilledBefore = hold.fulfilled;
+
+    let readSnap: P2UiLeakSnapshot | null = null;
+    let failSnap: P2UiLeakSnapshot | null = null;
+    let stillThere:
+      | {
+          id: string;
+          status: string;
+          message?: string | null;
+          result?: { engine?: string } | null;
+        }
+      | undefined;
+    let probe: { callbackCount: number; hitMarkers: string[] } | null = null;
+    let probeConsumed = false;
+
+    try {
+      await techParseBtn.click();
+      // 新读取开始：仅允许「正在读取解析策略」门可见
+      await expect(page.getByText("正在读取解析策略")).toBeVisible({
+        timeout: 15_000,
+      });
+      await expect
+        .poll(() => hold.held, { timeout: 15_000 })
+        .toBeGreaterThanOrEqual(1);
+      expect(countStrategyGets(net.apiHits)).toBe(strategyGetBaseline + 1);
+
+      // 探针在新读取开始后才 arm（禁止把动作前旧任务误记为泄漏）
+      await installDomPrivacyProbe(page, [
+        lastTaskMessage,
+        REAL_MANIFEST_TASK_ERROR,
+        RUNTIME_MANIFEST_INVALID,
+        SENSITIVE_LEAK,
+      ]);
+
+      // 读取期：不抛快照计数（禁止 toHaveCount(0) 提前卡住导致无法采 500/API）
+      readSnap = await captureP2UiLeakSnapshot(page, lastTaskMessage);
+
+      // 释放并消费策略 Hold 500 → 固定策略错误可见
+      await releaseAndAwaitHeldStrategyContinuation(
+        page,
+        gate,
+        hold,
+        fulfilledBefore,
+      );
+      await expect(page.getByText(STRATEGY_FAIL_MSG)).toBeVisible({
+        timeout: 15_000,
+      });
+
+      // 失败期快照：含 lastTask message、「最近任务」、「最近任务列表」
+      failSnap = await captureP2UiLeakSnapshot(page, lastTaskMessage);
+
+      // task API：旧任务仍存在（禁止删除/清 lastTask 真值冒充）
+      const tasksAfter = await listTasks(request, projectId);
+      stillThere = tasksAfter.find((t) => t.id === failedTask.id);
+
+      probe = await readDomPrivacyProbe(page);
+      probeConsumed = true;
+    } finally {
+      // 任一意外异常也须释放 Hold / 断 probe（禁止预期首红跳过清理）
+      if (!gate.isReleased()) {
+        gate.release();
+      }
+      if (!probeConsumed) {
+        try {
+          await readDomPrivacyProbe(page);
+        } catch {
+          /* 页面已关或探针未装时忽略 */
+        }
+      }
+    }
+
+    // 清理完成后统一断言读取期与失败期均为零（failure-first 红点在此）
+    // P2R1：完整 8 字段对象精确 toEqual，禁止采集不消费 / 部分字段漏断言
+    expect(readSnap, "读取期快照必须已采集").toBeTruthy();
+    expect(failSnap, "失败期快照必须已采集").toBeTruthy();
+    expect(readSnap!, "读取期 UI 泄漏快照 8 字段须全 0").toEqual({
+      lastTaskMessage: 0,
+      recentTasksLabel: 0,
+      recentTasksList: 0,
+      managedFailMsg: 0,
+      managedFailLink: 0,
+      realManifestError: 0,
+      runtimeManifestInvalid: 0,
+      sensitiveLeak: 0,
+    });
+    expect(failSnap!, "失败期 UI 泄漏快照 8 字段须全 0").toEqual({
+      lastTaskMessage: 0,
+      recentTasksLabel: 0,
+      recentTasksList: 0,
+      managedFailMsg: 0,
+      managedFailLink: 0,
+      realManifestError: 0,
+      runtimeManifestInvalid: 0,
+      sensitiveLeak: 0,
+    });
+
+    expect(stillThere, "旧 managed failed 任务必须仍存在").toBeTruthy();
+    expect(stillThere!.status).toBe("failed");
+    expect(stillThere!.message).toBe(lastTaskMessage);
+    expect(stillThere!.result?.engine).toBe("managed");
+
+    expect(probe, "隐私探针必须已消费").toBeTruthy();
+    expect(probe!.callbackCount).toBeGreaterThan(0);
+    expect(
+      probe!.hitMarkers,
+      `读取/失败期泄漏: ${probe!.hitMarkers.join(",")}`,
+    ).toEqual([]);
+    expect(net.taskPosts.length).toBe(postsBefore);
+    expect(countEngineParsePosts(net.taskPosts, "managed")).toBe(managedBefore);
+    expect(countLightweightParsePosts(net.taskPosts)).toBe(lightBefore);
+    expect(net.externalHits).toEqual([]);
+  });
+
+  test("T5+ P2 商务 old-lastTask 混显：Hold 读取期与 500 失败期零 message，API 任务仍在", async ({
+    page,
+    request,
+  }) => {
+    /**
+     * 模块：P2 old-lastTask-mixed-with-new-strategy（商务）
+     * 用途：与技术页同风险；商务上传自动 managed failed 后整段重解析路径；
+     *       读取期不抛快照 → release 500 → 失败期采 lastTask message/安全门；
+     *       finally 释放 Hold/断 probe 后统一断言读取期与失败期为零；API 任务仍在。
+     */
+    const projectId = await createProject(
+      request,
+      "business",
+      "E2E M3 T5+ P2 商务混显",
+    );
+    const net = await installNetworkGuard(page);
+    await injectParseStrategyGet(page, "managed");
+
+    await page.goto(`/business-bid/${projectId}/parse`);
+    await expect(
+      page.getByRole("heading", { name: "E2E M3 T5+ P2 商务混显" }),
+    ).toBeVisible({ timeout: 20_000 });
+    await uploadTxtViaHiddenInput(page, "e2e-t5p2-biz.txt");
+    await expect(
+      page.locator(".file-chip", { hasText: "e2e-t5p2-biz.txt" }),
+    ).toBeVisible({ timeout: 15_000 });
+
+    await expect(page.getByText(MANAGED_FAIL_MSG)).toBeVisible({
+      timeout: 45_000,
+    });
+    const failedTask = await awaitManagedFailedWithMessage(request, projectId);
+    const lastTaskMessage = failedTask.message;
+    expect(lastTaskMessage.length).toBeGreaterThan(0);
+    await expect(
+      page.getByText(lastTaskMessage, { exact: false }).first(),
+    ).toBeVisible({
+      timeout: 15_000,
+    });
+
+    const postsBefore = net.taskPosts.length;
+    const managedBefore = countEngineParsePosts(net.taskPosts, "managed");
+    const lightBefore = countLightweightParsePosts(net.taskPosts);
+    const strategyGetBaseline = countStrategyGets(net.apiHits);
+
+    await page.unroute("**/api/settings/parse-strategy");
+    const gate = createHoldGate();
+    const hold = await installParseStrategyGetHold(page, gate, {
+      status: 500,
+      body: {
+        detail: { code: "internal_error", message: SENSITIVE_LEAK },
+      },
+    });
+    const fulfilledBefore = hold.fulfilled;
+
+    let readSnap: P2UiLeakSnapshot | null = null;
+    let failSnap: P2UiLeakSnapshot | null = null;
+    let stillThere:
+      | {
+          id: string;
+          status: string;
+          message?: string | null;
+          result?: { engine?: string } | null;
+        }
+      | undefined;
+    let probe: { callbackCount: number; hitMarkers: string[] } | null = null;
+    let probeConsumed = false;
+
+    try {
+      await page
+        .getByRole("button", { name: "整段重解析", exact: true })
+        .click();
+      await expect(page.getByText("正在读取解析策略")).toBeVisible({
+        timeout: 15_000,
+      });
+      await expect
+        .poll(() => hold.held, { timeout: 15_000 })
+        .toBeGreaterThanOrEqual(1);
+      expect(countStrategyGets(net.apiHits)).toBe(strategyGetBaseline + 1);
+
+      // 探针在新读取开始后才 arm
+      await installDomPrivacyProbe(page, [
+        lastTaskMessage,
+        REAL_MANIFEST_TASK_ERROR,
+        RUNTIME_MANIFEST_INVALID,
+        SENSITIVE_LEAK,
+      ]);
+
+      // 读取期：不抛快照（旧 lastTask message + 安全门文案）
+      readSnap = await captureP2UiLeakSnapshot(page, lastTaskMessage);
+
+      await releaseAndAwaitHeldStrategyContinuation(
+        page,
+        gate,
+        hold,
+        fulfilledBefore,
+      );
+      await expect(page.getByText(STRATEGY_FAIL_MSG)).toBeVisible({
+        timeout: 15_000,
+      });
+
+      // 失败期：按商务实际 UI 采 lastTask message / 安全门
+      failSnap = await captureP2UiLeakSnapshot(page, lastTaskMessage);
+
+      const tasksAfter = await listTasks(request, projectId);
+      stillThere = tasksAfter.find((t) => t.id === failedTask.id);
+
+      probe = await readDomPrivacyProbe(page);
+      probeConsumed = true;
+    } finally {
+      if (!gate.isReleased()) {
+        gate.release();
+      }
+      if (!probeConsumed) {
+        try {
+          await readDomPrivacyProbe(page);
+        } catch {
+          /* 页面已关或探针未装时忽略 */
+        }
+      }
+    }
+
+    // 清理完成后统一断言（商务：旧 lastTask message + 安全门）
+    // P2R1：完整 8 字段对象精确 toEqual，禁止采集不消费 / 部分字段漏断言
+    expect(readSnap, "商务读取期快照必须已采集").toBeTruthy();
+    expect(failSnap, "商务失败期快照必须已采集").toBeTruthy();
+    expect(readSnap!, "商务读取期 UI 泄漏快照 8 字段须全 0").toEqual({
+      lastTaskMessage: 0,
+      recentTasksLabel: 0,
+      recentTasksList: 0,
+      managedFailMsg: 0,
+      managedFailLink: 0,
+      realManifestError: 0,
+      runtimeManifestInvalid: 0,
+      sensitiveLeak: 0,
+    });
+    expect(failSnap!, "商务失败期 UI 泄漏快照 8 字段须全 0").toEqual({
+      lastTaskMessage: 0,
+      recentTasksLabel: 0,
+      recentTasksList: 0,
+      managedFailMsg: 0,
+      managedFailLink: 0,
+      realManifestError: 0,
+      runtimeManifestInvalid: 0,
+      sensitiveLeak: 0,
+    });
+
+    expect(stillThere, "旧 managed failed 任务必须仍存在").toBeTruthy();
+    expect(stillThere!.status).toBe("failed");
+    expect(stillThere!.message).toBe(lastTaskMessage);
+    expect(stillThere!.result?.engine).toBe("managed");
+
+    expect(probe, "商务隐私探针必须已消费").toBeTruthy();
+    expect(probe!.callbackCount).toBeGreaterThan(0);
+    expect(
+      probe!.hitMarkers,
+      `商务读取/失败期泄漏: ${probe!.hitMarkers.join(",")}`,
+    ).toEqual([]);
     expect(net.taskPosts.length).toBe(postsBefore);
     expect(countEngineParsePosts(net.taskPosts, "managed")).toBe(managedBefore);
     expect(countLightweightParsePosts(net.taskPosts)).toBe(lightBefore);
