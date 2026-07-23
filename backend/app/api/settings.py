@@ -54,10 +54,22 @@ def get_parse_strategy(
     模块：解析策略脱敏读取
     用途：返回当前工作空间 parseStrategy；无设置行时默认 light 且不建行。
     对接：前端策略决策 Hook；settings_service.get_parse_strategy；deps.get_workspace_id。
-    二次开发：仅 GET；固定 Cache-Control:no-store；禁止复用完整 WorkspaceSettingsOut 或返回 Key。
+    二次开发：仅 GET；成功/损坏 500 均固定 Cache-Control:no-store；
+              非法存量固定 detail code/message，禁止复用完整 WorkspaceSettingsOut 或返回 Key/原值。
     """
     _no_store(response)
-    strategy = settings_service.get_parse_strategy(db, workspace_id)
+    try:
+        strategy = settings_service.get_parse_strategy(db, workspace_id)
+    except settings_service.WorkspaceParseStrategyCorruptError:
+        # HTTPException 走独立响应对象，必须在 headers 上再写 no-store
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "workspace_parse_strategy_corrupt",
+                "message": "解析策略配置损坏",
+            },
+            headers={"Cache-Control": "no-store"},
+        ) from None
     return ParseStrategyOut(parse_strategy=strategy)
 
 

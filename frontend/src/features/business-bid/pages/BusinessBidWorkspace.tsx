@@ -11,12 +11,15 @@
  *       ProjectPresencePanel（testid=business-project-presence）、
  *       EditorStateEventUpdatePanel（testid=business-editor-state-event-update）、
  *       ProjectTaskEventPanel（testid=business-project-task-event-update，onSafeTaskEvent）。
- * 二次开发：勿大改步骤信息架构；新任务类型扩在 pipeline TaskType；解析入口统一 handleParse。
+ * 二次开发：勿大改步骤信息架构；新任务类型扩在 pipeline TaskType；解析入口统一 handleParse（light|managed|local|ask）。
  *       项目详情只认 GET /api/projects/{id}，禁止 mockBusinessProjects 复活。
  *       P11B：editor-state 加载失败显示固定失败卡，禁止挂步骤/表格/编辑控件。
  *       版本/presence 文案不得称远端最新/实时/在线/正在编辑；用户名只作文本节点。
  *       任务事件安全对账仅限 reconcileCurrentTaskStatus，不自动拉详情；presence 提示不进入 editor Hook。
- *       禁止修改 useProjectPipeline/I4/SSE；export 保持独立围栏，不得并回 runBizTask 副作用链。
+ *       export 保持独立围栏，不得并回 runBizTask 副作用链；
+ *       managed 失败不得 fallback lightweight，固定中文 + 人工本地回传入口。
+ *       A13：runBizTask 统一消费 pipeline.runTask transport rejection，保留 pipeline.error，不 rethrow。
+ *       A2/A3/A10：策略读/项目详情/上传续体均以 projectId+generation 门禁迟到副作用。
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -40,7 +43,15 @@ import {
   ParseStrategyChoiceDialog,
   type ParseStrategyChoice,
 } from "../../parse-strategy/components/ParseStrategyChoiceDialog";
-import { useWorkspaceParseStrategy } from "../../parse-strategy/hooks/useWorkspaceParseStrategy";
+import {
+  PARSE_STRATEGY_ERROR_MESSAGE,
+  useWorkspaceParseStrategy,
+} from "../../parse-strategy/hooks/useWorkspaceParseStrategy";
+import {
+  isCurrentManagedParseFailure,
+  MANAGED_PARSE_LOCAL_FALLBACK_LINK_LABEL,
+  MANAGED_PARSE_UNAVAILABLE_MESSAGE,
+} from "../../parse-strategy/lib/managedParseTask";
 import { useProjectPipeline } from "../../technical-plan/hooks/useProjectPipeline";
 import {
   getProjectAsync,
@@ -95,8 +106,15 @@ export function BusinessBidWorkspace() {
   }>();
   const navigate = useNavigate();
 
-  const [project, setProject] = useState<Project | null>(null);
-  const [projectLoading, setProjectLoading] = useState(true);
+  /**
+   * A3：项目详情与 requestProjectId/status 同步归属门。
+   * ready 且 requestProjectId===当前路由才可渲染；A→B 首帧同步视空，不等 effect。
+   */
+  const [projectLoad, setProjectLoad] = useState<{
+    requestProjectId: string;
+    status: "loading" | "ready";
+    project: Project | null;
+  }>({ requestProjectId: projectId, status: "loading", project: null });
   const [strategyTip, setStrategyTip] = useState("");
   const [parseChoiceOpen, setParseChoiceOpen] = useState(false);
   /**
@@ -138,6 +156,16 @@ export function BusinessBidWorkspace() {
    * 项目切换与每次 runBizTask 启动均推进，锁 A→B→A 与同项目旧 run。
    */
   const taskRefreshGenerationRef = useRef(0);
+  /**
+   * A2：解析动作代次；项目切换与每次策略读取启动均推进。
+   * refresh 后与每个 continuation 前复核，锁 A→B / ABA 迟到 POST/ask/导航/tip。
+   */
+  const parseActionGenerationRef = useRef(0);
+  /**
+   * A2/T3：项目作用域的策略读取飞行旗标。
+   * 禁止用全局 parseStrategy.loading 驱动按钮文案/禁用——软切 B 时旧 GET 在途不得污染 B。
+   */
+  const strategyReadInFlightRef = useRef(false);
   /** V1-E：导出准备进行态（与 pipeline.busy 共同禁用按钮） */
   const [exportPreparing, setExportPreparing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -172,20 +200,40 @@ export function BusinessBidWorkspace() {
 
   const pipeline = useProjectPipeline(projectId);
 
+  /** A3：将 project 详情写入 projectLoad（仅 request 归属匹配时）。 */
+  const applyProjectDetail = useCallback(
+    (next: Project | null, requestProjectId: string) => {
+      setProjectLoad((prev) => {
+        if (prev.requestProjectId !== requestProjectId) return prev;
+        return {
+          requestProjectId,
+          status: "ready",
+          project: next,
+        };
+      });
+    },
+    [],
+  );
+
   useEffect(() => {
     let cancelled = false;
+    const requestProjectId = projectId;
+    // 同步进入 loading 并清空旧 project，A→B 首帧不得渲染 A 详情
+    setProjectLoad({
+      requestProjectId,
+      status: "loading",
+      project: null,
+    });
     void (async () => {
-      setProjectLoading(true);
       // 只认服务端详情；404/失败不得用 mock 复活
-      const remote = await getProjectAsync(projectId);
+      const remote = await getProjectAsync(requestProjectId);
       if (cancelled) return;
-      setProject(remote ?? null);
-      setProjectLoading(false);
+      applyProjectDetail(remote ?? null, requestProjectId);
     })();
     return () => {
       cancelled = true;
     };
-  }, [projectId]);
+  }, [projectId, applyProjectDetail]);
 
   useEffect(() => {
     void pipeline.refreshFiles();
@@ -199,13 +247,18 @@ export function BusinessBidWorkspace() {
     setEventReloadFailed(false);
     // V1-G：切项目推进任务刷新代次，旧 success 不得 refresh/写步进/覆盖 project
     taskRefreshGenerationRef.current += 1;
+    // A2/T3：切项目推进解析动作代次并清飞行旗标，旧 GET 在途不得锁/污染 B
+    parseActionGenerationRef.current += 1;
+    strategyReadInFlightRef.current = false;
   }, [projectId]);
 
   /**
    * 模块：runBizTask
    * 用途：商务 parse/biz_* 统一任务入口；V1-G 以 startedProjectId+generation 门禁 success 后副作用。
-   * 对接：pipeline.runTask；refreshFromApi；updateProjectAsync/getProjectAsync/setProject。
+   * 对接：pipeline.runTask；refreshFromApi；updateProjectAsync/getProjectAsync/setProjectLoad。
    * 二次开发：export 保持独立围栏，禁止并回本 helper；stale 返回真实 task，不得改写 status。
+   * A13：transport rejection 在本边界消费，保留 pipeline.error，返回 null，禁止 rethrow
+   *      （void runBizTask 的 biz_* 与 parse 路径均不得产生 unhandledrejection）。
    */
   const runBizTask = useCallback(
     async (
@@ -225,9 +278,16 @@ export function BusinessBidWorkspace() {
         currentProjectIdRef.current === startedProjectId &&
         taskRefreshGenerationRef.current === startedGeneration;
 
-      const t = await pipeline.runTask(type, payload);
+      let t: Awaited<ReturnType<typeof pipeline.runTask>> | null = null;
+      try {
+        t = await pipeline.runTask(type, payload);
+      } catch {
+        // A13：pipeline 已写入固定安全 error；消费 rejection，禁止冒泡为 unhandledrejection
+        // 正常 success/failed/cancelled 不走此分支，语义保持
+        return null;
+      }
       // runTask 后复核：已切项目或同项目新代次则零 refresh/tip/step/project 副作用
-      if (!isCurrentOwner()) {
+      if (!isCurrentOwner() || !t) {
         return t;
       }
       if (t.status === "success") {
@@ -236,34 +296,34 @@ export function BusinessBidWorkspace() {
         if (!isCurrentOwner()) {
           return t;
         }
-        const step = STEP_BY_TASK[type];
-        if (step) {
+        const nextStep = STEP_BY_TASK[type];
+        if (nextStep) {
           const patched = await updateProjectAsync(startedProjectId, {
-            technicalPlanStep: step,
+            technicalPlanStep: nextStep,
           });
           if (!isCurrentOwner()) {
             return t;
           }
           if (patched) {
-            setProject(patched);
+            applyProjectDetail(patched, startedProjectId);
           } else {
             const remote = await getProjectAsync(startedProjectId);
             if (!isCurrentOwner()) {
               return t;
             }
-            if (remote) setProject(remote);
+            if (remote) applyProjectDetail(remote, startedProjectId);
           }
         } else {
           const remote = await getProjectAsync(startedProjectId);
           if (!isCurrentOwner()) {
             return t;
           }
-          if (remote) setProject(remote);
+          if (remote) applyProjectDetail(remote, startedProjectId);
         }
       }
       return t;
     },
-    [pipeline, refreshFromApi],
+    [pipeline, refreshFromApi, applyProjectDetail],
   );
 
   /**
@@ -278,8 +338,19 @@ export function BusinessBidWorkspace() {
   }, [runBizTask]);
 
   /**
+   * 模块：runManagedBizParse
+   * 用途：商务标 managed parse，payload 精确 engine=managed；成功走 runBizTask 水合/步进。
+   * 对接：runBizTask("parse")。
+   * 二次开发：禁止 managed 失败后再发 lightweight。
+   */
+  const runManagedBizParse = useCallback(async () => {
+    setStrategyTip("");
+    await runBizTask("parse", { engine: "managed" });
+  }, [runBizTask]);
+
+  /**
    * 模块：goLocalParser
-   * 用途：跳转本地回传页；不创建 parse 任务。
+   * 用途：跳转人工本地回传页；不创建 parse 任务。
    * 对接：/local-parser?projectId=。
    * 二次开发：项目 ID 为空时不得导航。
    */
@@ -292,42 +363,69 @@ export function BusinessBidWorkspace() {
 
   /**
    * 模块：handleParse
-   * 用途：统一解析决策（上传后自动、整段重解析、反馈 regenerate）。
+   * 用途：统一解析决策 light|managed|local|ask（上传后自动、整段重解析、反馈 regenerate）。
    * 对接：useWorkspaceParseStrategy；ParseStrategyChoiceDialog。
-   * 二次开发：local/ask 不得自动创建任务；读取失败固定中文且不建任务。
+   * 二次开发：local 零任务；ask 不回写；读取失败固定中文且不建任务。
+   * A2：refresh 前捕获 projectId+parseActionGeneration；refresh 后与 continuation 前复核。
    */
   const handleParse = useCallback(async () => {
-    if (pipeline.busy || parseStrategy.loading) return;
+    // 仅用项目作用域飞行旗标防重入；禁止 parseStrategy.loading 跨项目锁死 B
+    if (pipeline.busy || strategyReadInFlightRef.current) return;
     const pid = (projectId || "").trim();
     if (!pid) return;
+    const startedProjectId = currentProjectIdRef.current || pid;
+    const startedGeneration = ++parseActionGenerationRef.current;
+    const isCurrentParseAction = () =>
+      Boolean(startedProjectId) &&
+      currentProjectIdRef.current === startedProjectId &&
+      parseActionGenerationRef.current === startedGeneration;
+
+    strategyReadInFlightRef.current = true;
     setStrategyTip("正在读取解析策略");
     const result = await parseStrategy.refresh();
+    if (!isCurrentParseAction()) {
+      // A→B / ABA 迟到：零 POST、零 ask、零导航、零 tip/error 写回
+      // 旗标由 projectId effect 清零；此处不回写 UI
+      return;
+    }
+    // 当前动作结束策略读取阶段；后续 task 由 pipeline.busy 接管
+    strategyReadInFlightRef.current = false;
     if (!result.ok) {
       setStrategyTip(result.error);
       return;
     }
     if (result.strategy === "light") {
+      if (!isCurrentParseAction()) return;
       await runLightweightBizParse();
       return;
     }
+    if (result.strategy === "managed") {
+      if (!isCurrentParseAction()) return;
+      await runManagedBizParse();
+      return;
+    }
     if (result.strategy === "local") {
+      if (!isCurrentParseAction()) return;
       goLocalParser();
       return;
     }
+    // ask：仅打开一次选择框，不写设置
+    if (!isCurrentParseAction()) return;
     setStrategyTip("");
     setParseChoiceOpen(true);
   }, [
-    pipeline.busy,
+    pipeline,
     parseStrategy,
     projectId,
     runLightweightBizParse,
+    runManagedBizParse,
     goLocalParser,
   ]);
 
   /**
    * 模块：onParseChoice
-   * 用途：处理 ask 一次性选择。
-   * 对接：runLightweightBizParse / goLocalParser。
+   * 用途：处理 ask 一次选择 light|managed|local。
+   * 对接：runLightweightBizParse / runManagedBizParse / goLocalParser。
    * 二次开发：不得回写工作空间默认策略。
    */
   const onParseChoice = useCallback(
@@ -337,15 +435,34 @@ export function BusinessBidWorkspace() {
         void runLightweightBizParse();
         return;
       }
+      if (choice === "managed") {
+        void runManagedBizParse();
+        return;
+      }
       goLocalParser();
     },
-    [runLightweightBizParse, goLocalParser],
+    [runLightweightBizParse, runManagedBizParse, goLocalParser],
   );
 
+  /**
+   * A10：上传捕获启动 projectId；迟到 success 不得再启动 handleParse/策略 GET/任务。
+   */
   const onPickFile = useCallback(
     async (file: File | null) => {
       if (!file) return;
-      await pipeline.uploadFile(file);
+      const startedProjectId = currentProjectIdRef.current;
+      try {
+        await pipeline.uploadFile(file);
+      } catch {
+        // pipeline 已写 error 或迟到拒绝；不得继续解析
+        return;
+      }
+      if (
+        !startedProjectId ||
+        currentProjectIdRef.current !== startedProjectId
+      ) {
+        return;
+      }
       await handleParse();
     },
     [pipeline, handleParse],
@@ -391,9 +508,15 @@ export function BusinessBidWorkspace() {
     [submitRevise],
   );
 
-  if (projectLoading || wsLoading) {
+  // A3：同步归属门——requestProjectId 不匹配或仍 loading 时视作未就绪
+  const projectReady =
+    projectLoad.status === "ready" &&
+    projectLoad.requestProjectId === projectId;
+  const project = projectReady ? projectLoad.project : null;
+
+  if (!projectReady || wsLoading) {
     return (
-      <div className="page bb-layout">
+      <div className="page bb-layout" data-testid="business-editor-loading">
         <p style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <Loader2 size={18} /> 加载商务标工作区…
         </p>
@@ -467,6 +590,12 @@ export function BusinessBidWorkspace() {
   const missingQualify = workspace.qualifyItems.filter(
     (q) => q.status === "missing" || q.status === "partial",
   ).length;
+
+  // P2：当前项目本地策略读取中/失败 tip 门；仅隐藏旧任务 UI，不改 lastTask 真值
+  // 禁止用全局 parseStrategy.loading 驱动（软切跨项目泄漏）
+  const strategyGateActive =
+    strategyTip === "正在读取解析策略" ||
+    strategyTip === PARSE_STRATEGY_ERROR_MESSAGE;
 
   return (
     <div className="page bb-layout" data-testid="business-editor-workspace">
@@ -580,32 +709,89 @@ export function BusinessBidWorkspace() {
         restoreRevision={restoreRevision}
       />
 
-      {(busy || lastTask || pipeline.error || strategyTip) && (
+      {(() => {
+        // A4/P2：策略 gate 生效时仅展示 tip；隐藏旧 lastTask message/取消/managed failure
+        // 不删除 lastTask 真值；gate 解除后恢复既有任务展示
+        const managedFail =
+          !strategyGateActive &&
+          isCurrentManagedParseFailure(
+            projectId,
+            lastTask,
+            pipeline.error,
+          );
+        if (
+          !strategyGateActive &&
+          !busy &&
+          !lastTask &&
+          !pipeline.error &&
+          !strategyTip &&
+          !managedFail
+        ) {
+          return null;
+        }
+        if (
+          strategyGateActive &&
+          !strategyTip
+        ) {
+          return null;
+        }
+        return (
         <div className="bb-hint" style={{ marginBottom: 12 }}>
           <Info size={16} />
           <div style={{ flex: 1 }}>
-            {pipeline.error && (
-              <div style={{ color: "var(--danger)" }}>{pipeline.error}</div>
-            )}
-            {strategyTip && (
-              <div
-                style={{
-                  color: strategyTip.includes("无法读取")
-                    ? "var(--danger)"
-                    : undefined,
-                }}
-              >
-                {strategyTip}
-              </div>
-            )}
-            {lastTask && (
-              <div>
-                任务 <strong>{lastTask.type}</strong> · {lastTask.status} ·{" "}
-                {lastTask.progress}% · {lastTask.message}
-              </div>
+            {strategyGateActive ? (
+              strategyTip ? (
+                <div
+                  style={{
+                    color: strategyTip.includes("无法读取")
+                      ? "var(--danger)"
+                      : undefined,
+                  }}
+                >
+                  {strategyTip}
+                </div>
+              ) : null
+            ) : (
+              <>
+                {managedFail ? (
+                  <div style={{ color: "var(--danger)" }}>
+                    {MANAGED_PARSE_UNAVAILABLE_MESSAGE}
+                    {" · "}
+                    <Link
+                      to={`/local-parser?projectId=${encodeURIComponent(projectId)}`}
+                    >
+                      {MANAGED_PARSE_LOCAL_FALLBACK_LINK_LABEL}
+                    </Link>
+                  </div>
+                ) : (
+                  pipeline.error && (
+                    <div style={{ color: "var(--danger)" }}>
+                      {pipeline.error}
+                    </div>
+                  )
+                )}
+                {strategyTip && (
+                  <div
+                    style={{
+                      color: strategyTip.includes("无法读取")
+                        ? "var(--danger)"
+                        : undefined,
+                    }}
+                  >
+                    {strategyTip}
+                  </div>
+                )}
+                {lastTask && (
+                  <div>
+                    任务 <strong>{lastTask.type}</strong> · {lastTask.status} ·{" "}
+                    {lastTask.progress}% · {lastTask.message}
+                  </div>
+                )}
+              </>
             )}
           </div>
-          {lastTask &&
+          {!strategyGateActive &&
+            lastTask &&
             (lastTask.status === "pending" ||
               lastTask.status === "running") && (
               <button
@@ -617,7 +803,8 @@ export function BusinessBidWorkspace() {
               </button>
             )}
         </div>
-      )}
+        );
+      })()}
 
       <ParseStrategyChoiceDialog
         open={parseChoiceOpen}
@@ -641,7 +828,7 @@ export function BusinessBidWorkspace() {
                 to={`/local-parser?projectId=${encodeURIComponent(projectId)}`}
                 style={{ margin: "0 4px", textDecoration: "underline" }}
               >
-                本地 MinerU 插件
+                人工本地回传
               </Link>
               。解析不准时用下方反馈定向修正。
             </span>
@@ -705,13 +892,14 @@ export function BusinessBidWorkspace() {
                   className="btn btn-ghost btn-sm"
                   disabled={
                     busy ||
-                    parseStrategy.loading ||
+                    // T3：仅本项目 tip/飞行态，禁止全局 parseStrategy.loading 软切泄漏
+                    strategyTip === "正在读取解析策略" ||
                     pipeline.files.length === 0
                   }
                   onClick={() => void handleParse()}
                 >
                   <RefreshCw size={14} />{" "}
-                  {parseStrategy.loading
+                  {strategyTip === "正在读取解析策略"
                     ? "正在读取解析策略"
                     : "整段重解析"}
                 </button>
@@ -1260,7 +1448,7 @@ export function BusinessBidWorkspace() {
                         return;
                       }
                       if (patched) {
-                        setProject(patched);
+                        applyProjectDetail(patched, startedProjectId);
                       } else {
                         const remote = await getProjectAsync(startedProjectId);
                         if (
@@ -1269,7 +1457,9 @@ export function BusinessBidWorkspace() {
                         ) {
                           return;
                         }
-                        if (remote) setProject(remote);
+                        if (remote) {
+                          applyProjectDetail(remote, startedProjectId);
+                        }
                       }
                       // 契约：成功且代次仍匹配时先写 P9D 告警，再 await 统一 downloadExport；
                       // 旧任务迟到不得写告警/下载；禁止 downloadPath/window.open 旁路

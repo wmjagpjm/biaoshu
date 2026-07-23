@@ -4,7 +4,8 @@
  * 对接：GET|PUT /api/settings；apiKey 明文存与回显（保密机产品决策）。
  */
 
-export type ParseStrategy = "light" | "local" | "ask";
+/** M3：与后端 ALLOWED_PARSE 对齐的四值策略。 */
+export type ParseStrategy = "light" | "managed" | "local" | "ask";
 
 export type WorkspaceSettings = {
   provider: string;

@@ -553,7 +553,7 @@ class WorkspaceSettingsRow(Base):
     # 用户自备 Key，明文存（产品决策：保密机，正常显示输入输出）
     api_key: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     model: Mapped[str] = mapped_column(String(200), nullable=False, default="deepseek-chat")
-    # light | local | ask
+    # light | managed | local | ask
     parse_strategy: Mapped[str] = mapped_column(String(32), nullable=False, default="light")
     # 可选 embedding 模型名；空=仅用本地哈希向量
     embedding_model: Mapped[str] = mapped_column(String(200), nullable=False, default="")

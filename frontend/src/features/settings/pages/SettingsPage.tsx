@@ -447,7 +447,7 @@ export function SettingsPage() {
         </div>
       </section>
 
-      {/* 3. 解析策略 */}
+      {/* 3. 解析策略（M3 四值：light|managed|local|ask；不得声称 OCR 已安装） */}
       <section className="card card-pad settings-section">
         <div className="settings-section__head">
           <div className="settings-section__icon">
@@ -455,7 +455,9 @@ export function SettingsPage() {
           </div>
           <div>
             <h2>解析策略</h2>
-            <p>在线轻量解析默认可用；复杂版式/扫描件优先本地 MinerU 插件。</p>
+            <p>
+              轻量解析默认可用；本机自动 OCR 需管理员另行准备运行时，未配置时请改用人工本地回传。
+            </p>
           </div>
         </div>
         <div className="settings-grid">
@@ -468,14 +470,15 @@ export function SettingsPage() {
                 patch({ parseStrategy: e.target.value as ParseStrategy })
               }
             >
-              <option value="light">在线轻量解析</option>
-              <option value="local">优先本地 MinerU 插件</option>
+              <option value="light">轻量解析</option>
+              <option value="managed">本机自动 OCR</option>
+              <option value="local">人工本地回传</option>
               <option value="ask">每次询问</option>
             </select>
           </div>
           <div>
             <Link to="/local-parser" className="btn btn-soft btn-sm">
-              <Plug size={14} /> 配置本地解析插件
+              <Plug size={14} /> 打开人工本地回传
             </Link>
           </div>
         </div>

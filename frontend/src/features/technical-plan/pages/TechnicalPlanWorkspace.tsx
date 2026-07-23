@@ -46,7 +46,15 @@ import {
   ParseStrategyChoiceDialog,
   type ParseStrategyChoice,
 } from "../../parse-strategy/components/ParseStrategyChoiceDialog";
-import { useWorkspaceParseStrategy } from "../../parse-strategy/hooks/useWorkspaceParseStrategy";
+import {
+  PARSE_STRATEGY_ERROR_MESSAGE,
+  useWorkspaceParseStrategy,
+} from "../../parse-strategy/hooks/useWorkspaceParseStrategy";
+import {
+  isCurrentManagedParseFailure,
+  MANAGED_PARSE_LOCAL_FALLBACK_LINK_LABEL,
+  MANAGED_PARSE_UNAVAILABLE_MESSAGE,
+} from "../../parse-strategy/lib/managedParseTask";
 import { ChapterEditor } from "../components/ChapterEditor";
 import { ContentFuseDialog } from "../components/ContentFuseDialog";
 import { EditorStateEventUpdatePanel } from "../../editor-state-collaboration/EditorStateEventUpdatePanel";
@@ -145,18 +153,19 @@ const STEP_IDS: TechnicalPlanStepId[] = [
  * 用途：六步流水线 + 异步任务 + 反馈修订 + 知识库引用展示。
  *   - 取消任务、大纲 revise「应用到大纲树」、生成后展示 kbCitations
  *   - 响应矩阵智能建议：外层来源页 × 内层候选批串行、本地累计、禁止自动写 editor-state
- *   - 文档解析入口按工作空间 parseStrategy 决策 light/local/ask（P8B）
+ *   - 文档解析入口按工作空间 parseStrategy 决策 light|managed|local|ask（P8B/V1-M M3）
  *   - 严格 bid_writer 可按需查看人力团队推荐投影（P10F，disabled 不展示）
  *   - P11C：editor-state 加载失败固定卡；项目详情绑定 requestProjectId；A→B 首帧不渲染旧项目
  *   - P13-B/C/D2：标题区展示当前已载入版本 UTC 更新时间、修订来源与操作者用户名（共享组件，零额外请求）
  * 对接：
  *   - useProjectPipeline / useTechnicalPlanEditors / useProjectGuidance
- *   - useWorkspaceParseStrategy / ParseStrategyChoiceDialog
+ *   - useWorkspaceParseStrategy / ParseStrategyChoiceDialog / managedParseTask
  *   - BidWriterTeamRecommendationPanel
  *   - EditorStateVersionFreshness（testid=technical-editor-version-freshness /
  *     technical-editor-version-source / technical-editor-version-actor）
  *   - editor-state、POST .../tasks（response_match payload.sourceBatchIndex + candidateBatchIndex）、POST .../revise
- * 二次开发：勿在此堆业务；任务与持久化进 hooks；分批合并用 mergeResponseMatrixSuggestions；禁止字段级合并；轻量路径必须 engine=lightweight。
+ * 二次开发：勿在此堆业务；任务与持久化进 hooks；分批合并用 mergeResponseMatrixSuggestions；禁止字段级合并；
+ *       轻量路径 engine=lightweight；managed 路径 engine=managed 且失败不得 fallback light；
  *       禁止生产演示入口（填入演示数据/伪抽取/示例目录）；M3-D 对话框打开时不得用 loadError 卡提前卸载；
  *       版本时间/来源/操作者文案不得改称远端最新/实时/在线/最后由；用户名只作文本节点。
  */
@@ -392,13 +401,30 @@ export function TechnicalPlanWorkspace() {
    * 二次开发：禁止传入 local/ask/mineru 等引擎名。
    */
   const runLightweightParse = useCallback(async () => {
+    // 清除策略读取 tip，避免与任务进度混显
+    setTaskTip("");
     await runWriterTaskWithSuccessReload("parse", { engine: "lightweight" }, () =>
       "解析完成，请查看右侧预览",
     );
   }, [runWriterTaskWithSuccessReload]);
+
+  /**
+   * 模块：runManagedParse
+   * 用途：以 engine=managed 创建 parse 任务；成功走既有 V1-G 水合/代次门。
+   * 对接：runWriterTaskWithSuccessReload("parse")。
+   * 二次开发：禁止 managed 失败后再发 lightweight；payload 精确 engine=managed。
+   * A4：managed 启动前清除「正在读取解析策略」残留 tip。
+   */
+  const runManagedParse = useCallback(async () => {
+    setTaskTip("");
+    await runWriterTaskWithSuccessReload("parse", { engine: "managed" }, () =>
+      "解析完成，请查看右侧预览",
+    );
+  }, [runWriterTaskWithSuccessReload]);
+
   /**
    * 模块：goLocalParser
-   * 用途：跳转本地回传页并携带编码后的项目 ID。
+   * 用途：跳转人工本地回传页并携带编码后的项目 ID。
    * 对接：/local-parser?projectId=；不创建任务。
    * 二次开发：项目 ID 为空时不得导航。
    */
@@ -409,44 +435,83 @@ export function TechnicalPlanWorkspace() {
   }, [navigate, projectId]);
 
   /**
+   * A2：解析动作代次；项目切换与每次策略读取启动均推进。
+   * refresh 后与每个 continuation 前复核，锁 A→B / ABA 迟到副作用。
+   * 复用上方 currentProjectIdRef 做 await 后 owner 复核。
+   */
+  const parseActionGenerationRef = useRef(0);
+  /**
+   * A2/T3：项目作用域的策略读取飞行旗标。
+   * 禁止用全局 parseStrategy.loading 驱动按钮文案/禁用——软切 B 时旧 GET 在途不得污染 B。
+   */
+  const strategyReadInFlightRef = useRef(false);
+
+  /**
    * 模块：handleDocumentParse
-   * 用途：点击解析时 refresh 策略并决策 light/local/ask。
+   * 用途：点击解析时 refresh 策略并决策 light|managed|local|ask。
    * 对接：useWorkspaceParseStrategy；ParseStrategyChoiceDialog。
-   * 二次开发：读取失败/取消/繁忙均不得创建任务；不得静默降级为 light。
+   * 二次开发：读取失败/取消/繁忙均不得创建任务；local 零任务；ask 不回写；不得静默降级 light。
+   * A2：refresh 前捕获 projectId+generation；refresh 后与 continuation 前复核。
    */
   const handleDocumentParse = useCallback(async () => {
-    if (pipeline.busy || parseStrategy.loading) return;
+    // 仅用项目作用域飞行旗标防重入；禁止 parseStrategy.loading 跨项目锁死 B
+    if (pipeline.busy || strategyReadInFlightRef.current) return;
     const pid = (projectId || "").trim();
     if (!pid) return;
+    const startedProjectId = currentProjectIdRef.current || pid;
+    const startedGeneration = ++parseActionGenerationRef.current;
+    const isCurrentParseAction = () =>
+      Boolean(startedProjectId) &&
+      currentProjectIdRef.current === startedProjectId &&
+      parseActionGenerationRef.current === startedGeneration;
+
+    strategyReadInFlightRef.current = true;
     setTaskTip("正在读取解析策略");
     const result = await parseStrategy.refresh();
+    if (!isCurrentParseAction()) {
+      // A→B / ABA 迟到：零 POST、零 ask、零导航、零 tip/error 写回
+      // 旗标由 projectId effect 清零；此处不回写 UI
+      return;
+    }
+    // 当前动作结束策略读取阶段；后续 task 由 pipeline.busy 接管
+    strategyReadInFlightRef.current = false;
     if (!result.ok) {
       setTaskTip(result.error);
       return;
     }
     if (result.strategy === "light") {
+      if (!isCurrentParseAction()) return;
       await runLightweightParse();
       return;
     }
+    if (result.strategy === "managed") {
+      if (!isCurrentParseAction()) return;
+      await runManagedParse();
+      return;
+    }
     if (result.strategy === "local") {
+      if (!isCurrentParseAction()) return;
       setTaskTip("");
       goLocalParser();
       return;
     }
+    // ask：仅打开一次选择框，不写设置
+    if (!isCurrentParseAction()) return;
     setTaskTip("");
     setParseChoiceOpen(true);
   }, [
-    pipeline.busy,
+    pipeline,
     parseStrategy,
     projectId,
     runLightweightParse,
+    runManagedParse,
     goLocalParser,
   ]);
 
   /**
    * 模块：onParseChoice
-   * 用途：处理 ask 选择框的一次选择。
-   * 对接：runLightweightParse / goLocalParser。
+   * 用途：处理 ask 选择框的一次选择（light|managed|local）。
+   * 对接：runLightweightParse / runManagedParse / goLocalParser。
    * 二次开发：不得回写工作空间 parseStrategy。
    */
   const onParseChoice = useCallback(
@@ -456,9 +521,13 @@ export function TechnicalPlanWorkspace() {
         void runLightweightParse();
         return;
       }
+      if (choice === "managed") {
+        void runManagedParse();
+        return;
+      }
       goLocalParser();
     },
-    [runLightweightParse, goLocalParser],
+    [runLightweightParse, runManagedParse, goLocalParser],
   );
 
   useEffect(() => {
@@ -494,8 +563,13 @@ export function TechnicalPlanWorkspace() {
     setMatrixSuggestions([]);
     setMatchProgress(null);
     setContentFuseOpen(false);
+    // 项目切换：关闭 ask 对话框并清空解析 tip
     setParseChoiceOpen(false);
+    setTaskTip("");
     setEventReloadFailed(false);
+    // A2/T3：切项目推进解析动作代次并清飞行旗标，旧 GET 在途不得锁/污染 B
+    parseActionGenerationRef.current += 1;
+    strategyReadInFlightRef.current = false;
   }, [projectId]);
 
   // 渲染顺序：项目/editor loading → 不存在跳列表 → loadError（ContentFuse 打开时例外）→ 工作区
@@ -562,7 +636,7 @@ export function TechnicalPlanWorkspace() {
     editors.parsedMarkdown?.trim() ||
     `# 招标公告（尚未解析）
 
-请上传 PDF/DOCX/TXT 后点击「轻量解析」。
+请上传 PDF/DOCX/TXT 后点击「开始解析」。
 项目：${project.name}
 `;
 
@@ -755,6 +829,11 @@ export function TechnicalPlanWorkspace() {
         })
       : null;
 
+  // P2：当前项目本地策略读取中/失败 tip 门；仅隐藏旧任务 UI，不改 lastTask 真值
+  // 禁止用全局 parseStrategy.loading 驱动（软切跨项目泄漏）
+  const strategyGateActive =
+    taskTip === "正在读取解析策略" || taskTip === PARSE_STRATEGY_ERROR_MESSAGE;
+
   return (
     <div className="page tp-layout" data-testid="technical-editor-workspace">
       <header className="page-header">
@@ -762,11 +841,13 @@ export function TechnicalPlanWorkspace() {
           <h1>{project.name}</h1>
           <p>
             {project.industry} · 服务端编辑态
-            {pipeline.busy
-              ? " · 任务执行中…"
-              : pipeline.lastTask
-                ? ` · 最近任务 ${pipeline.lastTask.type}/${pipeline.lastTask.status}`
-                : ""}
+            {strategyGateActive
+              ? ""
+              : pipeline.busy
+                ? " · 任务执行中…"
+                : pipeline.lastTask
+                  ? ` · 最近任务 ${pipeline.lastTask.type}/${pipeline.lastTask.status}`
+                  : ""}
           </p>
           <EditorStateVersionFreshness
             updatedAt={editors.versionUpdatedAt}
@@ -958,23 +1039,60 @@ export function TechnicalPlanWorkspace() {
         onCancel={() => setParseChoiceOpen(false)}
       />
 
-      {(pipeline.error || taskTip) && (
-        <div
-          className={`tp-source-banner ${pipeline.error ? "is-local" : "is-api"}`}
-          role="status"
-        >
-          {pipeline.error || taskTip}
-          {pipeline.error &&
-          /Key|配置|模型|API/i.test(pipeline.error) ? (
-            <>
-              {" · "}
-              <Link to="/settings">去设置页检查 Key</Link>
-            </>
-          ) : null}
-        </div>
-      )}
+      {(() => {
+        // A4/P2：策略 gate 生效时只展示 tip（读取中/固定失败文案）；
+        // 隐藏旧 managed failure 与 pipeline.error，不改 lastTask 真值
+        if (strategyGateActive) {
+          return (
+            <div className="tp-source-banner is-api" role="status">
+              {taskTip}
+            </div>
+          );
+        }
+        // managed 失败：固定中文 + 人工入口；遮罩 task.error/diagnosticCode
+        const managedFail = isCurrentManagedParseFailure(
+          projectId,
+          pipeline.lastTask,
+          pipeline.error,
+        );
+        if (!managedFail && !pipeline.error && !taskTip) return null;
+        const showError = Boolean(pipeline.error);
+        return (
+          <div
+            className={`tp-source-banner ${
+              managedFail || showError ? "is-local" : "is-api"
+            }`}
+            role="status"
+          >
+            {managedFail ? (
+              <>
+                {MANAGED_PARSE_UNAVAILABLE_MESSAGE}
+                {" · "}
+                <Link
+                  to={`/local-parser?projectId=${encodeURIComponent(projectId)}`}
+                >
+                  {MANAGED_PARSE_LOCAL_FALLBACK_LINK_LABEL}
+                </Link>
+              </>
+            ) : (
+              <>
+                {pipeline.error || taskTip}
+                {showError &&
+                pipeline.error &&
+                /Key|配置|模型|API/i.test(pipeline.error) ? (
+                  <>
+                    {" · "}
+                    <Link to="/settings">去设置页检查 Key</Link>
+                  </>
+                ) : null}
+              </>
+            )}
+          </div>
+        );
+      })()}
 
-      {(pipeline.busy || pipeline.lastTask) && (
+      {/* P2：策略读取中/失败期隐藏任务卡与 recentTasks，解除后恢复 */}
+      {!strategyGateActive && (pipeline.busy || pipeline.lastTask) && (
         <div className="card card-pad" style={{ padding: "10px 14px" }}>
           <div
             style={{
@@ -1074,12 +1192,12 @@ export function TechnicalPlanWorkspace() {
           <div className="hint-banner">
             <Info size={16} />
             <span>
-              上传后点「轻量解析」写入后端。扫描件请用
+              上传后点「开始解析」写入后端。扫描件可走
               <Link
                 to={`/local-parser?projectId=${encodeURIComponent(project.id)}`}
                 style={{ margin: "0 4px", textDecoration: "underline" }}
               >
-                本地 MinerU
+                人工本地回传
               </Link>
               。设置页需配置可用模型 Key（分析/生成步骤需要）。
             </span>
@@ -1101,11 +1219,20 @@ export function TechnicalPlanWorkspace() {
                     const f = e.target.files?.[0];
                     if (!f) return;
                     void (async () => {
+                      // A10：捕获启动 projectId；迟到 success 不得写 B tip
+                      const startedProjectId = currentProjectIdRef.current;
                       try {
                         await pipeline.uploadFile(f);
-                        setTaskTip(`已上传：${f.name}，可点击「轻量解析」`);
+                        if (
+                          startedProjectId &&
+                          currentProjectIdRef.current === startedProjectId
+                        ) {
+                          setTaskTip(
+                            `已上传：${f.name}，可点击「开始解析」`,
+                          );
+                        }
                       } catch {
-                        /* error 已在 pipeline */
+                        /* error 已在 pipeline；迟到拒绝不写 tip */
                       }
                       e.target.value = "";
                     })();
@@ -1125,18 +1252,19 @@ export function TechnicalPlanWorkspace() {
                   style={{ marginLeft: 8 }}
                   disabled={
                     pipeline.busy ||
-                    parseStrategy.loading ||
+                    // T3：仅本项目 tip/飞行态，禁止全局 parseStrategy.loading 软切泄漏
+                    taskTip === "正在读取解析策略" ||
                     pipeline.files.length === 0
                   }
                   onClick={() => {
                     void handleDocumentParse();
                   }}
                 >
-                  {parseStrategy.loading
+                  {taskTip === "正在读取解析策略"
                     ? "正在读取解析策略"
                     : pipeline.busy
                       ? "处理中…"
-                      : "轻量解析"}
+                      : "开始解析"}
                 </button>
               </div>
               <div style={{ marginTop: 14, display: "flex", gap: 8, flexWrap: "wrap" }}>

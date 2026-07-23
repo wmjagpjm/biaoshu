@@ -263,18 +263,40 @@ function parseSafeStatusProjection(
   };
 }
 
+/** 集合 owner：files/recentTasks 与 projectId+session 绑定，切项同步视空。 */
+type CollectionOwner = {
+  projectId: string;
+  session: number;
+};
+
 export function useProjectPipeline(projectId: string) {
   const [busy, setBusy] = useState(false);
   const [lastTask, setLastTask] = useState<PipelineTask | null>(null);
-  const [recentTasks, setRecentTasks] = useState<PipelineTask[]>([]);
+  const [recentTasksRaw, setRecentTasksRaw] = useState<PipelineTask[]>([]);
+  const [recentTasksOwner, setRecentTasksOwner] = useState<CollectionOwner | null>(
+    null,
+  );
   const [error, setError] = useState<string | null>(null);
-  const [files, setFiles] = useState<ProjectFileInfo[]>([]);
+  const [filesRaw, setFilesRaw] = useState<ProjectFileInfo[]>([]);
+  const [filesOwner, setFilesOwner] = useState<CollectionOwner | null>(null);
   const taskStreamRef = useRef<TaskStreamController | null>(null);
   const lastTaskRef = useRef<PipelineTask | null>(null);
   const projectSessionRef = useRef(0);
   const taskRunRef = useRef(0);
   const activeProjectIdRef = useRef(projectId);
   activeProjectIdRef.current = projectId;
+  /**
+   * A3/A8/A9：渲染同步读当前路由 projectId。
+   * owner 不匹配时 files/recentTasks 同步视空，不得等 effect 才清旧 A 集合。
+   */
+  const files =
+    filesOwner != null && filesOwner.projectId === projectId
+      ? filesRaw
+      : [];
+  const recentTasks =
+    recentTasksOwner != null && recentTasksOwner.projectId === projectId
+      ? recentTasksRaw
+      : [];
   /** I4：对账世代；项目切换/卸载/新代次递增，作废迟到响应 */
   const reconcileGenRef = useRef(0);
   /** I4：进行中的 status 请求（同 project+task 单飞；配合 AbortController） */
@@ -321,6 +343,11 @@ export function useProjectPipeline(projectId: string) {
     setLastTask(null);
     setBusy(false);
     setError(null);
+    // A8：切项同步失效集合 owner（渲染层已按 owner 视空；此处清 raw 防迟到写回）
+    setFilesRaw([]);
+    setFilesOwner(null);
+    setRecentTasksRaw([]);
+    setRecentTasksOwner(null);
     // 项目切换：取消旧 status fetch；下载仅作废代次（不 abort 挂起响应）
     abortReconcileInflight();
     invalidateDownloadGeneration();
@@ -340,70 +367,136 @@ export function useProjectPipeline(projectId: string) {
   const refreshFiles = useCallback(async () => {
     if (!projectId) return;
     const requestedProjectId = projectId;
+    const session = projectSessionRef.current;
     try {
       const list = await apiFetch<ProjectFileInfo[]>(
         `/projects/${encodeURIComponent(requestedProjectId)}/files`,
       );
-      if (activeProjectIdRef.current === requestedProjectId) {
-        setFiles(Array.isArray(list) ? list : []);
+      // 挂起 GET 返回时：仅当 owner projectId+session 仍匹配才写集合
+      if (
+        activeProjectIdRef.current === requestedProjectId &&
+        projectSessionRef.current === session
+      ) {
+        setFilesRaw(Array.isArray(list) ? list : []);
+        setFilesOwner({ projectId: requestedProjectId, session });
       }
     } catch {
-      /* ignore */
+      /* ignore：失败不得保留/回写旧 A 集合 */
     }
   }, [projectId]);
 
   const refreshTasks = useCallback(async () => {
     if (!projectId) return;
     const requestedProjectId = projectId;
+    const session = projectSessionRef.current;
     try {
       const list = await apiFetch<PipelineTask[]>(
         `/projects/${encodeURIComponent(requestedProjectId)}/tasks`,
       );
-      if (activeProjectIdRef.current === requestedProjectId) {
-        setRecentTasks(Array.isArray(list) ? list.slice(0, 8) : []);
+      if (
+        activeProjectIdRef.current === requestedProjectId &&
+        projectSessionRef.current === session
+      ) {
+        setRecentTasksRaw(Array.isArray(list) ? list.slice(0, 8) : []);
+        setRecentTasksOwner({ projectId: requestedProjectId, session });
       }
     } catch {
-      /* ignore */
+      /* ignore：失败不得保留/回写旧 A 集合 */
     }
   }, [projectId]);
 
+  /**
+   * A10：上传文件；启动时捕获 projectId+session。
+   * 迟到 catch/finally 不得写 B error 或清 B busy；迟到 success 不交给旧 continuation。
+   */
   const uploadFile = useCallback(
     async (file: File) => {
-      setBusy(true);
-      setError(null);
+      const startedProjectId = projectId;
+      const session = projectSessionRef.current;
+      const isCurrentOwner = () =>
+        Boolean(startedProjectId) &&
+        activeProjectIdRef.current === startedProjectId &&
+        projectSessionRef.current === session;
+
+      if (isCurrentOwner()) {
+        setBusy(true);
+        setError(null);
+      }
       try {
         const row = await apiUploadFile<ProjectFileInfo>(
-          `/projects/${encodeURIComponent(projectId)}/files`,
+          `/projects/${encodeURIComponent(startedProjectId)}/files`,
           file,
         );
-        await refreshFiles();
+        // A10：201 成功后始终对「启动项目」发起 files GET（因果门）；
+        // 不得因软切跳过 GET。写集合仅当前 owner（启动 projectId+session）生效。
+        try {
+          const list = await apiFetch<ProjectFileInfo[]>(
+            `/projects/${encodeURIComponent(startedProjectId)}/files`,
+          );
+          if (isCurrentOwner()) {
+            setFilesRaw(Array.isArray(list) ? list : []);
+            setFilesOwner({ projectId: startedProjectId, session });
+          }
+        } catch {
+          /* ignore：列表失败不得阻断已成功的上传结果路径 */
+        }
+        if (!isCurrentOwner()) {
+          // 迟到 success：拒绝交给旧页面 continuation（真实 Error，非假对象/永不 settle）
+          throw new Error("上传结果已过期");
+        }
         return row;
       } catch (err) {
+        if (!isCurrentOwner()) {
+          // 迟到 catch：不得写 B error，原样拒绝供调用方消费
+          throw err;
+        }
         const msg = (err as { message?: string })?.message || "上传失败";
         setError(msg);
         throw err;
       } finally {
-        setBusy(false);
+        // 迟到 finally 不得清 B 新 busy
+        if (isCurrentOwner()) setBusy(false);
       }
     },
-    [projectId, refreshFiles],
+    [projectId],
   );
 
+  /**
+   * A11+A12：上传图片；resolve 给调用方前校验启动 projectId+session。
+   * 迟到结果必须 reject，由既有调用 catch 消费；旧 catch/finally 不得污染新项目。
+   * 禁止空 ID / 假对象 / 永不 settle 冒充取消。
+   */
   const uploadImage = useCallback(
     async (file: File) => {
-      setBusy(true);
-      setError(null);
+      const startedProjectId = projectId;
+      const session = projectSessionRef.current;
+      const isCurrentOwner = () =>
+        Boolean(startedProjectId) &&
+        activeProjectIdRef.current === startedProjectId &&
+        projectSessionRef.current === session;
+
+      if (isCurrentOwner()) {
+        setBusy(true);
+        setError(null);
+      }
       try {
-        return await apiUploadFile<ProjectImageInfo>(
-          `/projects/${encodeURIComponent(projectId)}/images`,
+        const row = await apiUploadFile<ProjectImageInfo>(
+          `/projects/${encodeURIComponent(startedProjectId)}/images`,
           file,
         );
+        if (!isCurrentOwner()) {
+          throw new Error("图片上传结果已过期");
+        }
+        return row;
       } catch (err) {
+        if (!isCurrentOwner()) {
+          throw err;
+        }
         const msg = (err as { message?: string })?.message || "图片上传失败";
         setError(msg);
         throw err;
       } finally {
-        setBusy(false);
+        if (isCurrentOwner()) setBusy(false);
       }
     },
     [projectId],
