@@ -232,6 +232,184 @@ def test_settings_parse_strategy_illegal_put_rejected_no_pollute(client):
             db.close()
 
 
+def test_settings_parse_strategy_explicit_null_fresh_zero_create(client):
+    """
+    模块：M3 显式 JSON null parseStrategy — fresh 零建行（TEST-H1 / Q21 节点 A）
+    用途：fresh workspace 上 PUT 含 parseStrategy:null + 全量 poison 字段，
+          须固定 400/detail 精确「非法 parseStrategy」、零建行；可 -k fresh_zero_create。
+    对接：PUT /api/settings；ORM WorkspaceSettingsRow；ValueError→400。
+    二次开发：禁止 Literal/schemas 改 422；null 不得当未传；禁止先 status 断言中断取证。
+    """
+    ws = get_settings().default_workspace_id
+
+    db = SessionLocal()
+    try:
+        assert db.get(WorkspaceSettingsRow, ws) is None
+    finally:
+        db.close()
+
+    # content= 发真实 JSON null；exportFormat 与基线（无行/默认 null）不同，防漏写
+    put = client.put(
+        "/api/settings",
+        content=(
+            b'{"provider":"openai-compatible",'
+            b'"apiBaseUrl":"https://evil-null.example/v1",'
+            b'"apiKey":"sk-null-should-not-write",'
+            b'"model":"evil-null-model",'
+            b'"embeddingModel":"evil-null-embed",'
+            b'"exportFormat":{"preset":"evil-null-fresh-export"},'
+            b'"parseStrategy":null}'
+        ),
+        headers={"Content-Type": "application/json"},
+    )
+
+    # 先取证 HTTP + ORM after，末尾统一断言（失败须同时含 status/detail/after）
+    status = put.status_code
+    try:
+        payload = put.json()
+    except Exception:  # noqa: BLE001 — 取证用，非业务分支
+        payload = None
+    detail = payload.get("detail") if isinstance(payload, dict) else None
+    response_text = put.text
+
+    db = SessionLocal()
+    try:
+        row = db.get(WorkspaceSettingsRow, ws)
+        if row is None:
+            after = {"row_exists": False}
+        else:
+            after = {
+                "row_exists": True,
+                "provider": row.provider,
+                "api_base_url": row.api_base_url,
+                "api_key": row.api_key,
+                "model": row.model,
+                "parse_strategy": row.parse_strategy,
+                "embedding_model": row.embedding_model,
+                "export_format_json": row.export_format_json,
+                "updated_at": row.updated_at,
+            }
+    finally:
+        db.close()
+
+    facts = (status, detail, after, response_text)
+    assert status == 400, facts
+    assert status != 422, facts
+    assert detail == "非法 parseStrategy", facts
+    assert after["row_exists"] is False, facts
+
+
+def test_settings_parse_strategy_explicit_null_seeded_zero_pollute(client):
+    """
+    模块：M3 显式 JSON null parseStrategy — seeded 零污染（TEST-H1 / Q21 节点 B）
+    用途：已有完整设置行时 PUT null+poison 须 400 且全可写字段/parse_strategy/
+          export_format_json/updated_at 零改写；可 -k seeded_zero_pollute。
+    对接：PUT /api/settings；ORM WorkspaceSettingsRow；ValueError→400。
+    二次开发：禁止部分写入；detail 精确等于「非法 parseStrategy」；禁止 Or/子串二选一。
+    """
+    ws = get_settings().default_workspace_id
+
+    seed = client.put(
+        "/api/settings",
+        json={
+            "provider": "deepseek",
+            "apiBaseUrl": "https://api.seeded-keep.example/v1",
+            "apiKey": "sk-seeded-keep-unpolluted",
+            "model": "seeded-keep-model",
+            "embeddingModel": "seeded-keep-embed",
+            "parseStrategy": "ask",
+            "exportFormat": {"preset": "seeded-null-keep"},
+        },
+    )
+    assert seed.status_code == 200, seed.text
+    seed_body = seed.json()
+    assert seed_body["parseStrategy"] == "ask"
+    assert seed_body["provider"] == "deepseek"
+    assert seed_body["apiKey"] == "sk-seeded-keep-unpolluted"
+    assert seed_body["model"] == "seeded-keep-model"
+    assert seed_body["apiBaseUrl"] == "https://api.seeded-keep.example/v1"
+    assert seed_body.get("embeddingModel", "") == "seeded-keep-embed"
+    assert seed_body.get("exportFormat") == {"preset": "seeded-null-keep"}
+
+    db = SessionLocal()
+    try:
+        row = db.get(WorkspaceSettingsRow, ws)
+        assert row is not None
+        before = {
+            "provider": row.provider,
+            "api_base_url": row.api_base_url,
+            "api_key": row.api_key,
+            "model": row.model,
+            "parse_strategy": row.parse_strategy,
+            "embedding_model": row.embedding_model,
+            "export_format_json": row.export_format_json,
+            "updated_at": row.updated_at,
+        }
+    finally:
+        db.close()
+    assert before["parse_strategy"] == "ask"
+    assert before["embedding_model"] == "seeded-keep-embed"
+    assert before["export_format_json"] is not None
+
+    # poison exportFormat 与 seeded 基线不同；覆盖全部可写设置字段 + null
+    put = client.put(
+        "/api/settings",
+        content=(
+            b'{"provider":"openai-compatible",'
+            b'"apiBaseUrl":"https://evil-null-poison.example/v1",'
+            b'"apiKey":"sk-poison-null-key",'
+            b'"model":"poison-null-model",'
+            b'"embeddingModel":"poison-null-embed",'
+            b'"exportFormat":{"preset":"evil-null-poison-export"},'
+            b'"parseStrategy":null}'
+        ),
+        headers={"Content-Type": "application/json"},
+    )
+
+    # 先取证 HTTP + ORM after，末尾统一断言
+    status = put.status_code
+    try:
+        payload = put.json()
+    except Exception:  # noqa: BLE001 — 取证用，非业务分支
+        payload = None
+    detail = payload.get("detail") if isinstance(payload, dict) else None
+    response_text = put.text
+
+    db = SessionLocal()
+    try:
+        row = db.get(WorkspaceSettingsRow, ws)
+        if row is None:
+            after = {"row_exists": False}
+        else:
+            after = {
+                "row_exists": True,
+                "provider": row.provider,
+                "api_base_url": row.api_base_url,
+                "api_key": row.api_key,
+                "model": row.model,
+                "parse_strategy": row.parse_strategy,
+                "embedding_model": row.embedding_model,
+                "export_format_json": row.export_format_json,
+                "updated_at": row.updated_at,
+            }
+    finally:
+        db.close()
+
+    facts = (status, detail, before, after, response_text)
+    assert status == 400, facts
+    assert status != 422, facts
+    assert detail == "非法 parseStrategy", facts
+    assert after["row_exists"] is True, facts
+    assert after["provider"] == before["provider"], facts
+    assert after["api_base_url"] == before["api_base_url"], facts
+    assert after["api_key"] == before["api_key"], facts
+    assert after["model"] == before["model"], facts
+    assert after["parse_strategy"] == before["parse_strategy"], facts
+    assert after["embedding_model"] == before["embedding_model"], facts
+    assert after["export_format_json"] == before["export_format_json"], facts
+    assert after["updated_at"] == before["updated_at"], facts
+
+
 def test_revise_without_key_returns_400(client):
     """用途：未配置 Key 时 revise 应 400 提示去设置页。"""
     proj = client.post("/api/projects", json={"name": "修订测试项目"}).json()
