@@ -2762,7 +2762,9 @@ test.describe("P8B M3 managed 解析策略接线", () => {
     try {
       await techParseBtn.click();
       // 新读取开始：仅允许「正在读取解析策略」门可见
-      await expect(page.getByText("正在读取解析策略")).toBeVisible({
+      await expect(
+        page.getByRole("button", { name: "正在读取解析策略", exact: true }),
+      ).toBeDisabled({
         timeout: 15_000,
       });
       await expect
@@ -2928,7 +2930,9 @@ test.describe("P8B M3 managed 解析策略接线", () => {
       await page
         .getByRole("button", { name: "整段重解析", exact: true })
         .click();
-      await expect(page.getByText("正在读取解析策略")).toBeVisible({
+      await expect(
+        page.getByRole("button", { name: "正在读取解析策略", exact: true }),
+      ).toBeDisabled({
         timeout: 15_000,
       });
       await expect
