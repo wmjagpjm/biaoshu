@@ -7,7 +7,7 @@
 
 # 标书制作者能力补全与角色化演进路线图
 
-> **状态**：P11A/B/C、P12A 至 P12N、P13-A 至 P13-I4、V1-A 至 V1-L 均已完成。V1-M M1-M2 已完成并推送，M3-M4 未完成。当前 V1 产品覆盖率粗估仍约 94%。
+> **状态**：P11A/B/C、P12A 至 P12N、P13-A 至 P13-I4、V1-A 至 V1-L 均已完成。V1-M M1-M3 已完成并进入主协作分支，M4 未执行。当前开发工作量粗估约 96%，严格可交付口径仍约 94%。
 > **当前分支**：`collab/grok-code-codex-review`
 > **协作方式**：Grok 负责限定范围的实现与测试；Codex 负责范围、审查、验收和提交授权。
 
@@ -35,7 +35,7 @@
 
 - 技术标全流程、商务标、异步任务、AI 生成与编辑、文档知识库检索、查重/废标检查、Word 导出、标讯本地库和资源中心已可用。
 - 响应矩阵已支持人工映射、候选分批智能建议、冲突保护、来源 80 分页、双浏览器冲突/刷新来源/人工确认/来源分页 E2E；包 7 字段级三方合并 MVP 已推送（`2c7b3e0`）。
-- 轻量解析和本机 Markdown 回传已经可用；P8B/P8C/P8D/P8E 已交付策略、一次性票据与外置双助手。V1-C 又补齐零回调 dry-run、固定诊断和显式合成 DOCX 真值门；**本机仍无真实 CLI/模型，须用户人工准备，当前不得声称真实外置解析就绪**。
+- 轻量解析和本机 Markdown 回传已经可用；P8B/P8C/P8D/P8E 已交付策略、一次性票据与外置双助手，V1-M M3 已把策略扩为 `light|managed|local|ask` 并接通 managed 任务。V1-C 又补齐零回调 dry-run、固定诊断和显式合成 DOCX 真值门；**本机仍无真实 CLI/模型，远程 MinerU 仍在 V1-N 测试契约审查，当前不得声称真实自动解析就绪**。
 - 当前已具备中标内容模板资产化、多模板/卡片融合、差异确认、最多 20 条有限修订的手动游标浏览与受限恢复、统一卡片库、受限角色数据域，以及 P9C 固定模型运行时门和真实合成集预检。真实剩余缺口集中在多人协作与更完整版本治理、真实 MinerU/Docling 生产部署、P9C 真实用户语料评测/排序调优、Word `structure`/整章布局、更多合法外部标讯来源及完整生产部署治理。导出版式模板与中标内容模板是两个不同概念，后续不得混用术语。
 - P11A 已把技术标/商务标列表、详情、创建与查重/废标选择器收口为 `/api/projects*` 单一真值；前端全量 E2E 由 145 增至 155。它未改 editor-state 本地备份、知识库降级、未挂载首页、后端或角色权限。
 - P11B 已让商务标 workspace 只认 `GET|PUT /api/projects/{id}/editor-state`：旧 `biaoshu.businessBid.workspace.*` 忽略保值，真实空态保持空，加载/保存失败固定脱敏，A→B 的迟到 GET/PUT 被项目会话隔离；AI 反馈 history 本地键保持非目标，技术标大 Hook 未改。前端全量 E2E 由 155 增至 166。
@@ -671,4 +671,4 @@ V1-K 七键状态和单次原子替换保持；防火墙只文档化 Private/Loc
 
 Codex 最终独立 Q8 定点 **5 passed**、V1-L **56 passed / 68 subtests passed**、V1-K **67 passed / 19 subtests passed**；前端 lint/build、编译、PS1 Parse/BOM、diff、白名单、状态原子门和 TEMP 清理通过。未运行真实 LAN 服务、防火墙、隔离数据库/uploads、真实管理员登录或第二台设备可达性验证，部署验收不得假绿。
 
-**下一步**：V1 产品覆盖率粗估保持约 **94%**。V1-M M1 已以生产 `a7d640b` 完成 runtime 预检；M2 已以测试 `df85ac7`、生产 `86d5206` 完成后端多文件 ASC 聚合、单事务写回、错误脱敏、进程内并发 1 与 source/runtime no-follow。Codex 独立 M2/managed/代表回归/settings/B1-B2=`47/34/65/3/2 passed`。下一步冻结 M3 前端 `light|managed|local|ask` 与未就绪人工回传入口；M4 仍须管理员单独授权真实安装与烟测。真实 CLI/模型、real-runtime/quality did-not-run；V2/V3 继续后置。
+**下一步**：开发工作量粗估约 **96%**，严格可交付口径仍约 **94%**。V1-M M1-M3 已完成：M3 初始 test-only=`ea2ba31`/`d3748bd`/`c723636`、后续返修 test-only=`3521e12`/`b521d5f`/`cc58960`/`abe8afc`/`3fbd400`、production=`eb64dc1`，Codex 独立后端/P8B/V1-G=`31/25/10 passed`。当前优先收口 V1-N 远程 MinerU 安全测试契约与生产接入；M4 本机真实安装仍须管理员单独授权。任一真实烟测前必须轮换已泄露 Token，real-runtime/quality 当前 did-not-run；V2/V3 继续后置。

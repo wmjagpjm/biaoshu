@@ -8,8 +8,8 @@
 # V1-M 管理式本机 OCR 自动解析实施计划
 
 > **执行要求：** Grok 承担限定实现和高耗费精确测试，Codex 负责批量举证、独立审查、一次串行终验、提交与推送；协作细则见 `docs/agent-collaboration.md`。
-> **状态：** M1、M2 已完成并推送；M3 决策与白名单已冻结，待 failure-first；M4 未开始。M4 真实 runtime/quality 仍为 did-not-run。
-> **基线：** 当前生产=`86d5206`，M2 测试=`df85ac7`，M2 文档闭环=`fe1b00e`；仅协作分支，严禁 `main`。
+> **状态：** M1-M3 已完成、独立验收并提交；M4 未开始。M4 真实 runtime/quality 仍为 did-not-run。
+> **基线：** M2 测试=`df85ac7`、生产=`86d5206`；M3 初始 test-only=`ea2ba31`/`d3748bd`/`c723636`、后续返修 test-only=`3521e12`/`b521d5f`/`cc58960`/`abe8afc`/`3fbd400`、production-only=`eb64dc1`；仅协作分支，严禁 `main`。
 
 **目标：** 让扫描 PDF 在本机专用 MinerU runtime 中受控解析，并最终接入既有项目任务/editor-state，同时保留轻量与人工回传路径。
 
@@ -147,7 +147,7 @@ git diff --check
 - Codex 独立串行：M2 三文件 **47 passed**、managed unittest **34 passed**、task/revision/security 代表回归 **65 passed**、settings **3 passed**、B1/B2 **2 passed**；`py_compile`、diff、白名单、唯一 env 名实测和 TEMP left=0 通过。
 - 真实 CLI、模型、联网、真实业务文件、real-runtime/quality 未运行。M2 不改变 V1 约 94% 口径。
 
-## 阶段 7：M3 前端包（M2 后重新冻结）
+## 阶段 7：M3 前端包（已完成，2026-07-23）
 
 只读审计基线=`fe1b00e`：A task/review=`msg_a379fa7ebeb946988d7327b0d3e867a6`/`msg_bc1b63b2d26d4ea4afdd0960cebda35c`；B task/review=`msg_45c01e65f51a4178932075677309f7dc`/`msg_818f3a125b804aafa6d67c61dcf29306`。旧 `msg_30e4...` 基于 M2 前代码，只保留历史，不作为 M3 行号或事实依据。
 
@@ -156,9 +156,16 @@ git diff --check
 3. `local` 保持人工回传零任务；`ask` 三选一且取消零副作用，不 PUT 设置、不写策略缓存。技术标入口使用中性“开始解析”。
 4. 当前项目 managed 失败统一显示“本机自动 OCR 暂不可用，可改用人工本地回传”和项目化人工回传链接；不得显示 diagnosticCode/task.error，不得二次发送 lightweight。
 5. test-only 精确五文件：两个后端测试、P8B E2E、既有 V1-G 水合 E2E、Playwright 配置；普通 E2E 强制空白 manifest，禁止真实 runtime。
-6. production-only 精确十文件：settings service/API、实体四值注释、设置类型/页面、策略 API、新 managed task 纯函数、ask 对话框、技术/商务工作台。完整路径见契约；不得自行扩围。
+6. production-only 最终精确十一文件：settings service/API、实体四值注释、设置类型/页面、策略 API、新 managed task 纯函数、ask 对话框、技术/商务工作台，以及经 A9/A10 双确认后扩入的 `useProjectPipeline` 项目 owner/generation 围栏。完整路径见契约；不得自行扩围。
 7. Grok B 先写 test-only 并只跑新增聚焦红测；Codex 审查后分层提交。Grok A 再基于 test-only 提交写 production，并跑精确后端与前端套件。普通问题一次批量确认修完，高风险边界仍单独确认。
 8. Codex 最终一次串行运行后端双文件、P8B 完整 E2E、M3 新增 V1-G 用例、lint/build、编译、diff、白名单、泄漏和真实进程隔离门；Playwright 固定 `--workers=1 --retries=0`，禁止整仓 318 E2E、并发 pytest 和双方重复全量。
+
+### M3 完成记录（2026-07-23）
+
+- 初始 test-only=`ea2ba31`/`d3748bd`/`c723636`，后续返修 test-only=`3521e12`/`b521d5f`/`cc58960`/`abe8afc`/`3fbd400`，production-only=`eb64dc1`；提交均为中文且按测试/生产分层。
+- 最终生产 task/review=`msg_59146507e3a94d8a9477100166620d49`/`msg_d22681dbfca54a78a5351660881d0313`；ask 取消恢复 question/YES/review=`msg_8e0fcbe0ed144cc3b489de9d709b8ad1`/`msg_bc8f92e12f10476ebc111bec9bfb1eb4`/`msg_97987a0da8404315850708580bb8480a`。
+- Codex 独立串行：后端双文件 **31 passed**、P8B 更新后完整 **25 passed**、V1-G M3 **10 passed**；`py_compile`、oxlint、`npm run build`、diff-check 与十一生产文件白名单通过。
+- 真实 CLI、模型、联网、真实业务文件、real-runtime/quality 均未运行；M3 只关闭前端策略与安全水合，不把 M4 标记为完成。
 
 ## 阶段 8：M4 真实安装与发布验收
 

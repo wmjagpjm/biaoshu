@@ -1,6 +1,6 @@
 # 新会话交接：biaoshu（当前有效）
 
-> **交接日期**：2026-07-22（V1-L 可信内网访问已完成实现、自动化验收并推送）
+> **交接日期**：2026-07-23（V1-M M3 四策略与 managed 前端接线已完成独立验收并进入主协作分支）
 > **仓库本地**：`C:\Users\Administrator\biaoshu`
 > **GitHub**：https://github.com/wmjagpjm/biaoshu
 > **当前工作分支**：`collab/grok-code-codex-review`（协作分支；**勿直接当 main**）
@@ -24,13 +24,14 @@
 > **V1-L 完成基线**：可信内网单入口已完成并推送；契约=`docs/v1l-trusted-lan-access-contract.md`，计划=`docs/plans/2026-07-22-v1l-trusted-lan-access-plan.md`，测试冻结=`ea01c48`，夹具修正=`7c9266e`/`b0f197e`，生产实现=`10b5f3e`。只暴露显式 RFC1918 IPv4 上的 Vite 5173，后端恒回环，LAN 强制 required 且要求已 bootstrap，同源 `/api`，防火墙仅手工 Private/LocalSubnet。
 > **V1-L Q2 范围修订**：B 首版 failure-first 为 **61 failed / 15 passed**，Codex 发现正向启动链、LanHost listener/探针幂等、精确 code、外部 proxy 与 auth 快照反假绿缺口；B 逐项 YES 后完成 test-only 返修，question/review=`msg_100daab91dec454e8a6a6238407f1d71`/`msg_4745e5c01b2046a6bf74d0ec9fa0ec78`。
 > **V1-L Q3 精确语义**：LAN 暴露前 `authRequired` 与 `bootstrapped` 必须均为真，后者为假固定 `lan_admin_not_bootstrapped`；`VITE_API_BASE_URL` 未设置可回退 `/api`，显式空白或非 `/api` 必须失败。question/review=`msg_c3a68603ba344b46aaa30a0eb52f4969`/`msg_0af2ec045e904cd4b2272a4aeef3d3ca`。
-> **V1-M 当前状态**：M1 已完成；M2 后端 managed 调度、多文件 ASC 聚合、单事务写回与脱敏已完成并推送，测试=`df85ac7`、生产=`86d5206`。Codex 独立 M2/managed/代表回归/settings/B1-B2=`47/34/65/3/2 passed`，唯一 manifest env 与 TEMP=0 通过。M3/M4 未开始，真实 runtime/quality did-not-run，V1 仍约 94%。
+> **V1-M 当前状态**：M1-M3 自动接线代码已完成；M2 测试/生产=`df85ac7`/`86d5206`，M3 初始 test-only=`ea2ba31`/`d3748bd`/`c723636`、后续返修 test-only=`3521e12`/`b521d5f`/`cc58960`/`abe8afc`/`3fbd400`、production-only=`eb64dc1`。Codex 独立 M3 后端/P8B/V1-G=`31/25/10 passed`，lint/build/编译/diff/白名单通过。M4 真实 runtime/quality did-not-run；开发工作量粗估约 96%，严格可交付口径仍约 94%。
 > **参考 `origin/main`**：`4847a9d` — docs: 重写换会话交接并强制注释规范专章（非当前工作 HEAD）
 > **P12M 完成状态**：冻结=`95b298f`、实现=`cc23542`。首轮七文件实现后，受影响回归准确暴露两份旧七键测试；经 Codex 明确 test-only 扩围后闭环，生产边界未扩大。
 > **P12M 最终生产哈希**：schemas=`76633E2BFF418A9FBBD0DD3AD18164C62496340AB4AD30BCCD7BDE2918DDF39D`；route=`3CC358D8280F3C6579261F88848D986E0A5A929D46D09F81FD378E7A9F23EF0C`；service=`F8D373B8DCCACB5B0921D4F972F0B85B29AAAAF82CFA0BE8E3D08AC2D107C1FA`；前端 API=`CEDCC06FDCB9B0743BEE2A5A019003D19145B2837BBB273226C15E7EFFD45BA3`；面板=`5C41D4A3C2807B1A69DB40D34F22E40A7A664280765A3F8D7C7DFCE3EB25E31D`。
 > **P12N 完成状态**：冻结=`337b401`、实现=`394639a`；严格两文件，只做非搜索态当前已加载修订的前端稳定固定优先，不改后端或游标。最终面板哈希=`FEAD15B6CB4043D1E6A96C1BFF9782A3B1F072A28D6619E375D9B5F07A23FF3B`，history E2E=`617C7481B55A2F7760A36127E5E5DB8C50E193526206D444F13D56AA6F65698F`。
-> **本地状态**：只允许主工作分支 `collab/grok-code-codex-review`，严禁操作 `main`。V1-A 至 V1-L、V1-M M1-M2 均已完成并推送；M3-M4 待完成。文档闭环提交后以本地/远端分支一致为准，V2/V3 继续后置。
+> **本地状态**：只允许主工作分支 `collab/grok-code-codex-review`，严禁操作 `main`。V1-A 至 V1-L、V1-M M1-M3 均已完成并进入主协作分支；M4 未执行。文档闭环提交后以本地/远端分支一致为准，V2/V3 继续后置。
 > **V1-M M2 验收链**：Grok B 最终 test-only review=`msg_01656c6a4a7c4a908c5ef3d59d8d65a9`；Grok A production review=`msg_5064876c03ac4f8e89d4a03cab85f305`。Codex/Grok 另对锁等待、取消事务、source TOCTOU、commit 后 refresh、异常文案与 env 字段名回退完成 P1-P7 双确认和返修，最终九生产文件已由 Codex 逐 SHA 合入。
+> **V1-M M3 验收链**：Grok A 最终 production review=`msg_d22681dbfca54a78a5351660881d0313`；Codex/Grok 对显式 null、旧任务混显和 ask 取消恢复完成双确认。最终后端 **31 passed**、P8B **25 passed**、V1-G M3 **10 passed**，生产=`eb64dc1`。
 > **协作流程（已保存）**：自 V1-M M2 起默认“Codex 批量举证 → Grok 确认并一次修完 → Codex 单次终验”；Grok 不重复完整回归。仅权限、事务、隐私、数据损坏与真实安全边界保留 question/YES/单独授权。权威规则见 `docs/agent-collaboration.md`。
 > **V1-C 验收补充**：原始 failure-first `0 passed / 1 import error / 24 did-not-run`；测试 B1-B7 与生产 A1 均经双方确认后返修。最终编译、diff-check、三文件哈希和本机 `cli_missing`/2 探针通过；未运行真实 `--synthetic-check`、未安装/下载 CLI 或模型。
 > **验收基线**：P13-B Grok P13-B/真值 **6/46 passed**，Codex 独立 **6 passed**。P13-C Grok 后端/前端 **18/11 passed**；Codex 独立后端 P13-C+P12C/全状态 **32/19 passed**、P13-B/C E2E **11 passed**。P13-D1 Codex 独立专项+schema/PRAGMA 顺序/代表写链 **18/2/5 passed**。P13-D2 Grok 后端/freshness **44/17 passed**；Codex 独立核心/回归/freshness/外部写路径 **44/15/17/4 passed**。P13-E Grok/Codex 独立 P13-E 与完整认证均为 **25/36 passed**。P13-F1 初始 failure-first **30 failed / 4 passed**，两轮返修红测 **16 failed / 5 passed**、**2 failed**；Grok 最终专项/直接回归 **41/55 passed**，Codex 独立专项/代表回归 **41/3 passed**。P13-F2 初始 failure-first **7 failed / 1 passed**、返修红测 **2 failed / 0 passed**；Grok 最终专项 **11 passed**，Codex 独立专项/freshness **11/17 passed**。P13-G1 有效 failure-first **42 failed / 3 passed**；Grok 返修后聚焦/专项 **17/53 passed**，Codex 独立专项/P13-F1/认证/editor-state **53/41/8/1 passed**。P13-G2 failure-first **8 failed / 1 passed**；Grok 最终专项/聚焦关键序列 **13/7 passed**，Codex 独立专项/P13-F2/freshness **13/11/17 passed**。P13-H1 failure-first **25 failed / 3 passed**；Grok 最终专项/回归 **28/90 passed**，Codex 独立专项/editor-state 与 P13-D1 回归 **28/90 passed**。P13-H3 Codex 独立 H3 **15 passed**、freshness **17 passed**。P13-I2 failure-first **15 failed / 0 passed**；Codex 双确认返修后独立专项/代表回归 **17/125 passed**，合计 **142 passed**。P13-I4 Codex 独立后端 I4+I1+I2+P13-A **81 passed**、前端 I4+I3+H3+freshness **45 passed**。V1-A 初始 failure-first **50 failed / 1 passed**，最终测试版 failure-first **59 failed / 1 passed**；Codex 最终独立专项 **60 passed**，PS1 BOM/解析、`compileall`/diff-check 通过。V1-B 初始 failure-first 为备份 **56 passed / 9 failed**、恢复 **1 passed / 41 failed**；Codex 最终独立备份 **65 passed**、恢复 **81 passed**。V1-D 最终专项/回归 **9/10 passed**。V1-E 原始 failure-first **11 failed / 3 passed**，生产返修前真红 **14 passed / 4 failed**，Codex 最终新专项/图片告警/truth **18/4/46 passed**。V1-F 最终后端/前端 **20+1/14+4+18+28+18 passed**。V1-G 加固后 failure-first **7 failed / 2 passed**，Codex 最终新专项/truth/I4/I3/H3 **9/28/18/8/5/15 passed**。V1-J failure-first **6 failed / 4 passed**、V1-D **2 failed / 8 passed**；Codex 最终 V1-J/V1-D/代表回归 **10/10/38 passed**。V1-L 最终 Q8 定点 **5 passed**、V1-L **56 passed / 68 subtests passed**、V1-K **67 passed / 19 subtests passed**；前端 lint/build、编译、PS1 Parse/BOM、diff 和边界门通过。未运行后端全量或整仓 **318 E2E**。**同一 worktree 的 pytest 禁止 xdist/并发分组；不同 worktree 也必须使用独立 SQLite 目录。Playwright 必须显式 `--workers=1 --retries=0` 串行；按风险分级验收，避免重复全量。**
@@ -42,12 +43,12 @@
 ```text
 继续 biaoshu 标书制作者剩余主线任务。仓库 C:\Users\Administrator\biaoshu，GitHub https://github.com/wmjagpjm/biaoshu.git。
 工作分支只能是 collab/grok-code-codex-review，禁止直接操作 main；先执行 git status -sb，并核对 HEAD 与 origin/collab/grok-code-codex-review 一致且工作区干净。
-完整阅读 docs/v1m-managed-local-ocr-runtime-contract.md、docs/plans/2026-07-22-v1m-managed-local-ocr-runtime-plan.md、docs/agent-collaboration.md、docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/integration-checklist.md；V1-M M1-M2 已闭环，下一步依据既有 M3 只读审计冻结前端策略契约与精确白名单。
+完整阅读 docs/v1m-managed-local-ocr-runtime-contract.md、docs/plans/2026-07-22-v1m-managed-local-ocr-runtime-plan.md、docs/agent-collaboration.md、docs/HANDOFF-next.md、docs/plans/2026-07-12-bid-writer-roadmap.md、docs/integration-checklist.md；V1-M M1-M3 已闭环，M4 真实本机 runtime 仍 did-not-run。下一步继续 V1-N 远程 MinerU 测试契约反假绿与生产接入。
 长期目标：保留全部现有进度与生产文档，按 V1→V2→V3 交付。当前优先完成 V1 本机/内网可实际使用的标书制作系统；V2 为团队深度协作，V3 为公网 SaaS 与规模化生产。每包必须独立规划、限定实现、Codex 审查与独立验收、中文文档闭环、推送协作分支。
 当前进度：P12A、P12B-A/B/C/D、P12C-A/B/C、P12D-A/B、P12E-A/B/C、P12F-A/B/C/D/E-A/E-B/F-A/F-B/G-A/G-B/H/I/J-A/J-B/P12K/P12L/P12M/P12N、P13-A 至 P13-I4、V1-A 至 V1-L、P9D、P9C-R1、M3-A 至 M3-D、P8B/P8C/P8D/P8E、P9A/P9B/P9C、P10A 至 P10K、P11A/P11B/P11C 均已完成；V1 产品覆盖率粗估约 **94%**，整仓前端 **318 passed** 仍仅作既有历史基线。
 当前状态：修订历史已闭合来源、UTC 时间、联合搜索、搜索命中来源标签、游标分页、单条删除、展示名称、固定与保护性裁剪；检查点已有创建、列表、详情、安全恢复、展示名称、单条删除、当前项目显式搜索、固定状态读取/入口、固定/安全双保护裁剪、默认列表固定优先排序与固定名额提示。
-当前执行包：V1-M M3“前端 `light|managed|local|ask` 策略接线与未就绪人工回传入口”契约冻结；M2 已闭环，M3 只读审计=`msg_30e4ba1f69f746698094c24555bc4742`。
-下一步：Codex 基于 M3 审计统一非法存量策略 fail-closed 决策，冻结精确前端文件/测试白名单；Grok 承担 failure-first 与限定实现，Codex 单次串行 lint/build/E2E 终验。真实安装/模型下载必须等 M4 取得用户明确授权；最终版式、在线热备、WAL、数据根迁移和 V2/V3 继续后置。
+当前执行包：V1-N 远程 MinerU API。B 工作树四个 test-only/契约文件仍未提交；Codex 两路审查判定当前红门存在 SSRF、TLS、ZIP、deadline、TOCTOU、finalizer/CAS 等阻断，批量 question=`msg_45052121d0924da9beec0b65d1e099d2`，未授权 production。
+下一步：V1-N 的 23 项问题已由 Grok B 在 `msg_b55c60753a294d8fb6229365854ae4eb` 全部确认 YES；一次性返修 task=`msg_7105d4db880b43e9923f32d97c111c5a` 已投递并由 B 路由器领取。先核对该进程与最新 `review_request`，禁止重复确认或重复派单；Codex 审查并冻结 test-only 后，才授权 remote client/config/task 接线。真实外网烟测必须等待用户轮换已泄露 Token 并再次明确授权；M4 本机安装、最终版式、在线热备、WAL、数据根迁移和 V2/V3 继续后置。
 对话/注释/Commit Message 一律简体中文。
 【强制】遵守注释四字段：模块 / 用途 / 对接 / 二次开发（见本文 §2 与 docs/CONTRIBUTING.md）。
 新写或大改的文件必须先补齐文件顶注释再合入；交接时必须更新「注释齐备表」。
@@ -176,9 +177,9 @@
 
 | 功能域 | 关键路径 | 文件顶注释 | 说明 |
 |--------|----------|------------|------|
-| 技术标工作区 | `technical-plan/pages/TechnicalPlanWorkspace.tsx` | **齐** | ResponseMatrixPanel；串行 `response_match`；编写步 M3-A/M3-B 融合入口；P8B `light/local/ask` 解析决策 |
+| 技术标工作区 | `technical-plan/pages/TechnicalPlanWorkspace.tsx` | **齐** | ResponseMatrixPanel；串行 `response_match`；编写步 M3-A/M3-B 融合入口；P8B/M3 `light|managed|local|ask` 解析决策 |
 | 模板/卡片融合 UI | `technical-plan/components/ContentFuseDialog.tsx`、`lib/contentFuse.ts`、`lib/contentFuseApplications.ts`；E2E `e2e/content-fuse-suggest.spec.ts`、`content-fuse-apply.spec.ts`、`content-fuse-persistent-recovery.spec.ts` | **齐** | M3-A 只读建议；M3-B 双栏预览；M3-D 服务端原子确认、最近 20 批、完整/部分/零恢复、一次消费、固定失败语义与迟到隔离；`test:e2e:fuse` / `fuse-apply` / `fuse-persistent-recovery` |
-| 技术标 hooks | `useProjectPipeline` / `useTechnicalPlanEditors` / `useProjectGuidance` | **齐** | SSE、项目切换隔离、取消终态保护、正文图片上传、responseMatrix；`reloadFromApi` 为 M3-D 提供单次 `Promise<boolean>` 真实重载结果，其他调用方可保持旧静默语义；TaskType 含 content_fuse |
+| 技术标 hooks | `useProjectPipeline` / `useTechnicalPlanEditors` / `useProjectGuidance` | **齐** | SSE、项目切换隔离、取消终态保护、正文图片上传、responseMatrix；M3 为 files/recentTasks 增加项目 owner，并为 uploadFile/uploadImage 增加项目会话迟到围栏；`reloadFromApi` 为 M3-D 提供单次 `Promise<boolean>` 真实重载结果 |
 | 项目任务状态安全对账 P13-I4 前端 | `project-task-events/ProjectTaskEventPanel.tsx`、`technical-plan/hooks/useProjectPipeline.ts`、`technical-plan/hooks/projectTaskStatus.ts`、技术/商务 pages、`e2e/project-task-status-reconciliation.spec.ts` | **齐** | 200 条 FIFO 去重、Abort 单飞、切换取消、终态防回退；两页过时“不进入 useProjectPipeline”注释经双方确认后以 `7554d5d` 修正 |
 | 当前版本时间/来源 P13-B/C | `editor-state-collaboration/EditorStateVersionFreshness.tsx`、技术/商务 hooks/pages、`e2e/editor-state-version-freshness.spec.ts` | **齐** | 合法版本同响应接受 UTC 时间与九类流程来源；项目/写入代次隔离，零新请求/轮询/storage；P13-B/C E2E 11 passed |
 | 项目近期成员 P13-F2 | `editor-state-collaboration/projectPresenceApi.ts`、`ProjectPresencePanel.tsx`、技术/商务 pages、`e2e/project-presence.spec.ts` | **齐** | 文档内存 UUID、串行 heartbeat/leave、严格 parser、visible-only 生命周期与双页面薄挂载；专项 11 passed |
@@ -187,7 +188,7 @@
 | P11A 核心项目真值 | `technical-plan/lib/projectStore.ts`、技术标列表/新建、创建方案、商务标列表/工作区、查重/废标选择器；`e2e/core-project-data-truth.spec.ts` | **齐** | `/api/projects*` 单一真值；真实空态与固定失败；零 mock/localStorage 假成功；项目存储键族与 pending 反假绿；`test:e2e:core-project-data-truth` |
 | outlineTree | `technical-plan/lib/outlineTree.ts` | **齐** | markdownToOutline |
 | 商务标/P11B 编辑态真值 | `business-bid/pages/BusinessBidWorkspace.tsx`、`hooks/useBusinessBidWorkspace.ts`、`e2e/business-editor-state-truth.spec.ts` | **齐** | 服务端 editor-state 唯一真值；真实空态；固定加载/保存失败；旧 workspace 键忽略保值；A→B GET/PUT 会话隔离；上传、重解析与反馈重生成仍按 P8B 策略决策 |
-| P8B 解析策略 | `parse-strategy/*`、`local-parser/LocalParserPage.tsx`、`e2e/parse-strategy-wiring.spec.ts` | **齐** | 仅读取脱敏策略；轻量任务、本地回传跳转与一次性询问；无策略持久化、无服务端 MinerU/Docling |
+| P8B/M3 解析策略 | `parse-strategy/*`、`local-parser/LocalParserPage.tsx`、`e2e/parse-strategy-wiring.spec.ts` | **齐** | 脱敏读取精确 `light|managed|local|ask`；managed 走既有任务，local 人工回传，ask 三选一；非法存量 fail-closed，无策略缓存或静默 lightweight fallback；真实 runtime 仍未验收 |
 | 财务报价/成本 P10B/P10C | `services/finance_service.py`、`finance_cost_service.py`、`api/finance.py`；前端 `features/finance/*`、`e2e/finance-*.spec.ts` | **齐** | strict `finance` 当前空间报价白名单、人工成本草案和毛利快照；整数分、审计脱敏、无税务/审批/导出；`npm run test:e2e:finance-role` / `finance-cost-draft` |
 | 人员资质 P10D | `models/entities.py`（HrCredentialCardRow）、`api/deps.py`（require_hr）、`services/hr_credential_service.py`、`api/hr.py`；前端 `features/hr/*`、`e2e/hr-credential-cards.spec.ts` | **齐** | strict `hr` 当前空间最小资质卡；摘要不含备注、按需详情、CSRF、StrictBool、审计脱敏、无删除/附件/推荐；`npm run test:e2e:hr-credential-cards` |
 | 投标人匿名合规 P10E | `features/bidder/*`、`useAuthSession.canAccessBidder`、`router.tsx`、`AppShell.tsx`、`e2e/bidder-compliance-preview.spec.ts` | **齐** | strict `bidder` 仅 `/bidder`；只请求匿名汇总 GET、无存储、固定错误脱敏、无项目/财务/人力 API；`npm run test:e2e:bidder-compliance-preview` |
@@ -499,7 +500,7 @@ frontend/src/features/
 | 库 | Alembic | 仅 create_all + ALTER |
 | 生产 | HTTPS/Key 加密/PG/Docker | 本机身份和成员 RBAC 已有；生产部署能力未做 |
 
-**实时粗估**：本机/内网可用标书系统整体约 **94%**；技术标约 **98%**，商务标约 **84%**，内网多人协作约 **55%～60%**，公网 SaaS 约 **15%**。该估算是产品覆盖率；P13-E 至 P13-I4、V1-A 至 V1-L 已验收，账号/RBAC/CAS/presence/章节意图/SSE 重放、任务成功安全水合、真实创建页文件摄入、空文档解析拒绝、空白模型输出拒绝、导出前保存、稳健人读名下载、空章导出提醒、静默启动诊断和可信内网单入口代码已有。真实 LAN 服务/防火墙/第二台设备发布验证、扫描 PDF OCR/真实解析器部署、最终版式、协同光标、评论审批、强制锁和生产部署治理仍未完成。
+**实时粗估**：开发工作量约 **96%**，严格可交付口径约 **94%**；技术标约 **98%**，商务标约 **84%**，内网多人协作约 **55%～60%**，公网 SaaS 约 **15%**。M3 已完成四策略与 managed 前端接线，但尚无经授权的真实本机 runtime 或远程 MinerU 烟测，因此不把自动 OCR 计为可交付。真实 LAN 服务/防火墙/第二台设备发布验证、扫描 PDF OCR/真实解析器部署、最终版式、协同光标、评论审批、强制锁和生产部署治理仍未完成。
 
 ---
 
@@ -636,7 +637,7 @@ frontend/src/features/
 - 阶段 4 **包 5** 已推送：`460097a` 智能建议人工确认 E2E。
 - 阶段 4 **包 6** 已推送：`1289c92` 实现响应矩阵源分页调用。
 - 阶段 4 **包 7** 已推送：`2c7b3e0` 实现响应矩阵字段级三方合并（base 快照 + 原子字段三方合并 + 冲突显式选择 + 仅矩阵 PUT + field-merge E2E）。
-- 阶段 4 **包 8** MVP：**已验收并推送** `6db1586` 实现可插拔解析引擎调度（父提交 `834969e`；`parse_engines` + `_run_parse` 调度；默认 lightweight；测试 fake；非法引擎 failed 不静默回退；当时 MinerU 仅外置 callback、尚未接 Docling）。后续 **P8B** 已完成：计划=`f662674`、后端=`0994cc8`、前端=`80d2579`；脱敏策略接口只回 `light|local|ask`，技术标/商务标每次动作重新读取，`light` 显式任务、`local` 只带项目 ID 回传、`ask` 一次性选择且取消不建任务；不启服务端 MinerU/Docling、不持久化策略。P8D/P8E 又在后续分别补齐本机外置助手，但仍未把解析器嵌入服务端。
+- 阶段 4 **包 8** MVP：**已验收并推送** `6db1586` 实现可插拔解析引擎调度。P8B 初版交付 `light|local|ask`；V1-M M3 又以初始 test-only=`ea2ba31`/`d3748bd`/`c723636`、后续返修 test-only=`3521e12`/`b521d5f`/`cc58960`/`abe8afc`/`3fbd400`、production=`eb64dc1` 扩为精确 `light|managed|local|ask`。managed 复用既有受控任务与安全水合，local 仍为人工回传，ask 不持久化；真实本机 CLI/模型仍未验收。
 - **P8C 本地解析一次性回传票据交付**：计划=`cabe99d`，后端=`af39ff8`，前端=`1cf5576`。required strict `bid_writer` 受会话/CSRF 保护显式签发 10 分钟单项目单次票据，库内只存摘要；唯一公开 POST 使用流式 2 MiB 上限和条件 UPDATE，同事务写解析结果、任务、项目步骤与固定脱敏审计。前端只在组件内存显示当前 origin 的固定 `curl.exe`，disabled 保留旧表单，其他角色零签发。完整契约见 `docs/p8c-local-parser-one-time-callback-ticket-contract.md`。
 - **包 9A** 已实现并完成完整独立验收：计划=`57b394a`，实现=`c1ff160`，自动化文档闭环=`6d36365`，WPS 视觉验收闭环=`3dadaf8`。技术标父标题保持普通边框，叶子标题“部署架构/机房节点/售后保障”强化左栏；商务标叶子小节“二、资格响应”强化左栏；均无整章页框。不接 `structure`。
 - **包 9B 交付完成**：初始审计=`a1ba88a`；用户指定国能 e 招单站后，依次推送 `45d7214`、`1c46e41`、`6491363`、`229f1d7`、`000b403`、`a7cfcb8`。P9B 不使用未获授权的通用来源；完整固定契约、数据最小化、人工确认、验收和非目标见 `docs/p9b-chnenergy-integration-contract.md`。
