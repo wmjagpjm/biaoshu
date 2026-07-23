@@ -3023,6 +3023,188 @@ test.describe("P8B M3 managed 解析策略接线", () => {
     expect(countLightweightParsePosts(net.taskPosts)).toBe(lightBefore);
     expect(net.externalHits).toEqual([]);
   });
+
+  test("T6 技术 managed failed 后 ask 取消恢复：固定安全提示与项目化人工入口", async ({
+    page,
+    request,
+  }) => {
+    /**
+     * 模块：T6 技术 managed failed → 再读 ask → 对话框取消 → 旧 managed 安全门恢复
+     * 用途：真实 managed failed 建立 lastTask + associated pipeline.error；
+     *       第二次 parse-strategy GET 返回 ask；中性「开始解析」打开对话框后取消；
+     *       MANAGED_FAIL_MSG 唯一可见、MANAGED_FAIL_LINK 项目化 href 正确；
+     *       task.error/diagnostic 零泄漏；task POST 与 lightweight PUT 零增量。
+     * 二次开发：禁止条件 skip/xfail；禁止只查文案不查链接 href；禁止新 POST。
+     */
+    const projectId = await createProject(
+      request,
+      "technical",
+      "E2E M3 T6 技术 ask 取消恢复",
+    );
+    const net = await installNetworkGuard(page);
+    await injectParseStrategyGet(page, "managed");
+
+    await page.goto(`/technical-plan/${projectId}/document`);
+    await expect(
+      page.getByRole("heading", { name: "E2E M3 T6 技术 ask 取消恢复" }),
+    ).toBeVisible({ timeout: 20_000 });
+    await uploadTxtViaHiddenInput(page, "e2e-t6-tech-ask-cancel.txt");
+    await expect(
+      page.locator(".file-chip", { hasText: "e2e-t6-tech-ask-cancel.txt" }),
+    ).toBeVisible({ timeout: 15_000 });
+
+    // 真实 managed failed：建立 lastTask + associated pipeline.error
+    await parseActionButton(page).click();
+    await expect(page.getByText(MANAGED_FAIL_MSG)).toBeVisible({
+      timeout: 45_000,
+    });
+    await expect(
+      page.getByRole("link", { name: MANAGED_FAIL_LINK }),
+    ).toBeVisible();
+    await awaitManagedFailedPrivacyMarkers(request, projectId);
+
+    // 基线：取消后 task POST / light / managed / page PUT 均须零增量
+    const postsBefore = net.taskPosts.length;
+    const managedBefore = countEngineParsePosts(net.taskPosts, "managed");
+    const lightBefore = countLightweightParsePosts(net.taskPosts);
+    const putsBefore = countSettingsPuts(net.apiHits);
+    const strategyGetBaseline = countStrategyGets(net.apiHits);
+
+    // 第二次策略 GET 返回 ask（移除 managed 注入后单点注入 ask）
+    await page.unroute("**/api/settings/parse-strategy");
+    await injectParseStrategyGet(page, "ask");
+
+    await installDomPrivacyProbe(page, [
+      REAL_MANIFEST_TASK_ERROR,
+      RUNTIME_MANIFEST_INVALID,
+    ]);
+    await parseActionButton(page).click();
+    const dialog = page.getByRole("dialog", { name: "选择解析方式" });
+    await expect(dialog).toBeVisible({ timeout: 10_000 });
+    expect(countStrategyGets(net.apiHits)).toBe(strategyGetBaseline + 1);
+    // 对话框打开期间：不得新建任务、不得写设置
+    expect(net.taskPosts.length).toBe(postsBefore);
+    expect(countSettingsPuts(net.apiHits)).toBe(putsBefore);
+
+    await dialog.getByRole("button", { name: "取消", exact: true }).click();
+    await expect(dialog).toBeHidden();
+
+    // 取消后：旧 managed 固定安全提示唯一可见 + 项目化人工入口
+    await expect(page.getByText(MANAGED_FAIL_MSG)).toHaveCount(1);
+    await expect(page.getByText(MANAGED_FAIL_MSG)).toBeVisible({
+      timeout: 10_000,
+    });
+    const link = page.getByRole("link", { name: MANAGED_FAIL_LINK });
+    await expect(link).toHaveCount(1);
+    await expect(link).toBeVisible();
+    await expect(link).toHaveAttribute(
+      "href",
+      `/local-parser?projectId=${encodeURIComponent(projectId)}`,
+    );
+
+    // 敏感 task.error / diagnostic 零泄漏
+    await expect(page.getByText(REAL_MANIFEST_TASK_ERROR)).toHaveCount(0);
+    await expect(page.getByText(RUNTIME_MANIFEST_INVALID)).toHaveCount(0);
+    await expect(page.getByText(/diagnosticCode/i)).toHaveCount(0);
+    const probe = await readDomPrivacyProbe(page);
+    expect(probe.callbackCount).toBeGreaterThan(0);
+    expect(probe.hitMarkers).toEqual([]);
+
+    // task POST / managed / light / page PUT 均零增量；策略 GET 仅 +1
+    expect(net.taskPosts.length).toBe(postsBefore);
+    expect(countEngineParsePosts(net.taskPosts, "managed")).toBe(managedBefore);
+    expect(countLightweightParsePosts(net.taskPosts)).toBe(lightBefore);
+    expect(countSettingsPuts(net.apiHits)).toBe(putsBefore);
+    expect(countStrategyGets(net.apiHits)).toBe(strategyGetBaseline + 1);
+    expect(net.externalHits).toEqual([]);
+  });
+
+  test("T6 商务 managed failed 后 ask 取消恢复：固定安全提示与项目化人工入口", async ({
+    page,
+    request,
+  }) => {
+    /**
+     * 模块：T6 商务 managed failed → 再读 ask → 对话框取消 → 旧 managed 安全门恢复
+     * 用途：与技术页同风险；商务上传自动 managed failed 后「整段重解析」路径；
+     *       ask 对话框取消后 MANAGED_FAIL_MSG 唯一可见、MANAGED_FAIL_LINK 项目化 href；
+     *       敏感 marker 零泄漏；task POST 与 lightweight PUT 零增量。
+     */
+    const projectId = await createProject(
+      request,
+      "business",
+      "E2E M3 T6 商务 ask 取消恢复",
+    );
+    const net = await installNetworkGuard(page);
+    await injectParseStrategyGet(page, "managed");
+
+    await page.goto(`/business-bid/${projectId}/parse`);
+    await expect(
+      page.getByRole("heading", { name: "E2E M3 T6 商务 ask 取消恢复" }),
+    ).toBeVisible({ timeout: 20_000 });
+    // 商务：上传后自动触发 managed 解析
+    await uploadTxtViaHiddenInput(page, "e2e-t6-biz-ask-cancel.txt");
+    await expect(
+      page.locator(".file-chip", { hasText: "e2e-t6-biz-ask-cancel.txt" }),
+    ).toBeVisible({ timeout: 15_000 });
+
+    await expect(page.getByText(MANAGED_FAIL_MSG)).toBeVisible({
+      timeout: 45_000,
+    });
+    await expect(
+      page.getByRole("link", { name: MANAGED_FAIL_LINK }),
+    ).toBeVisible();
+    await awaitManagedFailedPrivacyMarkers(request, projectId);
+
+    const postsBefore = net.taskPosts.length;
+    const managedBefore = countEngineParsePosts(net.taskPosts, "managed");
+    const lightBefore = countLightweightParsePosts(net.taskPosts);
+    const putsBefore = countSettingsPuts(net.apiHits);
+    const strategyGetBaseline = countStrategyGets(net.apiHits);
+
+    await page.unroute("**/api/settings/parse-strategy");
+    await injectParseStrategyGet(page, "ask");
+
+    await installDomPrivacyProbe(page, [
+      REAL_MANIFEST_TASK_ERROR,
+      RUNTIME_MANIFEST_INVALID,
+    ]);
+    // 商务中性入口：整段重解析
+    await page.getByRole("button", { name: "整段重解析", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "选择解析方式" });
+    await expect(dialog).toBeVisible({ timeout: 10_000 });
+    expect(countStrategyGets(net.apiHits)).toBe(strategyGetBaseline + 1);
+    expect(net.taskPosts.length).toBe(postsBefore);
+    expect(countSettingsPuts(net.apiHits)).toBe(putsBefore);
+
+    await dialog.getByRole("button", { name: "取消", exact: true }).click();
+    await expect(dialog).toBeHidden();
+
+    await expect(page.getByText(MANAGED_FAIL_MSG)).toHaveCount(1);
+    await expect(page.getByText(MANAGED_FAIL_MSG)).toBeVisible({
+      timeout: 10_000,
+    });
+    const link = page.getByRole("link", { name: MANAGED_FAIL_LINK });
+    await expect(link).toHaveCount(1);
+    await expect(link).toBeVisible();
+    await expect(link).toHaveAttribute(
+      "href",
+      `/local-parser?projectId=${encodeURIComponent(projectId)}`,
+    );
+
+    await expect(page.getByText(REAL_MANIFEST_TASK_ERROR)).toHaveCount(0);
+    await expect(page.getByText(RUNTIME_MANIFEST_INVALID)).toHaveCount(0);
+    await expect(page.getByText(/diagnosticCode/i)).toHaveCount(0);
+    const probe = await readDomPrivacyProbe(page);
+    expect(probe.callbackCount).toBeGreaterThan(0);
+    expect(probe.hitMarkers).toEqual([]);
+
+    expect(net.taskPosts.length).toBe(postsBefore);
+    expect(countEngineParsePosts(net.taskPosts, "managed")).toBe(managedBefore);
+    expect(countLightweightParsePosts(net.taskPosts)).toBe(lightBefore);
+    expect(countSettingsPuts(net.apiHits)).toBe(putsBefore);
+    expect(countStrategyGets(net.apiHits)).toBe(strategyGetBaseline + 1);
+    expect(net.externalHits).toEqual([]);
+  });
 });
 
 /**
