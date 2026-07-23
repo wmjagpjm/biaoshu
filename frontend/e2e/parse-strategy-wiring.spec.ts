@@ -223,80 +223,234 @@ async function installParseStrategyGetHold(
 }
 
 /**
- * 用途：唯一 DOM 隐私探针 — MutationObserver 检查 MutationRecord
- *       addedNodes/removedNodes/characterData（oldValue + 当前 target），并扫 current DOM。
- * 对接：T4/T5/Q7 全过程零泄漏；callbackCount 仅由 observer 回调增加，手工 scan 不计。
+ * 用途：唯一 DOM 隐私探针 — 统一 scanNode/scanCurrent 覆盖文本、全部 attributes、
+ *       input/textarea/select 当前 value；Observer 含 attributes + attributeOldValue；
+ *       先包裹已有控件 own value descriptor（React 风格），再 patch 原型覆盖新控件；
+ *       read 前 process takeRecords。
+ * 对接：T4/T5/Q7 全过程零泄漏；callbackCount 仅由 observer 真回调增加，手工 scan 不计。
  */
 async function installDomPrivacyProbe(
   page: Page,
   markers: string[],
 ): Promise<void> {
   await page.evaluate((ms) => {
+    type ValueProto = {
+      prototype: {
+        value?: PropertyDescriptor | string;
+      };
+    };
+    type FormValueEl =
+      | HTMLInputElement
+      | HTMLTextAreaElement
+      | HTMLSelectElement;
     type Probe = {
       callbackCount: number;
       hitMarkers: string[];
       observer: MutationObserver | null;
+      restoreValueSetters: Array<() => void>;
+      processRecords: (records: MutationRecord[]) => void;
+      scanCurrent: () => void;
     };
-    const w = window as unknown as { __biaoshuPrivacyProbe?: Probe };
-    if (w.__biaoshuPrivacyProbe?.observer) {
-      w.__biaoshuPrivacyProbe.observer.disconnect();
+    type ProbeWin = Window & { __biaoshuPrivacyProbe?: Probe };
+
+    const w = window as unknown as ProbeWin;
+    // 重复安装须先清理旧探针（observer + value setter）
+    const prev = w.__biaoshuPrivacyProbe;
+    if (prev) {
+      if (prev.observer) {
+        prev.observer.disconnect();
+        prev.observer = null;
+      }
+      for (const restore of prev.restoreValueSetters) {
+        try {
+          restore();
+        } catch {
+          /* 忽略恢复失败 */
+        }
+      }
+      prev.restoreValueSetters = [];
+      w.__biaoshuPrivacyProbe = undefined;
     }
+
     const probe: Probe = {
       callbackCount: 0,
       hitMarkers: [],
       observer: null,
+      restoreValueSetters: [],
+      processRecords: () => {},
+      scanCurrent: () => {},
     };
+
     const noteHits = (text: string) => {
+      if (!text) return;
       for (const m of ms) {
         if (m && text.includes(m) && !probe.hitMarkers.includes(m)) {
           probe.hitMarkers.push(m);
         }
       }
     };
-    const nodeText = (node: Node): string => {
-      if (node.nodeType === Node.TEXT_NODE) {
-        return node.textContent || "";
+
+    /** 统一节点扫描：文本 + 元素全部 attributes + form 当前 value */
+    const scanNode = (root: Node | null) => {
+      if (!root) return;
+      if (root.nodeType === Node.TEXT_NODE) {
+        noteHits(root.textContent || "");
+        return;
       }
-      if (node.nodeType === Node.ELEMENT_NODE) {
-        return (node as Element).textContent || "";
+      if (root.nodeType !== Node.ELEMENT_NODE) return;
+      const el = root as Element;
+      noteHits(el.textContent || "");
+      for (const attr of Array.from(el.attributes)) {
+        noteHits(attr.name);
+        noteHits(attr.value);
       }
-      return "";
+      if (
+        el instanceof HTMLInputElement ||
+        el instanceof HTMLTextAreaElement ||
+        el instanceof HTMLSelectElement
+      ) {
+        noteHits(el.value);
+      }
+      for (const child of Array.from(el.childNodes)) {
+        scanNode(child);
+      }
     };
-    // 安装时扫当前 DOM，不增加 callbackCount
-    noteHits(document.body?.innerText || "");
-    const obs = new MutationObserver((records) => {
-      // callbackCount 只由 Observer 回调增加
-      probe.callbackCount += 1;
+
+    const scanCurrent = () => {
+      scanNode(document.documentElement);
+      // 再扫一遍表单控件当前 value（含未挂在主树的边角）
+      for (const el of Array.from(
+        document.querySelectorAll("input, textarea, select"),
+      )) {
+        if (
+          el instanceof HTMLInputElement ||
+          el instanceof HTMLTextAreaElement ||
+          el instanceof HTMLSelectElement
+        ) {
+          noteHits(el.value);
+        }
+      }
+    };
+    probe.scanCurrent = scanCurrent;
+
+    const processRecords = (records: MutationRecord[]) => {
       for (const rec of records) {
-        for (const n of Array.from(rec.addedNodes)) {
-          noteHits(nodeText(n));
+        if (rec.type === "attributes" && rec.target) {
+          if (typeof rec.oldValue === "string") {
+            noteHits(rec.oldValue);
+          }
+          const el = rec.target as Element;
+          if (rec.attributeName) {
+            const cur = el.getAttribute?.(rec.attributeName);
+            if (typeof cur === "string") noteHits(cur);
+          }
+          scanNode(el);
         }
-        for (const n of Array.from(rec.removedNodes)) {
-          noteHits(nodeText(n));
-        }
-        // Q1：characterData 必须同时检查 rec.oldValue 与当前 target
         if (rec.type === "characterData" && rec.target) {
           noteHits(rec.target.textContent || "");
           if (typeof rec.oldValue === "string") {
             noteHits(rec.oldValue);
           }
         }
+        for (const n of Array.from(rec.addedNodes)) {
+          scanNode(n);
+        }
+        for (const n of Array.from(rec.removedNodes)) {
+          scanNode(n);
+        }
       }
-      // 同时扫 current DOM
-      noteHits(document.body?.innerText || "");
+      scanCurrent();
+    };
+    probe.processRecords = processRecords;
+
+    const isFormValueEl = (el: Element): el is FormValueEl =>
+      el instanceof HTMLInputElement ||
+      el instanceof HTMLTextAreaElement ||
+      el instanceof HTMLSelectElement;
+
+    /**
+     * D3：包裹已有控件 own value descriptor（React 在实例上 defineProperty，
+     * 缓存安装前的原生/既有 setter；仅 patch 原型无法捕获此类 marker→safe 瞬态）。
+     * 保留原 get/set 语义，restore 可完整还原 own descriptor。
+     */
+    const wrapExistingOwnValueDescriptors = () => {
+      for (const node of Array.from(
+        document.querySelectorAll("input, textarea, select"),
+      )) {
+        if (!isFormValueEl(node)) continue;
+        const own = Object.getOwnPropertyDescriptor(node, "value");
+        if (!own || typeof own.set !== "function") continue;
+        const originalGet = own.get;
+        const originalSet = own.set;
+        Object.defineProperty(node, "value", {
+          configurable: true,
+          enumerable: own.enumerable,
+          get: originalGet
+            ? function (this: FormValueEl) {
+                return originalGet.call(this);
+              }
+            : undefined,
+          set: function (this: FormValueEl, next: string) {
+            noteHits(String(next ?? ""));
+            return originalSet.call(this, next);
+          },
+        });
+        probe.restoreValueSetters.push(() => {
+          Object.defineProperty(node, "value", own);
+        });
+      }
+    };
+    wrapExistingOwnValueDescriptors();
+
+    // 原型路径：覆盖安装后新建控件；React 后续挂载时会缓存本 patched setter
+    const patchValueSetter = (Ctor: ValueProto) => {
+      const desc = Object.getOwnPropertyDescriptor(Ctor.prototype, "value");
+      if (!desc || typeof desc.set !== "function" || typeof desc.get !== "function") {
+        return;
+      }
+      const originalGet = desc.get;
+      const originalSet = desc.set;
+      Object.defineProperty(Ctor.prototype, "value", {
+        configurable: true,
+        enumerable: desc.enumerable,
+        get: function (this: HTMLInputElement) {
+          return originalGet.call(this);
+        },
+        set: function (this: HTMLInputElement, next: string) {
+          noteHits(String(next ?? ""));
+          return originalSet.call(this, next);
+        },
+      });
+      probe.restoreValueSetters.push(() => {
+        Object.defineProperty(Ctor.prototype, "value", desc);
+      });
+    };
+    patchValueSetter(HTMLInputElement as unknown as ValueProto);
+    patchValueSetter(HTMLTextAreaElement as unknown as ValueProto);
+    patchValueSetter(HTMLSelectElement as unknown as ValueProto);
+
+    // 安装时扫当前 DOM，不增加 callbackCount
+    scanCurrent();
+
+    const obs = new MutationObserver((records) => {
+      // callbackCount 只由 Observer 真回调增加
+      probe.callbackCount += 1;
+      processRecords(records);
     });
     obs.observe(document.documentElement, {
       childList: true,
       subtree: true,
       characterData: true,
       characterDataOldValue: true,
+      attributes: true,
+      attributeOldValue: true,
     });
     probe.observer = obs;
     w.__biaoshuPrivacyProbe = probe;
   }, markers);
 }
 
-/** 用途：读取隐私探针结果并 disconnect Observer。 */
+/** 用途：读取隐私探针 — takeRecords → 扫 current → disconnect + 恢复 setter。 */
 async function readDomPrivacyProbe(page: Page): Promise<{
   callbackCount: number;
   hitMarkers: string[];
@@ -306,12 +460,34 @@ async function readDomPrivacyProbe(page: Page): Promise<{
       callbackCount: number;
       hitMarkers: string[];
       observer: MutationObserver | null;
+      restoreValueSetters: Array<() => void>;
+      processRecords: (records: MutationRecord[]) => void;
+      scanCurrent: () => void;
     };
     const w = window as unknown as { __biaoshuPrivacyProbe?: Probe };
     const probe = w.__biaoshuPrivacyProbe;
     if (probe?.observer) {
+      // read 前先 process 未投递 records（不虚增 callbackCount，保留真触发门）
+      const pending = probe.observer.takeRecords();
+      if (pending.length > 0) {
+        probe.processRecords(pending);
+      }
+      // 再扫描 current DOM/form values
+      probe.scanCurrent();
       probe.observer.disconnect();
       probe.observer = null;
+    } else if (probe) {
+      probe.scanCurrent();
+    }
+    if (probe?.restoreValueSetters?.length) {
+      for (const restore of probe.restoreValueSetters) {
+        try {
+          restore();
+        } catch {
+          /* 忽略 */
+        }
+      }
+      probe.restoreValueSetters = [];
     }
     return {
       callbackCount: probe?.callbackCount ?? 0,
@@ -614,6 +790,227 @@ async function assertNoStrategyPersistence(
   }
 }
 
+/** C2：同步 Storage 操作台账条目（setItem 写同值也记；clear 必记）。 */
+type StorageOpRecord = {
+  area: "localStorage" | "sessionStorage" | "other";
+  method: "setItem" | "removeItem" | "clear";
+  key: string | null;
+  value: string | null;
+};
+
+/**
+ * 用途：判断单条 Storage 操作是否策略违规。
+ * 规则：clear 一律违规；SETTINGS_V1_KEY 一律违规；策略命名 key / 策略 value 违规。
+ * 对接：C2 操作台账；合法无关 key 写不误报。
+ */
+function isViolatingStorageOp(op: StorageOpRecord): boolean {
+  if (op.method === "clear") return true;
+  if (op.key === SETTINGS_V1_KEY) return true;
+  if (op.key != null && isStrategyNamedKey(op.key)) return true;
+  if (op.value != null && valueHasStrategyContent(op.value)) return true;
+  return false;
+}
+
+/** 用途：从 baseline 下标起切片操作台账。 */
+function storageOpsSince(
+  ops: StorageOpRecord[],
+  baseline: number,
+): StorageOpRecord[] {
+  return ops.slice(baseline);
+}
+
+/**
+ * 用途：断言操作台账增量内无策略相关 setItem/removeItem/clear。
+ * 对接：C2 各 ask 分支即时断言。
+ */
+function assertNoStrategyStorageOps(
+  ops: StorageOpRecord[],
+  label: string,
+): void {
+  const bad = ops.filter(isViolatingStorageOp);
+  expect(bad, `${label} 禁止策略相关 Storage 操作: ${JSON.stringify(bad)}`).toEqual(
+    [],
+  );
+}
+
+/** C2/D2：Storage 分支 baseline — 含不可伪造为 [] 的 document/ledger generation。 */
+type StorageBranchBaseline = {
+  opsBaseline: number;
+  generation: number;
+  snapshot: BrowserStorageSnapshot;
+};
+
+/** C2/D2：台账读取元数据；缺失时 present=false，禁止把 [] 当零操作。 */
+type StorageOpsLedgerMeta = {
+  present: boolean;
+  generation: number | null;
+  ops: StorageOpRecord[];
+};
+
+/**
+ * 用途：安装同步 Storage 操作台账（patch Storage.prototype，SPA navigate 跨路由保留）。
+ * 对接：C2/D2；重复安装清空数组并 bump generation；完整刷新后 document 丢失须重装。
+ */
+async function installStorageOpsLedger(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    type OpsWin = Window & {
+      __biaoshuStorageOps?: Array<{
+        area: "localStorage" | "sessionStorage" | "other";
+        method: "setItem" | "removeItem" | "clear";
+        key: string | null;
+        value: string | null;
+      }>;
+      __biaoshuStorageOpsPatched?: boolean;
+      /** document 级 generation：reload 丢失；reinstall bump；不可用空数组冒充同台账 */
+      __biaoshuStorageOpsGeneration?: number;
+    };
+    const w = window as unknown as OpsWin;
+    if (!w.__biaoshuStorageOps) {
+      w.__biaoshuStorageOps = [];
+    } else {
+      // 重复安装：清空台账，保留 patch
+      w.__biaoshuStorageOps.length = 0;
+    }
+    // D2：每次 install 递增 generation（新 document 上从 1 起）
+    w.__biaoshuStorageOpsGeneration =
+      (typeof w.__biaoshuStorageOpsGeneration === "number"
+        ? w.__biaoshuStorageOpsGeneration
+        : 0) + 1;
+    if (w.__biaoshuStorageOpsPatched) return;
+
+    const resolveArea = (
+      storage: Storage,
+    ): "localStorage" | "sessionStorage" | "other" => {
+      try {
+        if (storage === window.localStorage) return "localStorage";
+        if (storage === window.sessionStorage) return "sessionStorage";
+      } catch {
+        /* 跨上下文比较失败 */
+      }
+      return "other";
+    };
+
+    const proto = Storage.prototype;
+    const origSetItem = proto.setItem;
+    const origRemoveItem = proto.removeItem;
+    const origClear = proto.clear;
+
+    proto.setItem = function (this: Storage, key: string, value: string) {
+      w.__biaoshuStorageOps!.push({
+        area: resolveArea(this),
+        method: "setItem",
+        key: String(key),
+        value: String(value),
+      });
+      return origSetItem.call(this, key, value);
+    };
+    proto.removeItem = function (this: Storage, key: string) {
+      w.__biaoshuStorageOps!.push({
+        area: resolveArea(this),
+        method: "removeItem",
+        key: String(key),
+        value: null,
+      });
+      return origRemoveItem.call(this, key);
+    };
+    proto.clear = function (this: Storage) {
+      w.__biaoshuStorageOps!.push({
+        area: resolveArea(this),
+        method: "clear",
+        key: null,
+        value: null,
+      });
+      return origClear.call(this);
+    };
+    w.__biaoshuStorageOpsPatched = true;
+  });
+}
+
+/**
+ * 用途：读取 Storage 操作台账 + generation 元数据。
+ * 对接：D2；台账或 generation 缺失时 present=false，不得伪造成空增量。
+ */
+async function readStorageOpsLedgerMeta(
+  page: Page,
+): Promise<StorageOpsLedgerMeta> {
+  return page.evaluate(() => {
+    const w = window as unknown as {
+      __biaoshuStorageOps?: StorageOpRecord[];
+      __biaoshuStorageOpsGeneration?: number;
+    };
+    if (
+      !Array.isArray(w.__biaoshuStorageOps) ||
+      typeof w.__biaoshuStorageOpsGeneration !== "number"
+    ) {
+      return { present: false, generation: null, ops: [] };
+    }
+    return {
+      present: true,
+      generation: w.__biaoshuStorageOpsGeneration,
+      ops: w.__biaoshuStorageOps.map((op) => ({ ...op })),
+    };
+  });
+}
+
+/** 用途：读取当前 Storage 操作台账全量副本（台账缺失时返回 []，调用方须配合 meta 门）。 */
+async function readStorageOpsLedger(page: Page): Promise<StorageOpRecord[]> {
+  const meta = await readStorageOpsLedgerMeta(page);
+  return meta.ops;
+}
+
+/**
+ * 用途：取操作台账基线下标 + generation + 全量 storage snapshot（第二层）。
+ * 对接：C2/D2 每个 ask 分支动作前调用；台账缺失立即失败。
+ */
+async function takeStorageBranchBaseline(
+  page: Page,
+): Promise<StorageBranchBaseline> {
+  const meta = await readStorageOpsLedgerMeta(page);
+  if (!meta.present || meta.generation == null) {
+    throw new Error(
+      "Storage 台账缺失或 generation 不可用，无法取 baseline（禁止把 [] 当零操作）",
+    );
+  }
+  const snapshot = await captureBrowserStorageSnapshot(page);
+  return {
+    opsBaseline: meta.ops.length,
+    generation: meta.generation,
+    snapshot,
+  };
+}
+
+/**
+ * 用途：分支动作后立即断言策略相关操作零增量且 snapshot 不变。
+ * 对接：C2/D2；台账缺失 / generation 变化 / 长度截断均失败；禁止把 reload 后 [] 当零操作。
+ */
+async function assertStorageBranchClean(
+  page: Page,
+  baseline: StorageBranchBaseline,
+  label: string,
+): Promise<void> {
+  const meta = await readStorageOpsLedgerMeta(page);
+  if (!meta.present || meta.generation == null) {
+    throw new Error(
+      `${label}: Storage 台账缺失（document/ledger 不可用，禁止把 [] 当零操作）`,
+    );
+  }
+  if (meta.generation !== baseline.generation) {
+    throw new Error(
+      `${label}: Storage 台账 generation 变化 baseline=${baseline.generation} now=${meta.generation}`,
+    );
+  }
+  if (meta.ops.length < baseline.opsBaseline) {
+    throw new Error(
+      `${label}: Storage 台账 truncated baselineLen=${baseline.opsBaseline} now=${meta.ops.length}`,
+    );
+  }
+  assertNoStrategyStorageOps(
+    storageOpsSince(meta.ops, baseline.opsBaseline),
+    label,
+  );
+  await assertNoStrategyPersistence(page, baseline.snapshot);
+}
+
 /**
  * 用途：零时长任务队列排空（非稳定窗 / 非 sleep）。
  * 因果：仅在 response finished + body 已消费后调用；
@@ -841,13 +1238,14 @@ test.describe("P8B 解析策略接线", () => {
     await expect(
       page.getByRole("heading", { name: "E2E P8B 技术标 ask" }),
     ).toBeVisible({ timeout: 20_000 });
+    // C2：页面就绪后安装 Storage 操作台账（SPA navigate 跨路由保留）
+    await installStorageOpsLedger(page);
     await uploadTxtViaHiddenInput(page, "e2e-ask.txt");
     await expect(page.locator(".file-chip", { hasText: "e2e-ask.txt" })).toBeVisible({
       timeout: 15_000,
     });
 
-    // 首次点击前锁 task/PUT/light/managed/GET/storage 基线（打开/取消/再开不得吞入）
-    const storageBefore = await captureBrowserStorageSnapshot(page);
+    // 首次点击前锁 task/PUT/light/managed/GET 基线（打开/取消/再开不得吞入）
     const baselineTasks = net.taskPosts.length;
     const baselinePuts = countSettingsPuts(net.apiHits);
     const baselineLight = countLightweightParsePosts(net.taskPosts);
@@ -855,6 +1253,7 @@ test.describe("P8B 解析策略接线", () => {
     const getBeforeOpen = countStrategyGets(net.apiHits);
 
     // 取消 — 冻结新术语 exact（T2：禁止旧「在线轻量解析/本地 MinerU 回传」）
+    const cancelStorage = await takeStorageBranchBaseline(page);
     await parseActionButton(page).click();
     const dialog = page.getByRole("dialog", { name: "选择解析方式" });
     await expect(dialog).toBeVisible({ timeout: 10_000 });
@@ -889,8 +1288,10 @@ test.describe("P8B 解析策略接线", () => {
     expect(countLightweightParsePosts(net.taskPosts)).toBe(baselineLight);
     expect(countEngineParsePosts(net.taskPosts, "managed")).toBe(baselineManaged);
     expect(countStrategyGets(net.apiHits)).toBe(getAfterOpen);
+    await assertStorageBranchClean(page, cancelStorage, "技术 ask cancel");
 
     // 再开前仍精确基线；选轻量（新一次打开再 +1 GET；对话框内选择不额外 GET）
+    const lightStorage = await takeStorageBranchBaseline(page);
     const getBeforeReopen = countStrategyGets(net.apiHits);
     await parseActionButton(page).click();
     await expect(dialog).toBeVisible({ timeout: 10_000 });
@@ -918,14 +1319,11 @@ test.describe("P8B 解析策略接线", () => {
     expect(countLightweightParsePosts(net.taskPosts)).toBe(baselineLight + 1);
     expect(countEngineParsePosts(net.taskPosts, "managed")).toBe(baselineManaged);
     expect(countSettingsPuts(net.apiHits)).toBe(baselinePuts);
+    await assertStorageBranchClean(page, lightStorage, "技术 ask light");
 
-    // 选本地（冻结标签「人工本地回传」）
+    // 选本地（冻结标签「人工本地回传」）；SPA navigate，台账跨路由保留
     await putParseStrategy(request, "ask");
-    await page.goto(`/technical-plan/${projectId}/document`);
-    await expect(
-      page.getByRole("heading", { name: "E2E P8B 技术标 ask" }),
-    ).toBeVisible({ timeout: 20_000 });
-    const storageBeforeLocal = await captureBrowserStorageSnapshot(page);
+    const localStorageBaseline = await takeStorageBranchBaseline(page);
     const beforeLocal = net.taskPosts.length;
     const putsBeforeLocal = countSettingsPuts(net.apiHits);
     const getBeforeLocal = countStrategyGets(net.apiHits);
@@ -945,8 +1343,8 @@ test.describe("P8B 解析策略接线", () => {
     expect(net.taskPosts.length).toBe(beforeLocal);
     expect(countSettingsPuts(net.apiHits)).toBe(putsBeforeLocal);
     expect(net.externalHits).toEqual([]);
-    await assertNoStrategyPersistence(page, storageBeforeLocal);
-    await assertNoStrategyPersistence(page, storageBefore);
+    // SPA 后仍可读台账并断言本分支零策略写
+    await assertStorageBranchClean(page, localStorageBaseline, "技术 ask local");
   });
 
   test("商务标 local/ask：上传与整段重解析不再无条件自动轻量", async ({
@@ -966,7 +1364,8 @@ test.describe("P8B 解析策略接线", () => {
     await expect(
       page.getByRole("heading", { name: "E2E P8B 商务标策略" }),
     ).toBeVisible({ timeout: 20_000 });
-    const storageBefore = await captureBrowserStorageSnapshot(page);
+    await installStorageOpsLedger(page);
+    const localStorageBranch = await takeStorageBranchBaseline(page);
     const beforeUpload = net.taskPosts.length;
     const getBeforeLocal = countStrategyGets(net.apiHits);
     await uploadTxtViaHiddenInput(page, "e2e-biz-local.txt");
@@ -978,6 +1377,7 @@ test.describe("P8B 解析策略接线", () => {
     );
     expect(net.taskPosts.length).toBe(beforeUpload);
     expect(countStrategyGets(net.apiHits)).toBe(getBeforeLocal + 1);
+    await assertStorageBranchClean(page, localStorageBranch, "商务 local 上传跳转");
 
     // ask：整段重解析弹框，取消不建任务
     await putParseStrategy(request, "ask");
@@ -986,9 +1386,11 @@ test.describe("P8B 解析策略接线", () => {
     await expect(
       page.getByRole("heading", { name: "E2E P8B 商务标策略" }),
     ).toBeVisible({ timeout: 20_000 });
+    await installStorageOpsLedger(page);
     await expect(page.locator(".file-chip", { hasText: "e2e-biz-local.txt" })).toBeVisible({
       timeout: 15_000,
     });
+    const askCancelStorage = await takeStorageBranchBaseline(page);
     const beforeReparse = net.taskPosts.length;
     const getBeforeAsk = countStrategyGets(net.apiHits);
     await page.getByRole("button", { name: "整段重解析" }).click();
@@ -999,7 +1401,7 @@ test.describe("P8B 解析策略接线", () => {
     await expect(dialog).toBeHidden();
     expect(net.taskPosts.length).toBe(beforeReparse);
     expect(net.externalHits).toEqual([]);
-    await assertNoStrategyPersistence(page, storageBefore);
+    await assertStorageBranchClean(page, askCancelStorage, "商务 local/ask 取消");
   });
 
   test("商务标 ask：取消 + light/managed/local 独立验收，PUT 零增量", async ({
@@ -1007,9 +1409,9 @@ test.describe("P8B 解析策略接线", () => {
     request,
   }) => {
     /**
-     * 模块：Q8 商务 ask 独立验收
-     * 用途：首次动作前锁 task/PUT/engine/GET/storage 基线；
-     *       取消 / light(+1 lightweight) / managed(+1 managed) / local(零任务+项目化跳转) 精确；
+     * 模块：Q8 / C1 / C2 商务 ask 独立验收
+     * 用途：取消 / light(+1 lightweight 真实 terminal) / managed(+1 managed 真实 failed 终态 + owner path)
+     *       / local(零任务+SPA 项目化跳转) 精确；各分支独立 Storage 操作台账；
      *       全部 page PUT 零增量；同对话框选择不额外 GET。
      */
     await putParseStrategy(request, "ask");
@@ -1019,11 +1421,13 @@ test.describe("P8B 解析策略接线", () => {
       "E2E P8B 商务标 ask 上传",
     );
     const net = await installNetworkGuard(page);
+    const expectedTasksPath = `/api/projects/${projectId}/tasks`;
 
     await page.goto(`/business-bid/${projectId}/parse`);
     await expect(
       page.getByRole("heading", { name: "E2E P8B 商务标 ask 上传" }),
     ).toBeVisible({ timeout: 20_000 });
+    await installStorageOpsLedger(page);
 
     // 商务人工入口冻结为「人工本地回传」（T2：禁止旧「本地 MinerU 插件」）
     await expect(
@@ -1037,12 +1441,15 @@ test.describe("P8B 解析策略接线", () => {
     ).toHaveCount(0);
 
     // 首次动作前锁基线
-    const storageBefore = await captureBrowserStorageSnapshot(page);
     const baselineTasks = net.taskPosts.length;
     const baselinePuts = countSettingsPuts(net.apiHits);
     const baselineLight = countLightweightParsePosts(net.taskPosts);
     const baselineManaged = countEngineParsePosts(net.taskPosts, "managed");
     const getBefore = countStrategyGets(net.apiHits);
+
+    // D1：cancel 分支 Storage baseline 必须在上传/首次 ask 打开之前，
+    // 覆盖 上传→策略 GET→对话框→取消 完整窗口；light/managed/local 仍各自独立 baseline
+    const cancelStorage = await takeStorageBranchBaseline(page);
 
     await uploadTxtViaHiddenInput(page, "e2e-biz-ask-upload.txt");
     await expect(
@@ -1072,7 +1479,7 @@ test.describe("P8B 解析策略接线", () => {
     expect(net.taskPosts.length).toBe(baselineTasks);
     expect(countSettingsPuts(net.apiHits)).toBe(baselinePuts);
 
-    // 取消 — 零 task / 零 PUT / 零引擎增量 / 不额外 GET
+    // 取消 — 零 task / 零 PUT / 零引擎增量 / 不额外 GET / C2 分支台账（含上传→取消整窗）
     await dialog.getByRole("button", { name: "取消", exact: true }).click();
     await expect(dialog).toBeHidden();
     expect(net.taskPosts.length).toBe(baselineTasks);
@@ -1080,8 +1487,10 @@ test.describe("P8B 解析策略接线", () => {
     expect(countLightweightParsePosts(net.taskPosts)).toBe(baselineLight);
     expect(countEngineParsePosts(net.taskPosts, "managed")).toBe(baselineManaged);
     expect(countStrategyGets(net.apiHits)).toBe(getAfterOpen);
+    await assertStorageBranchClean(page, cancelStorage, "商务 ask cancel");
 
-    // light：整段重解析再开 → 只 +1 lightweight，PUT 零，对话框内选择不额外 GET
+    // light：整段重解析再开 → 只 +1 lightweight，须等真实 terminal 后再进 managed
+    const lightStorage = await takeStorageBranchBaseline(page);
     const getBeforeLight = countStrategyGets(net.apiHits);
     await page.getByRole("button", { name: "整段重解析", exact: true }).click();
     await expect(dialog).toBeVisible({ timeout: 10_000 });
@@ -1091,15 +1500,33 @@ test.describe("P8B 解析策略接线", () => {
     await expect
       .poll(() => countLightweightParsePosts(net.taskPosts), { timeout: 30_000 })
       .toBe(baselineLight + 1);
+    // C1：light 真实 terminal（避免同 type active 重叠假红）
+    await expect
+      .poll(async () => {
+        const tasks = await listTasks(request, projectId);
+        const light = tasks.find(
+          (t) =>
+            t.type === "parse" && t.result?.engine === "lightweight",
+        );
+        if (!light) return "pending";
+        if (light.status === "success" || light.status === "failed") {
+          return light.status;
+        }
+        return light.status;
+      })
+      .toMatch(/^(success|failed)$/);
     expect(countStrategyGets(net.apiHits)).toBe(getAfterLightOpen);
     expect(countEngineParsePosts(net.taskPosts, "managed")).toBe(baselineManaged);
     expect(countSettingsPuts(net.apiHits)).toBe(baselinePuts);
     expect(net.taskPosts.length).toBe(baselineTasks + 1);
+    await assertStorageBranchClean(page, lightStorage, "商务 ask light");
 
-    // managed：只 +1 managed，light 不再增，PUT 零
+    // managed：C1 owner path + payload；真实 failed 终态后再锁计数；禁止 page.goto 冒充合格
+    const managedStorage = await takeStorageBranchBaseline(page);
     const lightAfterLight = countLightweightParsePosts(net.taskPosts);
     const managedBefore = countEngineParsePosts(net.taskPosts, "managed");
     const tasksBeforeManaged = net.taskPosts.length;
+    const putsBeforeManaged = countSettingsPuts(net.apiHits);
     const getBeforeManaged = countStrategyGets(net.apiHits);
     await page.getByRole("button", { name: "整段重解析", exact: true }).click();
     await expect(dialog).toBeVisible({ timeout: 10_000 });
@@ -1111,24 +1538,60 @@ test.describe("P8B 解析策略接线", () => {
         timeout: 20_000,
       })
       .toBe(managedBefore + 1);
+    // C1：锁 captured request.path 与 payload（不得仅断言 payload）
+    const managedPost = net.taskPosts
+      .slice()
+      .reverse()
+      .find((h) => {
+        const b = parseTaskPostBody(h.postData);
+        return b.type === "parse" && b.payload?.engine === "managed";
+      });
+    expect(managedPost, "managed POST 必须入台账").toBeTruthy();
+    expect(managedPost!.path).toBe(expectedTasksPath);
+    expect(parseTaskPostBody(managedPost!.postData)).toEqual({
+      type: "parse",
+      payload: { engine: "managed" },
+    });
+    // C1：local 前等待当前项目 managed 真实 failed 终态 + 固定安全 UI
+    await expect(page.getByText(MANAGED_FAIL_MSG)).toBeVisible({
+      timeout: 45_000,
+    });
+    await awaitManagedFailedPrivacyMarkers(request, projectId);
+    // D4：安全 UI + 真实 failed 后先执行明确 continuation barrier，再重读最终计数
+    await waitPageContinuationBarrier(page);
+    // 终态 + barrier 后重新读取请求台账（禁止复用早期数组）
     expect(countStrategyGets(net.apiHits)).toBe(getAfterManagedOpen);
     expect(countLightweightParsePosts(net.taskPosts)).toBe(lightAfterLight);
+    expect(countEngineParsePosts(net.taskPosts, "managed")).toBe(
+      managedBefore + 1,
+    );
     expect(net.taskPosts.length).toBe(tasksBeforeManaged + 1);
-    expect(countSettingsPuts(net.apiHits)).toBe(baselinePuts);
-    expect(
-      parseTaskPostBody(net.taskPosts[net.taskPosts.length - 1].postData),
-    ).toEqual({ type: "parse", payload: { engine: "managed" } });
+    expect(countSettingsPuts(net.apiHits)).toBe(putsBeforeManaged);
+    // 终态后再次锁定 path/payload owner
+    const managedPostFinal = net.taskPosts
+      .slice()
+      .reverse()
+      .find((h) => {
+        const b = parseTaskPostBody(h.postData);
+        return b.type === "parse" && b.payload?.engine === "managed";
+      });
+    expect(managedPostFinal!.path).toBe(expectedTasksPath);
+    expect(parseTaskPostBody(managedPostFinal!.postData)).toEqual({
+      type: "parse",
+      payload: { engine: "managed" },
+    });
+    await assertStorageBranchClean(page, managedStorage, "商务 ask managed");
 
-    // local：零任务并项目化跳转；PUT 零
+    // local：同一页 SPA 跳转（不得用 page.goto 抑制 managed continuation 后声称合格）
+    // D2：local baseline 记录 generation；跳转后须仍为同一 document/ledger
+    const localStorageBranch = await takeStorageBranchBaseline(page);
+    const localLedgerGen = localStorageBranch.generation;
     const tasksBeforeLocal = net.taskPosts.length;
+    const lightBeforeLocal = countLightweightParsePosts(net.taskPosts);
+    const managedBeforeLocal = countEngineParsePosts(net.taskPosts, "managed");
     const getBeforeLocalChoice = countStrategyGets(net.apiHits);
-    await page.goto(`/business-bid/${projectId}/parse`);
-    await expect(
-      page.getByRole("heading", { name: "E2E P8B 商务标 ask 上传" }),
-    ).toBeVisible({ timeout: 20_000 });
     await page.getByRole("button", { name: "整段重解析", exact: true }).click();
     await expect(dialog).toBeVisible({ timeout: 10_000 });
-    // goto 后可能无额外策略 GET；以本轮打开精确 +1
     expect(countStrategyGets(net.apiHits)).toBe(getBeforeLocalChoice + 1);
     const getAfterLocalOpen = countStrategyGets(net.apiHits);
     await dialog.getByRole("button", { name: LABEL_LOCAL, exact: true }).click();
@@ -1140,9 +1603,19 @@ test.describe("P8B 解析策略接线", () => {
     );
     expect(countStrategyGets(net.apiHits)).toBe(getAfterLocalOpen);
     expect(net.taskPosts.length).toBe(tasksBeforeLocal);
+    expect(countLightweightParsePosts(net.taskPosts)).toBe(lightBeforeLocal);
+    expect(countEngineParsePosts(net.taskPosts, "managed")).toBe(
+      managedBeforeLocal,
+    );
     expect(countSettingsPuts(net.apiHits)).toBe(baselinePuts);
     expect(net.externalHits).toEqual([]);
-    await assertNoStrategyPersistence(page, storageBefore);
+    // D2：SPA 后同一 document/ledger generation 必须保持；assert 会拒 generation 变化/缺失/截断
+    const localMetaAfter = await readStorageOpsLedgerMeta(page);
+    expect(localMetaAfter.present, "商务 ask local SPA 后台账必须仍在").toBe(
+      true,
+    );
+    expect(localMetaAfter.generation).toBe(localLedgerGen);
+    await assertStorageBranchClean(page, localStorageBranch, "商务 ask local");
   });
 
   test("策略读取失败：固定中文、不建任务、不泄漏详情", async ({
@@ -1408,24 +1881,26 @@ test.describe("P8B M3 managed 解析策略接线", () => {
       "E2E P8B M3 技术标 ask",
     );
     const net = await installNetworkGuard(page);
+    const expectedTasksPath = `/api/projects/${projectId}/tasks`;
 
     await page.goto(`/technical-plan/${projectId}/document`);
     await expect(
       page.getByRole("heading", { name: "E2E P8B M3 技术标 ask" }),
     ).toBeVisible({ timeout: 20_000 });
+    await installStorageOpsLedger(page);
     await uploadTxtViaHiddenInput(page, "e2e-m3-ask.txt");
     await expect(
       page.locator(".file-chip", { hasText: "e2e-m3-ask.txt" }),
     ).toBeVisible({ timeout: 15_000 });
 
-    // 首次点击前锁 task/PUT/light/managed/GET/storage 基线
-    const storageBefore = await captureBrowserStorageSnapshot(page);
+    // 首次点击前锁 task/PUT/light/managed/GET 基线
     const baselineTasks = net.taskPosts.length;
     const baselinePuts = countSettingsPuts(net.apiHits);
     const baselineLight = countLightweightParsePosts(net.taskPosts);
     const baselineManaged = countEngineParsePosts(net.taskPosts, "managed");
     const getBeforeOpen = countStrategyGets(net.apiHits);
 
+    const cancelStorage = await takeStorageBranchBaseline(page);
     await parseActionButton(page).click();
     const dialog = page.getByRole("dialog", { name: "选择解析方式" });
     await expect(dialog).toBeVisible({ timeout: 10_000 });
@@ -1468,8 +1943,10 @@ test.describe("P8B M3 managed 解析策略接线", () => {
     expect(countLightweightParsePosts(net.taskPosts)).toBe(baselineLight);
     expect(countEngineParsePosts(net.taskPosts, "managed")).toBe(baselineManaged);
     expect(countStrategyGets(net.apiHits)).toBe(getAfterOpen);
+    await assertStorageBranchClean(page, cancelStorage, "M3 技术 ask cancel");
 
     // 再开前仍精确基线；选 managed 后只允许 managed +1，PUT/light 不变；同对话框选择不额外 GET
+    const managedStorage = await takeStorageBranchBaseline(page);
     const getBeforeReopen = countStrategyGets(net.apiHits);
     await parseActionButton(page).click();
     await expect(dialog).toBeVisible({ timeout: 10_000 });
@@ -1495,9 +1972,19 @@ test.describe("P8B M3 managed 解析策略接线", () => {
     );
     expect(net.taskPosts.length).toBe(baselineTasks + 1);
     expect(countLightweightParsePosts(net.taskPosts)).toBe(baselineLight);
-    expect(
-      parseTaskPostBody(net.taskPosts[net.taskPosts.length - 1].postData),
-    ).toEqual({ type: "parse", payload: { engine: "managed" } });
+    const managedPost = net.taskPosts
+      .slice()
+      .reverse()
+      .find((h) => {
+        const b = parseTaskPostBody(h.postData);
+        return b.type === "parse" && b.payload?.engine === "managed";
+      });
+    expect(managedPost).toBeTruthy();
+    expect(managedPost!.path).toBe(expectedTasksPath);
+    expect(parseTaskPostBody(managedPost!.postData)).toEqual({
+      type: "parse",
+      payload: { engine: "managed" },
+    });
 
     const settingsRes = await request.get(`${API}/settings`);
     expect(settingsRes.ok()).toBeTruthy();
@@ -1506,7 +1993,7 @@ test.describe("P8B M3 managed 解析策略接线", () => {
     };
     expect(settingsBody.parseStrategy).toBe("ask");
     expect(net.externalHits).toEqual([]);
-    await assertNoStrategyPersistence(page, storageBefore);
+    await assertStorageBranchClean(page, managedStorage, "M3 技术 ask managed");
   });
 
   test("M3 managed 空 manifest 真实失败：固定中文+项目化人工入口，零诊断泄漏", async ({
@@ -2122,7 +2609,8 @@ test.describe("P8B M3 managed 解析策略接线", () => {
 /**
  * Q9：纯 helper 自检（无浏览器、无业务路由）。
  * 证明：(a) 空 key 策略写入被捕获；(b) settings.v1 动作后改写失败；
- *       (c) 动作前已存在且动作后字节相同的合法设置兜底不误报。
+ *       (c) 动作前已存在且动作后字节相同的合法设置兜底不误报；
+ *       (d) C2 操作台账：setItem→removeItem、同值 setItem、clear、session 策略 value 均违规，合法无关写不误报。
  */
 test.describe("Q9 存储探针纯 helper 自检", () => {
   test("空 key 捕获、settings.v1 改写失败、合法兜底不误报", () => {
@@ -2209,5 +2697,613 @@ test.describe("Q9 存储探针纯 helper 自检", () => {
         sessionStorage: {},
       }),
     ).toThrow();
+  });
+
+  test("C2 Storage 操作台账：setItem/removeItem/同值/clear/session 策略 value 违规，合法写不误报", () => {
+    // setItem → removeItem 策略命名 key：两步均违规
+    const setThenRemove: StorageOpRecord[] = [
+      {
+        area: "localStorage",
+        method: "setItem",
+        key: "parseStrategy",
+        value: "light",
+      },
+      {
+        area: "localStorage",
+        method: "removeItem",
+        key: "parseStrategy",
+        value: null,
+      },
+    ];
+    expect(isViolatingStorageOp(setThenRemove[0])).toBe(true);
+    expect(isViolatingStorageOp(setThenRemove[1])).toBe(true);
+    expect(() =>
+      assertNoStrategyStorageOps(setThenRemove, "setItem→removeItem"),
+    ).toThrow();
+
+    // 同值 setItem 也必须记且违规（settings.v1）
+    const sameValueSet: StorageOpRecord = {
+      area: "localStorage",
+      method: "setItem",
+      key: SETTINGS_V1_KEY,
+      value: JSON.stringify({ parseStrategy: "ask" }),
+    };
+    expect(isViolatingStorageOp(sameValueSet)).toBe(true);
+    expect(() =>
+      assertNoStrategyStorageOps([sameValueSet], "同值 setItem settings.v1"),
+    ).toThrow();
+
+    // clear 一律违规
+    const clearOp: StorageOpRecord = {
+      area: "sessionStorage",
+      method: "clear",
+      key: null,
+      value: null,
+    };
+    expect(isViolatingStorageOp(clearOp)).toBe(true);
+    expect(() => assertNoStrategyStorageOps([clearOp], "clear")).toThrow();
+
+    // sessionStorage 策略 value 违规
+    const sessionStrategyVal: StorageOpRecord = {
+      area: "sessionStorage",
+      method: "setItem",
+      key: "tmp.cache",
+      value: '{"parseStrategy":"managed"}',
+    };
+    expect(isViolatingStorageOp(sessionStrategyVal)).toBe(true);
+    expect(() =>
+      assertNoStrategyStorageOps([sessionStrategyVal], "session 策略 value"),
+    ).toThrow();
+
+    // 合法无关写不误报
+    const legalOps: StorageOpRecord[] = [
+      {
+        area: "localStorage",
+        method: "setItem",
+        key: "biaoshu.ui.prefs",
+        value: '{"sidebar":true}',
+      },
+      {
+        area: "sessionStorage",
+        method: "setItem",
+        key: "tab",
+        value: "doc",
+      },
+      {
+        area: "localStorage",
+        method: "removeItem",
+        key: "biaoshu.ui.toast",
+        value: null,
+      },
+    ];
+    for (const op of legalOps) {
+      expect(isViolatingStorageOp(op), JSON.stringify(op)).toBe(false);
+    }
+    assertNoStrategyStorageOps(legalOps, "合法无关写");
+
+    // storageOpsSince 切片正确
+    const ledger: StorageOpRecord[] = [
+      ...legalOps,
+      clearOp,
+      sessionStrategyVal,
+    ];
+    const since = storageOpsSince(ledger, legalOps.length);
+    expect(since).toHaveLength(2);
+    expect(() => assertNoStrategyStorageOps(since, "since 切片")).toThrow();
+    assertNoStrategyStorageOps(storageOpsSince(ledger, ledger.length), "空增量");
+  });
+});
+
+/**
+ * D2/D3：真实浏览器 helper 自检（必须执行浏览器原语，禁止仅查源码字符串）。
+ * D2：台账缺失 / generation 变化 / truncated 均失败。
+ * D3：React 风格 own value descriptor 上 marker→safe 瞬态命中；原型路径与 attributes/characterData 门保留。
+ */
+test.describe("D2/D3 Storage 与隐私探针浏览器 helper 自检", () => {
+  test("D2 Storage 台账 generation：missing/mismatch/truncated 均失败", async ({
+    page,
+  }) => {
+    // 必须同源可访问 Storage 的页面（about:blank 会 SecurityError）
+    await page.goto("http://127.0.0.1:5174/");
+    await expect(page.locator("body")).toBeVisible({ timeout: 20_000 });
+
+    // missing：未安装台账时 take/assert 必须失败
+    await expect(takeStorageBranchBaseline(page)).rejects.toThrow(
+      /台账缺失|generation/,
+    );
+    await expect(
+      assertStorageBranchClean(
+        page,
+        {
+          opsBaseline: 0,
+          generation: 1,
+          snapshot: { localStorage: {}, sessionStorage: {} },
+        },
+        "missing-ledger",
+      ),
+    ).rejects.toThrow(/台账缺失/);
+
+    await installStorageOpsLedger(page);
+    const baseline = await takeStorageBranchBaseline(page);
+    expect(baseline.generation).toBeGreaterThan(0);
+    // 台账副本可读且初始为空增量
+    expect(await readStorageOpsLedger(page)).toEqual([]);
+    // 合法空增量通过
+    await assertStorageBranchClean(page, baseline, "clean-empty");
+
+    // truncated：长度小于 baseline 必须失败（不可把截断当零操作）
+    await page.evaluate(() => {
+      const w = window as unknown as { __biaoshuStorageOps?: unknown[] };
+      // 先写一条再截断到 0，模拟 document 半丢失/被清空
+      w.__biaoshuStorageOps = w.__biaoshuStorageOps || [];
+      w.__biaoshuStorageOps.push({
+        area: "localStorage",
+        method: "setItem",
+        key: "x",
+        value: "1",
+      });
+      const paddedBaseline = (w.__biaoshuStorageOps as unknown[]).length;
+      (window as unknown as { __pad?: number }).__pad = paddedBaseline;
+      w.__biaoshuStorageOps.length = 0;
+    });
+    const truncatedBaseline: StorageBranchBaseline = {
+      opsBaseline: 1,
+      generation: baseline.generation,
+      snapshot: baseline.snapshot,
+    };
+    await expect(
+      assertStorageBranchClean(page, truncatedBaseline, "truncated"),
+    ).rejects.toThrow(/truncated/);
+
+    // generation mismatch：reinstall bump 后旧 baseline 失败
+    await installStorageOpsLedger(page);
+    const afterReinstall = await readStorageOpsLedgerMeta(page);
+    expect(afterReinstall.present).toBe(true);
+    expect(afterReinstall.generation).not.toBe(baseline.generation);
+    await expect(
+      assertStorageBranchClean(page, baseline, "generation-mismatch"),
+    ).rejects.toThrow(/generation 变化/);
+
+    // 同 document 新 baseline 可通过
+    const fresh = await takeStorageBranchBaseline(page);
+    await assertStorageBranchClean(page, fresh, "fresh-ok");
+  });
+
+  test("D3 隐私探针：own/prototype/attr 互异 marker 命中且 restore 精确还原", async ({
+    page,
+  }) => {
+    /**
+     * E1：八条子路径各用互异 marker（existing-own 三控件 / prototype-new 三控件 /
+     *     attribute / characterData），任一路径失效时其它路径无法顶替使其通过。
+     * E2：同一正式 installDomPrivacyProbe 覆盖安装前 own 控件与安装后 plain 原型路径；
+     *     安装前保存 own + 三原型 descriptor；restore 后精确核对 get/set 身份与 flags。
+     * E3：existing/plain 两个 select 均含 SAFE option，终值精确等于 SAFE（禁止空串当成功）。
+     */
+    // 八个互异 marker：禁止共享类别 marker
+    const MARKER_OWN_INPUT = "D3_EXISTING_OWN_INPUT_MARKER_SECRET";
+    const MARKER_OWN_TEXTAREA = "D3_EXISTING_OWN_TEXTAREA_MARKER_SECRET";
+    const MARKER_OWN_SELECT = "D3_EXISTING_OWN_SELECT_MARKER_SECRET";
+    const MARKER_PROTO_INPUT = "D3_PROTOTYPE_NEW_INPUT_MARKER_SECRET";
+    const MARKER_PROTO_TEXTAREA = "D3_PROTOTYPE_NEW_TEXTAREA_MARKER_SECRET";
+    const MARKER_PROTO_SELECT = "D3_PROTOTYPE_NEW_SELECT_MARKER_SECRET";
+    const MARKER_ATTR = "D3_ATTRIBUTE_MARKER_SECRET";
+    const MARKER_CHAR = "D3_CHARACTER_DATA_MARKER_SECRET";
+    const SAFE = "d3-safe-final-value";
+    const ALL_MARKERS = [
+      MARKER_OWN_INPUT,
+      MARKER_OWN_TEXTAREA,
+      MARKER_OWN_SELECT,
+      MARKER_PROTO_INPUT,
+      MARKER_PROTO_TEXTAREA,
+      MARKER_PROTO_SELECT,
+      MARKER_ATTR,
+      MARKER_CHAR,
+    ];
+    // 断言八 marker 互异（去重后仍为 8）
+    expect(new Set(ALL_MARKERS).size).toBe(8);
+
+    await page.goto("about:blank");
+    // 建立 React 风格 own descriptor：缓存原生 setter，实例 set 不经后续原型 patch 路径
+    await page.evaluate(
+      ({ safe }) => {
+        type DescSnap = {
+          get: PropertyDescriptor["get"];
+          set: PropertyDescriptor["set"];
+          enumerable: boolean | undefined;
+          configurable: boolean | undefined;
+        };
+        type D3Snap = {
+          inputOwn: DescSnap;
+          textareaOwn: DescSnap;
+          selectOwn: DescSnap;
+          inputProto: DescSnap;
+          textareaProto: DescSnap;
+          selectProto: DescSnap;
+        };
+        const w = window as unknown as { __d3DescriptorSnap?: D3Snap };
+        const host = document.createElement("div");
+        host.id = "d3-probe-host";
+        document.body.appendChild(host);
+
+        const toSnap = (desc: PropertyDescriptor): DescSnap => ({
+          get: desc.get,
+          set: desc.set,
+          enumerable: desc.enumerable,
+          configurable: desc.configurable,
+        });
+
+        /** select 必须含 SAFE option，否则 marker→SAFE 后 value 变空串（禁止当成功） */
+        const fillSelectOptions = (el: HTMLSelectElement, safe: string) => {
+          const optEmpty = document.createElement("option");
+          optEmpty.value = "";
+          optEmpty.textContent = "empty";
+          el.appendChild(optEmpty);
+          const optX = document.createElement("option");
+          optX.value = "x";
+          optX.textContent = "x";
+          el.appendChild(optX);
+          const optSafe = document.createElement("option");
+          optSafe.value = safe;
+          optSafe.textContent = "safe";
+          el.appendChild(optSafe);
+        };
+
+        const mkReactOwned = (tag: "input" | "textarea" | "select") => {
+          const el = document.createElement(tag) as
+            | HTMLInputElement
+            | HTMLTextAreaElement
+            | HTMLSelectElement;
+          el.id = `d3-${tag}`;
+          if (tag === "select") {
+            fillSelectOptions(el as HTMLSelectElement, safe);
+          }
+          host.appendChild(el);
+          const protoDesc = Object.getOwnPropertyDescriptor(
+            Object.getPrototypeOf(el),
+            "value",
+          );
+          if (!protoDesc?.get || !protoDesc?.set) {
+            throw new Error(`缺少 ${tag} 原型 value descriptor`);
+          }
+          // 缓存安装探针前的原生 setter（模拟 React trackValueOnNode）
+          const nativeGet = protoDesc.get;
+          const nativeSet = protoDesc.set;
+          Object.defineProperty(el, "value", {
+            configurable: true,
+            enumerable: true,
+            get: function (this: HTMLInputElement) {
+              return nativeGet.call(this);
+            },
+            set: function (this: HTMLInputElement, next: string) {
+              return nativeSet.call(this, next);
+            },
+          });
+          return el;
+        };
+        const input = mkReactOwned("input");
+        const textarea = mkReactOwned("textarea");
+        const select = mkReactOwned("select");
+
+        // attributes / characterData 门对照节点
+        const span = document.createElement("span");
+        span.id = "d3-attr-node";
+        span.setAttribute("data-x", "init");
+        span.textContent = "init-text";
+        host.appendChild(span);
+
+        // 安装前快照：existing own + 三原型 descriptor（身份/flags 供 restore 精确核对）
+        const inputOwn = Object.getOwnPropertyDescriptor(input, "value");
+        const textareaOwn = Object.getOwnPropertyDescriptor(textarea, "value");
+        const selectOwn = Object.getOwnPropertyDescriptor(select, "value");
+        const inputProto = Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype,
+          "value",
+        );
+        const textareaProto = Object.getOwnPropertyDescriptor(
+          HTMLTextAreaElement.prototype,
+          "value",
+        );
+        const selectProto = Object.getOwnPropertyDescriptor(
+          HTMLSelectElement.prototype,
+          "value",
+        );
+        if (
+          !inputOwn?.get ||
+          !inputOwn?.set ||
+          !textareaOwn?.get ||
+          !textareaOwn?.set ||
+          !selectOwn?.get ||
+          !selectOwn?.set ||
+          !inputProto?.get ||
+          !inputProto?.set ||
+          !textareaProto?.get ||
+          !textareaProto?.set ||
+          !selectProto?.get ||
+          !selectProto?.set
+        ) {
+          throw new Error("D3 安装前 own/prototype value descriptor 不完整");
+        }
+        w.__d3DescriptorSnap = {
+          inputOwn: toSnap(inputOwn),
+          textareaOwn: toSnap(textareaOwn),
+          selectOwn: toSnap(selectOwn),
+          inputProto: toSnap(inputProto),
+          textareaProto: toSnap(textareaProto),
+          selectProto: toSnap(selectProto),
+        };
+      },
+      { safe: SAFE },
+    );
+
+    // 证明 own descriptor 已存在
+    const ownBefore = await page.evaluate(() => {
+      const input = document.getElementById("d3-input") as HTMLInputElement;
+      return !!Object.getOwnPropertyDescriptor(input, "value")?.set;
+    });
+    expect(ownBefore).toBe(true);
+
+    // 同一正式 helper：同时监视八个互异 marker
+    await installDomPrivacyProbe(page, ALL_MARKERS);
+
+    // 八条互异路径：各只写自己的 marker，再写 SAFE
+    await page.evaluate(
+      ({
+        markerOwnInput,
+        markerOwnTextarea,
+        markerOwnSelect,
+        markerProtoInput,
+        markerProtoTextarea,
+        markerProtoSelect,
+        markerAttr,
+        markerChar,
+        safe,
+      }) => {
+        const input = document.getElementById("d3-input") as HTMLInputElement;
+        const textarea = document.getElementById(
+          "d3-textarea",
+        ) as HTMLTextAreaElement;
+        const select = document.getElementById("d3-select") as HTMLSelectElement;
+        // existing-own：安装前已有 own setter；三控件各写互异 marker
+        input.value = markerOwnInput;
+        input.value = safe;
+        textarea.value = markerOwnTextarea;
+        textarea.value = safe;
+        select.value = markerOwnSelect;
+        select.value = safe;
+
+        // prototype-new：安装后新建 plain 控件（无 own descriptor）走原型 setter
+        const host = document.getElementById("d3-probe-host") as HTMLElement;
+        const fillSelectOptions = (el: HTMLSelectElement, safeVal: string) => {
+          const optEmpty = document.createElement("option");
+          optEmpty.value = "";
+          optEmpty.textContent = "empty";
+          el.appendChild(optEmpty);
+          const optX = document.createElement("option");
+          optX.value = "x";
+          optX.textContent = "x";
+          el.appendChild(optX);
+          const optSafe = document.createElement("option");
+          optSafe.value = safeVal;
+          optSafe.textContent = "safe";
+          el.appendChild(optSafe);
+        };
+        const mkPlain = (tag: "input" | "textarea" | "select") => {
+          const el = document.createElement(tag) as
+            | HTMLInputElement
+            | HTMLTextAreaElement
+            | HTMLSelectElement;
+          el.id = `d3-plain-${tag}`;
+          if (tag === "select") {
+            fillSelectOptions(el as HTMLSelectElement, safe);
+          }
+          host.appendChild(el);
+          if (Object.getOwnPropertyDescriptor(el, "value")) {
+            throw new Error(`plain ${tag} 不应有 own value descriptor`);
+          }
+          return el;
+        };
+        const plainInput = mkPlain("input");
+        const plainTextarea = mkPlain("textarea");
+        const plainSelect = mkPlain("select");
+        plainInput.value = markerProtoInput;
+        plainInput.value = safe;
+        plainTextarea.value = markerProtoTextarea;
+        plainTextarea.value = safe;
+        plainSelect.value = markerProtoSelect;
+        plainSelect.value = safe;
+
+        // attributes 与 characterData 各用独立 marker（不得共享）
+        const span = document.getElementById("d3-attr-node") as HTMLElement;
+        span.setAttribute("data-x", markerAttr);
+        span.setAttribute("data-x", safe);
+        const text = span.firstChild as Text;
+        text.data = markerChar;
+        text.data = safe;
+      },
+      {
+        markerOwnInput: MARKER_OWN_INPUT,
+        markerOwnTextarea: MARKER_OWN_TEXTAREA,
+        markerOwnSelect: MARKER_OWN_SELECT,
+        markerProtoInput: MARKER_PROTO_INPUT,
+        markerProtoTextarea: MARKER_PROTO_TEXTAREA,
+        markerProtoSelect: MARKER_PROTO_SELECT,
+        markerAttr: MARKER_ATTR,
+        markerChar: MARKER_CHAR,
+        safe: SAFE,
+      },
+    );
+
+    const probe = await readDomPrivacyProbe(page);
+    // E1：八个 marker 逐项精确 toContain，禁止单路径/类别 marker 顶替
+    expect(probe.hitMarkers, "existing-own input marker").toContain(
+      MARKER_OWN_INPUT,
+    );
+    expect(probe.hitMarkers, "existing-own textarea marker").toContain(
+      MARKER_OWN_TEXTAREA,
+    );
+    expect(probe.hitMarkers, "existing-own select marker").toContain(
+      MARKER_OWN_SELECT,
+    );
+    expect(probe.hitMarkers, "prototype-new input marker").toContain(
+      MARKER_PROTO_INPUT,
+    );
+    expect(probe.hitMarkers, "prototype-new textarea marker").toContain(
+      MARKER_PROTO_TEXTAREA,
+    );
+    expect(probe.hitMarkers, "prototype-new select marker").toContain(
+      MARKER_PROTO_SELECT,
+    );
+    expect(probe.hitMarkers, "attribute marker").toContain(MARKER_ATTR);
+    expect(probe.hitMarkers, "characterData marker").toContain(MARKER_CHAR);
+
+    // 完整终值门：六控件 value + attribute + Text.data 均精确等于 SAFE，且不含对应 marker
+    // （read/restore 后读取；select 不得以无匹配 option 的空串冒充成功）
+    const finals = await page.evaluate(() => {
+      const input = document.getElementById("d3-input") as HTMLInputElement;
+      const textarea = document.getElementById(
+        "d3-textarea",
+      ) as HTMLTextAreaElement;
+      const select = document.getElementById("d3-select") as HTMLSelectElement;
+      const plainInput = document.getElementById(
+        "d3-plain-input",
+      ) as HTMLInputElement;
+      const plainTextarea = document.getElementById(
+        "d3-plain-textarea",
+      ) as HTMLTextAreaElement;
+      const plainSelect = document.getElementById(
+        "d3-plain-select",
+      ) as HTMLSelectElement;
+      const span = document.getElementById("d3-attr-node") as HTMLElement;
+      const text = span.firstChild as Text;
+      return {
+        ownInput: input.value,
+        ownTextarea: textarea.value,
+        ownSelect: select.value,
+        plainInput: plainInput.value,
+        plainTextarea: plainTextarea.value,
+        plainSelect: plainSelect.value,
+        attr: span.getAttribute("data-x"),
+        charData: text.data,
+      };
+    });
+    expect(finals.ownInput, "existing input 终值").toBe(SAFE);
+    expect(finals.ownTextarea, "existing textarea 终值").toBe(SAFE);
+    expect(finals.ownSelect, "existing select 终值（须匹配 SAFE option）").toBe(
+      SAFE,
+    );
+    expect(finals.plainInput, "plain input 终值").toBe(SAFE);
+    expect(finals.plainTextarea, "plain textarea 终值").toBe(SAFE);
+    expect(finals.plainSelect, "plain select 终值（须匹配 SAFE option）").toBe(
+      SAFE,
+    );
+    expect(finals.attr, "attribute 终值").toBe(SAFE);
+    expect(finals.charData, "characterData 终值").toBe(SAFE);
+
+    expect(finals.ownInput).not.toContain(MARKER_OWN_INPUT);
+    expect(finals.ownTextarea).not.toContain(MARKER_OWN_TEXTAREA);
+    expect(finals.ownSelect).not.toContain(MARKER_OWN_SELECT);
+    expect(finals.plainInput).not.toContain(MARKER_PROTO_INPUT);
+    expect(finals.plainTextarea).not.toContain(MARKER_PROTO_TEXTAREA);
+    expect(finals.plainSelect).not.toContain(MARKER_PROTO_SELECT);
+    expect(finals.attr).not.toContain(MARKER_ATTR);
+    expect(finals.charData).not.toContain(MARKER_CHAR);
+
+    // E2：restore 后精确核对 get/set 身份与 enumerable/configurable（禁止仅「仍能赋值」）
+    const restored = await page.evaluate(() => {
+      type DescSnap = {
+        get: PropertyDescriptor["get"];
+        set: PropertyDescriptor["set"];
+        enumerable: boolean | undefined;
+        configurable: boolean | undefined;
+      };
+      type D3Snap = {
+        inputOwn: DescSnap;
+        textareaOwn: DescSnap;
+        selectOwn: DescSnap;
+        inputProto: DescSnap;
+        textareaProto: DescSnap;
+        selectProto: DescSnap;
+      };
+      const w = window as unknown as { __d3DescriptorSnap?: D3Snap };
+      const snap = w.__d3DescriptorSnap;
+      if (!snap) throw new Error("缺少安装前 descriptor 快照");
+
+      const checkPair = (
+        cur: PropertyDescriptor | undefined,
+        expected: DescSnap,
+        label: string,
+      ) => {
+        if (!cur) {
+          return { ok: false, reason: `${label}: descriptor 缺失` };
+        }
+        if (cur.get !== expected.get) {
+          return { ok: false, reason: `${label}: get 身份不一致` };
+        }
+        if (cur.set !== expected.set) {
+          return { ok: false, reason: `${label}: set 身份不一致` };
+        }
+        if (cur.enumerable !== expected.enumerable) {
+          return { ok: false, reason: `${label}: enumerable 不一致` };
+        }
+        if (cur.configurable !== expected.configurable) {
+          return { ok: false, reason: `${label}: configurable 不一致` };
+        }
+        return { ok: true, reason: "" };
+      };
+
+      const input = document.getElementById("d3-input") as HTMLInputElement;
+      const textarea = document.getElementById(
+        "d3-textarea",
+      ) as HTMLTextAreaElement;
+      const select = document.getElementById("d3-select") as HTMLSelectElement;
+      const checks = [
+        checkPair(
+          Object.getOwnPropertyDescriptor(input, "value"),
+          snap.inputOwn,
+          "input.own",
+        ),
+        checkPair(
+          Object.getOwnPropertyDescriptor(textarea, "value"),
+          snap.textareaOwn,
+          "textarea.own",
+        ),
+        checkPair(
+          Object.getOwnPropertyDescriptor(select, "value"),
+          snap.selectOwn,
+          "select.own",
+        ),
+        checkPair(
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value"),
+          snap.inputProto,
+          "HTMLInputElement.prototype",
+        ),
+        checkPair(
+          Object.getOwnPropertyDescriptor(
+            HTMLTextAreaElement.prototype,
+            "value",
+          ),
+          snap.textareaProto,
+          "HTMLTextAreaElement.prototype",
+        ),
+        checkPair(
+          Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value"),
+          snap.selectProto,
+          "HTMLSelectElement.prototype",
+        ),
+      ];
+      const failed = checks.filter((c) => !c.ok);
+      // 语义仍可用（附加，非唯一证据）
+      input.value = "after-restore";
+      return {
+        allOk: failed.length === 0,
+        failed: failed.map((f) => f.reason),
+        valueAfter: input.value,
+      };
+    });
+    expect(
+      restored.allOk,
+      `restore 身份/flags 必须精确还原: ${restored.failed.join("; ")}`,
+    ).toBe(true);
+    expect(restored.valueAfter).toBe("after-restore");
   });
 });
