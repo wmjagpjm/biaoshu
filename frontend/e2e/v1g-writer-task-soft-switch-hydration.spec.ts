@@ -1754,7 +1754,8 @@ test.describe("V1-G writer 任务迟到 success 软切水合", () => {
     await expect(page.getByText(PARSE_MD_A)).toBeVisible();
 
     const getsAInit = countGets(state, TECH_A);
-    await page.getByRole("button", { name: "轻量解析" }).click();
+    // 中性入口 exact「开始解析」（禁止宽正则旧 UI 冒充）
+    await page.getByRole("button", { name: "开始解析", exact: true }).click();
     const post = await waitTaskRunningHeld(state, TECH_A, "parse");
     expect(post.payload).toEqual({ engine: "lightweight" });
 
@@ -2582,7 +2583,8 @@ test.describe("V1-G writer 任务迟到 success 软切水合", () => {
     await page.goto(`/technical-plan/${TECH_A}/document`);
     await expectTechReady(page, "V1G A9 技术甲");
     await expect(page.getByText(FILE_NAME_TECH_A)).toBeVisible();
-    await page.getByRole("button", { name: "轻量解析" }).click();
+    // 中性入口 exact「开始解析」（禁止宽正则旧 UI 冒充）
+    await page.getByRole("button", { name: "开始解析", exact: true }).click();
     const postA = await waitTaskRunningHeld(state, TECH_A, "parse");
     await releaseTaskSuccess(page, state, postA.taskId, TASK_MSG_TECH_A);
     // lastTask 摘要 + recentTasks 列表可同时含 marker；禁止条件跳过，至少一处可见
