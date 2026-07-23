@@ -313,25 +313,41 @@ def test_disabled_managed_orm_roundtrip_exact(client):
     assert "no-store" in cache
 
 
+@pytest.mark.parametrize(
+    "corrupt_value",
+    [
+        _CORRUPT_PARSE,
+        " light ",
+        "managed ",
+        "\tlocal",
+        "ask\t",
+        " light",
+        "local ",
+    ],
+)
 def test_disabled_corrupt_stock_fixed_500_no_store_no_leak_no_commit(
-    client, monkeypatch
+    client, monkeypatch, corrupt_value: str
 ):
     """
-    模块：M3 非法存量 corrupt
-    用途：ORM 直写 secret 非法策略后，权威 GET 固定 500 + 精确 detail，
+    模块：M3 非法存量 corrupt（含 fixed secret 与空白近合法值）
+    用途：ORM 直写非法/空白包裹策略后，权威 GET 固定 500 + 精确 detail，
           Cache-Control=no-store，零 commit（Session.commit 计数=0），
-          原值/Key/model 零泄漏。
+          原值/Key/model 零泄漏；ORM 原值保留。
     对接：契约 M3 冻结决策 §2；GET /api/settings/parse-strategy。
-    二次开发：禁止 soft fallback light；禁止 detail 回显原值；
+    二次开发：禁止 soft fallback light / strip 归一；禁止 detail 回显原值；
               commit 计数须继续调用原实现，禁止抛异常制造 500 假绿。
     """
     from sqlalchemy.orm import Session
 
+    stripped = corrupt_value.strip()
+    if corrupt_value != stripped:
+        assert stripped in _FOUR_VALUES
+
     ws = get_settings().default_workspace_id
-    before_row = _orm_write_parse_strategy(ws, _CORRUPT_PARSE)
+    before_row = _orm_write_parse_strategy(ws, corrupt_value)
     before_updated = before_row.updated_at
     before_count = _settings_row_count(ws)
-    assert before_row.parse_strategy == _CORRUPT_PARSE
+    assert before_row.parse_strategy == corrupt_value
     assert before_row.api_key == _SECRET_API_KEY
     assert before_row.model == _SECRET_MODEL
 
@@ -346,7 +362,7 @@ def test_disabled_corrupt_stock_fixed_500_no_store_no_leak_no_commit(
     monkeypatch.setattr(Session, "commit", counting_commit)
 
     res = client.get(_PATH)
-    assert res.status_code == 500, res.text
+    assert res.status_code == 500, (repr(corrupt_value), res.text)
     body = res.json()
     detail = body.get("detail")
     assert isinstance(detail, dict), body
@@ -355,28 +371,30 @@ def test_disabled_corrupt_stock_fixed_500_no_store_no_leak_no_commit(
     assert detail["message"] == "解析策略配置损坏"
     cache = (res.headers.get("cache-control") or "").lower()
     assert "no-store" in cache
-    _assert_no_leak(
-        body,
-        _CORRUPT_PARSE,
+    leak_markers: list[str] = [
+        corrupt_value,
         _SECRET_API_KEY,
         _SECRET_MODEL,
         _SECRET_PROVIDER,
         _SECRET_BASE,
         _SECRET_EMBED,
         "sk-",
-    )
+    ]
+    if corrupt_value != stripped:
+        leak_markers.append(stripped)
+    _assert_no_leak(body, *leak_markers)
     # 响应体不得误回退 light，也不得出现 parseStrategy 键或原非法值
     raw_text = res.text
     assert "parseStrategy" not in raw_text
     assert '"light"' not in raw_text
-    assert _CORRUPT_PARSE not in raw_text
+    assert corrupt_value not in raw_text
 
     # 权威 GET 路径零 commit（契约硬锁，非仅零可见写）
     assert commit_calls["n"] == 0
 
     after_row = _read_orm_parse_row(ws)
     assert after_row is not None
-    assert after_row.parse_strategy == _CORRUPT_PARSE
+    assert after_row.parse_strategy == corrupt_value
     assert after_row.api_key == _SECRET_API_KEY
     assert after_row.model == _SECRET_MODEL
     assert after_row.updated_at == before_updated

@@ -108,11 +108,40 @@ def test_settings_parse_strategy_four_values_put_roundtrip(client):
 
 def test_settings_parse_strategy_illegal_put_rejected_no_pollute(client):
     """
-    模块：M3 非四值 PUT 拒绝零污染
-    用途：非法 parseStrategy 固定拒绝；完整设置行策略与敏感字段不被改写。
+    模块：M3 非四值 PUT 拒绝零污染（含空白近合法值）
+    用途：fresh workspace 先覆盖非法 PUT 零建行；seed 后非法/空白包裹固定 400；
+          恶意 body 实发 embeddingModel 与全字段 HTTP+ORM 零污染。
     对接：PUT /api/settings；ORM WorkspaceSettingsRow。
-    二次开发：保持 400（非通用 422）；禁止部分写入。
+    二次开发：保持 400（非通用 422）；禁止 strip 归一；禁止部分写入；禁止另复制整段用例。
     """
+    ws = get_settings().default_workspace_id
+    # Q5：seed 前先覆盖 fresh workspace — 无 workspace_settings 行时非法 PUT 不得建行
+    db = SessionLocal()
+    try:
+        assert db.get(WorkspaceSettingsRow, ws) is None
+    finally:
+        db.close()
+
+    put_fresh = client.put(
+        "/api/settings",
+        json={
+            "provider": "openai-compatible",
+            "apiBaseUrl": "https://evil.example/v1",
+            "apiKey": "sk-should-not-write",
+            "model": "evil-model",
+            "embeddingModel": "evil-embed-should-not-write",
+            "parseStrategy": "mineru",
+        },
+    )
+    assert put_fresh.status_code == 400, put_fresh.text
+    assert put_fresh.status_code != 422
+    db = SessionLocal()
+    try:
+        # 零 commit 可见写：行仍不存在
+        assert db.get(WorkspaceSettingsRow, ws) is None
+    finally:
+        db.close()
+
     seed = client.put(
         "/api/settings",
         json={
@@ -120,13 +149,14 @@ def test_settings_parse_strategy_illegal_put_rejected_no_pollute(client):
             "apiBaseUrl": "https://api.example.com/v1",
             "apiKey": "sk-keep-unpolluted",
             "model": "keep-model",
+            "embeddingModel": "keep-embed",
             "parseStrategy": "local",
         },
     )
     assert seed.status_code == 200, seed.text
     assert seed.json()["parseStrategy"] == "local"
+    assert seed.json().get("embeddingModel", "") == "keep-embed"
 
-    ws = get_settings().default_workspace_id
     db = SessionLocal()
     try:
         row = db.get(WorkspaceSettingsRow, ws)
@@ -137,10 +167,12 @@ def test_settings_parse_strategy_illegal_put_rejected_no_pollute(client):
             "model": row.model,
             "provider": row.provider,
             "api_base_url": row.api_base_url,
+            "embedding_model": row.embedding_model,
             "updated_at": row.updated_at,
         }
     finally:
         db.close()
+    assert before["embedding_model"] == "keep-embed"
 
     for illegal in (
         "mineru",
@@ -150,7 +182,16 @@ def test_settings_parse_strategy_illegal_put_rejected_no_pollute(client):
         "MANAGED",
         "secret-not-allowed",
         "",
+        " light ",
+        "managed ",
+        "\tlocal",
+        "ask\t",
+        " light",
+        "local ",
+        "\nmanaged",
+        "ask\r\n",
     ):
+        # Q6：恶意 body 实发 embeddingModel，与 provider/apiBaseUrl/apiKey/model/parseStrategy 一起证零污染
         put = client.put(
             "/api/settings",
             json={
@@ -158,20 +199,23 @@ def test_settings_parse_strategy_illegal_put_rejected_no_pollute(client):
                 "apiBaseUrl": "https://evil.example/v1",
                 "apiKey": "sk-should-not-write",
                 "model": "evil-model",
+                "embeddingModel": "evil-embed-should-not-write",
                 "parseStrategy": illegal,
             },
         )
-        assert put.status_code == 400, (illegal, put.status_code, put.text)
+        assert put.status_code == 400, (repr(illegal), put.status_code, put.text)
         # 不得变成 422（Schema Literal 会改变既有错误形态）
         assert put.status_code != 422
 
         full = client.get("/api/settings")
         assert full.status_code == 200, full.text
         body = full.json()
-        assert body["parseStrategy"] == "local"
+        assert body["parseStrategy"] == "local", repr(illegal)
         assert body["apiKey"] == "sk-keep-unpolluted"
         assert body["model"] == "keep-model"
         assert body["provider"] == "deepseek"
+        assert body["apiBaseUrl"] == "https://api.example.com/v1"
+        assert body.get("embeddingModel", "") == "keep-embed", repr(illegal)
 
         db = SessionLocal()
         try:
@@ -182,6 +226,7 @@ def test_settings_parse_strategy_illegal_put_rejected_no_pollute(client):
             assert row.model == before["model"]
             assert row.provider == before["provider"]
             assert row.api_base_url == before["api_base_url"]
+            assert row.embedding_model == before["embedding_model"]
             assert row.updated_at == before["updated_at"]
         finally:
             db.close()
