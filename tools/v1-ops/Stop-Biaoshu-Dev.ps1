@@ -103,13 +103,13 @@ function Get-LiveListenerRecords {
     throw "LISTENER_ENUM_FAILED"
   }
 
-  $allowedLocal = @("127.0.0.1", "0.0.0.0", "::", "::1")
   $records = New-Object System.Collections.Generic.List[object]
   foreach ($port in $TargetPorts) {
-    # A8：每个端口始终执行 exact(127.0.0.1) 与 full(无 LocalAddress 后过滤 allowedLocal)。
-    # 不得因 exact 非空而短路 full（IPv4 127 与 IPv6/:: 可同端口并存 foreign）。
+    # V1-Q/A8：每个端口始终执行 exact(127.0.0.1) 与 full(无 LocalAddress，保留全部 Listen)。
+    # full 必须覆盖显式 RFC1918/LAN，禁止再按回环/通配集合过滤而丢弃 LAN 监听。
+    # 不得因 exact 非空而短路 full（IPv4 127 与 IPv6/LAN 可同端口并存 foreign）。
     # 任一次非“无匹配”真异常固定失败；No MSFT/空数组视为该次确认空。
-    # 将 exact+full 记录按 port/pid 去重合并后进入归属判定。
+    # 将 exact+full 记录按 port/pid 去重合并后进入全量归属判定；任一 foreign 则整次拒绝。
     $exactConns = $null
     $exactOk = $false
     try {
@@ -129,8 +129,8 @@ function Get-LiveListenerRecords {
     $fullConns = $null
     $fullOk = $false
     try {
-      $fullConns = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction Stop |
-        Where-Object { $_.LocalAddress -in $allowedLocal })
+      # 目标端口全部 Listen（含 0.0.0.0/::/回环/显式 RFC1918），不做地址白名单丢弃
+      $fullConns = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction Stop)
       $fullOk = $true
     } catch {
       $detail = "$($_.Exception.Message) $($_.FullyQualifiedErrorId)"
@@ -328,32 +328,23 @@ function Test-RecordOwnership($Record) {
 }
 
 function Test-PortListening([int]$Port) {
+  # V1-Q：观察目标端口全部 Listen（含显式 LAN）；仅明确无 MSFT_NetTCPConnection 视为空闲。
+  # 其它枚举异常一律 busy fail-closed；禁止任何回环 TCP 客户端异步连接回退探测。
   try {
     if (-not (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue)) {
       # 复查阶段无法枚举时按仍占用处理，避免误报成功
       return $true
     }
     try {
-      $c = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop |
-        Where-Object { $_.LocalAddress -in @("127.0.0.1", "0.0.0.0", "::", "::1") })
+      $c = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop)
       return ($c.Count -gt 0)
     } catch {
       $detail = "$($_.Exception.Message) $($_.FullyQualifiedErrorId)"
       if (Test-IsNoConnectionError $detail) {
         return $false
       }
-      # 枚举异常：回退 TCP 探测
-      $client = New-Object System.Net.Sockets.TcpClient
-      try {
-        $iar = $client.BeginConnect("127.0.0.1", $Port, $null, $null)
-        $ok = $iar.AsyncWaitHandle.WaitOne(300)
-        if ($ok -and $client.Connected) {
-          return $true
-        }
-        return $false
-      } finally {
-        $client.Close()
-      }
+      # 非“明确无监听对象”的枚举异常：直接 busy，零连接回退
+      return $true
     }
   } catch {
     return $true

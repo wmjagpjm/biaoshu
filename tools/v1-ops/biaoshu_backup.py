@@ -289,13 +289,17 @@ def build_source_plan(
 
 
 def _default_port_probe(host: str, port: int) -> bool:
-    """返回 True 表示端口可连接（视为仍在监听）。"""
+    """返回 True 表示端口可连接（视为仍在监听）。
+
+    仅明确 ConnectionRefused 视为空闲（False）。
+    timeout / permission / unreachable 等其它 OS 错误向上抛出，由调用方 fail-closed。
+    """
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.settimeout(0.5)
     try:
         sock.connect((host, int(port)))
         return True
-    except OSError:
+    except ConnectionRefusedError:
         return False
     finally:
         try:
@@ -304,20 +308,63 @@ def _default_port_probe(host: str, port: int) -> bool:
             pass
 
 
+def _local_ipv4_probe_hosts() -> List[str]:
+    """构造 probe=None 时的本机候选：回环 + 已分配非回环 IPv4。
+
+    仅枚举本机 hostname 的 AF_INET 地址，不构造外部/公网探测目标，不做 DNS 远端查询。
+    枚举异常由调用方转为 BackupError。
+    """
+    hosts: List[str] = ["127.0.0.1"]
+    seen = {"127.0.0.1"}
+    infos = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET, socket.SOCK_STREAM)
+    for info in infos:
+        ip = info[4][0]
+        if not ip or ip.startswith("127.") or ip in seen:
+            continue
+        seen.add(ip)
+        hosts.append(ip)
+    return hosts
+
+
 def assert_services_stopped(
     host: str = "127.0.0.1",
     ports: Sequence[int] = _DEFAULT_PORTS,
     probe: Optional[Callable[[str, int], bool]] = None,
 ) -> None:
-    """确认指定端口均未监听；任一占用则失败。"""
-    checker = probe if probe is not None else _default_port_probe
+    """确认指定端口均未监听；任一占用或不确定错误则失败。
+
+    - 注入 probe(host, port) 时：保持原注入契约，仅按传入 host 与 ports 调用。
+    - probe=None 时：host 不再缩窄安全面；对每个端口覆盖 127.0.0.1 与本机已分配
+      非回环 IPv4。仅 ConnectionRefused 为空闲；其它探测/枚举异常均为 BackupError。
+    """
     busy: List[int] = []
-    for port in ports:
+
+    if probe is not None:
+        for port in ports:
+            try:
+                if probe(host, int(port)):
+                    busy.append(int(port))
+            except Exception as exc:
+                raise BackupError(f"无法探测服务端口 {port}") from exc
+    else:
         try:
-            if checker(host, int(port)):
-                busy.append(int(port))
+            candidates = _local_ipv4_probe_hosts()
+        except BackupError:
+            raise
         except Exception as exc:
-            raise BackupError(f"无法探测服务端口 {port}") from exc
+            raise BackupError("无法枚举本机地址以确认服务已停止") from exc
+        for port in ports:
+            port_i = int(port)
+            for candidate in candidates:
+                try:
+                    if _default_port_probe(candidate, port_i):
+                        busy.append(port_i)
+                        break
+                except BackupError:
+                    raise
+                except Exception as exc:
+                    raise BackupError(f"无法探测服务端口 {port_i}") from exc
+
     if busy:
         ports_text = "、".join(str(p) for p in busy)
         raise BackupError(
