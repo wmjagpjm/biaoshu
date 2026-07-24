@@ -10728,6 +10728,7 @@ def test_g13_httpx_log_suppress_and_restore(
     finally 只移除该 filter，logger level 全量原值。
     并发：旁路线程 sentinel 日志仍可见；
     成功 + POST/PUT/poll/ZIP + cloud code!=0 + state=failed 均扫 caplog 与异常链。
+    另：httpcore.connection / httpcore.http11 子 logger 同步隐私红门与全量快照恢复。
     """
     mod = _load_client()
     run = _get_run_fn(mod)
@@ -10735,10 +10736,41 @@ def test_g13_httpx_log_suppress_and_restore(
     p = _write_temp_source(tmp_path, ORIGINAL_BASENAME_A, b"%PDF")
     httpx_logger = logging.getLogger("httpx")
     httpcore_logger = logging.getLogger("httpcore")
+    hc_conn_logger = logging.getLogger("httpcore.connection")
+    hc_http11_logger = logging.getLogger("httpcore.http11")
     prev_httpx = httpx_logger.level
     prev_httpcore = httpcore_logger.level
     prev_httpx_filters = list(httpx_logger.filters)
     prev_httpcore_filters = list(httpcore_logger.filters)
+
+    def _snap_logger_full(lg: logging.Logger) -> dict[str, object]:
+        # 子 logger 全量快照：level/disabled/propagate/filters/handlers
+        return {
+            "level": lg.level,
+            "disabled": lg.disabled,
+            "propagate": lg.propagate,
+            "filters": list(lg.filters),
+            "handlers": list(lg.handlers),
+        }
+
+    prev_hc_conn = _snap_logger_full(hc_conn_logger)
+    prev_hc_http11 = _snap_logger_full(hc_http11_logger)
+
+    def _assert_sub_logger_restored(
+        lg: logging.Logger, snap: dict[str, object], name: str
+    ) -> None:
+        assert lg.level == snap["level"], (
+            f"业务红：{name} level 必须原值 {snap['level']} actual={lg.level}"
+        )
+        assert lg.disabled == snap["disabled"], (
+            f"业务红：{name} disabled 必须原值 {snap['disabled']} actual={lg.disabled}"
+        )
+        assert lg.propagate == snap["propagate"], (
+            f"业务红：{name} propagate 必须原值 {snap['propagate']} actual={lg.propagate}"
+        )
+        assert list(lg.filters) == list(snap["filters"]), (
+            f"业务红：{name} filters 必须 finally 恢复"
+        )
 
     def _assert_restored() -> None:
         assert httpx_logger.level == prev_httpx, (
@@ -10753,6 +10785,10 @@ def test_g13_httpx_log_suppress_and_restore(
         )
         assert list(httpcore_logger.filters) == prev_httpcore_filters, (
             "业务红：httpcore filters 必须 finally 恢复"
+        )
+        _assert_sub_logger_restored(hc_conn_logger, prev_hc_conn, "httpcore.connection")
+        _assert_sub_logger_restored(
+            hc_http11_logger, prev_hc_http11, "httpcore.http11"
         )
 
     def _scan_exc_and_log(exc: BaseException, text: str, frags: list[str]) -> None:
@@ -10774,6 +10810,8 @@ def test_g13_httpx_log_suppress_and_restore(
 
     httpx_hits: list[str] = []
     httpcore_hits: list[str] = []
+    hc_conn_hits: list[str] = []
+    hc_http11_hits: list[str] = []
 
     class _SideHandler(logging.Handler):
         def __init__(self, bucket: list[str]):
@@ -10785,8 +10823,12 @@ def test_g13_httpx_log_suppress_and_restore(
 
     hx_side = _SideHandler(httpx_hits)
     hc_side = _SideHandler(httpcore_hits)
+    hc_conn_side = _SideHandler(hc_conn_hits)
+    hc_http11_side = _SideHandler(hc_http11_hits)
     httpx_logger.addHandler(hx_side)
     httpcore_logger.addHandler(hc_side)
+    hc_conn_logger.addHandler(hc_conn_side)
+    hc_http11_logger.addHandler(hc_http11_side)
     stop_flag = threading.Event()
     filter_installed = threading.Event()  # installed
     nonce_emitted = threading.Event()  # emit done
@@ -10805,6 +10847,9 @@ def test_g13_httpx_log_suppress_and_restore(
         if filter_installed.is_set():
             httpx_logger.debug("%s_HTTPX", unique_nonce)
             httpcore_logger.debug("%s_HTTPCORE", unique_nonce)
+            # 子 logger 旁路 sentinel：证明非全局静音
+            hc_conn_logger.debug("%s_HTTPCORE_CONN", unique_nonce)
+            hc_http11_logger.debug("%s_HTTPCORE_HTTP11", unique_nonce)
             nonce_emitted.set()
         while not stop_flag.wait(0.02):
             pass
@@ -10843,6 +10888,9 @@ def test_g13_httpx_log_suppress_and_restore(
                 # 调用线程敏感日志：正确 Filter 应压制本线程记录
                 httpx_logger.debug(call_sensitive)
                 httpcore_logger.debug(call_sensitive)
+                # 子 logger 同 marker：生产须对 httpcore.connection/http11 同步压制
+                hc_conn_logger.debug(call_sensitive)
+                hc_http11_logger.debug(call_sensitive)
             early = base(request)
             if early is not None:
                 return early
@@ -10913,7 +10961,22 @@ def test_g13_httpx_log_suppress_and_restore(
         assert any(unique_nonce in m for m in httpcore_hits), (
             f"业务红：旁路 httpcore nonce 必须可见，hits={httpcore_hits[:8]}"
         )
+        assert any(unique_nonce in m for m in hc_conn_hits), (
+            f"业务红：旁路 httpcore.connection nonce 必须可见，hits={hc_conn_hits[:8]}"
+        )
+        assert any(unique_nonce in m for m in hc_http11_hits), (
+            f"业务红：旁路 httpcore.http11 nonce 必须可见，hits={hc_http11_hits[:8]}"
+        )
         # 调用线程敏感日志被压制：旁路 handler 不得看到 call_sensitive
+        # 子 logger 隐私红门优先（failure-first：当前生产未覆盖子 logger 时应红）
+        assert all(call_sensitive not in m for m in hc_conn_hits), (
+            f"业务红：调用线程敏感 httpcore.connection 日志必须被 Filter 压制，"
+            f"hits={hc_conn_hits}"
+        )
+        assert all(call_sensitive not in m for m in hc_http11_hits), (
+            f"业务红：调用线程敏感 httpcore.http11 日志必须被 Filter 压制，"
+            f"hits={hc_http11_hits}"
+        )
         assert all(call_sensitive not in m for m in httpx_hits), (
             f"业务红：调用线程敏感 httpx 日志必须被 Filter 压制，hits={httpx_hits}"
         )
@@ -11169,6 +11232,38 @@ def test_g13_httpx_log_suppress_and_restore(
         except RuntimeError as e:
             cleanup_errs.append(e)
         try:
+            hc_conn_logger.removeHandler(hc_conn_side)
+        except RuntimeError as e:
+            cleanup_errs.append(e)
+        try:
+            hc_http11_logger.removeHandler(hc_http11_side)
+        except RuntimeError as e:
+            cleanup_errs.append(e)
+
+        def _restore_logger_full(
+            lg: logging.Logger, snap: dict[str, object]
+        ) -> None:
+            # 按 G13 风格精确恢复 handlers/filters/level/disabled/propagate
+            prev_handlers = list(snap["handlers"])  # type: ignore[arg-type]
+            prev_filters = list(snap["filters"])  # type: ignore[arg-type]
+            while lg.handlers and list(lg.handlers) != prev_handlers:
+                lg.removeHandler(lg.handlers[-1])
+            for hd in prev_handlers:
+                if hd not in lg.handlers:
+                    lg.addHandler(hd)
+            while lg.filters and list(lg.filters) != prev_filters:
+                lg.removeFilter(lg.filters[-1])
+            for fl in prev_filters:
+                if fl not in lg.filters:
+                    lg.addFilter(fl)
+            if lg.level != snap["level"]:
+                lg.setLevel(snap["level"])  # type: ignore[arg-type]
+            if lg.disabled != snap["disabled"]:
+                lg.disabled = snap["disabled"]  # type: ignore[assignment]
+            if lg.propagate != snap["propagate"]:
+                lg.propagate = snap["propagate"]  # type: ignore[assignment]
+
+        try:
             # 恢复 filter/level（不抛业务断言优先）
             while httpx_logger.filters and list(httpx_logger.filters) != list(
                 prev_httpx_filters
@@ -11188,6 +11283,8 @@ def test_g13_httpx_log_suppress_and_restore(
                 httpx_logger.setLevel(prev_httpx)
             if httpcore_logger.level != prev_httpcore:
                 httpcore_logger.setLevel(prev_httpcore)
+            _restore_logger_full(hc_conn_logger, prev_hc_conn)
+            _restore_logger_full(hc_http11_logger, prev_hc_http11)
         except RuntimeError as e:
             cleanup_errs.append(e)
         alive = sibling.is_alive()
@@ -11199,4 +11296,11 @@ def test_g13_httpx_log_suppress_and_restore(
             if cleanup_errs:
                 raise cleanup_errs[0]
             _assert_restored()
+            # 子 logger handlers 也须与前态完全一致（side handler 已移除）
+            assert list(hc_conn_logger.handlers) == list(prev_hc_conn["handlers"]), (
+                "业务红：httpcore.connection handlers 必须 finally 恢复"
+            )
+            assert list(hc_http11_logger.handlers) == list(
+                prev_hc_http11["handlers"]
+            ), "业务红：httpcore.http11 handlers 必须 finally 恢复"
         # 若已有业务红，仅尽力清理，不再抛清理断言掩盖首错
