@@ -13,6 +13,10 @@
  *     Q4 根级 DOM/字段空位；Q7 hook.queue 身份 + root.current 重遍历 poll；Q8 GET 逐字段；Q9 moveTarget=""与默认活跃。
  * R9：写后对账 owner 代次 failure-first——unmount/主 refresh 后旧写 finally 零新增双 GET/semantic/写/DOM，
  *     不得把旧 opError 绑新代次或覆盖新列表/错误/选择；浏览器 terminal+continuation 证 settle。
+ * Q10-TEST-FIX：19 定位假红（长 canary / table 状态 / tree move / batch delete / 先勾选再 moveTarget）；
+ *     T1 写前 settled 基线 + AppShell SPA Link unmount；Playwright 由 Codex 执行，Grok 仅静态。
+ * Q11-TEST-FIX：finishedAt 非法 marker 复用 preparePage/assertPrivacyClean 全公开面探针；
+ *     semantic 时序门在 semantic-index.spec.ts（building 后 poll A/B、rebuild 前旧 GET）。
  */
 import {
   expect,
@@ -3201,8 +3205,8 @@ const schemaCases: Array<{
   {
     name: "folder_duplicate_id",
     folders: withSentinelFolders([
-      { id: "dupf", name: "a", parentId: null },
-      { id: "dupf", name: "b", parentId: null },
+      { id: "dupf", name: "FOLDER_DUP_ID_CANARY_A_V1O", parentId: null },
+      { id: "dupf", name: "FOLDER_DUP_ID_CANARY_B_V1O", parentId: null },
     ]),
     docs: [],
   },
@@ -3221,8 +3225,8 @@ const schemaCases: Array<{
   {
     name: "folder_parentId_cycle",
     folders: withSentinelFolders([
-      { id: "f1", name: "a", parentId: "f2" },
-      { id: "f2", name: "b", parentId: "f1" },
+      { id: "f1", name: "FOLDER_CYCLE_CANARY_A_V1O", parentId: "f2" },
+      { id: "f2", name: "FOLDER_CYCLE_CANARY_B_V1O", parentId: "f1" },
     ]),
     docs: [],
   },
@@ -3758,8 +3762,16 @@ const schemaCases: Array<{
     name: "doc_duplicate_id",
     folders: [legalFolderSentinel()],
     docs: withSentinelDocs([
-      makeDoc({ id: "dup", name: "a", folderId: LEGAL_FOLDER_SENTINEL }),
-      makeDoc({ id: "dup", name: "b", folderId: LEGAL_FOLDER_SENTINEL }),
+      makeDoc({
+        id: "dup",
+        name: "DOC_DUP_ID_CANARY_A_V1O",
+        folderId: LEGAL_FOLDER_SENTINEL,
+      }),
+      makeDoc({
+        id: "dup",
+        name: "DOC_DUP_ID_CANARY_B_V1O",
+        folderId: LEGAL_FOLDER_SENTINEL,
+      }),
     ]),
   },
 ];
@@ -3919,7 +3931,12 @@ test.describe("V1-O B schema 与加载失败", () => {
     await openKnowledge(page, probe);
     await expect(page.getByText(SERVER_DOC_A)).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText(LOAD_ERROR)).toHaveCount(0);
-    await expect(page.getByText(STATUS_SAFE_LABEL.parsing)).toBeVisible();
+    // nullable 状态限定 table/row 内 status pill，禁止全页 getByText 命中筛选 option
+    const row = page.getByRole("row", { name: new RegExp(SERVER_DOC_A) });
+    await expect(row).toBeVisible();
+    await expect(
+      row.locator("td").nth(2).getByText(STATUS_SAFE_LABEL.parsing),
+    ).toBeVisible();
 
     // parentId null / 缺失：均为树列表直接子按钮（根级），禁止仅文字可见
     const treeList = page.locator(".kb-folder-tree__list");
@@ -3936,9 +3953,6 @@ test.describe("V1-O B schema 与加载失败", () => {
         hasText: "PARENTID_KEY_MISSING_ROOT_V1O",
       }),
     ).toHaveCount(0);
-
-    const row = page.getByRole("row", { name: new RegExp(SERVER_DOC_A) });
-    await expect(row).toBeVisible();
     // sizeLabel: null → 资料列 mono 尺寸块精确不存在
     const nameCell = row.locator("td").nth(1);
     await expect(nameCell.locator("div.mono")).toHaveCount(0);
@@ -4220,8 +4234,12 @@ async function assertWriteEntryDisabledOrHidden(page: Page) {
   await expect(rebuild).toBeVisible();
   await expect(rebuild).toBeDisabled();
 
-  const moveBtn = page.getByRole("button", { name: /^移动$/ });
-  const deleteBtn = page.getByRole("button", { name: /^删除$/ });
+  const moveBtn = page.locator(".kb-batch-bar").getByRole("button", {
+    name: /^移动$/,
+  });
+  const deleteBtn = page.locator(".kb-batch-bar").getByRole("button", {
+    name: /^删除$/,
+  });
   if ((await moveBtn.count()) > 0) {
     await expect(moveBtn).toBeDisabled();
   }
@@ -4363,7 +4381,10 @@ async function triggerMutation(
     await page.getByRole("checkbox", { name: `选择 ${SERVER_DOC_A}` }).check();
     await page.getByRole("checkbox", { name: `选择 ${SERVER_DOC_B}` }).check();
     await page.getByLabel("移入文件夹").selectOption(FLD_ARCHIVE);
-    await page.getByRole("button", { name: /移动/ }).click();
+    await page
+      .locator(".kb-batch-bar")
+      .getByRole("button", { name: /移动/ })
+      .click();
     return;
   }
   if (kind === "delete") {
@@ -4372,7 +4393,11 @@ async function triggerMutation(
       await page.getByRole("checkbox", { name: `选择 ${SERVER_DOC_B}` }).check();
       await page.getByRole("checkbox", { name: `选择 ${SERVER_DOC_C}` }).check();
     }
-    await page.getByRole("button", { name: /^删除$/ }).click();
+    // 批量删除限定 .kb-batch-bar，禁止与行内 title=删除 图标 strict 双命中
+    await page
+      .locator(".kb-batch-bar")
+      .getByRole("button", { name: /^删除$/ })
+      .click();
     return;
   }
   await page
@@ -4529,7 +4554,9 @@ async function attemptSecondLockedEntry(
   }
 
   if (second === "move") {
-    const btn = page.getByRole("button", { name: /移动/ });
+    const btn = page.locator(".kb-batch-bar").getByRole("button", {
+      name: /移动/,
+    });
     const state = await classifyEntryState(btn);
     assertExclusiveEntryState(state);
     if (state === "missing" || state === "hidden") {
@@ -4551,7 +4578,10 @@ async function attemptSecondLockedEntry(
   }
 
   if (second === "delete") {
-    const btn = page.getByRole("button", { name: /^删除$/ });
+    // 限定 .kb-batch-bar，避免与行内删除图标双命中
+    const btn = page.locator(".kb-batch-bar").getByRole("button", {
+      name: /^删除$/,
+    });
     const state = await classifyEntryState(btn);
     assertExclusiveEntryState(state);
     if (state === "missing" || state === "hidden") {
@@ -4705,7 +4735,12 @@ async function runMutationCase(
   const getDocB = reconD[1]!;
   await expect(page.getByText(reconNameA)).toBeVisible({ timeout: 10_000 });
   await expect(page.getByText(reconNameB)).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByText(reconFolder)).toBeVisible();
+  // move 对账 folder 名限定 folder tree button，禁止与 batch select option 双命中
+  await expect(
+    page
+      .locator(".kb-folder-tree")
+      .getByRole("button", { name: reconFolder }),
+  ).toBeVisible();
   // 写响应专属残留门（probe 自身值不作 UI 消费证明）
   await expect(page.getByText(UPLOAD_SERVER_NAME)).toHaveCount(0);
   await expect(page.getByText(UPLOAD_CLIENT_NAME)).toHaveCount(0);
@@ -4786,7 +4821,10 @@ test.describe("V1-O D 五类 mutation 独立参数化", () => {
     await page.getByRole("checkbox", { name: "全选当前列表" }).check();
     const folderBefore = probe.folderGets;
     const docBefore = probe.docGets;
-    await page.getByRole("button", { name: /^删除$/ }).click();
+    await page
+      .locator(".kb-batch-bar")
+      .getByRole("button", { name: /^删除$/ })
+      .click();
 
     await expect(page.getByText(DELETE_ERR)).toBeVisible({ timeout: 10_000 });
     const deletes = probe.writes.filter((w) => w.method === "DELETE");
@@ -5018,7 +5056,10 @@ test.describe("V1-O D3 move moved 矩阵", () => {
       const folderBefore = probe.folderGets;
       const docBefore = probe.docGets;
       await page.getByLabel("移入文件夹").selectOption(FLD_ARCHIVE);
-      await page.getByRole("button", { name: /移动/ }).click();
+      await page
+        .locator(".kb-batch-bar")
+        .getByRole("button", { name: /移动/ })
+        .click();
 
       await expect
         .poll(
@@ -5196,7 +5237,10 @@ test.describe("V1-O D3 move moved 矩阵", () => {
       })
       .toEqual([DOC_A, DOC_B, DOC_A]);
 
-    await page.getByRole("button", { name: /移动/ }).click();
+    await page
+      .locator(".kb-batch-bar")
+      .getByRole("button", { name: /移动/ })
+      .click();
     await expect
       .poll(() =>
         writeCount(
@@ -5337,7 +5381,10 @@ test.describe("V1-O E 成功写链服务端真值", () => {
       .getByRole("checkbox", { name: `选择 ${reconDoc.name}` })
       .check();
     await page.getByLabel("移入文件夹").selectOption(FLD_INBOX);
-    await page.getByRole("button", { name: /移动/ }).click();
+    await page
+      .locator(".kb-batch-bar")
+      .getByRole("button", { name: /移动/ })
+      .click();
     await expect
       .poll(() => {
         const m = probe.writes.find(
@@ -5352,7 +5399,10 @@ test.describe("V1-O E 成功写链服务端真值", () => {
     await page
       .getByRole("checkbox", { name: `选择 ${reconDoc.name}` })
       .check();
-    await page.getByRole("button", { name: /^删除$/ }).click();
+    await page
+      .locator(".kb-batch-bar")
+      .getByRole("button", { name: /^删除$/ })
+      .click();
     await expect
       .poll(() =>
         probe.writes.some(
@@ -5769,6 +5819,26 @@ test.describe("V1-O R9 写后对账 owner 代次", () => {
     await openKnowledge(page, probe);
     await expect(page.getByText(SERVER_DOC_A)).toBeVisible({ timeout: 15_000 });
 
+    // 写前：continuation barrier + 初始 folders/docs 全 settled（禁止未 settle 基线误红）
+    await continuationBarrier(page);
+    await expect
+      .poll(
+        () =>
+          probe.folderGetArrived > 0 &&
+          probe.folderGetArrived === probe.folderGetFulfilled,
+        { timeout: 15_000 },
+      )
+      .toBe(true);
+    await expect
+      .poll(
+        () =>
+          probe.docGetArrived > 0 &&
+          probe.docGetArrived === probe.docGetFulfilled,
+        { timeout: 15_000 },
+      )
+      .toBe(true);
+    await businessContinuationBarrier(page);
+
     // 真实 UI create 入口；POST 必须真实 arrived 且 hold（禁止 route 冒充写到达）
     const actionPromise = triggerMutation(page, "create");
     await expect
@@ -5781,11 +5851,15 @@ test.describe("V1-O R9 写后对账 owner 代次", () => {
     expect(hold.released).toBe(false);
     expect(probe.reconcileArmed).toBe(true);
 
-    // 释放/卸载前冻结：folders/docs arrived/settled、semantic、写、业务 API、DOM
+    // 写已 hold 后冻结基线：folders/docs arrived/settled、semantic、写、业务 API、DOM
     const baseArrivedF = probe.folderGetArrived;
     const baseArrivedD = probe.docGetArrived;
     const baseSettledF = probe.folderGetFulfilled;
     const baseSettledD = probe.docGetFulfilled;
+    expect(baseArrivedF).toBe(baseSettledF);
+    expect(baseArrivedD).toBe(baseSettledD);
+    expect(baseArrivedF).toBeGreaterThan(0);
+    expect(baseArrivedD).toBeGreaterThan(0);
     const baseFolderGets = probe.folderGets;
     const baseDocGets = probe.docGets;
     const baseSemantic = probe.gets.filter((g) =>
@@ -5802,21 +5876,26 @@ test.describe("V1-O R9 写后对账 owner 代次", () => {
     const baseDom = await collectDomExport(page);
     expect(baseDom.includes("OWNER_UNMOUNT_STALE_DOC")).toBe(false);
 
-    // 导航卸载前安装浏览器写终态门；卸载后释放旧 POST
+    // 卸载前安装浏览器写终态门；用 AppShell 真实 SPA 侧栏 Link 离开（禁止 page.goto 整页卸载）
     const writeTerminal = armBrowserRouteTerminal(
       page,
       "/api/knowledge/folders",
       "either",
       "POST",
     );
-    await page.goto("/");
-    await expect(page.getByRole("heading", { name: "知识库" })).toHaveCount(0);
+    const spaLeave = page.getByRole("link", { name: "我的项目" });
+    await expect(spaLeave).toBeVisible({ timeout: 10_000 });
+    await spaLeave.click();
+    // 确认 KnowledgeBasePage 主 heading 卸载（侧栏「知识库」Link 仍可存在）
+    await expect(page.getByRole("heading", { name: "知识库" })).toHaveCount(0, {
+      timeout: 15_000,
+    });
     hold.release();
     probe.writeHoldGate = null;
     const writeTerm = await writeTerminal;
     // 与 unmount 门一致：终态仅 response 或 requestfailed（禁 expect 内 || 宽放）
     expect(["response", "requestfailed"]).toContain(writeTerm);
-    // 旧写真实 settle：浏览器 terminal + 业务 continuation（禁 sleep/仅 DOM）
+    // 旧写真实 settle：浏览器 terminal + 业务 continuation（禁 sleep/仅 DOM/硬编码请求数）
     await businessContinuationBarrier(page);
 
     // finally 零新增 folders/docs 对账 GET（精确差值，非 >=）
@@ -5833,7 +5912,7 @@ test.describe("V1-O R9 写后对账 owner 代次", () => {
     ).toBe(0);
     expect(probe.writes.length - baseWrite).toBe(0);
     expect(probe.writeArrived.length - baseWriteArrived).toBe(0);
-    // 业务 API 与导航 document 分账：knowledge/cards 精确 0 增长
+    // 业务 API 分账：knowledge/cards 精确 0 增长（SPA 导航无 document 卸载要求）
     const kbApiAfter = probe.allRequests.filter(
       (r) =>
         r.resourceKind === "api" &&
@@ -5841,9 +5920,6 @@ test.describe("V1-O R9 写后对账 owner 代次", () => {
           r.path.startsWith("/api/cards")),
     ).length;
     expect(kbApiAfter - baseKbApi).toBe(0);
-    expect(
-      probe.allRequests.some((r) => r.resourceKind === "document"),
-    ).toBe(true);
     // 零 DOM 污染
     await expect(page.getByText("OWNER_UNMOUNT_STALE_DOC")).toHaveCount(0);
     await expect(page.getByText("OWNER_UNMOUNT_STALE_FOLDER")).toHaveCount(0);
@@ -5863,19 +5939,19 @@ test.describe("V1-O G 选择清理与 fail-closed", () => {
     await openKnowledge(page, probe);
     await expect(page.getByText(SERVER_DOC_A)).toBeVisible({ timeout: 15_000 });
 
-    // 两个 folder 控件必须存在：树侧 selectedFolderId + 移入 moveTarget
+    // 树侧 folder 控件先可见
     const treeInbox = page.getByRole("button", { name: SERVER_FOLDER_INBOX });
     const treeArchive = page.getByRole("button", { name: SERVER_FOLDER_ARCHIVE });
-    const moveTarget = page.getByLabel("移入文件夹");
     await expect(treeInbox).toBeVisible();
     await expect(treeArchive).toBeVisible();
-    await expect(moveTarget).toHaveCount(1);
-    await expect(moveTarget).toBeVisible();
 
-    // 先勾选 A/B（在收件箱/全部视图），moveTarget=归档
+    // 先勾选 A/B 使 batch-bar 渲染，再断言 moveTarget（Page 仅 selectedIds>0 时挂载）
     await treeInbox.click();
     await page.getByRole("checkbox", { name: `选择 ${SERVER_DOC_A}` }).check();
     await page.getByRole("checkbox", { name: `选择 ${SERVER_DOC_B}` }).check();
+    const moveTarget = page.getByLabel("移入文件夹");
+    await expect(moveTarget).toHaveCount(1);
+    await expect(moveTarget).toBeVisible();
     await moveTarget.selectOption(FLD_ARCHIVE);
     // stale selectedFolderId=归档（即将消失）
     await treeArchive.click();
@@ -5985,6 +6061,50 @@ test.describe("V1-O G 选择清理与 fail-closed", () => {
     expect(
       probe.allRequests.some((r) => r.url.includes("EXT_V1O_CANARY_9f3a")),
     ).toBe(true);
+    await assertPrivacyClean(page, probe, consoleCol);
+  });
+
+  /**
+   * Q11-TEST-FIX / Q4：finishedAt 含 path+apiKey 与统一 SECRET 对齐的 marker 时，
+   * 精确显示「—」，且复用 preparePage/assertPrivacyClean 全公开面零泄漏。
+   * semantic-index.spec.ts 保留独立精确「—」窄面；本用例为权威全公开面。
+   */
+  test("finishedAt 非法 marker：精确 — + preparePage/assertPrivacyClean 全公开面", async ({
+    page,
+  }) => {
+    // finishedAt 注入：path + 统一 SECRET（与 secretBlobsFromText / scanAll 对齐）
+    const illegalFinishedAt = `C:\\Users\\secret\\models\\bge-cache ${SECRET}`;
+    const consoleCol = collectConsole(page);
+    const probe = emptyProbe({
+      semantic: baseSemantic({
+        id: "idx_dirty_finished_v1o",
+        status: "active",
+        errorCode: null,
+        dimension: 512,
+        totalChunks: 4,
+        embeddedChunks: 4,
+        chunkCount: 4,
+        modelFingerprint: "fp_dirty_finished",
+        finishedAt: illegalFinishedAt,
+      }),
+    });
+    await preparePage(page, probe, { poison: true });
+    await openKnowledge(page, probe);
+
+    await expect(page.getByText(SERVER_DOC_A)).toBeVisible({ timeout: 15_000 });
+    const panel = page.getByTestId("semantic-index-panel");
+    await expect(panel).toBeVisible({ timeout: 10_000 });
+    const finished = panel.getByTestId("semantic-index-finished");
+    await expect(finished).toBeVisible({ timeout: 10_000 });
+    // 非法 finishedAt 精确固定安全占位
+    await expect(finished).toHaveText("—");
+    await expect(finished).not.toContainText("sk-v1o-leaked");
+    await expect(finished).not.toContainText("C:\\Users\\secret");
+    await expect(finished).not.toContainText(SECRET);
+    await expect(panel).not.toContainText(SECRET);
+    await expect(panel).not.toContainText("sk-v1o-leaked");
+
+    // 权威全公开面：request / console args drain / DOM 历史 / Storage / IDB / Cookie
     await assertPrivacyClean(page, probe, consoleCol);
   });
 });

@@ -15,7 +15,19 @@
 > **R5-FINAL 返修授权：** task=`msg_4ad902ba574145568ea219dd665e5ee2`（Q1–Q10 集中 test-only；Q17 synthetic 冲突 NO 不混入；禁止本代理跑 Playwright）。
 > **R6-FIX 返修授权：** task=`msg_0d71b9b59aa9438da2467eb9cd8e37f1`（七项确认后最终集中 test-only；依据 Codex Q `msg_c1bfb70021da43fdad97783b018b07a8` + Grok YES×7 `msg_5b5635c73e5f49539fe41c3db278d57a`；禁止本代理跑 Playwright）。
 > **Codex failure-first：** 144 项，`134 failed / 10 passed`，29.9 分钟；其中自守卫两处宽 OR 经 question=`msg_65e1f044a2624033b800a572d60788f0`、YES=`msg_d4aaf61379be4dfda5084f88341e19b9`、task=`msg_e8ba8c78024c4f19aaa5c539fe8c9c61` 修复，聚焦复验 `1 passed / 7.2s`；禁止重复完整 failure-first。
-> **本阶段可写：** 本契约、实施计划、`frontend/e2e/knowledge-doc-server-truth.spec.ts`、`frontend/e2e/semantic-index.spec.ts`（仅收紧文档失败语义与注释）。生产 hook/page 另授权。
+> **本阶段可写：** 本契约、实施计划、`frontend/e2e/knowledge-doc-server-truth.spec.ts`、`frontend/e2e/semantic-index.spec.ts`。生产 hook/page 另授权。
+> **Q10-TEST-FIX（test-first 集中返修）：** task=`msg_909dab0172744ceb88872b24d51986a1`；前置双方确认 Q1–Q4 `msg_f1551bd6111d446686c724959f957e20`/`msg_39fc38d822b34630b3169f4f4ce4dc81`、Q3a/Q3b/Q5 `msg_a6688493f79642a8a55d6a8be5e3ce65`/`msg_226bf0eab0824e6091c9b1500f2fca38`、Q5 增补/Q6 `msg_dfd69e9fb45b4b55890f77a7803e3900`/`msg_2f7dac2ba07349f4b9c0b4748d6722c5`。
+> - **test-only 节点：** ① 19 定位/顺序假红（三处单字符 badSentinel→唯一长 canary；nullable 状态限定 table/row；move 对账 folder 限定 tree button；delete 限定 `.kb-batch-bar`；选择清理先勾选再断 moveTarget）；② T1 写前 continuation + folders/docs `arrived==fulfilled` 且各>0 后冻结基线，AppShell 真实 SPA 侧栏 Link 离开并确认 heading 卸载后再释放旧写，response/requestfailed 收口 + knowledge/semantic/DOM/写精确零增量；③ semantic 红门：同代 GET A/B 逆序、同 tick 双 rebuild 精确一 POST、旧 GET 不得覆盖 rebuild building、building 后轮询 GET 503 保 building+继续轮询+固定安全错误；④ finishedAt 非法 path/apiKey marker → 精确「—」+ 公开表面零 marker。
+> - **未宣称 production 完成；** production 两文件 `useKnowledgeBase.ts` / `KnowledgeBasePage.tsx` 本任务未授权、须逐字节保留。
+> - **did-not-run：** Playwright / 浏览器 / Vite / uvicorn / pytest / 端口 / 真实数据 / 网络 / Git add|commit|push|stash|reset|checkout。Grok 仅一次 TS compiler API parse/transpile + `git diff --check`/`status`/四文件哈希。
+> **Q11-TEST-FIX（四项时序与隐私门返修）：** task=`msg_20322d1b0a7c43ceb28d2e062246f8d1`；前置 Codex question `msg_8d96ac331bd24203b769f0ca22c6aaea` + Grok A canonical YES `msg_f7719cb11b144f5281af5f534b43d0ee`。工作树 `biaoshu-v1o-prod` @ `collab/v1o-production` HEAD `bff8b26`；**production 未授权、须逐字节保留**。
+> - **一次关闭 test-only：** ① Q1 确定业务路径先进入 building，再 hold 同代两个 poll GET，禁止依赖 StrictMode 第二请求；② Q2 fulfill B 后用 B 唯一 DOM 状态证明已提交，再释放 A，终态仍 B；③ Q3 真正 hold rebuild 前已到达的 semantic GET，building 返回并 DOM 提交后再释放旧 GET，禁止拿 POST 后 poll 冒充；④ Q4 finishedAt marker 复用 knowledge 主 spec `preparePage`/`assertPrivacyClean` 全公开面探针（统一 SECRET 对齐）；semantic-index 保留精确「—」窄面；building 后 503 仅宣称 panel/body 实际覆盖。
+> - **不得弱化：** 已确认有效的 19 locator、T1 settled+SPA unmount、双 rebuild 单飞红门、building 后 503 继续轮询门。
+> - **未宣称 production 完成；** did-not-run 同 Q10（Playwright/Vite/uvicorn/pytest/端口/真实数据/网络/Git 写）。Grok 仅一次 TS compiler API parse/transpile + `git diff --check`/`status`/四文件哈希。
+> **Q12-TEST-FIX（后续 poll 掩盖门返修）：** 初轮 task=`msg_3109bca3d57f40c1b057c927b1a89d61`；**最终返修授权** task=`msg_d9ed563e706c4ec8ba3da22872325eac`；前置 Codex question `msg_350dea0570364f6582fa61fc579821d6` + Grok A Q1/Q2 YES `msg_338f4d763c584e368ea197c303818f0e`。工作树 `biaoshu-v1o-prod` @ HEAD `bff8b26`；**production 未授权、须逐字节保留**；**冻结** `knowledge-doc-server-truth.spec.ts`（保留 Q4 权威探针）与 production 两文件。
+> - **一次关闭 test-only（仅 `semantic-index.spec.ts` + 本契约 + 计划）：** ① 同代 A/B：B DOM 9/9 commit 后 hold **全部**后续 poll（含第 3+，禁止立即回 B）；释放 A 前 arm 精确 response terminal；等 A terminal + 业务 continuation；在后续 poll 全挂起窗口用 **`page.evaluate` 一次性**读取 status/counts/degrade 等 DOM 快照，精确仍 B（ready、9/9、非 not_built/building）；finally 释放/abort 全部 held。② rebuild 旧 GET：POST 后 poll **全 hold**；释放 click 前已到达的 pre-rebuild 旧 GET 并等**各** terminal+continuation；以 **held post poll >0**（禁止 empty.every / `>=0` 恒真）证明未提交窗口；**`page.evaluate` 一次性** snapshot 仍 building 且 rebuild disabled；finally 释放全部 pre/post routes。
+> - **不得弱化：** finishedAt、19 locator、T1、同 tick 双 rebuild、503 保 building、隐私探针，及 Q11 其余节点（确定 business building、同代双 poll、B 9/9 提交后再释 A、旧 GET 在 click 前冻结）。
+> - **未宣称 production 完成；** did-not-run：Playwright/Vite/uvicorn/pytest/端口/真实数据/网络/Git 写。Grok 仅一次 TS compiler API parse/transpile + `git diff --check`/`status`/三可写文件 + 两 production 哈希。
 
 ## 1. 问题真值
 
@@ -308,7 +320,10 @@ cd frontend
 - 有效 failure-first：`144 collected / 134 failed / 10 passed`；其中 1 项测试自身自守卫已关闭，完整套件按纪律不重复，剩余业务红交生产实现关闭。
 - 可写四文件：本契约、`docs/plans/2026-07-23-v1o-knowledge-doc-server-truth-plan.md`、`frontend/e2e/knowledge-doc-server-truth.spec.ts`、`frontend/e2e/semantic-index.spec.ts`。
 - 真实 failure-first 数字与四文件 SHA/bytes 见对应 review_request；生产未改预期业务红。
+- **Q10-TEST-FIX（2026-07-24）：** 关闭 test-only 定位假红 + T1 真值基线/SPA unmount + semantic 竞态/503 红门 + finishedAt 隐私红门；契约/计划同步本节点与引用消息。**Playwright did-not-run**；**不宣称 production 已完成**（category 列、hook request seq/rebuild lock、building 失败保 last-known、formatFinishedAt 非法仅「—」等生产项另授权）。
+- **Q11-TEST-FIX（2026-07-24）：** 四项时序/隐私门返修（building 后同代 poll、B 先 DOM 再释 A、rebuild 前旧 GET hold、finishedAt 全公开面迁主 spec）。**Playwright did-not-run**；production 未改。
+- **Q12-TEST-FIX（2026-07-24）：** 关闭后续 poll 掩盖门。初轮 `msg_3109bca3d57f40c1b057c927b1a89d61`；**最终返修** `msg_d9ed563e706c4ec8ba3da22872325eac`：同代 A/B 后续 poll 全 hold + A terminal/continuation + **`page.evaluate` 一次性** status/counts/degrade 仍 B；rebuild POST 后 poll 全 hold + 旧 GET 各 terminal + **held post poll>0** 窗口 + **`page.evaluate`** 仍 building/disabled；删 >=0 恒真。可写仅 semantic-index + 契约/计划；主 spec 与 production 冻结。**Playwright did-not-run**；**不宣称 production 已完成**。
 
 ### 7.2 后续
 
-- Codex 审查测试与契约 → 静态 PASS 后独立单次 Playwright → 合格后 test-only 提交/转移 → 另 task 授权 hook+page 生产实现 → 复跑至绿 → 文档闭环。
+- Codex 审查本轮 Q12 最终 test-only → 静态 PASS 后独立单次 Playwright failure-first → 合格后 test-only 提交/转移 → 另 task 授权 hook+page 生产实现（含 Q2 category、Q5 semantic 竞态、Q6 finishedAt）→ 复跑至绿 → 文档闭环。
