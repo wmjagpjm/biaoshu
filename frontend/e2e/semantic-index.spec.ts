@@ -1,8 +1,10 @@
 /**
  * 模块：P9C 离线语义索引状态面板 E2E
- * 用途：用 Playwright route 拦截本机 /api/knowledge/semantic-index*，验收未构建/构建中/已就绪/失败降级、固定模型展示、受控错误与 local 回退；不启动真实模型、不触网。
+ * 用途：用 Playwright route 拦截本机 /api/knowledge/semantic-index*，验收未构建/构建中/已就绪/失败降级、固定模型展示与受控错误；不启动真实模型、不触网。
  * 对接：Playwright chromium；前端 5174 + Vite proxy /api；npm run test:e2e:semantic-index。
  * 二次开发：禁止真实模型下载、外网 host、localStorage 伪就绪；勿改 cards/matrix 等既有 spec。
+ * 说明（V1-O）：文档 folders/docs 失败不得再以 “local 回退成功” 绿测；末例断言显式文档失败与零 rebuild。
+ *       未知 /api/knowledge* 与外网 fail-closed 的权威证明由 knowledge-doc-server-truth.spec.ts 承担，本文件不扩改 route 框架。
  */
 import { expect, test, type Page, type Route } from "@playwright/test";
 
@@ -86,7 +88,7 @@ async function installKbRoutes(
       status: number;
       detail: unknown;
     };
-    /** folders/docs 失败以进入 local 回退 */
+    /** folders/docs 失败：文档主链 error（非 local 成功回退） */
     knowledgeDocsFail?: boolean;
   },
 ) {
@@ -158,7 +160,7 @@ async function installKbRoutes(
       return;
     }
 
-    // 知识库文档/文件夹：失败时进入 source=local
+    // 知识库文档/文件夹：失败时由前端进入文档主 error（禁止 local 成功绿路径）
     if (path === "/api/knowledge/folders" && method === "GET") {
       if (opts.knowledgeDocsFail) {
         await json(
@@ -591,9 +593,35 @@ test.describe("P9C 离线语义索引状态面板", () => {
     );
   });
 
-  test("folders/docs API 失败进入 local：不可构建且无伪就绪 localStorage", async ({
+  test("folders/docs API 失败：显式文档失败、语义不可构建、零伪就绪、旧 docs 键原值不变", async ({
     page,
   }) => {
+    const DOCS_LS_KEY = "biaoshu.knowledgeBase.docs.v1";
+    const LOAD_ERROR = "知识库文档加载失败，请稍后重试";
+    const PRESET_DOCS_VALUE = JSON.stringify({
+      folders: [{ id: "fld_preset", name: "预置夹", parentId: null }],
+      docs: [
+        {
+          id: "kb_preset",
+          name: "PRESET_DOCS_KEY_MUST_STAY.txt",
+          tags: ["preset"],
+          chunks: 1,
+          updated: "preset",
+          updatedAt: "2020-01-01T00:00:00.000Z",
+          category: "preset",
+          folderId: "fld_preset",
+          status: "ready",
+        },
+      ],
+    });
+
+    await page.addInitScript(
+      ({ key, value }) => {
+        window.localStorage.setItem(key, value);
+      },
+      { key: DOCS_LS_KEY, value: PRESET_DOCS_VALUE },
+    );
+
     let state = baseIndex({
       status: "active",
       errorCode: null,
@@ -610,12 +638,21 @@ test.describe("P9C 离线语义索引状态面板", () => {
     await openKnowledgeBase(page);
     const panel = page.getByTestId("semantic-index-panel");
 
-    // 本地演示 / 不可构建
-    await expect(panel.getByTestId("semantic-index-status")).toContainText(
-      /本地演示|不可构建/,
+    // V1-O：文档主失败固定文案；禁止 local 成功暗示与 mock 文档真值
+    await expect(page.getByText(LOAD_ERROR)).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator("body")).not.toContainText("离线本地演示");
+    await expect(page.locator("body")).not.toContainText("本地演示");
+    await expect(page.locator("body")).not.toContainText(
+      "PRESET_DOCS_KEY_MUST_STAY",
     );
-    await expect(panel.getByTestId("semantic-index-degrade")).toContainText(
-      /本地演示|无法构建/,
+    await expect(page.locator("body")).not.toContainText(
+      "智慧交通同类业绩汇编",
+    );
+    await expect(page.getByText("知识库暂无文档")).toHaveCount(0);
+
+    // 语义不可构建：零 rebuild；状态不得伪造成已就绪；上传等写入口不得依赖 local
+    await expect(panel.getByTestId("semantic-index-status")).not.toContainText(
+      /已就绪|就绪/,
     );
     await expect(panel.getByTestId("semantic-index-model")).toHaveText(
       FIXED_MODEL,
@@ -623,8 +660,6 @@ test.describe("P9C 离线语义索引状态面板", () => {
 
     const buildBtn = panel.getByTestId("semantic-index-rebuild");
     await expect(buildBtn).toBeDisabled();
-
-    // disabled 按钮即使用 force 点击，也不应发起 rebuild（无 sleep，可观测断言）
     await buildBtn.click({ force: true });
     await expect.poll(() => net.getRebuildHits()).toBe(0);
 
@@ -643,17 +678,20 @@ test.describe("P9C 离线语义索引状态面板", () => {
       ),
     ).toEqual([]);
 
-    const docsCacheRaw = await page.evaluate(() =>
-      localStorage.getItem("biaoshu.knowledgeBase.docs.v1"),
+    // 旧 docs 键原值精确不变（不读不写不删不迁移不上传）
+    const docsCacheRaw = await page.evaluate(
+      (key) => localStorage.getItem(key),
+      DOCS_LS_KEY,
     );
-    if (docsCacheRaw) {
-      expect(docsCacheRaw).not.toMatch(/semanticIndex|semanticStatus|idx_should_not_persist/i);
-    }
+    expect(docsCacheRaw).toBe(PRESET_DOCS_VALUE);
+    expect(docsCacheRaw).not.toMatch(
+      /semanticIndex|semanticStatus|idx_should_not_persist/i,
+    );
 
-    // 既有文档本地入口仍可见
-    await expect(
-      page.getByRole("button", { name: /上传文档/ }),
-    ).toBeVisible();
+    // 敏感 folders/docs detail 不得进入 DOM
+    await expect(page.locator("body")).not.toContainText("sk-leaked");
+    await expect(page.locator("body")).not.toContainText("evil.example");
+
     await expect(page.getByRole("heading", { name: "知识库" })).toBeVisible();
   });
 });
