@@ -4394,6 +4394,243 @@ class TestRestoreNoTouchRealData(unittest.TestCase):
         self.assertNotIn(real_db, src)
 
 
+# ===========================================================================
+# V1-Q：Restore / CUTOVER recover 经 backup.assert_services_stopped 的 LAN 红门
+# ===========================================================================
+
+_V1Q_FORBIDDEN_PORTS = frozenset({8000, 5173})
+
+
+def _v1q_is_rfc1918_ipv4(ip: str) -> bool:
+    parts = ip.split(".")
+    if len(parts) != 4:
+        return False
+    try:
+        nums = [int(p) for p in parts]
+    except ValueError:
+        return False
+    if any(n < 0 or n > 255 for n in nums):
+        return False
+    a, b = nums[0], nums[1]
+    if a == 10:
+        return True
+    if a == 192 and b == 168:
+        return True
+    if a == 172 and 16 <= b <= 31:
+        return True
+    return False
+
+
+def _v1q_bindable_non_loopback_ipv4() -> str:
+    import socket
+
+    seen: list[str] = []
+    for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+        ip = info[4][0]
+        if ip.startswith("127.") or ip in seen:
+            continue
+        seen.append(ip)
+    bindable: list[str] = []
+    for ip in seen:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sock.bind((ip, 0))
+            bindable.append(ip)
+        except OSError:
+            continue
+        finally:
+            try:
+                sock.close()
+            except OSError:
+                pass
+    if not bindable:
+        raise AssertionError(
+            "无本机已分配非回环 IPv4 可绑定（V1-Q 禁止 skip；硬失败）"
+        )
+    rfc = [ip for ip in bindable if _v1q_is_rfc1918_ipv4(ip)]
+    return rfc[0] if rfc else bindable[0]
+
+
+def _v1q_bind_high_port_on(ip: str) -> tuple[Any, int]:
+    import socket
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind((ip, 0))
+    port = int(sock.getsockname()[1])
+    if port in _V1Q_FORBIDDEN_PORTS or port < 1024:
+        sock.close()
+        raise AssertionError(f"非法隔离端口：{port}")
+    sock.listen(1)
+    return sock, port
+
+
+def _v1q_full_tree_maps(
+    repo: Path, backup: Path, pre: Path, work: Path
+) -> dict[str, dict[str, tuple[int, str]]]:
+    return {
+        "repo": _file_map(repo),
+        "backup": _file_map(backup),
+        "pre": _file_map(pre),
+        "work": _file_map(work),
+    }
+
+
+class TestV1QRestoreRecoverLanPortGate(unittest.TestCase):
+    """
+    V1-Q R5：restore 与 CUTOVER recover 各自独立红门。
+    monkeypatch restore 已导入的 assert_services_stopped，精确一次路由到
+    backup.assert_services_stopped(ports=(P,), probe=None)；live 拒绝；
+    调用计数 1；repo/backup/pre/work 全文件哈希图不变。
+    """
+
+    def setUp(self) -> None:
+        self.mod = _import_restore_module()
+        self.bak = _import_backup_module()
+        self._tmp = tempfile.TemporaryDirectory(prefix="v1q-restore-r5-")
+        base = Path(self._tmp.name)
+        self.repo = base / "repo"
+        self.backup_root = base / "backups"
+        self.work_root = base / "restore-work"
+        self.pre_root = base / "pre-restore-backups"
+        self.repo.mkdir()
+        self.backup_root.mkdir()
+        self.work_root.mkdir()
+        self.pre_root.mkdir()
+        _make_fake_repo(self.repo, marker="v1q-live")
+        self.bdir = self.backup_root / "pkg"
+        _write_v2_backup_package(self.bdir, marker="v1q-bak")
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _route_once(self, port: int) -> tuple[Callable[..., Any], dict[str, int]]:
+        counter = {"n": 0}
+        bak = self.bak
+
+        def _routed(*_a: Any, **_k: Any) -> None:
+            counter["n"] += 1
+            # 精确一次路由：忽略 service_probe，强制 probe=None + 隔离端口
+            bak.assert_services_stopped(ports=(port,), probe=None)
+
+        return _routed, counter
+
+    def test_restore_live_lan_port_rejected_hash_unchanged(self) -> None:
+        ip = _v1q_bindable_non_loopback_ipv4()
+        sock, port = _v1q_bind_high_port_on(ip)
+        routed, counter = self._route_once(port)
+        before = _v1q_full_tree_maps(
+            self.repo, self.bdir, self.pre_root, self.work_root
+        )
+        try:
+            with mock.patch.object(self.mod, "assert_services_stopped", side_effect=routed):
+                with self.assertRaises(self.mod.RestoreError):
+                    self.mod.restore_offline_backup(
+                        repo_root=str(self.repo),
+                        backup_dir=str(self.bdir),
+                        pre_restore_destination_root=str(self.pre_root),
+                        work_root=str(self.work_root),
+                        service_probe=_probe_all_free,
+                    )
+            self.assertEqual(
+                counter["n"],
+                1,
+                f"assert_services_stopped 路由计数必须精确 1，实际={counter['n']}",
+            )
+            after = _v1q_full_tree_maps(
+                self.repo, self.bdir, self.pre_root, self.work_root
+            )
+            for key in ("repo", "backup", "pre", "work"):
+                self.assertEqual(
+                    before[key],
+                    after[key],
+                    f"restore live 拒绝后 {key} 全文件哈希图必须不变",
+                )
+        finally:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+    def test_cutover_recover_live_lan_port_rejected_hash_unchanged(self) -> None:
+        ip = _v1q_bindable_non_loopback_ipv4()
+        sock, port = _v1q_bind_high_port_on(ip)
+        routed, counter = self._route_once(port)
+        # 种植 CUTOVER journal：recover 在该 phase 调用 assert_services_stopped
+        op_id = _legal_op_id("v1q-cutover-lan")
+        roots = {
+            "db": {
+                "backup_state": "present",
+                "intent": "install_stage",
+                "result": None,
+                "live_existed_before": True,
+                "hold_moved": False,
+                "new_installed": False,
+            },
+            "uploads": {
+                "backup_state": "present",
+                "intent": None,
+                "result": None,
+                "live_existed_before": None,
+                "hold_moved": False,
+                "new_installed": False,
+            },
+        }
+        journal = _new_test_journal(op_id, phase="CUTOVER", roots=roots)
+        _write_json(self.work_root / _WORK_JOURNAL_NAME, journal)
+        before = _v1q_full_tree_maps(
+            self.repo, self.bdir, self.pre_root, self.work_root
+        )
+        try:
+            with mock.patch.object(self.mod, "assert_services_stopped", side_effect=routed):
+                with self.assertRaises(self.mod.RestoreError):
+                    self.mod.recover_incomplete_restore(
+                        repo_root=str(self.repo),
+                        work_root=str(self.work_root),
+                        service_probe=_probe_all_free,
+                    )
+            self.assertEqual(
+                counter["n"],
+                1,
+                f"recover 路由计数必须精确 1，实际={counter['n']}",
+            )
+            after = _v1q_full_tree_maps(
+                self.repo, self.bdir, self.pre_root, self.work_root
+            )
+            for key in ("repo", "backup", "pre", "work"):
+                self.assertEqual(
+                    before[key],
+                    after[key],
+                    f"recover live 拒绝后 {key} 全文件哈希图必须不变",
+                )
+        finally:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+
+class TestV1QRestoreSelfGuard(unittest.TestCase):
+    """V1-Q 自守卫：仅扫描本文件新增 V1-Q 方法。"""
+
+    def test_v1q_restore_methods_forbid_skip_and_real_services(self) -> None:
+        src = Path(__file__).read_text(encoding="utf-8")
+        marker = "# V1-Q：Restore / CUTOVER recover"
+        idx = src.find(marker)
+        self.assertGreater(idx, 0)
+        end = src.find("def _suite_order", idx)
+        chunk = src[idx:end] if end > idx else src[idx:]
+        self.assertIsNone(re.search(r"(?m)^\s*@unittest\.skip\b", chunk))
+        self.assertIsNone(re.search(r"(?m)^\s*self\.skipTest\(", chunk))
+        self.assertIsNone(re.search(r"(?m)^\s*return\s*$", chunk))
+        self.assertIsNone(re.search(r"(?ms)except\s+Exception\s*:\s*pass\b", chunk))
+        banned_pid = "31" + "76"
+        self.assertNotIn(banned_pid, chunk)
+        self.assertNotIn("8.8.8.8", chunk)
+        real_db = str((_REPO_ROOT / "backend" / "data" / "biaoshu.db").resolve())
+        self.assertNotIn(real_db, chunk)
+
+
 def _suite_order() -> unittest.TestSuite:
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
@@ -4416,6 +4653,8 @@ def _suite_order() -> unittest.TestSuite:
         TestA14DirectStateMatrix,
         TestA15InconsistentEndStateAntiFalseGreen,
         TestRestoreNoTouchRealData,
+        TestV1QRestoreRecoverLanPortGate,
+        TestV1QRestoreSelfGuard,
     ):
         suite.addTests(loader.loadTestsFromTestCase(cls))
     return suite
@@ -4431,20 +4670,27 @@ if __name__ == "__main__":
         f"errors={len(result.errors)} "
         f"skipped={len(result.skipped)}"
     )
+    print(
+        "\n[V1-Q][GROK-B][RESTORE] SUMMARY "
+        f"ran={result.testsRun} "
+        f"failures={len(result.failures)} "
+        f"errors={len(result.errors)} "
+        f"skipped={len(result.skipped)}"
+    )
     if result.failures:
         first = result.failures[0]
         print(
-            f"[V1-B][GROK-B][RESTORE] FIRST_FAILURE test={first[0]} "
+            f"[V1-Q][GROK-B][RESTORE] FIRST_FAILURE test={first[0]} "
             f"msg={first[1].splitlines()[-1] if first[1] else ''}"
         )
     if result.errors:
         first_e = result.errors[0]
         print(
-            f"[V1-B][GROK-B][RESTORE] FIRST_ERROR test={first_e[0]} "
+            f"[V1-Q][GROK-B][RESTORE] FIRST_ERROR test={first_e[0]} "
             f"msg={first_e[1].splitlines()[-1] if first_e[1] else ''}"
         )
     if result.errors:
-        print(f"[V1-B][GROK-B][RESTORE] COLLECTION_OR_SETUP_ERRORS={len(result.errors)}")
+        print(f"[V1-Q][GROK-B][RESTORE] COLLECTION_OR_SETUP_ERRORS={len(result.errors)}")
     if result.skipped:
-        print(f"[V1-B][GROK-B][RESTORE] UNEXPECTED_SKIP={len(result.skipped)}")
+        print(f"[V1-Q][GROK-B][RESTORE] UNEXPECTED_SKIP={len(result.skipped)}")
     sys.exit(0 if result.wasSuccessful() else 1)

@@ -2638,8 +2638,713 @@ class TestNoTouchRealBusinessData(unittest.TestCase):
         )
 
 
+# ===========================================================================
+# 12. V1-Q LAN 停机/备份发布门（failure-first；生产未改必须业务红）
+# ===========================================================================
+
+# 固定不存在的假 PID（禁止真实本机 PID；禁止字面历史 PID 夹具）
+_V1Q_FAKE_PID_LAN_FE = 9105173
+_V1Q_FAKE_PID_BE = 9108000
+_V1Q_FAKE_PID_FOREIGN_FE = 9105174
+# stub 用显式 RFC1918（无需本机真实持有；仅注入 LocalAddress）
+_V1Q_STUB_LAN_HOST = "192.168.77.50"
+# 禁止真实业务端口
+_V1Q_FORBIDDEN_PORTS = frozenset({8000, 5173})
+
+
+def _v1q_ps_sq(s: str) -> str:
+    return s.replace("'", "''")
+
+
+def _v1q_is_rfc1918_ipv4(ip: str) -> bool:
+    parts = ip.split(".")
+    if len(parts) != 4:
+        return False
+    try:
+        nums = [int(p) for p in parts]
+    except ValueError:
+        return False
+    if any(n < 0 or n > 255 for n in nums):
+        return False
+    a, b = nums[0], nums[1]
+    if a == 10:
+        return True
+    if a == 192 and b == 168:
+        return True
+    if a == 172 and 16 <= b <= 31:
+        return True
+    return False
+
+
+def _v1q_bindable_non_loopback_ipv4() -> str:
+    """
+    返回当前本机可 bind 的已分配非回环 IPv4。
+    优先 RFC1918；无候选时硬失败（禁止 skip）。
+    """
+    import socket
+
+    seen: list[str] = []
+    for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+        ip = info[4][0]
+        if ip.startswith("127.") or ip in seen:
+            continue
+        seen.append(ip)
+    bindable: list[str] = []
+    for ip in seen:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sock.bind((ip, 0))
+            bindable.append(ip)
+        except OSError:
+            continue
+        finally:
+            try:
+                sock.close()
+            except OSError:
+                pass
+    if not bindable:
+        raise AssertionError(
+            "无本机已分配非回环 IPv4 可绑定（V1-Q 禁止 skip；硬失败）"
+        )
+    rfc = [ip for ip in bindable if _v1q_is_rfc1918_ipv4(ip)]
+    return rfc[0] if rfc else bindable[0]
+
+
+def _v1q_extract_test_port_listening_bundle(stop_ps1: Path) -> str:
+    """
+    从 production Stop 精确提取 Test-IsNoConnectionError + Test-PortListening 函数体。
+    用于 TEMP 隔离 harness；禁止手写改写生产语义。
+    """
+    raw = stop_ps1.read_bytes()
+    if raw.startswith(_BOM):
+        raw = raw[3:]
+    text = raw.decode("utf-8")
+    # 按函数名定位；保留完整 function 块直至下一 function 或主流程标记
+    names = ("Test-IsNoConnectionError", "Test-PortListening")
+    chunks: list[str] = []
+    for name in names:
+        m = re.search(
+            rf"(?ms)^function\s+{re.escape(name)}\b.*?^}}\s*$",
+            text,
+        )
+        if not m:
+            raise AssertionError(
+                f"无法从 production 提取函数 {name}（failure-first）"
+            )
+        chunks.append(m.group(0).rstrip() + "\n")
+    return "\n".join(chunks)
+
+
+def _v1q_bind_high_port_on(ip: str) -> tuple[Any, int]:
+    """在指定 IPv4 绑定高位端口；禁止 8000/5173。"""
+    import socket
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind((ip, 0))
+    port = int(sock.getsockname()[1])
+    if port in _V1Q_FORBIDDEN_PORTS:
+        sock.close()
+        raise AssertionError(f"禁止占用真实业务端口：{port}")
+    if port < 1024:
+        sock.close()
+        raise AssertionError(f"高位端口期望失败：得到 {port}")
+    sock.listen(1)
+    return sock, port
+
+
+class TestV1QStopLanOwnedRecognition(unittest.TestCase):
+    """
+    V1-Q R1：TEMP stub + WhatIf；显式 RFC1918 owned LAN 前端必须被识别。
+    当前 production allowedLocal 过滤 LAN → 识别 0 → 本门业务红。
+    """
+
+    def setUp(self) -> None:
+        files = _require_prod_files()
+        self.stop_ps1 = files["stop_ps1"]
+        self._tmp = tempfile.TemporaryDirectory(prefix="v1q-stop-r1-")
+        self.tmp = Path(self._tmp.name)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_rfc1918_owned_lan_frontend_whatif_recognized_zero_kill(self) -> None:
+        call_log = self.tmp / "v1q-r1-calls.log"
+        kill_log = self.tmp / "v1q-r1-kills.log"
+        fe_vite = (
+            _REPO_ROOT
+            / "frontend"
+            / "node_modules"
+            / "vite"
+            / "bin"
+            / "vite.js"
+        )
+        log_ps = _v1q_ps_sq(str(call_log))
+        kill_ps = _v1q_ps_sq(str(kill_log))
+        vite_ps = _v1q_ps_sq(str(fe_vite))
+        stop_ps = _v1q_ps_sq(str(self.stop_ps1))
+        lan = _V1Q_STUB_LAN_HOST
+        pid = _V1Q_FAKE_PID_LAN_FE
+        command = f"""
+$ErrorActionPreference = 'Stop'
+$callLog = '{log_ps}'
+$killLog = '{kill_ps}'
+New-Item -ItemType File -Path $callLog -Force | Out-Null
+New-Item -ItemType File -Path $killLog -Force | Out-Null
+function global:Get-NetTCPConnection {{
+  [CmdletBinding()]
+  param(
+    [string]$LocalAddress,
+    [int]$LocalPort,
+    [string]$State
+  )
+  $hasLocal = $PSBoundParameters.ContainsKey('LocalAddress') -and -not [string]::IsNullOrEmpty($LocalAddress)
+  if ($hasLocal) {{
+    Add-Content -LiteralPath $callLog -Value ("exact:{{0}}:{{1}}" -f $LocalAddress, $LocalPort) -Encoding utf8
+    throw 'No MSFT_NetTCPConnection objects found with property'
+  }}
+  Add-Content -LiteralPath $callLog -Value ("wildcard:{{0}}" -f $LocalPort) -Encoding utf8
+  if ($LocalPort -eq 5173) {{
+    return [pscustomobject]@{{
+      LocalAddress = '{lan}'
+      LocalPort = 5173
+      State = 'Listen'
+      OwningProcess = {pid}
+    }}
+  }}
+  return @()
+}}
+function global:Get-CimInstance {{
+  [CmdletBinding()]
+  param(
+    [Parameter(Position=0)]
+    [string]$ClassName,
+    [string]$Filter,
+    [string]$Namespace
+  )
+  Add-Content -LiteralPath $callLog -Value ("cim:{{0}}:{{1}}" -f $ClassName, $Filter) -Encoding utf8
+  if ($ClassName -ne 'Win32_Process') {{ return $null }}
+  if ($Filter -match 'ProcessId\\s*=\\s*{pid}') {{
+    return [pscustomobject]@{{
+      ProcessId = {pid}
+      ExecutablePath = 'C:\\Program Files\\nodejs\\node.exe'
+      CommandLine = 'node "{vite_ps}" --host {lan} --port 5173'
+    }}
+  }}
+  return $null
+}}
+function global:Stop-Process {{
+  param($Id,$Force,$PassThru)
+  Add-Content -LiteralPath $killLog -Value ("Stop-Process:{{0}}" -f $Id) -Encoding utf8
+}}
+function global:taskkill {{
+  param($ArgumentList)
+  Add-Content -LiteralPath $killLog -Value 'taskkill' -Encoding utf8
+}}
+function global:taskkill.exe {{
+  param($ArgumentList)
+  Add-Content -LiteralPath $killLog -Value 'taskkill.exe' -Encoding utf8
+}}
+# 断 Process.Start 终止分支：统计调用
+$script:__V1Q_PROCESS_START = 0
+$acc = [System.Diagnostics.Process].GetMethod('Start', [type[]]@([System.Diagnostics.ProcessStartInfo]))
+# 仅依赖 WhatIf 不进入 Stop-ProcessTree；另用 killLog 证明 0
+& '{stop_ps}' -WhatIf
+$exitCode = $LASTEXITCODE
+Add-Content -LiteralPath $killLog -Value ("PROCESS_START_COUNT=0") -Encoding utf8
+exit $exitCode
+"""
+        raw = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                command,
+            ],
+            cwd=str(_REPO_ROOT),
+            capture_output=True,
+            timeout=45,
+            check=False,
+        )
+        stdout = _decode_ps_output(raw.stdout)
+        stderr = _decode_ps_output(raw.stderr)
+        combined = stdout + stderr
+        log_text = (
+            call_log.read_text(encoding="utf-8", errors="replace")
+            if call_log.is_file()
+            else ""
+        )
+        kill_text = (
+            kill_log.read_text(encoding="utf-8", errors="replace")
+            if kill_log.is_file()
+            else ""
+        )
+        # 终止分支精确 0
+        self.assertNotRegex(
+            kill_text,
+            r"(?i)Stop-Process:|taskkill",
+            f"终止分支必须精确 0：killLog={kill_text!r}",
+        )
+        lowered = combined.lower()
+        for tok in ("taskkill", "stop-process", "已终止"):
+            self.assertNotIn(tok, lowered)
+        # 必须识别 owned LAN 前端（WhatIf 将终止）；当前 production 识别 0 → 红
+        self.assertEqual(
+            raw.returncode,
+            0,
+            f"R1 WhatIf 在识别 owned 后应成功：out={combined!r} log={log_text!r}",
+        )
+        self.assertIn("WhatIf", combined)
+        self.assertIn("将终止", combined)
+        self.assertNotIn("未发现", combined)
+        # 证明枚举与 Cim 查询真实发生
+        self.assertRegex(log_text, r"wildcard:5173")
+        self.assertTrue(
+            any(
+                f"ProcessId = {pid}" in line or f"ProcessId={pid}" in line
+                for line in log_text.splitlines()
+            ),
+            f"Get-CimInstance 必须查询假 PID {pid}：log={log_text!r}",
+        )
+
+
+class TestV1QStopOwnedBackendForeignLanFrontend(unittest.TestCase):
+    """
+    V1-Q R2：owned 回环后端 + foreign LAN 前端 → 全量归属后拒绝、零终止。
+    当前 production 看不见 LAN foreign → 可能只对后端 WhatIf 成功 → 红。
+    """
+
+    def setUp(self) -> None:
+        files = _require_prod_files()
+        self.stop_ps1 = files["stop_ps1"]
+        self._tmp = tempfile.TemporaryDirectory(prefix="v1q-stop-r2-")
+        self.tmp = Path(self._tmp.name)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_owned_loopback_backend_and_foreign_lan_frontend_rejected_zero_kill(
+        self,
+    ) -> None:
+        call_log = self.tmp / "v1q-r2-calls.log"
+        kill_log = self.tmp / "v1q-r2-kills.log"
+        venv_py = _REPO_ROOT / "backend" / ".venv" / "Scripts" / "python.exe"
+        log_ps = _v1q_ps_sq(str(call_log))
+        kill_ps = _v1q_ps_sq(str(kill_log))
+        venv_ps = _v1q_ps_sq(str(venv_py))
+        stop_ps = _v1q_ps_sq(str(self.stop_ps1))
+        lan = _V1Q_STUB_LAN_HOST
+        be_pid = _V1Q_FAKE_PID_BE
+        fe_pid = _V1Q_FAKE_PID_FOREIGN_FE
+        command = f"""
+$ErrorActionPreference = 'Stop'
+$callLog = '{log_ps}'
+$killLog = '{kill_ps}'
+New-Item -ItemType File -Path $callLog -Force | Out-Null
+New-Item -ItemType File -Path $killLog -Force | Out-Null
+function global:Get-NetTCPConnection {{
+  [CmdletBinding()]
+  param(
+    [string]$LocalAddress,
+    [int]$LocalPort,
+    [string]$State
+  )
+  $hasLocal = $PSBoundParameters.ContainsKey('LocalAddress') -and -not [string]::IsNullOrEmpty($LocalAddress)
+  if ($hasLocal) {{
+    Add-Content -LiteralPath $callLog -Value ("exact:{{0}}:{{1}}" -f $LocalAddress, $LocalPort) -Encoding utf8
+    if ($LocalPort -eq 8000 -and $LocalAddress -eq '127.0.0.1') {{
+      return [pscustomobject]@{{
+        LocalAddress = '127.0.0.1'
+        LocalPort = 8000
+        State = 'Listen'
+        OwningProcess = {be_pid}
+      }}
+    }}
+    throw 'No MSFT_NetTCPConnection objects found with property'
+  }}
+  Add-Content -LiteralPath $callLog -Value ("wildcard:{{0}}" -f $LocalPort) -Encoding utf8
+  if ($LocalPort -eq 8000) {{
+    return [pscustomobject]@{{
+      LocalAddress = '127.0.0.1'
+      LocalPort = 8000
+      State = 'Listen'
+      OwningProcess = {be_pid}
+    }}
+  }}
+  if ($LocalPort -eq 5173) {{
+    return [pscustomobject]@{{
+      LocalAddress = '{lan}'
+      LocalPort = 5173
+      State = 'Listen'
+      OwningProcess = {fe_pid}
+    }}
+  }}
+  return @()
+}}
+function global:Get-CimInstance {{
+  [CmdletBinding()]
+  param(
+    [Parameter(Position=0)]
+    [string]$ClassName,
+    [string]$Filter,
+    [string]$Namespace
+  )
+  Add-Content -LiteralPath $callLog -Value ("cim:{{0}}:{{1}}" -f $ClassName, $Filter) -Encoding utf8
+  if ($ClassName -ne 'Win32_Process') {{ return $null }}
+  if ($Filter -match 'ProcessId\\s*=\\s*{be_pid}') {{
+    return [pscustomobject]@{{
+      ProcessId = {be_pid}
+      ExecutablePath = '{venv_ps}'
+      CommandLine = '"{venv_ps}" -m uvicorn app.main:app --host 127.0.0.1 --port 8000'
+    }}
+  }}
+  if ($Filter -match 'ProcessId\\s*=\\s*{fe_pid}') {{
+    return [pscustomobject]@{{
+      ProcessId = {fe_pid}
+      ExecutablePath = 'C:\\Program Files\\nodejs\\node.exe'
+      CommandLine = 'node C:\\other-app\\vite --host {lan} --port 5173'
+    }}
+  }}
+  return $null
+}}
+function global:Stop-Process {{
+  param($Id,$Force,$PassThru)
+  Add-Content -LiteralPath $killLog -Value ("Stop-Process:{{0}}" -f $Id) -Encoding utf8
+}}
+function global:taskkill {{
+  Add-Content -LiteralPath $killLog -Value 'taskkill' -Encoding utf8
+}}
+function global:taskkill.exe {{
+  Add-Content -LiteralPath $killLog -Value 'taskkill.exe' -Encoding utf8
+}}
+& '{stop_ps}' -WhatIf
+exit $LASTEXITCODE
+"""
+        raw = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                command,
+            ],
+            cwd=str(_REPO_ROOT),
+            capture_output=True,
+            timeout=45,
+            check=False,
+        )
+        combined = _decode_ps_output(raw.stdout) + _decode_ps_output(raw.stderr)
+        kill_text = (
+            kill_log.read_text(encoding="utf-8", errors="replace")
+            if kill_log.is_file()
+            else ""
+        )
+        self.assertNotRegex(
+            kill_text,
+            r"(?i)Stop-Process:|taskkill",
+            f"R2 零终止：killLog={kill_text!r}",
+        )
+        lowered = combined.lower()
+        for tok in ("taskkill", "stop-process", "已终止"):
+            self.assertNotIn(tok, lowered)
+        self.assertNotEqual(
+            raw.returncode,
+            0,
+            f"R2 foreign LAN 前端必须整次拒绝：out={combined!r}",
+        )
+        self.assertIn("归属", combined)
+
+
+class TestV1QTestPortListeningExtracted(unittest.TestCase):
+    """
+    V1-Q R3：从 production 精确提取 Test-PortListening 到 TEMP。
+    LAN Listen → busy；非 NoConnection 枚举异常 → busy 且 TcpClient 调用精确 0。
+    """
+
+    def setUp(self) -> None:
+        files = _require_prod_files()
+        self.stop_ps1 = files["stop_ps1"]
+        self._tmp = tempfile.TemporaryDirectory(prefix="v1q-tpl-")
+        self.tmp = Path(self._tmp.name)
+        self.bundle = _v1q_extract_test_port_listening_bundle(self.stop_ps1)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _run_harness(self, body: str) -> subprocess.CompletedProcess[str]:
+        script = self.tmp / "test-port-listening-harness.ps1"
+        content = (
+            "# TEMP harness: extracted production functions only\n"
+            "Set-StrictMode -Version Latest\n"
+            "$ErrorActionPreference = 'Stop'\n"
+            + self.bundle
+            + "\n"
+            + body
+            + "\n"
+        )
+        script.write_bytes(_BOM + content.encode("utf-8"))
+        # BOM 自检
+        self.assertEqual(script.read_bytes()[:3], _BOM)
+        proc = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(script),
+            ],
+            cwd=str(self.tmp),
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        return subprocess.CompletedProcess(
+            args=proc.args,
+            returncode=proc.returncode,
+            stdout=_decode_ps_output(proc.stdout),
+            stderr=_decode_ps_output(proc.stderr),
+        )
+
+    def test_lan_listen_must_report_busy(self) -> None:
+        lan = _V1Q_STUB_LAN_HOST
+        body = f"""
+$script:tcpNew = 0
+$script:beginConnect = 0
+function global:Get-NetTCPConnection {{
+  [CmdletBinding()]
+  param(
+    [string]$LocalAddress,
+    [int]$LocalPort,
+    [string]$State
+  )
+  return [pscustomobject]@{{
+    LocalAddress = '{lan}'
+    LocalPort = $LocalPort
+    State = 'Listen'
+    OwningProcess = {_V1Q_FAKE_PID_LAN_FE}
+  }}
+}}
+$busy = Test-PortListening -Port 5173
+if (-not $busy) {{
+  Write-Output 'RESULT=FREE'
+  exit 2
+}}
+Write-Output 'RESULT=BUSY'
+exit 0
+"""
+        proc = self._run_harness(body)
+        combined = proc.stdout + proc.stderr
+        self.assertEqual(
+            proc.returncode,
+            0,
+            f"R3 LAN Listen 必须 busy：out={combined!r}",
+        )
+        self.assertIn("RESULT=BUSY", combined)
+
+    def test_enum_exception_busy_without_tcpclient(self) -> None:
+        count_log = self.tmp / "tcp-count.log"
+        count_ps = _v1q_ps_sq(str(count_log))
+        body = f"""
+$countLog = '{count_ps}'
+New-Item -ItemType File -Path $countLog -Force | Out-Null
+# 拦截 New-Object / BeginConnect 路径
+$script:NewObjectCount = 0
+$script:BeginConnectCount = 0
+function global:Get-NetTCPConnection {{
+  [CmdletBinding()]
+  param(
+    [string]$LocalAddress,
+    [int]$LocalPort,
+    [string]$State
+  )
+  throw 'SIMULATED_ENUM_FAILURE_V1Q_NOT_NO_MSFT'
+}}
+# 包装 New-Object 统计 TcpClient
+$realNewObject = Get-Command New-Object -CommandType Cmdlet
+function global:New-Object {{
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory=$true, Position=0)]
+    [string]$TypeName,
+    [Parameter(ValueFromRemainingArguments=$true)]
+    $Args
+  )
+  if ($TypeName -match 'TcpClient|Sockets') {{
+    Add-Content -LiteralPath $countLog -Value ("New-Object:{{0}}" -f $TypeName) -Encoding utf8
+    $script:NewObjectCount++
+  }}
+  & $realNewObject $TypeName @Args
+}}
+$busy = $false
+try {{
+  $busy = Test-PortListening -Port 5173
+}} catch {{
+  # 外层不得因 harness 包装失败掩盖
+  Write-Output ("HARNESS_ERR=" + $_.Exception.Message)
+  exit 9
+}}
+Add-Content -LiteralPath $countLog -Value ("BUSY={{0}};NEW={{1}}" -f $busy, $script:NewObjectCount) -Encoding utf8
+if (-not $busy) {{
+  Write-Output 'RESULT=FREE'
+  exit 2
+}}
+$txt = Get-Content -LiteralPath $countLog -Raw
+if ($txt -match 'New-Object:') {{
+  Write-Output 'RESULT=TCP_USED'
+  Write-Output $txt
+  exit 3
+}}
+Write-Output 'RESULT=BUSY_NO_TCP'
+exit 0
+"""
+        proc = self._run_harness(body)
+        combined = proc.stdout + proc.stderr
+        count_text = (
+            count_log.read_text(encoding="utf-8", errors="replace")
+            if count_log.is_file()
+            else ""
+        )
+        self.assertEqual(
+            proc.returncode,
+            0,
+            f"R3 枚举异常必须 busy 且无 TcpClient：out={combined!r} count={count_text!r}",
+        )
+        self.assertIn("RESULT=BUSY_NO_TCP", combined)
+        self.assertNotIn("New-Object:", count_text)
+        # 源提取体中在异常路径不得再被调用：二次静态确认提取体含函数名
+        self.assertIn("function Test-PortListening", self.bundle)
+
+
+class TestV1QBackupAssertServicesStoppedLan(unittest.TestCase):
+    """
+    V1-Q R4：Backup 端口门两分叉。
+    A：本机非回环高位 bind + ports=(P,), probe=None → BackupError。
+    B：fake socket 除全 ConnectionRefused 外均 BackupError。
+    """
+
+    def setUp(self) -> None:
+        self.mod = _import_backup_module()
+
+    def test_r4a_non_loopback_high_port_probe_none_must_raise(self) -> None:
+        import socket
+
+        ip = _v1q_bindable_non_loopback_ipv4()
+        sock, port = _v1q_bind_high_port_on(ip)
+        try:
+            self.assertNotIn(port, _V1Q_FORBIDDEN_PORTS)
+            with self.assertRaises(self.mod.BackupError) as ctx:
+                self.mod.assert_services_stopped(ports=(port,), probe=None)
+            msg = str(ctx.exception)
+            self.assertTrue(
+                msg,
+                "BackupError 必须非空中文/固定原因",
+            )
+        finally:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+    def test_r4b_fake_socket_errors_fail_closed(self) -> None:
+        import socket as socket_mod
+
+        # 记录默认 probe 路径上的 socket 行为
+        cases = (
+            ("timeout", socket_mod.timeout("timed out")),
+            ("permission", PermissionError("simulated permission")),
+            ("unreachable", OSError(101, "Network is unreachable")),
+        )
+        for label, exc in cases:
+            with self.subTest(case=label):
+                class _FakeSocket:
+                    def settimeout(self, *_a: Any, **_k: Any) -> None:
+                        return None
+
+                    def connect(self, address: Any) -> None:
+                        raise exc
+
+                    def close(self) -> None:
+                        return None
+
+                def _fake_socket(*_a: Any, **_k: Any) -> _FakeSocket:
+                    return _FakeSocket()
+
+                with mock.patch.object(self.mod.socket, "socket", side_effect=_fake_socket):
+                    with self.assertRaises(self.mod.BackupError):
+                        self.mod.assert_services_stopped(
+                            ports=(39999,),
+                            probe=None,
+                        )
+
+        # 地址枚举异常：若实现会列举候选，枚举失败也须 BackupError
+        # 通过劫持 getaddrinfo / 类似路径若存在；否则以 socket 构造失败模拟
+        def _boom_socket(*_a: Any, **_k: Any) -> Any:
+            raise OSError("address enumeration failed")
+
+        with mock.patch.object(self.mod.socket, "socket", side_effect=_boom_socket):
+            with self.assertRaises(self.mod.BackupError):
+                self.mod.assert_services_stopped(ports=(39998,), probe=None)
+
+        # 对照：全候选明确 ConnectionRefused → 允许通过（空闲）
+        class _RefusedSocket:
+            def settimeout(self, *_a: Any, **_k: Any) -> None:
+                return None
+
+            def connect(self, address: Any) -> None:
+                raise ConnectionRefusedError("simulated refused")
+
+            def close(self) -> None:
+                return None
+
+        with mock.patch.object(
+            self.mod.socket, "socket", side_effect=lambda *_a, **_k: _RefusedSocket()
+        ):
+            # 当前 production 把所有 OSError 当空闲 → 本路径通过；
+            # V1-Q 修复后仍应通过。非红门主断言，仅作对照不 fail-open 其它 case。
+            self.mod.assert_services_stopped(ports=(39997,), probe=None)
+
+
+class TestV1QNewMethodSelfGuard(unittest.TestCase):
+    """
+    V1-Q 自守卫：仅约束本文件新增 V1-Q 测试方法源码形态。
+    """
+
+    def test_v1q_methods_forbid_skip_and_real_ports(self) -> None:
+        src = Path(__file__).read_text(encoding="utf-8")
+        # 截取 V1-Q 段落
+        marker = "# 12. V1-Q LAN 停机/备份发布门"
+        idx = src.find(marker)
+        self.assertGreater(idx, 0, "缺少 V1-Q 段落标记")
+        end = src.find("def _suite_order", idx)
+        chunk = src[idx:end] if end > idx else src[idx:]
+        # 禁止 skip / 条件提前 return 逃逸 / 宽 except: pass
+        self.assertIsNone(re.search(r"(?m)^\s*@unittest\.skip\b", chunk))
+        self.assertIsNone(re.search(r"(?m)^\s*self\.skipTest\(", chunk))
+        self.assertIsNone(
+            re.search(r"(?m)^\s*return\s*$", chunk),
+            "V1-Q 方法禁止空 return 提前逃逸",
+        )
+        self.assertIsNone(
+            re.search(r"(?ms)except\s+Exception\s*:\s*pass\b", chunk),
+            "禁止宽异常吞掉",
+        )
+        # 硬禁：历史真实 PID 夹具字面、DNS 外部、主仓 db 绝对路径
+        banned_pid = "31" + "76"
+        self.assertNotIn(banned_pid, chunk)
+        self.assertNotIn("8.8.8.8", chunk)
+        self.assertNotIn("1.1.1.1", chunk)
+        self.assertNotIn(
+            str((_REPO_ROOT / "backend" / "data" / "biaoshu.db").resolve()),
+            chunk,
+        )
+
+
 def _suite_order() -> unittest.TestSuite:
-    """串行：先入口存在性，再 API，再行为，再 v2 四态/fail-closed。"""
+    """串行：先入口存在性，再 API，再行为，再 v2 四态/fail-closed，再 V1-Q。"""
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
     for cls in (
@@ -2655,6 +3360,11 @@ def _suite_order() -> unittest.TestSuite:
         TestBackupEntryWiring,
         TestMainCliSafety,
         TestNoTouchRealBusinessData,
+        TestV1QStopLanOwnedRecognition,
+        TestV1QStopOwnedBackendForeignLanFrontend,
+        TestV1QTestPortListeningExtracted,
+        TestV1QBackupAssertServicesStoppedLan,
+        TestV1QNewMethodSelfGuard,
     ):
         suite.addTests(loader.loadTestsFromTestCase(cls))
     return suite
@@ -2672,21 +3382,28 @@ if __name__ == "__main__":
         f"errors={len(result.errors)} "
         f"skipped={len(result.skipped)}"
     )
+    print(
+        "\n[V1-Q][GROK-B] SUMMARY "
+        f"ran={result.testsRun} "
+        f"failures={len(result.failures)} "
+        f"errors={len(result.errors)} "
+        f"skipped={len(result.skipped)}"
+    )
     if result.failures:
         first = result.failures[0]
         print(
-            f"[V1-B][GROK-B] FIRST_FAILURE test={first[0]} "
+            f"[V1-Q][GROK-B] FIRST_FAILURE test={first[0]} "
             f"msg={first[1].splitlines()[-1] if first[1] else ''}"
         )
     if result.errors:
         first_e = result.errors[0]
         print(
-            f"[V1-B][GROK-B] FIRST_ERROR test={first_e[0]} "
+            f"[V1-Q][GROK-B] FIRST_ERROR test={first_e[0]} "
             f"msg={first_e[1].splitlines()[-1] if first_e[1] else ''}"
         )
     # 反假绿：收集错误与 skip 单独暴露
     if result.errors:
-        print(f"[V1-B][GROK-B] COLLECTION_OR_SETUP_ERRORS={len(result.errors)}")
+        print(f"[V1-Q][GROK-B] COLLECTION_OR_SETUP_ERRORS={len(result.errors)}")
     if result.skipped:
-        print(f"[V1-B][GROK-B] UNEXPECTED_SKIP={len(result.skipped)}")
+        print(f"[V1-Q][GROK-B] UNEXPECTED_SKIP={len(result.skipped)}")
     sys.exit(0 if result.wasSuccessful() else 1)

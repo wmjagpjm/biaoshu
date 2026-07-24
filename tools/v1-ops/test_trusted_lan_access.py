@@ -229,10 +229,8 @@ _WRITABLE_REL = (
     "tools/v1-ops/test_trusted_lan_access.py",
 )
 
-# Stop 哈希：证明本测试不得改 Stop（与 V1-K 冻结一致）
-_EXPECTED_STOP_SHA256 = (
-    "5f7e2f774c0529dc12ca2477fd982538243d1febfb0087797bcb2af9d8e9c23c"
-)
+# V1-Q：禁止固定 Stop SHA；完整性改为 UTF-8 BOM + PS5.1 ParseFile。
+# 行为由 test_biaoshu_backup.py V1-Q Stop 红门证明；禁止预填 future hash。
 
 # 非法 host / profile 样例（fail-closed）
 _INVALID_PROFILES = (
@@ -1891,10 +1889,51 @@ class TestBoundaryAndLoopbackBaseline(unittest.TestCase):
         self.assertNotIn("tools/v1-ops/Start-Biaoshu-Dev.ps1", _WRITABLE_REL)
         self.assertNotIn("frontend/vite.config.ts", _WRITABLE_REL)
 
-    def test_stop_sha256_unchanged(self) -> None:
-        self.assertTrue(_STOP_PS1.is_file())
-        digest = _sha256_file(_STOP_PS1)
-        self.assertEqual(digest.lower(), _EXPECTED_STOP_SHA256)
+    def test_stop_utf8_bom_and_ps51_parse_zero_errors(self) -> None:
+        """Stop 必须 UTF-8 BOM（EF-BB-BF）且 powershell Parser.ParseFile errors=0。"""
+        self.assertTrue(_STOP_PS1.is_file(), f"Stop 缺失：{_STOP_PS1}")
+        raw = _STOP_PS1.read_bytes()
+        self.assertTrue(
+            raw.startswith(_BOM),
+            "Stop-Biaoshu-Dev.ps1 必须 UTF-8 BOM（EF-BB-BF）",
+        )
+        src_text = Path(__file__).read_text(encoding="utf-8")
+        frozen_hash_const = "_EXPECTED_" + "STOP_SHA256"
+        self.assertNotIn(frozen_hash_const, src_text)
+        # 拆分字面量，避免本断言自命中
+        legacy_sha = (
+            "5f7e2f774c0529dc12ca2477fd982538"
+            + "243d1febfb0087797bcb2af9d8e9c23c"
+        )
+        self.assertNotIn(legacy_sha, src_text)
+        ps_path = str(_STOP_PS1).replace("'", "''")
+        cmd = (
+            "$e=$null; $t=$null; "
+            "[void][System.Management.Automation.Language.Parser]::"
+            f"ParseFile('{ps_path}', [ref]$t, [ref]$e); "
+            "if ($e -and @($e).Count -gt 0) { "
+            "@($e) | ForEach-Object { $_.ToString() }; exit 1 "
+            "} else { Write-Output ('PARSE_ERRORS=' + @($e).Count); exit 0 }"
+        )
+        proc = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                cmd,
+            ],
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        out = (proc.stdout or b"").decode("utf-8", errors="replace")
+        err = (proc.stderr or b"").decode("utf-8", errors="replace")
+        self.assertEqual(
+            proc.returncode,
+            0,
+            f"Stop PS5.1 ParseFile 必须 errors 精确 0：out={out!r} err={err!r}",
+        )
+        self.assertIn("PARSE_ERRORS=0", out)
 
     def test_default_planonly_loopback_seven_keys(self) -> None:
         """无 LAN 参数时 PlanOnly 仍成功、七键、零副作用。"""

@@ -121,10 +121,9 @@ _START_PROCESS_CAPTURE_MARKER = "V1K_START_PROCESS_CAPTURE="
 _FRONTEND_READY_HTTP = frozenset({200})
 _FRONTEND_NOT_READY_HTTP = frozenset({201, 204, 301, 302, 304, 400, 404, 500, 502})
 
-# Stop 生产脚本精确 SHA-256（证明本测试不得改动 Stop）
-_EXPECTED_STOP_SHA256 = (
-    "5f7e2f774c0529dc12ca2477fd982538243d1febfb0087797bcb2af9d8e9c23c"
-)
+# V1-Q：禁止固定 Stop SHA（合法 production 修复不得被预填哈希阻挡）。
+# Stop 完整性改为 UTF-8 BOM + 真实 powershell.exe 5.1 Parser.ParseFile；
+# 行为由 test_biaoshu_backup.py 中 V1-Q Stop 红门证明。
 
 # 真源冻结回环探测 URL（行为/注入主证据；常量自检仅辅助）
 _EXPECTED_BACKEND_HEALTH_URL = "http://127.0.0.1:8000/api/health"
@@ -3831,22 +3830,56 @@ class TestPsAstStaticBypassHelpers(unittest.TestCase):
 
 class TestUnchangedStopHostPortsEvidence(unittest.TestCase):
     """
-    Stop 精确哈希锁定；探测 URL 走 PowerShell AST 赋值门；
-    host/port 主证据为受控 Start-Process capture。
+    Stop：UTF-8 BOM + PS5.1 ParseFile（V1-Q 取消固定 SHA）；
+    探测 URL 走 PowerShell AST 赋值门；host/port 主证据为受控 Start-Process capture。
     """
 
-    def test_stop_ps1_still_present_and_hashed(self) -> None:
-        self.assertTrue(_STOP_PS1.is_file())
-        digest = _sha256_file(_STOP_PS1)
-        self.assertEqual(len(digest), 64)
-        self.assertRegex(digest, r"^[0-9a-f]{64}$")
-        self.assertEqual(
-            digest.lower(),
-            _EXPECTED_STOP_SHA256,
-            "Stop-Biaoshu-Dev.ps1 SHA-256 必须精确锁定，证明测试未改 Stop",
+    def test_stop_ps1_utf8_bom_and_ps51_parse_zero_errors(self) -> None:
+        """Stop 必须存在、UTF-8 BOM（EF-BB-BF）、powershell Parser.ParseFile errors=0。"""
+        self.assertTrue(_STOP_PS1.is_file(), f"Stop 缺失：{_STOP_PS1}")
+        raw = _STOP_PS1.read_bytes()
+        self.assertTrue(
+            raw.startswith(_BOM),
+            "Stop-Biaoshu-Dev.ps1 必须 UTF-8 BOM（EF-BB-BF）",
         )
-        # 记录到测试输出供审查对照（不写仓库）
-        print(f"V1K_STOP_PS1_SHA256={digest}")
+        # 禁止预填 future production hash：此处只做 BOM/Parse，不锁 SHA
+        src_text = Path(__file__).read_text(encoding="utf-8")
+        frozen_hash_const = "_EXPECTED_" + "STOP_SHA256"
+        self.assertNotIn(frozen_hash_const, src_text)
+        # 拆分字面量，避免本断言自命中
+        legacy_sha = (
+            "5f7e2f774c0529dc12ca2477fd982538"
+            + "243d1febfb0087797bcb2af9d8e9c23c"
+        )
+        self.assertNotIn(legacy_sha, src_text)
+        ps_path = str(_STOP_PS1).replace("'", "''")
+        cmd = (
+            "$e=$null; $t=$null; "
+            "[void][System.Management.Automation.Language.Parser]::"
+            f"ParseFile('{ps_path}', [ref]$t, [ref]$e); "
+            "if ($e -and @($e).Count -gt 0) { "
+            "@($e) | ForEach-Object { $_.ToString() }; exit 1 "
+            "} else { Write-Output ('PARSE_ERRORS=' + @($e).Count); exit 0 }"
+        )
+        proc = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                cmd,
+            ],
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        out = (proc.stdout or b"").decode("utf-8", errors="replace")
+        err = (proc.stderr or b"").decode("utf-8", errors="replace")
+        self.assertEqual(
+            proc.returncode,
+            0,
+            f"Stop PS5.1 ParseFile 必须 errors 精确 0：out={out!r} err={err!r}",
+        )
+        self.assertIn("PARSE_ERRORS=0", out)
 
     def test_frozen_loopback_ports_constants(self) -> None:
         """
