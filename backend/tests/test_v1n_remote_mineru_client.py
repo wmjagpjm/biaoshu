@@ -13134,13 +13134,13 @@ def test_v1n_p0_capture_baseline_lstat_oserror_zero_chain_marker(
     assert exc.__context__ is None, (
         "业务红：__context__ 必须为 None（lstat OSError 不得挂入 RemoteMineruError 链）"
     )
-    # 反：公开异常图零 marker / 合成 strerror / 假路径片段
-    _rq_assert_zero_markers(
+    # 反：仅深扫 OSError marker/strerror（公开异常图契约）；
+    # 禁止断私有 path / RemoteSource 字段（§8.6 私有帧边界，不把 path 可达当公开泄漏）
+    _rq_assert_zero_markers_deep(
         exc,
         [
             _P0_LSTAT_OSERROR_MARKER,
             _P0_LSTAT_OSERROR_STR,
-            _P0_LSTAT_FAKE_PATH_MARKER,
         ],
     )
 
@@ -13268,8 +13268,8 @@ def test_v1n_p0_entry_unsupported_suffix_privacy_zero_marker(
     assert exc.__context__ is None, (
         "业务红：__context__ 必须为 None（suffix 门不得挂链）"
     )
-    # 反：生产异常图（跳过测试帧）token/tok/path/filename marker 全零
-    _rq_assert_zero_markers(
+    # 反：深 walker（全 production f_locals + Path/RemoteSource 递归）token/path/filename 零 marker
+    _rq_assert_zero_markers_deep(
         exc,
         [
             _P0_ENTRY_UNSUP_TOKEN_MARKER,
@@ -13399,8 +13399,8 @@ def test_v1n_p0_entry_baseline_lstat_privacy_zero_marker(
     assert exc.__context__ is None, (
         "业务红：__context__ 必须为 None（lstat OSError 不得挂入入口异常链）"
     )
-    # 反：credential/path/filename/OSError marker 全零
-    _rq_assert_zero_markers(
+    # 反：深 walker 全 production 异常图 credential/path/filename/OSError marker 全零
+    _rq_assert_zero_markers_deep(
         exc,
         [
             _P0_ENTRY_LSTAT_TOKEN_MARKER,
@@ -13818,7 +13818,7 @@ def test_v1n_final_p0_zip_failure_locals_zero_marker(
 
     assert counts["post"] == 1, f"业务红：POST 须精确 1，counts={counts}"
     assert counts["put"] == 1, f"业务红：PUT 须精确 1，counts={counts}"
-    assert counts["poll"] >= 1, f"业务红：poll 须至少 1，counts={counts}"
+    assert counts["poll"] == 1, f"业务红：poll 须精确 1（固定一次 done），counts={counts}"
     assert counts["zip"] == 1, f"业务红：ZIP GET 须精确 1（失败），counts={counts}"
 
     exc = ei.value
@@ -13857,14 +13857,19 @@ def test_v1n_final_p1_multi_source_aggregate_cap_fail_fast(
 
     sep = SOURCE_SEPARATOR
     assert sep == "\n\n<!-- BIAOSHU_SOURCE_SEPARATOR -->\n\n"
-    # 每份 10 码点合法；两份 + sep = 10+37+10=57；cap=50 → 第二份后超
+    # 每份各自合法 <= cap；A+sep+B 精确累计越界；C 不得被下载
+    cap_cp = 50
     body_a = "A" * 10
     body_b = "B" * 10
-    body_c = "C" * 10 + _FINAL_P1_AGGCAP_BODY_MARKER
+    # body_c 仅 marker（len=46<=50），各自独立合法，禁止用 >cap 的 C 伪造成「单份即超」
+    body_c = _FINAL_P1_AGGCAP_BODY_MARKER
     assert len(body_a) == 10 and len(body_b) == 10
+    assert len(body_c) <= cap_cp, (
+        f"夹具自证：body_c 必须各自 <= cap，len={len(body_c)} cap={cap_cp}"
+    )
     assert len(body_a) + len(sep) + len(body_b) == 57
-    cap_cp = 50
-    assert len(body_a) <= cap_cp and len(body_b) <= cap_cp and len(body_c) <= 200
+    assert len(body_a) <= cap_cp and len(body_b) <= cap_cp and len(body_c) <= cap_cp
+    # 累计必须在 B + 精确 separator 后越界（非 C 单份）
     assert len(body_a) + len(sep) + len(body_b) > cap_cp
 
     monkeypatch.setattr(mod, "MAX_MD_CODEPOINTS", cap_cp)
@@ -13959,8 +13964,7 @@ def test_v1n_final_p1_multi_source_aggregate_cap_fail_fast(
             **_run_kwargs(),
         )
 
-    # 不得部分返回成功
-    assert not hasattr(ei, "value") or ei.value is not None
+    # 不得部分返回成功（禁止宽 OR / 恒真断言）
     _assert_remote_error(ei.value, "output_invalid", msg_fn=msg_fn)
     assert put_n["n"] == 3, f"业务红：三源 PUT 均应成功，put={put_n['n']}"
     assert post_n["n"] == 1
@@ -14005,7 +14009,11 @@ def test_v1n_final_p1_frozen_trusted_root_reresolve(
     # 真实可读文件仅作 open 目标；final-path 与 root 全由 seam 合成
     leaf = _write_temp_source(tmp_path, "trusted-leaf.pdf", b"%PDF-in-tmp-not-outside\n")
 
+    final_path_hits = {"n": 0}
+
     def escape_final(fd: int) -> str:
+        # 证明已进入 final handle 路径；返回盘外合成路径
+        final_path_hits["n"] += 1
         return _FINAL_P1_OUTSIDE_FILE
 
     monkeypatch.setattr(mod, "_v1n_final_path_for_fd", escape_final)
@@ -14072,9 +14080,22 @@ def test_v1n_final_p1_frozen_trusted_root_reresolve(
         )
 
     _assert_remote_error(ei.value, "source_identity_mismatch", msg_fn=msg_fn)
+    # 证明：已进入 final handle 路径，且未再 resolve 冻结根即拒绝；POST 可发生，PUT 禁止
+    assert final_path_hits["n"] == 1, (
+        f"业务红：final-path seam 必须精确命中 1 次，"
+        f"final_path_hits={final_path_hits['n']} resolve_hits={resolve_hits}"
+    )
+    assert post_n["n"] == 1, (
+        f"业务红：POST 须精确 1（边界在上传前 final handle 检查之后可到 batch），"
+        f"post_n={post_n['n']}"
+    )
     assert put_n["n"] == 0, (
-        f"业务红：冻结根再 resolve 绕过必须零 PUT，put_n={put_n['n']} "
-        f"resolve_hits={resolve_hits} post={post_n}"
+        f"业务红：冻结根/ final handle 越界必须零 PUT，put_n={put_n['n']} "
+        f"resolve_hits={resolve_hits} post={post_n} final={final_path_hits}"
+    )
+    assert resolve_hits["trusted"] == 0, (
+        f"业务红：不得再 resolve 冻结可信根（trusted hits 必须 0），"
+        f"resolve_hits={resolve_hits}"
     )
 
 
@@ -14124,12 +14145,22 @@ def test_v1n_final_p2_zip_declared_undercount_pre_zipfile(
 
     holder: dict[str, str] = {}
     base = _post_ok_single(holder, put_url=PRESIGNED_PUT_A)
+    # 阶段精确计数：证明走到 ZIP GET 后再拒，禁止「更早 zip_unsafe」假绿
+    stage = {"post": 0, "put": 0, "poll": 0, "zip": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        early = base(request)
-        if early is not None:
+        if request.method == "POST" and PATH_FILE_URLS_BATCH in str(request.url):
+            stage["post"] += 1
+            early = base(request)
+            assert early is not None
+            return early
+        if request.method == "PUT":
+            stage["put"] += 1
+            early = base(request)
+            assert early is not None
             return early
         if request.method == "GET" and PATH_EXTRACT_RESULTS_PREFIX in str(request.url):
+            stage["poll"] += 1
             return httpx.Response(
                 200,
                 json={
@@ -14146,6 +14177,7 @@ def test_v1n_final_p2_zip_declared_undercount_pre_zipfile(
                 },
             )
         if request.method == "GET" and str(request.url) == _FINAL_P2_ZIP_URL:
+            stage["zip"] += 1
             return httpx.Response(200, content=under)
         raise AssertionError(f"unexpected {request.method} {request.url}")
 
@@ -14157,7 +14189,13 @@ def test_v1n_final_p2_zip_declared_undercount_pre_zipfile(
             **_run_kwargs(),
         )
     _assert_remote_error(ei.value, "zip_unsafe", msg_fn=msg_fn)
+    assert stage["post"] == 1, f"业务红：POST 须精确 1，stage={stage}"
+    assert stage["put"] == 1, f"业务红：PUT 须精确 1，stage={stage}"
+    assert stage["poll"] == 1, f"业务红：poll 须精确 1，stage={stage}"
+    assert stage["zip"] == 1, (
+        f"业务红：ZIP GET 须精确 1（少报门须在下载后、ZipFile 前触发），stage={stage}"
+    )
     assert constructs["n"] == 0, (
         f"业务红：声明少报(CD=4,declared=1,cap=3) 时 ZipFile 不得构造，"
-        f"constructs={constructs['n']}"
+        f"constructs={constructs['n']} stage={stage}"
     )

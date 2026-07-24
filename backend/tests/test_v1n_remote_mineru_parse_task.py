@@ -4547,14 +4547,26 @@ def test_v1n_p1_late_explicit_os_lstat_oserror_fail_closed_no_follow_fallback(
         db.close()
     assert declared == len(content)
 
-    # 字面叶路径（与 production _literal_source_path 同构）；resolve 后路径仅用于 spy 匹配
-    leaf_literal = (
-        Path(settings.upload_dir).resolve() / pid / Path(stored).name
-    )
+    # --- 任何 patch 之前：冻结规范路径字符串与叶名（spy 内禁止再 resolve）---
+    stored_leaf_name = Path(stored).name
+    leaf_literal = Path(settings.upload_dir).resolve() / pid / stored_leaf_name
     leaf_resolved = Path(
         file_service.resolve_path(settings, pid, stored)
     ).resolve()
-    assert leaf_literal.is_file() or leaf_resolved.is_file()
+    # 明确真源存在性：production resolve_path 叶必须存在（禁止宽 OR）
+    assert leaf_resolved.is_file(), (
+        f"真源存在性失败：resolve_path 叶必须是文件，"
+        f"resolved={leaf_resolved!s} literal={leaf_literal!s}"
+    )
+    # 冻结规范字符串集合（仅字符串匹配；含 normcase / 正反斜杠变体）
+    _frozen_path_norms: set[str] = set()
+    for _p in (leaf_literal, leaf_resolved):
+        _s = str(_p)
+        _frozen_path_norms.add(os.path.normcase(_s))
+        _frozen_path_norms.add(os.path.normcase(_s.replace("/", "\\")))
+        _frozen_path_norms.add(os.path.normcase(_s.replace("\\", "/")))
+    _frozen_leaf_name = stored_leaf_name
+    _frozen_stored = stored
 
     # --- 计数：前置 Path.lstat（真实通过） vs 晚期 os.lstat（唯一失败点）---
     path_lstat_leaf_hits = {"n": 0}
@@ -4568,35 +4580,37 @@ def test_v1n_p1_late_explicit_os_lstat_oserror_fail_closed_no_follow_fallback(
     real_nofollow_size = task_service._stat_nofollow_size
 
     def _is_target_leaf(path_like: object) -> bool:
+        """纯字符串/叶名匹配；禁止内部 Path.resolve（避免递归进 os.lstat patch）。"""
         try:
-            p = Path(path_like)
-        except (TypeError, ValueError):
+            s = str(path_like)
+        except Exception:
             return False
-        s = str(path_like)
-        if stored and stored in s:
-            # 精确到 stored_name 叶，避免父目录/根误命中
-            try:
-                if p.name == Path(stored).name:
-                    return True
-            except OSError:
-                pass
-        try:
-            rp = p.resolve()
-        except OSError:
-            rp = None
-        if rp is not None and (rp == leaf_resolved or rp == leaf_literal.resolve()):
+        # 规范字符串精确命中（patch 前冻结）
+        if os.path.normcase(s) in _frozen_path_norms:
             return True
+        if os.path.normcase(s.replace("/", "\\")) in _frozen_path_norms:
+            return True
+        if os.path.normcase(s.replace("\\", "/")) in _frozen_path_norms:
+            return True
+        # 叶名 + stored/pid 片段，避免同名误命中
         try:
-            if p == leaf_literal or str(p) == str(leaf_literal):
+            name = Path(s).name
+        except Exception:
+            name = ""
+        if _frozen_leaf_name and name == _frozen_leaf_name:
+            if (_frozen_stored and _frozen_stored in s) or (pid and pid in s):
                 return True
-        except OSError:
-            pass
         return False
 
     def _count_path_lstat(self, *a, **k):
-        # 仅计数；真实执行 → 前置 reparse 必须通过
+        # 仅计数显式 reparse 叶 lstat；排除 Path.is_symlink 内部 self.lstat()
+        # （否则 2 阶段 × (is_symlink+显式) = 4，无法表达「resolve 前后各 1 次」）
         if _is_target_leaf(self):
-            path_lstat_leaf_hits["n"] += 1
+            import sys
+
+            caller = sys._getframe(1).f_code.co_name
+            if caller != "is_symlink":
+                path_lstat_leaf_hits["n"] += 1
         return real_path_lstat(self, *a, **k)
 
     def _late_only_os_lstat(path, *a, **k):
@@ -4623,9 +4637,9 @@ def test_v1n_p1_late_explicit_os_lstat_oserror_fail_closed_no_follow_fallback(
     with caplog.at_level(logging.DEBUG):
         body = _parse_remote(client, pid)
 
-    # 前置 reparse/Path.lstat 必须真实发生（叶至少 resolve 前后各一次）
-    assert path_lstat_leaf_hits["n"] >= 2, (
-        f"业务红：前置 Path.lstat/reparse 叶检查必须保持，"
+    # 前置 reparse/Path.lstat：叶精确 2 次（resolve 前/后各一；禁止 >= 宽口）
+    assert path_lstat_leaf_hits["n"] == 2, (
+        f"业务红：前置 Path.lstat/reparse 叶检查必须精确 2 次，"
         f"actual={path_lstat_leaf_hits['n']}"
     )
     # 晚期显式 os.lstat 精确命中一次（不得 0=未覆盖、不得 >1 重复吞/回退再 lstat）
