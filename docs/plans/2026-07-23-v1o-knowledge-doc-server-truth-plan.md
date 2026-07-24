@@ -8,12 +8,21 @@
 # V1-O 知识库文档服务端真值实施计划
 
 > **执行代理：** Grok A 本 worktree 仅契约/计划 + failure-first test-only；生产未授权。
-> **分支：** `collab/v1m-m3-a` @ `eb64dc1a2fcd2ffa8bee85668f0b99a9ff6c4ffe`。
+> **分支：** `collab/v1o-production` @ `47ca7cb`（书面授权 worktree `biaoshu-v1o-prod`）；生产两文件未暂存变更必须原样保留。
 > **R1：** 关闭 Codex Q1–Q12（`msg_c089ca8bc9ee4d5d98969944fd31c15b`）；**R1 重复/中断 Playwright 收集作废，不得恢复续跑**。
 > **R2：** 关闭 Q1–Q9（`msg_3a048f3b68f14fd5b395f192dc4f8dcf`）；Grok **禁止** Playwright/浏览器/Vite/uvicorn/pytest/8010/5174；仅静态 TS parse + 只读 git/hash/端口。
 > **R5-FINAL：** 关闭 Q1–Q10（`msg_4ad902ba574145568ea219dd665e5ee2`）；Q17 page.evaluate synthetic 冲突明确 NO；semantic-index 优先保哈希；Grok 仅静态 parse + 只读 git。
 > **R6-FIX：** 七项确认后最终集中 test-only（`msg_0d71b9b59aa9438da2467eb9cd8e37f1`；Q `msg_c1bfb70021da43fdad97783b018b07a8` + YES×7 `msg_5b5635c73e5f49539fe41c3db278d57a`）；Grok 仅静态 parse + 只读 git；禁止 Playwright。
 > **Codex failure-first：** 2026-07-24 单 worker 收集 144 项，`134 failed / 10 passed`，耗时 29.9 分钟；其中 1 项为两处宽 OR 触发自守卫，双方确认后以 R8 test-only 修复，聚焦自守卫 `1 passed / 7.2s`。其余完整 failure-first 不重复运行，生产仍未授权。
+> **R9-TEST（test-first，写后对账 owner 代次）：** 前置确认 `msg_c7717cc4cb654d49828ffdda824ba8ab` Q1/Q2/Q3 全 YES；任务 `msg_9af257b363bd4abb93c41c62f726d205`。只补红门：T1 unmount 后旧 create finally 零新增双 GET/semantic/写/DOM；T2 主 refresh 新代次 ready 后旧 create 不得覆写列表/错误/选择、不得绑旧 opError。Grok **仅**一次 TS compiler API parse/transpile + `git diff --check`/`status`/两文件哈希；**Playwright did-not-run**（Codex 保留串行 failure-first 槽）；禁止改 production/契约/依赖/Git 提交。
+> **R9-FIX（修正红门自身阻断并保留 T1）：** 前置 Codex `msg_9e9686cab64949a2a0401c1810f55d4d`；Grok Q1–Q3 全 YES `msg_7c29aa9eca3b4f198c0623be5604585e`；本任务 `msg_814282381ae44d96a13b0b450822144a`。
+> - **Codex 聚焦实证（5 个含 unmount 用例，未完整重跑）：** T1 在业务门 `folderGetArrived - baseArrivedF` 处 **expected 0 / received 1**（生产 finally 仍对账的真实红，保留）；另三例精确因 `armBrowserRouteTerminal` 未选 waiter（Promise.race/双侧 waitForEvent 遗留 loser）在 test end 超时拒绝（红门自阻断，非业务）。
+> - **最小修复：** ① `prefer=response` 只装 response waiter；`prefer=requestfailed` 只装 requestfailed waiter；`either` 用 `page.on` + 单 Promise + 单 timeout + 双侧 `off` cleanup（命中/超时/close 均收口），禁止 loser 遗留；② T1 `staleDocs[].folderId` 精确指向 `fld_owner_unmount_stale` 合法图；③ **完整删除**不可达 T2（真实 UI 在 create hold/busy 时刷新按钮禁用，禁止 force/dispatch 替代；程序化 refresh 竞态后续 hook 层另验）；④ 不改 Page/hook，不降 T1 精确差值/隐私/settle 门。
+> - Grok **仅**一次 TS compiler API parse/transpile + `git diff --check`/`status`/两 production 哈希；**Playwright did-not-run / 无完整重跑**；禁止 Git 提交。
+> **R9-Q3-FIX（修正 F-unmount 真值，保留 T1 真红）：** 前置 Codex `msg_0c92b55a030a4103942ad73f87f9f01f`；Grok Q1/Q2 全 YES `msg_afc2184c663b470bad54008b12d5cbeb`；本任务 `msg_c6255904c0e54e66a5c4d648c347dfcf`。
+> - **Codex 聚焦实证（含 unmount 用例，未完整重跑）：** **3 passed / 2 failed**。假红：① F-unmount 硬编 `fulfilled=baseSettled+1`，hold 下 `pending=baseArrived-baseSettled` 在 StrictMode/并发双飞时可为 2 → expected 1 / received 2（测试真值错，非业务渲染红）；② F-unmount stale `makeDoc` 未设 `folderId`，默认 `FLD_INBOX` 与 `fld_um_stale` 不同图。真红保留：T1 `folderGetArrived-baseArrivedF` **expected 0 / received 1**（生产 finally 仍对账）。
+> - **最小修复：** ① 释放前冻结 `pendingF/pendingD` 并断各 `>0`，释放后精确 `fulfilled=baseSettled+pending`，继续严格断 arrived 不增长及业务 API/写/semantic/DOM 不变，禁止宽 `>=` 代替终值；② stale `doc.folderId` 精确 `"fld_um_stale"`；③ 不改 production hook/page，不降 T1 精确门。
+> - Grok **仅**一次 TS compiler API parse/transpile + `git diff --check`/`status`/两文件哈希；**Playwright did-not-run**；禁止 Git 提交。
 
 **目标：** 知识库文档/文件夹以服务端 GET/写响应为唯一真值；消灭 local 成功态、旧键污染、假 ID 与敏感透传；P9C 在文档非 ready 时不可构建。
 
@@ -121,3 +130,6 @@ cd frontend
 - 参数化独立 case 增加测试数属于有效覆盖，不算无意义膨胀；failure-first 首红不中止后续独立 case 的收集（workers=1 仍会跑完文件内各 test）。
 - R2 Grok 仅静态；业务红/绿以 Codex 单次 Playwright 为准。
 - R6-FIX 七项关闭点：① DOM synthetic 查 detail+oldValue/跨 task；② refresh/unmount 绑 response|requestfailed + 本轮 settled 精确 +1 + 业务 continuation；③ 写 phase 分账 + multi-delete 冻结剩余 + diagonal synthetic；④ parentId 根级 DOM、statusMessage/sizeLabel 字段精确空；⑤ [A,B,A] 仅同步派发 + 精确 hook poll；⑥ 五类写 GET 逐字段 + reindex chunks=88 排 99；⑦ moveTarget="" + 全部文档 is-active + selectedIds 精确保留/清除。
+- **R9-TEST 状态（2026-07-24）：** Grok-A 已在 `knowledge-doc-server-truth.spec.ts` 追加两门「写后对账 owner 代次」failure-first（T1 unmount finally 零副作用；T2 主 refresh 新代次不接受旧写对账/opError）。计划已同步。**did-not-run：** Playwright / Vite / uvicorn / 端口监听 / 整仓 E2E；Grok 仅静态 TS parse/transpile + git 两文件检查。Codex 持有串行 failure-first 测试槽，未授权前不得声称业务红/绿。
+- **R9-FIX 状态（2026-07-24）：** Codex 聚焦 5 含 unmount 用例：T1 业务门 `folderGetArrived-baseArrivedF` expected 0 / received 1；另三例因 loser waiter test-end 拒绝。Grok 已修 `armBrowserRouteTerminal` 分流/cleanup、T1 合法图、**完整删除 T2**（UI busy 不可达；不保留 force/dispatch；hook 层 refresh 竞态另验）。**明确没有完整重跑**；Grok 仅静态 parse + git 检查；生产两文件字节保持。T1 精确门保留作 failure-first 真红。
+- **R9-Q3-FIX 状态（2026-07-24）：** Codex 聚焦实证 **3 passed / 2 failed**。假红：F-unmount 硬编 settled `+1`（pending 可为 2）+ stale doc 默认 `folderId=FLD_INBOX` 非法图。Grok 已改为释放前 `pendingF/pendingD` 冻结并 `>0`、释放后精确 `fulfilled=baseSettled+pending`、stale `folderId:"fld_um_stale"`。**T1 expected 0 / received 1 仍是真业务红**（生产 finally 对账）。**Playwright did-not-run**；Grok 仅静态 parse + git 检查；hook/page 字节保持。

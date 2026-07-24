@@ -11,6 +11,8 @@
  *     IDB 不 disarm；reconcile 仅写后；schema 字段矩阵；写 3×3 精确一次；outcome 双 GET 真值。
  * R6-FIX：Q1 DOM detail+oldValue；Q2 response/requestfailed+精确 settled+1；Q3 写阶段分账；
  *     Q4 根级 DOM/字段空位；Q7 hook.queue 身份 + root.current 重遍历 poll；Q8 GET 逐字段；Q9 moveTarget=""与默认活跃。
+ * R9：写后对账 owner 代次 failure-first——unmount/主 refresh 后旧写 finally 零新增双 GET/semantic/写/DOM，
+ *     不得把旧 opError 绑新代次或覆盖新列表/错误/选择；浏览器 terminal+continuation 证 settle。
  */
 import {
   expect,
@@ -1739,28 +1741,116 @@ function pathEqualsApi(url: string, apiPath: string): boolean {
 /**
  * 等待浏览器层对指定 API 路径的终态：response 或 requestfailed。
  * 必须在 release 之前安装 promise，禁止仅依赖 route helper fulfilled 计数。
+ * 可选 method：用于写 POST 与同 path 的 GET 对账分账（如 create folders）。
+ *
+ * prefer 分流（禁止遗留 loser waiter 在 test end 超时拒绝）：
+ * - response：仅创建 response waiter
+ * - requestfailed：仅创建 requestfailed waiter
+ * - either：page.on 双侧 listener + 单个 Promise + 单个 timeout；
+ *   任一命中/超时/page close 均 removeListener 并清理 timeout
  */
 function armBrowserRouteTerminal(
   page: Page,
   apiPath: string,
   prefer: "response" | "requestfailed" | "either",
+  method?: string,
 ): Promise<"response" | "requestfailed"> {
   const matchUrl = (url: string) => pathEqualsApi(url, apiPath);
-  const resp = page
-    .waitForEvent("response", {
-      predicate: (r) => matchUrl(r.url()),
-      timeout: 12_000,
-    })
-    .then(() => "response" as const);
-  const fail = page
-    .waitForEvent("requestfailed", {
-      predicate: (r) => matchUrl(r.url()),
-      timeout: 12_000,
-    })
-    .then(() => "requestfailed" as const);
-  if (prefer === "response") return resp;
-  if (prefer === "requestfailed") return fail;
-  return Promise.race([resp, fail]);
+  const matchMethod = (m: string) => !method || m === method;
+  const timeoutMs = 12_000;
+
+  // prefer=response：只装 response 门，不得并行 requestfailed
+  if (prefer === "response") {
+    return page
+      .waitForEvent("response", {
+        predicate: (r) =>
+          matchUrl(r.url()) && matchMethod(r.request().method()),
+        timeout: timeoutMs,
+      })
+      .then(() => "response" as const);
+  }
+
+  // prefer=requestfailed：只装 requestfailed 门，不得并行 response
+  if (prefer === "requestfailed") {
+    return page
+      .waitForEvent("requestfailed", {
+        predicate: (r) => matchUrl(r.url()) && matchMethod(r.method()),
+        timeout: timeoutMs,
+      })
+      .then(() => "requestfailed" as const);
+  }
+
+  // prefer=either：单 Promise + 双侧 on + 单 timeout；命中即双侧 cleanup
+  return new Promise<"response" | "requestfailed">((resolve, reject) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const cleanup = () => {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+      page.off("response", onResponse);
+      page.off("requestfailed", onRequestFailed);
+      page.off("close", onClose);
+    };
+
+    const finish = (outcome: "response" | "requestfailed") => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(outcome);
+    };
+
+    const fail = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(err);
+    };
+
+    function onResponse(r: {
+      url: () => string;
+      request: () => { method: () => string };
+    }) {
+      try {
+        if (matchUrl(r.url()) && matchMethod(r.request().method())) {
+          finish("response");
+        }
+      } catch {
+        // page 关闭或 request 不可读时忽略，由 close/timeout 收口
+      }
+    }
+
+    function onRequestFailed(r: { url: () => string; method: () => string }) {
+      try {
+        if (matchUrl(r.url()) && matchMethod(r.method())) {
+          finish("requestfailed");
+        }
+      } catch {
+        // 同上
+      }
+    }
+
+    function onClose() {
+      fail(
+        new Error(
+          `armBrowserRouteTerminal: page closed before terminal for ${apiPath}`,
+        ),
+      );
+    }
+
+    page.on("response", onResponse);
+    page.on("requestfailed", onRequestFailed);
+    page.on("close", onClose);
+    timer = setTimeout(() => {
+      fail(
+        new Error(
+          `armBrowserRouteTerminal: timeout ${timeoutMs}ms waiting either for ${apiPath}`,
+        ),
+      );
+    }, timeoutMs);
+  });
 }
 
 async function setHiddenFileInput(page: Page, name: string, body: string) {
@@ -5563,6 +5653,11 @@ test.describe("V1-O F refresh 代次与 unmount", () => {
     const baseArrivedD = probe.docGetArrived;
     const baseSettledF = probe.folderGetFulfilled;
     const baseSettledD = probe.docGetFulfilled;
+    // 本轮 hold 下 pending=已到未结；StrictMode/并发双飞时可为 2，禁止硬编码 +1
+    const pendingF = baseArrivedF - baseSettledF;
+    const pendingD = baseArrivedD - baseSettledD;
+    expect(pendingF).toBeGreaterThan(0);
+    expect(pendingD).toBeGreaterThan(0);
     const baseWrite = probe.writes.length;
     const baseSemantic = probe.gets.filter((g) =>
       g.path.includes("semantic-index"),
@@ -5576,8 +5671,13 @@ test.describe("V1-O F refresh 代次与 unmount", () => {
     probe.folders = [
       makeFolder({ id: "fld_um_stale", name: "UNMOUNT_STALE_FOLDER" }),
     ];
+    // 合法同图：stale doc.folderId 必须精确指向 fld_um_stale（禁默认 FLD_INBOX）
     probe.docs = [
-      makeDoc({ id: "doc_um_stale", name: "UNMOUNT_STALE_DOC.txt" }),
+      makeDoc({
+        id: "doc_um_stale",
+        name: "UNMOUNT_STALE_DOC.txt",
+        folderId: "fld_um_stale",
+      }),
     ];
 
     // 导航卸载前安装浏览器终态门（response 或 requestfailed 均可，导航可能改写终态）
@@ -5598,13 +5698,13 @@ test.describe("V1-O F refresh 代次与 unmount", () => {
     const docTerm = await docTerminal;
     expect(["response", "requestfailed"]).toContain(folderTerm);
     expect(["response", "requestfailed"]).toContain(docTerm);
-    // 旧 folders+docs 本轮 settled 精确 +1（route handler 收尾）
+    // 旧 folders+docs 本轮 settled 精确 = baseSettled+pending（禁止宽 >= 或硬编码 +1）
     await expect
       .poll(() => probe.folderGetFulfilled, { timeout: 10_000 })
-      .toBe(baseSettledF + 1);
+      .toBe(baseSettledF + pendingF);
     await expect
       .poll(() => probe.docGetFulfilled, { timeout: 10_000 })
-      .toBe(baseSettledD + 1);
+      .toBe(baseSettledD + pendingD);
     await businessContinuationBarrier(page);
 
     // 业务 API：只允许旧请求自身完成，禁止新 knowledge arrived/写/semantic
@@ -5626,6 +5726,132 @@ test.describe("V1-O F refresh 代次与 unmount", () => {
     await expect(page.getByRole("heading", { name: "知识库" })).toHaveCount(0);
     await expect(page.getByText("UNMOUNT_STALE_DOC")).toHaveCount(0);
   });
+});
+
+// ---------------------------------------------------------------------------
+// R9. 写后对账 owner 代次（failure-first：旧写 settle 不得污染卸载/新代次）
+// ---------------------------------------------------------------------------
+
+test.describe("V1-O R9 写后对账 owner 代次", () => {
+  test("写后对账 owner 代次：unmount 后旧 create finally 零新增对账/写/semantic/DOM", async ({
+    page,
+  }) => {
+    const consoleCol = collectConsole(page);
+    page.on("dialog", (d) => {
+      if (d.type() === "prompt") void d.accept(NEW_FOLDER_NAME);
+      else void d.accept();
+    });
+    const seed = serverSeed();
+    // 若旧写 finally 错误发起对账 GET，会采用的污染载荷
+    // 合法图：stale doc.folderId 必须精确指向 stale folder id
+    const staleFolders = [
+      makeFolder({
+        id: "fld_owner_unmount_stale",
+        name: "OWNER_UNMOUNT_STALE_FOLDER",
+      }),
+    ];
+    const staleDocs = [
+      makeDoc({
+        id: "doc_owner_unmount_stale",
+        name: "OWNER_UNMOUNT_STALE_DOC.txt",
+        folderId: "fld_owner_unmount_stale",
+      }),
+    ];
+    const probe = emptyProbe({
+      folders: seed.folders,
+      docs: seed.docs,
+      reconcileFolders: staleFolders,
+      reconcileDocs: staleDocs,
+    });
+    const hold = createHoldGate();
+    probe.writeHoldGate = hold;
+    await preparePage(page, probe, { poison: false });
+    await openKnowledge(page, probe);
+    await expect(page.getByText(SERVER_DOC_A)).toBeVisible({ timeout: 15_000 });
+
+    // 真实 UI create 入口；POST 必须真实 arrived 且 hold（禁止 route 冒充写到达）
+    const actionPromise = triggerMutation(page, "create");
+    await expect
+      .poll(() => writeCount(probe, writePathPred("create")), { timeout: 10_000 })
+      .toBe(1);
+    await actionPromise;
+    expect(
+      probe.writeArrived.filter((w) => writePathPred("create")(w)).length,
+    ).toBe(1);
+    expect(hold.released).toBe(false);
+    expect(probe.reconcileArmed).toBe(true);
+
+    // 释放/卸载前冻结：folders/docs arrived/settled、semantic、写、业务 API、DOM
+    const baseArrivedF = probe.folderGetArrived;
+    const baseArrivedD = probe.docGetArrived;
+    const baseSettledF = probe.folderGetFulfilled;
+    const baseSettledD = probe.docGetFulfilled;
+    const baseFolderGets = probe.folderGets;
+    const baseDocGets = probe.docGets;
+    const baseSemantic = probe.gets.filter((g) =>
+      g.path.includes("semantic-index"),
+    ).length;
+    const baseWrite = probe.writes.length;
+    const baseWriteArrived = probe.writeArrived.length;
+    const baseKbApi = probe.allRequests.filter(
+      (r) =>
+        r.resourceKind === "api" &&
+        (r.path.startsWith("/api/knowledge") ||
+          r.path.startsWith("/api/cards")),
+    ).length;
+    const baseDom = await collectDomExport(page);
+    expect(baseDom.includes("OWNER_UNMOUNT_STALE_DOC")).toBe(false);
+
+    // 导航卸载前安装浏览器写终态门；卸载后释放旧 POST
+    const writeTerminal = armBrowserRouteTerminal(
+      page,
+      "/api/knowledge/folders",
+      "either",
+      "POST",
+    );
+    await page.goto("/");
+    await expect(page.getByRole("heading", { name: "知识库" })).toHaveCount(0);
+    hold.release();
+    probe.writeHoldGate = null;
+    const writeTerm = await writeTerminal;
+    // 与 unmount 门一致：终态仅 response 或 requestfailed（禁 expect 内 || 宽放）
+    expect(["response", "requestfailed"]).toContain(writeTerm);
+    // 旧写真实 settle：浏览器 terminal + 业务 continuation（禁 sleep/仅 DOM）
+    await businessContinuationBarrier(page);
+
+    // finally 零新增 folders/docs 对账 GET（精确差值，非 >=）
+    expect(probe.folderGetArrived - baseArrivedF).toBe(0);
+    expect(probe.docGetArrived - baseArrivedD).toBe(0);
+    expect(probe.folderGetFulfilled - baseSettledF).toBe(0);
+    expect(probe.docGetFulfilled - baseSettledD).toBe(0);
+    expect(probe.folderGets - baseFolderGets).toBe(0);
+    expect(probe.docGets - baseDocGets).toBe(0);
+    // 零 semantic、零其它写
+    expect(
+      probe.gets.filter((g) => g.path.includes("semantic-index")).length -
+        baseSemantic,
+    ).toBe(0);
+    expect(probe.writes.length - baseWrite).toBe(0);
+    expect(probe.writeArrived.length - baseWriteArrived).toBe(0);
+    // 业务 API 与导航 document 分账：knowledge/cards 精确 0 增长
+    const kbApiAfter = probe.allRequests.filter(
+      (r) =>
+        r.resourceKind === "api" &&
+        (r.path.startsWith("/api/knowledge") ||
+          r.path.startsWith("/api/cards")),
+    ).length;
+    expect(kbApiAfter - baseKbApi).toBe(0);
+    expect(
+      probe.allRequests.some((r) => r.resourceKind === "document"),
+    ).toBe(true);
+    // 零 DOM 污染
+    await expect(page.getByText("OWNER_UNMOUNT_STALE_DOC")).toHaveCount(0);
+    await expect(page.getByText("OWNER_UNMOUNT_STALE_FOLDER")).toHaveCount(0);
+    await expect(page.getByText(SERVER_CREATE_FOLDER_NAME)).toHaveCount(0);
+    await assertPrivacyClean(page, probe, consoleCol);
+  });
+  // T2（主 refresh 新代次 vs 旧 create）已删除：真实 UI 在 create hold/busy 时刷新按钮禁用，
+  // 不可达；禁止 force/dispatch 替代。程序化 refresh 竞态留待 hook 层另验。
 });
 
 test.describe("V1-O G 选择清理与 fail-closed", () => {
