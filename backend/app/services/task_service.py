@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -465,19 +465,27 @@ def cancel_task(
     db: Session, workspace_id: str, project_id: str, task_id: str
 ) -> ProjectTaskRow:
     """
-    用途：将 pending/running 任务标为 cancelled；worker 在检查点退出。
+    用途：条件 UPDATE 将 pending/running 任务标为 cancelled（CAS 抢终态）。
     对接：POST /api/projects/{id}/tasks/{taskId}/cancel
+    规则：仅 status∈{pending,running} 可取消；CAS rowcount!=1 整事务回滚
+      （含 cancel event）；与 finalizer success 互斥；单事务唯一 commit。
+    实现：先 set_committed_value 使内存可见 cancelled（供 barrier/观测）但不标脏，
+      再写 event + CAS 认领；禁止在 barrier 前 execute UPDATE 持锁导致 SQLite 互锁。
     """
+    from sqlalchemy.orm.attributes import set_committed_value
+
     task = get_task(db, workspace_id, project_id, task_id)
     if task.status not in ACTIVE_STATUSES:
         raise ValueError(f"任务已结束（{task.status}），无法取消")
     prev_status = task.status
     prev_progress = int(task.progress)
-    task.status = "cancelled"
-    task.message = "已取消"
-    task.error = "用户取消"
-    # 进度保留当前值，便于 UI 展示中断点
-    task.updated_at = _now()
+    now = _now()
+    # 内存可见 cancelled，不标脏：flush 不会把 task 行写成 cancelled 覆盖 success
+    set_committed_value(task, "status", "cancelled")
+    set_committed_value(task, "message", "已取消")
+    set_committed_value(task, "error", "用户取消")
+    set_committed_value(task, "updated_at", now)
+    # 写 cancel event（仅事件行；task 不脏）。测试 barrier 挂在此入口。
     _maybe_record_task_status_event(
         db,
         workspace_id=workspace_id,
@@ -485,6 +493,27 @@ def cancel_task(
         prev_status=prev_status,
         prev_progress=prev_progress,
     )
+    # CAS：只允许从 pending/running 认领 cancelled
+    res = db.execute(
+        update(ProjectTaskRow)
+        .where(
+            ProjectTaskRow.id == task_id,
+            ProjectTaskRow.project_id == project_id,
+            ProjectTaskRow.status.in_(tuple(ACTIVE_STATUSES)),
+        )
+        .values(
+            status="cancelled",
+            message="已取消",
+            error="用户取消",
+            updated_at=now,
+        )
+    )
+    rc = res.rowcount
+    if rc is None or int(rc) != 1:
+        # finalizer 已 success 或并发取消：整单回滚（含 event）
+        db.rollback()
+        task2 = get_task(db, workspace_id, project_id, task_id)
+        raise ValueError(f"任务已结束（{task2.status}），无法取消")
     db.commit()
     db.refresh(task)
     return task
@@ -819,35 +848,60 @@ def _ensure_state(db: Session, project_id: str) -> ProjectEditorStateRow:
 
 
 def _is_symlink_or_reparse(path: Path) -> bool:
-    """用途：no-follow 判定叶或目录是否为 symlink/reparse。"""
+    """
+    用途：no-follow 判定叶或目录是否为 symlink/reparse。
+    规则：lstat/is_symlink 任一 OSError → 抛 ValueError fail-closed（禁止 return False）。
+    """
     try:
         if path.is_symlink():
             return True
-    except OSError:
-        pass
+    except OSError as exc:
+        raise ValueError(_MSG_LEAF_REPARSE) from None
     try:
         st = path.lstat()
         attrs = int(getattr(st, "st_file_attributes", 0) or 0)
         if attrs & _FILE_ATTR_REPARSE:
             return True
     except OSError:
-        pass
+        raise ValueError(_MSG_LEAF_REPARSE) from None
     return False
 
 
 def _stat_nofollow_size(path: Path) -> int:
-    """用途：读取普通文件字节数；优先 no-follow。"""
+    """
+    用途：读取普通文件字节数；严格 no-follow。
+    规则：nofollow stat OSError fail-closed；禁止回退 follow stat。
+    """
     try:
         st = path.stat(follow_symlinks=False)  # type: ignore[call-arg]
     except TypeError:
-        st = path.stat()
-    except OSError:
-        st = path.stat()
+        # 无 follow_symlinks 形参时用 os.lstat（仍 no-follow）
+        st = os.lstat(str(path))
+    # OSError 原样上抛，由调用方 fail-closed；禁止 except 后 path.stat() 跟随
     return int(st.st_size)
 
 
+def _freeze_trusted_upload_root(settings: Any) -> Path:
+    """
+    用途：启动时冻结可信非 reparse upload root；任一层 reparse/OSError fail-closed。
+    """
+    raw = Path(settings.upload_dir)
+    # 字面与 resolve 两侧均探测 reparse（upload_dir 静态 reparse 门）
+    if _is_symlink_or_reparse(raw):
+        raise ValueError(_MSG_PARENT_REPARSE)
+    try:
+        root = raw.resolve()
+    except OSError:
+        raise ValueError(_MSG_TRAVERSAL) from None
+    if _is_symlink_or_reparse(root):
+        raise ValueError(_MSG_PARENT_REPARSE)
+    return root
+
+
 def _literal_source_path(
-    settings: Any, project_id: str, stored_name: str
+    settings: Any, project_id: str, stored_name: str,
+    *,
+    trusted_upload_root: Path | None = None,
 ) -> Path:
     """
     用途：构造 source 字面路径（不 follow）；穿越在此拒绝。
@@ -856,30 +910,54 @@ def _literal_source_path(
     name = Path(stored_name).name
     if not name or name != stored_name:
         raise ValueError(_MSG_TRAVERSAL)
-    root = Path(settings.upload_dir).resolve() / project_id
-    return root / name
+    root = (
+        trusted_upload_root
+        if trusted_upload_root is not None
+        else Path(settings.upload_dir).resolve()
+    )
+    return root / project_id / name
 
 
 def _validate_parse_sources(
     settings: Any,
     project_id: str,
     files: list[Any],
+    *,
+    trusted_upload_root: Path | None = None,
 ) -> list[tuple[Any, Path]]:
     """
-    用途：10 文件/200MiB/大小一致/no-follow 叶与父目录/穿越门；零 parser 前置。
+    用途：10 文件/200MiB/大小一致/upload 根→项目目录→叶各级 no-follow；零 parser 前置。
     返回：[(row, path), ...] 与 files 同序。
     """
     if len(files) > _MAX_SOURCE_FILES:
         raise ValueError(_MSG_TOO_MANY_SOURCES)
 
+    # G1：上传根 fail-closed（静态 reparse / OSError）
+    if trusted_upload_root is None:
+        trusted_root = _freeze_trusted_upload_root(settings)
+    else:
+        trusted_root = Path(trusted_upload_root)
+        if _is_symlink_or_reparse(trusted_root):
+            raise ValueError(_MSG_PARENT_REPARSE)
+
+    project_dir = trusted_root / project_id
+    # 项目目录首检
+    if _is_symlink_or_reparse(project_dir):
+        raise ValueError(_MSG_PARENT_REPARSE)
+
     resolved: list[tuple[Any, Path]] = []
     total = 0
     for row in files:
         try:
-            leaf = _literal_source_path(settings, project_id, row.stored_name)
+            leaf = _literal_source_path(
+                settings,
+                project_id,
+                row.stored_name,
+                trusted_upload_root=trusted_root,
+            )
         except ValueError:
             raise
-        # 叶 symlink/reparse（先于 resolve 跟随，避免 junction 被当成越界）
+        # 叶 symlink/reparse（先于 resolve 跟随）
         if _is_symlink_or_reparse(leaf):
             raise ValueError(_MSG_LEAF_REPARSE)
         parent = leaf.parent
@@ -888,17 +966,26 @@ def _validate_parse_sources(
         try:
             path = file_service.resolve_path(settings, project_id, row.stored_name)
         except ValueError as exc:
-            raise ValueError(_MSG_TRAVERSAL) from exc
+            raise ValueError(_MSG_TRAVERSAL) from None
+        # TOCTOU：resolve 后再次探测 project_dir / parent reparse（禁止仅靠路径字符串）
+        if _is_symlink_or_reparse(project_dir):
+            raise ValueError(_MSG_PARENT_REPARSE)
+        if _is_symlink_or_reparse(parent):
+            raise ValueError(_MSG_PARENT_REPARSE)
+        if _is_symlink_or_reparse(leaf):
+            raise ValueError(_MSG_LEAF_REPARSE)
+        # P1 晚期 lstat：OSError 直接固定脱敏 ValueError fail-closed；
+        # 禁止 exists_nofollow / path.is_file / resolved path follow 回退；
+        # 成功后才 _stat_nofollow_size(leaf)。
         try:
-            if not leaf.exists() and not path.is_file():
-                raise RuntimeError("文件已丢失，请重新上传")
-            actual = _stat_nofollow_size(leaf if leaf.exists() else path)
-        except ValueError:
-            raise
-        except RuntimeError:
-            raise
-        except OSError as exc:
-            raise RuntimeError("文件已丢失，请重新上传") from exc
+            os.lstat(str(leaf))
+        except OSError:
+            raise ValueError(_MSG_LEAF_REPARSE) from None
+        try:
+            actual = _stat_nofollow_size(leaf)
+        except OSError:
+            # nofollow size OSError → fail-closed（禁止 follow 回退）
+            raise ValueError(_MSG_LEAF_REPARSE) from None
 
         declared = int(getattr(row, "size_bytes", 0) or 0)
         if declared != actual:
@@ -948,6 +1035,25 @@ def _fail_managed_task(
     )
 
 
+def _fail_remote_task(
+    db: Session,
+    task: ProjectTaskRow,
+    *,
+    diagnostic_code: str,
+    error: str,
+) -> None:
+    """用途：remote_mineru 失败终态；result 精确二键 engine/diagnosticCode。"""
+    _set_task(
+        db,
+        task,
+        status="failed",
+        progress=100,
+        message="任务失败",
+        error=error,
+        result={"engine": "remote_mineru", "diagnosticCode": diagnostic_code},
+    )
+
+
 def _parse_finalize_success(
     db: Session,
     workspace_id: str,
@@ -961,7 +1067,9 @@ def _parse_finalize_success(
 ) -> None:
     """
     用途：parse 专用 finalizer——editor-state + revision + project + task success
-      同事务唯一 commit；任一步异常 rollback 后写固定 failed。
+      同事务唯一 commit；与 cancel 条件 UPDATE 互斥 CAS 抢终态。
+    规则：五域写后以条件 UPDATE 从 running/pending 认领 success；
+      rowcount!=1 → TaskCancelled 并完整回滚五域；禁止第二 commit。
     """
     try:
         _upsert_editor_state_for_task(
@@ -983,33 +1091,50 @@ def _parse_finalize_success(
             technical_plan_step=1,
             commit=False,
         )
-        _set_task(
-            db,
-            task,
-            status="success",
-            progress=100,
-            message="解析完成",
-            error="",
-            result={
-                "engine": engine,
-                "fileCount": file_count,
-                "chars": len(md),
-            },
-            commit=False,
+        # 先同步内存行字段（事件 prev 快照）
+        prev_status = task.status
+        prev_progress = int(task.progress)
+        result_obj = {
+            "engine": engine,
+            "fileCount": file_count,
+            "chars": len(md),
+        }
+        result_json = _dumps(result_obj)
+        now = _now()
+        # CAS：仅 pending/running 可认领 success；cancel 先胜则 rowcount=0
+        res = db.execute(
+            update(ProjectTaskRow)
+            .where(
+                ProjectTaskRow.id == task.id,
+                ProjectTaskRow.status.in_(tuple(ACTIVE_STATUSES)),
+            )
+            .values(
+                status="success",
+                progress=100,
+                message="解析完成",
+                error=None,
+                result_json=result_json,
+                updated_at=now,
+            )
         )
-        # flush 后 identity 变 clean；提交前再标脏，保证同事务最终 commit 可被观测
-        from sqlalchemy.orm.attributes import flag_modified
-
-        flag_modified(task, "status")
-        flag_modified(task, "progress")
-        project = db.get(Project, project_id)
-        if project is not None:
-            flag_modified(project, "status")
-        # P5：唯一 commit 成功后立即返回；禁止 refresh/再读，避免已提交成功包被后置 DB 故障映射为 failed
+        rc = res.rowcount
+        if rc is None or int(rc) != 1:
+            db.rollback()
+            raise TaskCancelled()
+        # 同步 ORM 行并写 success event（仍未 commit）
+        db.refresh(task)
+        _maybe_record_task_status_event(
+            db,
+            workspace_id=workspace_id,
+            task=task,
+            prev_status=prev_status,
+            prev_progress=prev_progress,
+        )
+        # 唯一 commit
         db.commit()
         return
     except TaskCancelled:
-        # P2：取消不得提交已 flush 的 editor/revision/project；先 rollback 再抛
+        # cancel 先胜：完整回滚五域
         db.rollback()
         raise
     except editor_state_service.EditorStateVersionConflict:
@@ -1040,7 +1165,8 @@ def _run_parse(
 ) -> None:
     """
     用途：按引擎解析项目全部 source（ASC），成功后单事务写入 editor-state。
-    对接：parse_engines（lightweight）；managed_parse_runtime_service（managed）。
+    对接：parse_engines（lightweight）；managed_parse_runtime_service（managed）；
+      remote_mineru_client（remote_mineru 旁路，不经 parse_engines/managed）。
     二次开发：失败不得覆盖已有 parsedMarkdown；result 仅三键/二键摘要。
     """
     settings = get_settings()
@@ -1049,7 +1175,14 @@ def _run_parse(
         raise ValueError("请先上传招标文件")
     _assert_not_cancelled(db, task)
 
-    validated = _validate_parse_sources(settings, project_id, files)
+    # 冻结可信 upload root（非 reparse）；传 client 最终句柄边界门
+    trusted_upload_root = _freeze_trusted_upload_root(settings)
+    validated = _validate_parse_sources(
+        settings,
+        project_id,
+        files,
+        trusted_upload_root=trusted_upload_root,
+    )
     _set_task(
         db,
         task,
@@ -1058,8 +1191,12 @@ def _run_parse(
     )
 
     raw_engine = (payload or {}).get("engine")
+    is_remote = isinstance(raw_engine, str) and raw_engine.strip() == "remote_mineru"
     is_managed = isinstance(raw_engine, str) and raw_engine.strip() == "managed"
-    if is_managed:
+    # remote 旁路必须在 resolve_engine_name 之前；不注册 parse_engines
+    if is_remote:
+        engine_name = "remote_mineru"
+    elif is_managed:
         engine_name = "managed"
     else:
         engine_name = parse_engines.resolve_engine_name(raw_engine)
@@ -1071,7 +1208,118 @@ def _run_parse(
     used_engine = engine_name
     file_count = len(validated)
 
-    if is_managed:
+    if is_remote:
+        from app.services import remote_mineru_client as remote_client
+
+        # 任务层后缀门（零 runner）
+        for row, _path in validated:
+            suf = Path(str(row.filename or "")).suffix.lower()
+            if suf not in remote_client.ALLOWED_SOURCE_SUFFIXES:
+                try:
+                    _fail_remote_task(
+                        db,
+                        task,
+                        diagnostic_code="source_type_unsupported",
+                        error=remote_client.message_for_code("source_type_unsupported"),
+                    )
+                except TaskCancelled:
+                    return
+                return
+
+        # 任务层 Token 门（零 runner；仅 env alias 字段）
+        token = str(getattr(settings, "remote_mineru_token", "") or "").strip()
+        if not token:
+            try:
+                _fail_remote_task(
+                    db,
+                    task,
+                    diagnostic_code="token_unconfigured",
+                    error=remote_client.message_for_code("token_unconfigured"),
+                )
+            except TaskCancelled:
+                return
+            return
+
+        sources = [
+            remote_client.RemoteSource(
+                path=path,
+                filename=str(row.filename or path.name),
+                expected_size=int(getattr(row, "size_bytes", 0) or 0),
+            )
+            for row, path in validated
+        ]
+
+        def _cancel_check_remote() -> bool:
+            # G2：refresh 任意失败 fail-closed 视为 interrupted（True）
+            try:
+                db.refresh(task)
+            except Exception:
+                return True
+            return task.status == "cancelled"
+
+        err_cls = remote_client.RemoteMineruError
+        known_remote_codes = {
+            "token_unconfigured",
+            "source_type_unsupported",
+            "api_request_failed",
+            "api_response_invalid",
+            "api_auth_failed",
+            "api_quota_exceeded",
+            "api_busy",
+            "api_input_rejected",
+            "api_upstream_error",
+            "upload_failed",
+            "poll_budget_exceeded",
+            "remote_parse_failed",
+            "zip_download_failed",
+            "zip_unsafe",
+            "zip_full_md_missing",
+            "zip_full_md_ambiguous",
+            "output_invalid",
+            "source_size_exceeded",
+            "source_identity_mismatch",
+            "interrupted",
+            "internal_error",
+        }
+        try:
+            out = remote_client.run_remote_mineru_parse(
+                sources,
+                token=token,
+                cancel_check=_cancel_check_remote,
+                trusted_upload_root=trusted_upload_root,
+            )
+            md = out.markdown
+            file_count = int(out.file_count)
+            used_engine = "remote_mineru"
+        except err_cls as exc:
+            # 只信 diagnostic_code；error 由 message_for_code 重建；禁止 str(exc)/message/args
+            raw_code = getattr(exc, "diagnostic_code", None)
+            if isinstance(raw_code, str) and raw_code in known_remote_codes:
+                code = raw_code
+                msg = remote_client.message_for_code(code)
+            else:
+                code = "internal_error"
+                msg = remote_client.message_for_code(code)
+            try:
+                _fail_remote_task(db, task, diagnostic_code=code, error=msg)
+            except TaskCancelled:
+                return
+            return
+        except TaskCancelled:
+            raise
+        except Exception:
+            # 禁止 logger.exception 输出 remote 异常链（防路径/Token/URL 泄漏）
+            try:
+                _fail_remote_task(
+                    db,
+                    task,
+                    diagnostic_code="internal_error",
+                    error=remote_client.message_for_code("internal_error"),
+                )
+            except TaskCancelled:
+                return
+            return
+    elif is_managed:
         from app.services import managed_parse_runtime_service as managed_svc
 
         manifest = str(getattr(settings, "managed_ocr_manifest_path", "") or "").strip()
@@ -1094,10 +1342,11 @@ def _run_parse(
         ]
 
         def _cancel_check() -> bool:
+            # G2：managed 同类 refresh 失败 fail-closed interrupted
             try:
                 db.refresh(task)
             except Exception:
-                return False
+                return True
             return task.status == "cancelled"
 
         core_mod = managed_svc.get_core_module()

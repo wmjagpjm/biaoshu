@@ -113,6 +113,14 @@ class Settings(BaseSettings):
         default="",
         validation_alias="BIAOSHU_MANAGED_OCR_MANIFEST",
     )
+    # V1-N：远程 MinerU 批量解析 Token；空=未配置（零 HTTP 固定失败）
+    # 环境仅接受 BIAOSHU_REMOTE_MINERU_TOKEN（validation_alias 唯一）；
+    # 不支持 Settings(remote_mineru_token=...) 字段名构造；
+    # 必要显式构造时使用 alias 关键字 BIAOSHU_REMOTE_MINERU_TOKEN=...。
+    remote_mineru_token: str = Field(
+        default="",
+        validation_alias="BIAOSHU_REMOTE_MINERU_TOKEN",
+    )
 
     @field_validator("auth_mode", mode="before")
     @classmethod
