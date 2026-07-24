@@ -20,6 +20,11 @@
  *       旧 GET 并等各 terminal+continuation；以 held post poll>0 证明未提交窗口；
  *       page.evaluate 一次性 snapshot 仍 building/rebuild disabled；finally 释放全部；
  *       删除 postRebuildGets>=0 恒真。不得弱化 finishedAt/19/T1/双 rebuild/503/隐私。
+ * P2-TEST（独立红门，不弱化 Q12）：folders/docs ready 后 hold click 前首个 semantic GET A；
+ *       点击重建并 hold POST；POST 仍 hold 时让 A 以 503+合成敏感 detail 结束并证固定错误出现；
+ *       再释 POST=202 building；POST 后 poll 全 hold 且至少一条 arrived 未提交；
+ *       一次性 snapshot：status=构建中、重建 disabled、semantic-index-error 精确 0、
+ *       panel/body 无旧错误与合成 detail。预期 production 成功分支未清错 → 第 6 步业务红。
  */
 import { expect, test, type Page, type Route } from "@playwright/test";
 
@@ -271,6 +276,29 @@ function armSemanticGetResponseTerminal(
     .then(() => "response" as const);
 }
 
+/** 释放 rebuild POST 前 arm 精确 browser terminal（仅 response；stub 均为 fulfill） */
+function armSemanticRebuildResponseTerminal(
+  page: Page,
+  timeoutMs = 12_000,
+): Promise<"response"> {
+  return page
+    .waitForEvent("response", {
+      predicate: (r) => {
+        try {
+          const path = new URL(r.url()).pathname;
+          return (
+            path === "/api/knowledge/semantic-index/rebuild" &&
+            r.request().method() === "POST"
+          );
+        } catch {
+          return false;
+        }
+      },
+      timeout: timeoutMs,
+    })
+    .then(() => "response" as const);
+}
+
 /** 业务 catch/finally 可观测 continuation：terminal 后再跑双 RAF + microtask */
 async function businessContinuationBarrier(page: Page) {
   await page.evaluate(
@@ -329,6 +357,47 @@ async function readSemanticPanelDomSnapshot(page: Page): Promise<{
       counts: textOf("semantic-index-counts"),
       degrade: textOf("semantic-index-degrade"),
       rebuildDisabled: rebuild ? Boolean(rebuild.disabled) : null,
+    };
+  });
+}
+
+/**
+ * P2：一次性 DOM 快照（含 error 精确计数 + panel/body 文本）。
+ * 禁止 auto-retry expect 等待后续 poll 掩蔽；禁止 errorCount>=0 恒真。
+ */
+async function readSemanticPanelErrorClearSnapshot(page: Page): Promise<{
+  status: string;
+  rebuildDisabled: boolean | null;
+  errorCount: number;
+  errorText: string;
+  panelText: string;
+  bodyText: string;
+}> {
+  return page.evaluate(() => {
+    const textOf = (testId: string) => {
+      const el = document.querySelector(`[data-testid="${testId}"]`);
+      return (el?.textContent ?? "").replace(/\s+/g, " ").trim();
+    };
+    const rebuild = document.querySelector(
+      '[data-testid="semantic-index-rebuild"]',
+    ) as HTMLButtonElement | null;
+    const panel = document.querySelector(
+      '[data-testid="semantic-index-panel"]',
+    );
+    const errors = document.querySelectorAll(
+      '[data-testid="semantic-index-error"]',
+    );
+    return {
+      status: textOf("semantic-index-status"),
+      rebuildDisabled: rebuild ? Boolean(rebuild.disabled) : null,
+      errorCount: errors.length,
+      errorText: Array.from(errors)
+        .map((el) => (el.textContent ?? "").replace(/\s+/g, " ").trim())
+        .join("|"),
+      panelText: (panel?.textContent ?? "").replace(/\s+/g, " ").trim(),
+      bodyText: (document.body?.textContent ?? "")
+        .replace(/\s+/g, " ")
+        .trim(),
     };
   });
 }
@@ -1209,6 +1278,217 @@ test.describe("P9C 离线语义索引状态面板", () => {
           await safeFulfillHeld(held.route, notBuilt);
           held.released = true;
         }
+      }
+      for (const held of postRebuildHeld) {
+        if (!held.released) {
+          await safeFulfillHeld(held.route, building);
+          held.released = true;
+        }
+      }
+    }
+  });
+
+  /**
+   * P2 独立红门（不改写/弱化 Q12 成功迟到门）：
+   * 1) folders/docs ready 后 hold click 前首个 semantic GET A，明确 A arrived；
+   * 2) 点击重建并 hold POST，明确 POST arrived 未返回；
+   * 3) POST 仍 hold 时让 A（及所有仍 hold 的 pre-GET）以 503+合成敏感 detail 结束，
+   *    等 response terminal + 业务 continuation，先证固定错误「语义索引状态不可用」真实出现；
+   * 4) 再释放 POST 为 202 building，等 POST terminal + continuation，DOM 进入「构建中」；
+   * 5) POST 后全部 poll GET 必须 hold，且至少一条 arrived 未提交，排除后续成功 poll 清错；
+   * 6) 一次 DOM snapshot：status=构建中、重建 disabled、semantic-index-error 精确 0、
+   *    panel/body 不含旧错误与合成 detail；
+   * 7) finally 释放/abort 全部 held，禁止悬挂。
+   * 当前 production 成功分支写 building 时未再 setSemanticError(null) → 第 6 步稳定业务红。
+   */
+  test("rebuild 成功须清除 POST hold 窗口旧 GET 错误", async ({ page }) => {
+    const building = baseIndex({
+      id: "idx_building",
+      status: "running",
+      errorCode: "index_building",
+      totalChunks: 12,
+      embeddedChunks: 4,
+      chunkCount: 4,
+      startedAt: "2026-07-14T10:00:00+00:00",
+    });
+    /** 合成敏感 detail：仅服务端 body，禁止进入 DOM */
+    const SENSITIVE_DETAIL =
+      "pre-rebuild get failed at C:\\\\Users\\\\secret\\\\bge apiKey=sk-pre-rebuild-get-leak path=/var/secret/pre";
+    const SENSITIVE_MARKERS = [
+      "sk-pre-rebuild-get-leak",
+      "Users\\\\secret",
+      "/var/secret/pre",
+      "apiKey=",
+    ] as const;
+
+    type HeldRoute = { route: Route; released: boolean };
+    /** click 前（及 POST 未返回前）到达的 semantic GET；首个为 A */
+    const preRebuildHeld: HeldRoute[] = [];
+    /** POST 返回后的 poll：全程 hold 至 finally */
+    const postRebuildHeld: HeldRoute[] = [];
+    let rebuildHits = 0;
+    /** POST 是否已进入 route（arrived） */
+    let postArrived = false;
+    /** POST 是否已 fulfill（returned） */
+    let postReleased = false;
+    let heldPost: HeldRoute | null = null;
+
+    await page.route("**/*", async (route) => {
+      const req = route.request();
+      const url = new URL(req.url());
+      if (url.hostname !== "127.0.0.1" && url.hostname !== "localhost") {
+        await route.abort("failed");
+        return;
+      }
+      const path = url.pathname;
+      const method = req.method();
+      if (path === "/api/knowledge/semantic-index/rebuild" && method === "POST") {
+        rebuildHits += 1;
+        postArrived = true;
+        heldPost = { route, released: false };
+        // hold：不 fulfill，明确 arrived 未返回
+        return;
+      }
+      if (
+        (path === "/api/knowledge/semantic-index" ||
+          path.startsWith("/api/knowledge/semantic-index/")) &&
+        method === "GET" &&
+        !path.includes("/rebuild")
+      ) {
+        if (!postReleased) {
+          // click 前 / POST hold 窗口：全部 hold（首个为 A）
+          preRebuildHeld.push({ route, released: false });
+          return;
+        }
+        // POST 后 poll 全 hold（禁止即时成功 fulfill 清错掩蔽）
+        postRebuildHeld.push({ route, released: false });
+        return;
+      }
+      if (path === "/api/knowledge/folders" && method === "GET") {
+        await json(route, [{ id: "fld_inbox", name: "收件箱", parentId: null }]);
+        return;
+      }
+      if (path === "/api/knowledge/docs" && method === "GET") {
+        await json(route, []);
+        return;
+      }
+      if (path.startsWith("/api/cards") && method === "GET") {
+        await json(route, []);
+        return;
+      }
+      if (path === "/api/health") {
+        await json(route, {
+          status: "ok",
+          service: "biaoshu-e2e",
+          workspaceId: "ws_e2e",
+        });
+        return;
+      }
+      await route.continue();
+    });
+
+    try {
+      await page.goto("/knowledge-base");
+      await expect(page.getByRole("heading", { name: "知识库" })).toBeVisible({
+        timeout: 20_000,
+      });
+
+      // 1) folders/docs ready 后 hold click 前首个 semantic GET A
+      await expect
+        .poll(() => preRebuildHeld.length, { timeout: 15_000 })
+        .toBeGreaterThanOrEqual(1);
+      const a = preRebuildHeld[0]!;
+      expect(a.released, "A 必须 arrived 且未提交").toBe(false);
+      expect(postArrived, "click 前 POST 不得已到达").toBe(false);
+      expect(rebuildHits).toBe(0);
+
+      const panel = page.getByTestId("semantic-index-panel");
+      const buildBtn = panel.getByTestId("semantic-index-rebuild");
+      await expect(buildBtn).toBeEnabled({ timeout: 10_000 });
+      const preCountAtClick = preRebuildHeld.length;
+
+      // 2) 点击重建并 hold POST
+      await buildBtn.click();
+      await expect
+        .poll(() => postArrived && heldPost != null, { timeout: 10_000 })
+        .toBe(true);
+      expect(rebuildHits).toBe(1);
+      expect(postReleased).toBe(false);
+      expect(heldPost!.released, "POST 必须 arrived 未返回").toBe(false);
+      // click 前 A 集合冻结口径：pre 在 POST 返回前可继续 arrived，但 A 仍是首个
+      expect(preRebuildHeld[0]).toBe(a);
+      expect(preRebuildHeld.length).toBeGreaterThanOrEqual(preCountAtClick);
+
+      // 3) POST 仍 hold：让全部 pre-GET（含 A）以 503 + 敏感 detail 结束
+      expect(postReleased, "释 A 前 POST 仍必须 hold").toBe(false);
+      for (const held of preRebuildHeld) {
+        if (held.released) continue;
+        const terminal = armSemanticGetResponseTerminal(page);
+        await json(held.route, { detail: SENSITIVE_DETAIL }, 503);
+        held.released = true;
+        await terminal;
+        await businessContinuationBarrier(page);
+      }
+      // 先证固定错误真实出现（不得跳过）
+      const err = panel.getByTestId("semantic-index-error");
+      await expect(err).toBeVisible({ timeout: 10_000 });
+      await expect(err).toHaveText(STATUS_UNAVAILABLE_MSG);
+      await expect(panel).not.toContainText(/sk-pre-rebuild-get-leak|apiKey=/i);
+      await expect(page.locator("body")).not.toContainText(
+        "sk-pre-rebuild-get-leak",
+      );
+
+      // 4) 释放 POST=202 building；等 terminal + continuation；DOM 构建中
+      expect(heldPost, "POST held 句柄必须存在").not.toBeNull();
+      const postTerminal = armSemanticRebuildResponseTerminal(page);
+      await json(heldPost!.route, building, 202);
+      heldPost!.released = true;
+      postReleased = true;
+      await postTerminal;
+      await businessContinuationBarrier(page);
+      await expect(panel.getByTestId("semantic-index-status")).toContainText(
+        "构建中",
+        { timeout: 10_000 },
+      );
+
+      // 5) POST 后 poll 全 hold，至少一条 arrived 未提交
+      await expect
+        .poll(() => postRebuildHeld.length, { timeout: 20_000 })
+        .toBeGreaterThan(0);
+      expect(
+        postRebuildHeld.every((h) => !h.released),
+        "snapshot 前 post poll 必须全 hold",
+      ).toBe(true);
+      const heldPostPollCount = postRebuildHeld.filter((h) => !h.released)
+        .length;
+      expect(heldPostPollCount, "held post poll 必须 >0").toBeGreaterThan(0);
+
+      // 6) 一次 snapshot：构建中 + rebuild disabled + error 精确 0 + 无旧错/敏感
+      const snap = await readSemanticPanelErrorClearSnapshot(page);
+      expect(snap.status).toMatch(/构建中/);
+      expect(snap.status).not.toMatch(/未构建|已就绪|就绪/);
+      expect(snap.rebuildDisabled).toBe(true);
+      // 业务红点：成功 building 后旧 GET 错误必须清除（errorCount 精确 0）
+      expect(snap.errorCount, "semantic-index-error 必须精确 0").toBe(0);
+      expect(snap.errorText).toBe("");
+      expect(snap.panelText).not.toContain(STATUS_UNAVAILABLE_MSG);
+      expect(snap.bodyText).not.toContain(STATUS_UNAVAILABLE_MSG);
+      for (const marker of SENSITIVE_MARKERS) {
+        expect(snap.panelText).not.toContain(marker);
+        expect(snap.bodyText).not.toContain(marker);
+      }
+    } finally {
+      // 7) 释放/收口全部 held，禁止悬挂
+      for (const held of preRebuildHeld) {
+        if (!held.released) {
+          await safeFulfillHeld(held.route, { detail: SENSITIVE_DETAIL }, 503);
+          held.released = true;
+        }
+      }
+      if (heldPost && !heldPost.released) {
+        await safeFulfillHeld(heldPost.route, building, 202);
+        heldPost.released = true;
+        postReleased = true;
       }
       for (const held of postRebuildHeld) {
         if (!held.released) {
