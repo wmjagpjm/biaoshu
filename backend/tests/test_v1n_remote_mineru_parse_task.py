@@ -3629,3 +3629,861 @@ def test_t13_message_for_code_exact_all_codes():
     for code, expected in FIXED_MESSAGES.items():
         assert msg_fn(code) == expected, f"{code}: {msg_fn(code)!r} != {expected!r}"
     assert msg_fn("totally_unknown_code") == FIXED_MESSAGES["internal_error"]
+
+# ===========================================================================
+# V1-N 任务发布门 Q4：路径/取消/事务仲裁（关键字 v1n_task_release_gate_q4）
+# failure-first：生产未修时必须真实 failed；禁止 sleep/宽 OR/仅返回值自证。
+# ===========================================================================
+
+# 合成敏感 marker：仅测试注入；公开表面必须零泄漏
+_Q4_REFRESH_MARKER = "Q4_SYNTH_REFRESH_FAIL_SENSITIVE_MARKER_v1n"
+_Q4_LSTAT_MARKER = "Q4_SYNTH_LSTAT_OSERROR_SENSITIVE_MARKER_v1n"
+_Q4_NOFOLLOW_MARKER = "Q4_SYNTH_NOFOLLOW_STAT_OSERROR_SENSITIVE_MARKER_v1n"
+
+
+def _q4_reparse_stat(*, is_dir: bool = False) -> Any:
+    """用途：合成 reparse/symlink 风格 lstat 结果（M2/T5b 同构）。"""
+
+    class _St:
+        st_mode = 0o40777 if is_dir else 0o120777
+        st_size = 0 if is_dir else 10
+        st_ino = 91
+        st_dev = 1
+        st_nlink = 1
+        st_uid = 0
+        st_gid = 0
+        st_atime = 0
+        st_mtime = 0
+        st_ctime = 0
+        st_file_attributes = 0x400
+
+    return _St()
+
+
+def _q4_assert_runner_http_zero(calls: list, body: dict, *, label: str) -> None:
+    assert calls == [], f"业务红：{label} runner 必须为 0，actual={calls}"
+    assert body["status"] == "failed", (
+        f"业务红：{label} 必须 fail-closed failed，actual={body['status']} body={body}"
+    )
+    # 共享路径门：result 不得带 remote 二键/成功三键
+    assert body.get("result") is None, (
+        f"业务红：{label} 路径门 result 必须 is None，actual={body.get('result')!r}"
+    )
+
+
+def test_v1n_task_release_gate_q4_upload_root_parent_chain_fail_closed(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """
+    Q4-G1：上传根/父链 fail-closed（failure-first）。
+    - upload_dir 静态 reparse
+    - project_dir 检查后被替换为 junction/reparse
+    - 任一层 lstat/reparse 探测 OSError
+    - nofollow stat OSError
+    全部 runner/HTTP=0；五域零写。
+    """
+    _enable_fake_token(monkeypatch)
+    mod = _load_client()
+    calls: list[str] = []
+
+    def guard(*a, **k):
+        calls.append("run")
+        raise AssertionError("路径 fail-closed 后不得进入 remote runner")
+
+    _patch_remote_run(monkeypatch, mod, guard)
+    settings = get_settings()
+    upload_root = Path(settings.upload_dir).resolve()
+
+    # --- A) upload_dir 静态 reparse：可信根本身被标为 reparse 必须拒绝 ---
+    calls.clear()
+    pid_a = _create_project(client, "V1N-Q4-root")
+    _upload(client, pid_a, "root.pdf", b"%PDF-Q4-ROOT", "application/pdf")
+    before_a = _snapshot_domains(client, pid_a)
+    real_path_lstat = Path.lstat
+    real_os_lstat = os.lstat
+    real_is_symlink = Path.is_symlink
+
+    def _root_lstat(self, *a, **k):
+        p = Path(self)
+        try:
+            if p.resolve() == upload_root:
+                return _q4_reparse_stat(is_dir=True)
+        except OSError:
+            pass
+        # 字面 upload_dir 字符串也命中（resolve 前后）
+        if str(p) == str(upload_root) or str(p.resolve()) == str(upload_root):
+            return _q4_reparse_stat(is_dir=True)
+        return real_path_lstat(self, *a, **k)
+
+    def _root_os_lstat(path, *a, **k):
+        try:
+            if Path(path).resolve() == upload_root:
+                return _q4_reparse_stat(is_dir=True)
+        except OSError:
+            pass
+        return real_os_lstat(path, *a, **k)
+
+    def _root_is_symlink(self) -> bool:
+        try:
+            if Path(self).resolve() == upload_root:
+                return True
+        except OSError:
+            return True
+        return real_is_symlink(self)
+
+    monkeypatch.setattr(Path, "lstat", _root_lstat)
+    monkeypatch.setattr(os, "lstat", _root_os_lstat)
+    monkeypatch.setattr(Path, "is_symlink", _root_is_symlink, raising=False)
+    body_a = _parse_remote(client, pid_a)
+    _q4_assert_runner_http_zero(calls, body_a, label="upload_dir-static-reparse")
+    _assert_domains_unchanged(
+        client, pid_a, before_a, label="q4-upload-root", task_id=body_a["id"]
+    )
+    # 恢复
+    monkeypatch.setattr(Path, "lstat", real_path_lstat)
+    monkeypatch.setattr(os, "lstat", real_os_lstat)
+    monkeypatch.setattr(Path, "is_symlink", real_is_symlink, raising=False)
+
+    # --- B) project_dir 在父检查后被替换为 reparse（TOCTOU）---
+    calls.clear()
+    pid_b = _create_project(client, "V1N-Q4-proj")
+    _upload(client, pid_b, "proj.pdf", b"%PDF-Q4-PROJ", "application/pdf")
+    from app.services import file_service
+
+    db_b = SessionLocal()
+    try:
+        row_b = db_b.scalars(
+            select(ProjectFileRow).where(ProjectFileRow.project_id == pid_b)
+        ).one()
+        stored_b = row_b.stored_name
+    finally:
+        db_b.close()
+    leaf_b = Path(file_service.resolve_path(settings, pid_b, stored_b)).resolve()
+    project_dir_b = leaf_b.parent
+    external_b = _track_temp(tmp_path / "q4-external-proj")
+    external_b.mkdir(parents=True, exist_ok=True)
+    twin_b = external_b / stored_b
+    twin_b.write_bytes(leaf_b.read_bytes())
+    assert twin_b.stat().st_size == leaf_b.stat().st_size
+    before_b = _snapshot_domains(client, pid_b)
+    parent_checks = {"n": 0}
+    real_is_rep = task_service._is_symlink_or_reparse
+
+    def _parent_then_replace(path: Path) -> bool:
+        # 首次对 project_dir 判定为非 reparse 后，立即替换为指向 external 的 junction/目录 reparse 证据
+        try:
+            resolved = path.resolve()
+        except OSError:
+            resolved = path
+        if resolved == project_dir_b or str(path) == str(project_dir_b):
+            parent_checks["n"] += 1
+            if parent_checks["n"] == 1:
+                # 模拟「检查通过」后目录被换成 reparse 指向外部
+                # 不依赖管理员权限：后续 leaf resolve 跟随到 external 时，
+                # 正确实现须在使用前再次 no-follow 校验父链并拒绝。
+                # 用 lstat seam 让「再检」可见 reparse。
+                return False
+            return True  # 再次探测必须看见 reparse
+        return real_is_rep(path)
+
+    monkeypatch.setattr(task_service, "_is_symlink_or_reparse", _parent_then_replace)
+    # 同时让 resolve 后的 path 可落到 external twin（模拟 junction 跟随）
+    real_resolve = file_service.resolve_path
+
+    def _resolve_follow_external(settings_a, project_id, stored_name):
+        p = real_resolve(settings_a, project_id, stored_name)
+        if project_id == pid_b and parent_checks["n"] >= 1:
+            return twin_b
+        return p
+
+    monkeypatch.setattr(file_service, "resolve_path", _resolve_follow_external)
+    body_b = _parse_remote(client, pid_b)
+    _q4_assert_runner_http_zero(calls, body_b, label="project_dir-replace-reparse")
+    # Q4：必须发生第二次父链 reparse 探测；仅 resolved 越界不得冒充关闭 TOCTOU
+    assert parent_checks["n"] >= 2, (
+        f"业务红：project_dir 替换后须再次父链 reparse 探测，"
+        f"parent_checks.n={parent_checks['n']}"
+    )
+    _assert_domains_unchanged(
+        client, pid_b, before_b, label="q4-project-replace", task_id=body_b["id"]
+    )
+    monkeypatch.setattr(task_service, "_is_symlink_or_reparse", real_is_rep)
+    monkeypatch.setattr(file_service, "resolve_path", real_resolve)
+
+    # --- C) 任一层 lstat/reparse 探测 OSError → fail-closed（禁止 return False）---
+    calls.clear()
+    pid_c = _create_project(client, "V1N-Q4-lstat")
+    _upload(client, pid_c, "lstat.pdf", b"%PDF-Q4-LSTAT", "application/pdf")
+    before_c = _snapshot_domains(client, pid_c)
+    db_c = SessionLocal()
+    try:
+        row_c = db_c.scalars(
+            select(ProjectFileRow).where(ProjectFileRow.project_id == pid_c)
+        ).one()
+        stored_c = row_c.stored_name
+    finally:
+        db_c.close()
+    leaf_c = Path(file_service.resolve_path(settings, pid_c, stored_c)).resolve()
+
+    def _lstat_oserror(self, *a, **k):
+        p = Path(self)
+        try:
+            if p.resolve() == leaf_c or str(self).endswith(stored_c):
+                raise OSError(_Q4_LSTAT_MARKER + " " + FAKE_TOKEN)
+        except OSError as exc:
+            if _Q4_LSTAT_MARKER in str(exc):
+                raise
+        return real_path_lstat(self, *a, **k)
+
+    def _os_lstat_oserror(path, *a, **k):
+        if stored_c in str(path) or str(leaf_c) in str(path):
+            raise OSError(_Q4_LSTAT_MARKER + " " + FAKE_TOKEN)
+        return real_os_lstat(path, *a, **k)
+
+    monkeypatch.setattr(Path, "lstat", _lstat_oserror)
+    monkeypatch.setattr(os, "lstat", _os_lstat_oserror)
+    body_c = _parse_remote(client, pid_c)
+    _q4_assert_runner_http_zero(calls, body_c, label="lstat-OSError-fail-closed")
+    err_c = str(body_c.get("error") or "")
+    assert _Q4_LSTAT_MARKER not in err_c, "业务红：lstat OSError marker 不得泄漏到 error"
+    assert FAKE_TOKEN not in err_c
+    _assert_domains_unchanged(
+        client, pid_c, before_c, label="q4-lstat-oserror", task_id=body_c["id"]
+    )
+    monkeypatch.setattr(Path, "lstat", real_path_lstat)
+    monkeypatch.setattr(os, "lstat", real_os_lstat)
+
+    # --- D) nofollow stat OSError → fail-closed（禁止回退 follow stat）---
+    calls.clear()
+    pid_d = _create_project(client, "V1N-Q4-nf")
+    content_d = b"%PDF-Q4-NOFOLLOW-SIZE-16"
+    _upload(client, pid_d, "nf.pdf", content_d, "application/pdf")
+    before_d = _snapshot_domains(client, pid_d)
+    db_d = SessionLocal()
+    try:
+        row_d = db_d.scalars(
+            select(ProjectFileRow).where(ProjectFileRow.project_id == pid_d)
+        ).one()
+        stored_d = row_d.stored_name
+        declared_d = int(row_d.size_bytes or 0)
+    finally:
+        db_d.close()
+    leaf_d = Path(file_service.resolve_path(settings, pid_d, stored_d)).resolve()
+    assert declared_d == len(content_d)
+    real_path_stat = Path.stat
+
+    def _nofollow_oserror(self, *a, **k):
+        follow = k.get("follow_symlinks", True)
+        # Path.stat(follow_symlinks=False) 或位置兼容
+        if a:
+            # 旧签名极少见；忽略
+            pass
+        p = Path(self)
+        try:
+            matched = p.resolve() == leaf_d or str(self).endswith(stored_d)
+        except OSError:
+            matched = str(self).endswith(stored_d)
+        if matched and follow is False:
+            raise OSError(_Q4_NOFOLLOW_MARKER + " " + FAKE_TOKEN)
+        return real_path_stat(self, *a, **k)
+
+    monkeypatch.setattr(Path, "stat", _nofollow_oserror)
+    body_d = _parse_remote(client, pid_d)
+    _q4_assert_runner_http_zero(calls, body_d, label="nofollow-stat-OSError")
+    err_d = str(body_d.get("error") or "")
+    assert _Q4_NOFOLLOW_MARKER not in err_d
+    assert FAKE_TOKEN not in err_d
+    _assert_domains_unchanged(
+        client, pid_d, before_d, label="q4-nofollow-oserror", task_id=body_d["id"]
+    )
+    monkeypatch.setattr(Path, "stat", real_path_stat)
+    get_settings.cache_clear()
+
+
+def test_v1n_task_release_gate_q4_remote_source_trusted_root_final_handle_contract(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    Q4-G1 契约冻结：RemoteSource 协作须携带启动时冻结的可信非 reparse upload root；
+    最终句柄路径校验 seam 存在；禁止仅靠 Path.resolve 字符串边界。
+    task 接线必须把 trusted_upload_root 传入 run_remote_mineru_parse。
+    """
+    _enable_fake_token(monkeypatch)
+    mod = _load_client()
+    out_cls = _require_attr(mod, "RemoteParseOutput")
+    run_fn = _require_attr(mod, "run_remote_mineru_parse")
+    sig = inspect.signature(run_fn)
+    assert "trusted_upload_root" in sig.parameters, (
+        "业务红：run_remote_mineru_parse 必须接受 trusted_upload_root（任务/client 协作契约）"
+    )
+    assert hasattr(mod, "_v1n_final_path_for_fd"), (
+        "业务红：必须提供 _v1n_final_path_for_fd(fd)->str 最终句柄路径 seam"
+    )
+    # 冻结：trusted 根须为 keyword-only 或显式关键字形参
+    p_root = sig.parameters["trusted_upload_root"]
+    assert p_root.kind in (
+        inspect.Parameter.KEYWORD_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    ), f"业务红：trusted_upload_root 形参 kind 非法 actual={p_root.kind}"
+
+    captured: list[dict[str, Any]] = []
+    # Q3：调用前冻结 expected_root；fake 只 capture，禁止内部 AssertionError 假绿
+    expected_root = Path(get_settings().upload_dir).resolve()
+
+    def fake_run(sources, *, token, cancel_check, **kwargs):
+        captured.append(
+            {
+                "trusted_upload_root": kwargs.get("trusted_upload_root", "MISSING"),
+                "n_sources": len(sources),
+            }
+        )
+        md = "# Q4_TRUSTED_ROOT_OK\n"
+        return out_cls(markdown=md, file_count=1, chars=len(md))
+
+    _patch_remote_run(monkeypatch, mod, fake_run)
+    pid = _create_project(client, "V1N-Q4-trust")
+    _upload(client, pid, "t.pdf", b"%PDF-Q4-T", "application/pdf")
+    body = _parse_remote(client, pid)
+    assert len(captured) == 1, (
+        f"业务红：runner 必须精确 1 次以观测 trusted_upload_root，actual={len(captured)}"
+    )
+    root = captured[0]["trusted_upload_root"]
+    assert root is not None and root != "MISSING", (
+        "业务红：task 接线必须传入 trusted_upload_root，禁止缺省 None 逃逸"
+    )
+    actual = Path(root).resolve()
+    assert actual == expected_root, (
+        f"业务红：trusted_upload_root 必须等于启动冻结 upload 根，"
+        f"actual={actual} expected={expected_root}"
+    )
+    # 成功路径必须 success（禁止 failed 折叠假绿）
+    assert body["status"] == "success", (
+        f"业务红：trusted_upload_root 契约门必须 success，actual={body['status']!r}"
+    )
+    get_settings.cache_clear()
+
+
+def test_v1n_task_release_gate_q4_cancel_refresh_fail_closed_interrupted_zero_external(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    """
+    Q4-G2：remote cancel_check 的 db.refresh 抛合成敏感异常 → 视为 interrupted；
+    fake runner 在 cancel_check 后零后续外部动作；公开表面固定中文、marker 零泄漏。
+    """
+    _enable_fake_token(monkeypatch)
+    mod = _load_client()
+    err_cls = _require_attr(mod, "RemoteMineruError")
+    out_cls = _require_attr(mod, "RemoteParseOutput")
+    external_actions: list[str] = []
+    check_results: list[Any] = []
+    from app.core import database as dbmod
+
+    real_refresh = dbmod.Session.refresh
+    refresh_hits = {"n": 0}
+
+    def boom_refresh(self, instance, *a, **k):
+        # 仅 runner 内 cancel_check 窗口注入；禁止破坏进度/finalizer 的其它 refresh
+        if (
+            isinstance(instance, ProjectTaskRow)
+            and getattr(boom_refresh, "_arm", False)
+        ):
+            refresh_hits["n"] += 1
+            raise RuntimeError(
+                f"{_Q4_REFRESH_MARKER} {FAKE_TOKEN} {FAKE_BATCH} {BODY_CANARY}"
+            )
+        return real_refresh(self, instance, *a, **k)
+
+    def fake_run(sources, *, token, cancel_check, **kwargs):
+        boom_refresh._arm = True  # type: ignore[attr-defined]
+        try:
+            # 每个外部动作前检查（对齐 client 契约）
+            r = cancel_check()
+        finally:
+            # 立即撤防：后续 finalizer/进度 refresh 不得再炸出敏感异常
+            boom_refresh._arm = False  # type: ignore[attr-defined]
+        check_results.append(r)
+        # fail-closed：refresh 失败必须让 check 指示停止（True）或等价中断
+        if r is True:
+            raise err_cls(
+                diagnostic_code="interrupted",
+                message=FIXED_MESSAGES["interrupted"],
+            )
+        # 若错误地返回 False，后续外部动作会被记录 → 业务红
+        external_actions.append("POST_file_urls_batch")
+        external_actions.append("PUT_presign")
+        external_actions.append("GET_poll")
+        external_actions.append("GET_zip")
+        md = "# Q4_SHOULD_NOT_SUCCEED\n"
+        return out_cls(markdown=md, file_count=1, chars=len(md))
+
+    monkeypatch.setattr(dbmod.Session, "refresh", boom_refresh)
+    _patch_remote_run(monkeypatch, mod, fake_run)
+
+    pid = _create_project(client, "V1N-Q4-cref")
+    _upload(client, pid, ORIGINAL_FILENAME, b"%PDF-Q4-CR", "application/pdf")
+    before = _snapshot_domains(client, pid)
+    temp_abs = str(Path(get_settings().upload_dir).resolve())
+    with caplog.at_level(logging.DEBUG):
+        body = _parse_remote(client, pid)
+
+    assert check_results, "业务红：fake runner 必须调用 cancel_check"
+    assert check_results[0] is True, (
+        f"业务红：refresh 失败时 cancel_check 必须 fail-closed 为 True（interrupted），"
+        f"actual={check_results!r}"
+    )
+    assert external_actions == [], (
+        f"业务红：cancel_check 中断后零后续外部动作，actual={external_actions}"
+    )
+    assert refresh_hits["n"] >= 1, "业务红：必须真实触发 refresh 失败注入"
+    # 未 API cancel → failed + 二键 interrupted（与 t9d 一致）
+    assert body["status"] == "failed", (
+        f"业务红：refresh 失败 interrupted 必须 failed，actual={body['status']}"
+    )
+    _assert_fail_result(body, code="interrupted")
+    _assert_domains_unchanged(
+        client, pid, before, label="q4-cancel-refresh", task_id=body["id"]
+    )
+    _scan_task_surfaces(
+        client,
+        pid,
+        body,
+        extra=[
+            temp_abs,
+            _Q4_REFRESH_MARKER,
+            FAKE_TOKEN,
+            FAKE_BATCH,
+            BODY_CANARY,
+            ORIGINAL_FILENAME,
+        ],
+        caplog_text=caplog.text,
+        monkeypatch=monkeypatch,
+    )
+    public_blob = json.dumps(body, ensure_ascii=False) + (caplog.text or "")
+    assert _Q4_REFRESH_MARKER not in public_blob
+    assert FAKE_TOKEN not in public_blob
+    get_settings.cache_clear()
+
+
+def test_v1n_task_release_gate_q4_managed_cancel_refresh_fail_closed_representative(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    Q4-G2 代表门：managed 同类 cancel_check 闭包 refresh 失败亦须 fail-closed interrupted；
+    不扩大生产文件白名单；仅观测 managed 路径。
+    """
+    from app.services import managed_parse_runtime_service as managed_svc
+    from app.core import database as dbmod
+
+    assert hasattr(managed_svc, "run_managed_parse")
+    core = managed_svc.get_core_module()
+    assert core is not None
+
+    rt = _track_temp(Path(tempfile.mkdtemp(prefix="v1n_q4_m_")))
+    try:
+        cli = rt / "venv" / "Scripts" / "mineru.exe"
+        cli.parent.mkdir(parents=True, exist_ok=True)
+        cli.write_bytes(b"MZ-fake")
+        marker = rt / "models" / ".biaoshu-ready"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_bytes(b"ready\n")
+        manifest = rt / "runtime-manifest.json"
+        five = {
+            "schemaVersion": 1,
+            "engine": "mineru",
+            "cliRelativePath": "venv/Scripts/mineru.exe",
+            "modelMarkerRelativePath": "models/.biaoshu-ready",
+            "requiredFreeBytes": 1,
+        }
+        manifest.write_text(json.dumps(five, ensure_ascii=False), encoding="utf-8")
+        monkeypatch.setenv(MANIFEST_ENV, str(manifest))
+        get_settings.cache_clear()
+        settings = get_settings()
+        if hasattr(settings, "managed_ocr_manifest_path"):
+            monkeypatch.setattr(settings, "managed_ocr_manifest_path", str(manifest))
+
+        def fake_ready(*a, **k):
+            from types import SimpleNamespace
+
+            return SimpleNamespace(ok=True, diagnostic_code="static_ready")
+
+        def fake_recheck(*a, **k):
+            return True
+
+        monkeypatch.setattr(core, "validate_runtime_ready", fake_ready)
+        monkeypatch.setattr(core, "recheck_cli_and_marker", fake_recheck)
+
+        external: list[str] = []
+        checks: list[Any] = []
+        real_refresh = dbmod.Session.refresh
+
+        def boom_refresh(self, instance, *a, **k):
+            if isinstance(instance, ProjectTaskRow) and getattr(
+                boom_refresh, "_arm", False
+            ):
+                raise RuntimeError(f"{_Q4_REFRESH_MARKER} managed {FAKE_TOKEN}")
+            return real_refresh(self, instance, *a, **k)
+
+        def fake_managed(sources, *, manifest_path, cancel_check, **kwargs):
+            boom_refresh._arm = True  # type: ignore[attr-defined]
+            try:
+                r = cancel_check()
+            finally:
+                boom_refresh._arm = False  # type: ignore[attr-defined]
+            checks.append(r)
+            if r is True:
+                # managed 中断：抛 PreflightError interrupted 或等价
+                err_cls = getattr(core, "PreflightError", None)
+                if err_cls is not None:
+                    try:
+                        raise err_cls(
+                            diagnostic_code="interrupted",
+                            message="操作已中断",
+                        )
+                    except TypeError:
+                        exc = err_cls("interrupted")
+                        try:
+                            exc.diagnostic_code = "interrupted"
+                        except Exception:
+                            pass
+                        raise exc
+                raise RuntimeError("interrupted")
+            external.append("managed_cli_run_one")
+            from types import SimpleNamespace
+
+            return SimpleNamespace(
+                markdown="# MANAGED_Q4_SHOULD_NOT\n",
+                file_count=1,
+                chars=20,
+            )
+
+        monkeypatch.setattr(dbmod.Session, "refresh", boom_refresh)
+        monkeypatch.setattr(managed_svc, "run_managed_parse", fake_managed)
+
+        pid = _create_project(client, "V1N-Q4-mref")
+        _upload(client, pid, "m.pdf", b"%PDF-Q4-M", "application/pdf")
+        before = _snapshot_domains(client, pid)
+        res = client.post(
+            f"/api/projects/{pid}/tasks?sync=true",
+            json={"type": "parse", "payload": {"engine": "managed"}},
+        )
+        assert res.status_code == 201, res.text
+        body = res.json()
+        assert checks, "业务红：managed runner 必须调用 cancel_check"
+        assert checks[0] is True, (
+            f"业务红：managed refresh 失败 cancel_check 必须 True，actual={checks!r}"
+        )
+        assert external == [], (
+            f"业务红：managed 中断后零 CLI/外部动作，actual={external}"
+        )
+        assert body["status"] == "failed", (
+            f"业务红：managed interrupted 必须 failed，actual={body['status']}"
+        )
+        result = body.get("result") or {}
+        assert result.get("engine") == "managed"
+        assert result.get("diagnosticCode") == "interrupted", (
+            f"业务红：managed diagnosticCode 必须 interrupted，actual={result!r}"
+        )
+        err = str(body.get("error") or "")
+        assert _Q4_REFRESH_MARKER not in err
+        assert FAKE_TOKEN not in err
+        _assert_domains_unchanged(
+            client, pid, before, label="q4-managed-refresh", task_id=body["id"]
+        )
+    finally:
+        if rt.exists():
+            shutil.rmtree(rt)
+        assert not rt.exists()
+    get_settings.cache_clear()
+
+
+def test_v1n_task_release_gate_q4_cancel_wins_finalizer_window_zero_partial(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    Q4-G3a：两真实 Session + barrier：cancel 在 finalizer 五域提交窗口胜出；
+    最终精确 cancelled、result None、editor/revision/project/success event 零部分写回。
+    窗口定义：_upsert_editor_state_for_task（finalizer 首写 helper）调用之前，
+    已捕获 worker Session/目标 project 身份且尚未调用 real helper
+    （此时尚无五域写锁，cancel 独立 Session 可先真实 commit；
+    禁止 sleep/宽 OR/autoflush/session.dirty/flag_modified/仅返回值自证）。
+    try/finally 无条件 release + cancel_done.set + worker join，失败不污染 teardown。
+    """
+    _enable_fake_token(monkeypatch)
+    mod = _load_client()
+    out_cls = _require_attr(mod, "RemoteParseOutput")
+    md = f"# Q4_FINALIZER_CANCEL_RACE\n{BODY_CANARY}\n"
+
+    def fake_run(*a, **k):
+        return out_cls(markdown=md, file_count=1, chars=len(md))
+
+    _patch_remote_run(monkeypatch, mod, fake_run)
+
+    in_window = threading.Event()
+    cancel_done = threading.Event()
+    workers: list[threading.Thread] = []
+    matched: list[threading.Thread] = []
+    real_thread = threading.Thread
+    window_hits = {"n": 0}
+
+    class _Track(real_thread):  # type: ignore[valid-type,misc]
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            workers.append(self)
+
+    monkeypatch.setattr(threading, "Thread", _Track)
+    import app.services.task_service as _ts
+
+    monkeypatch.setattr(_ts.threading, "Thread", _Track)
+
+    real_upsert = task_service._upsert_editor_state_for_task
+    # 仅 worker 同一 Session + 目标 project 在首写 helper 前 barrier，避免 cancel 互锁
+    worker_gate: dict[str, Any] = {
+        "db": None,
+        "workspace_id": None,
+        "project_id": None,
+    }
+
+    def spy_upsert(*a, **k):
+        # _upsert_editor_state_for_task(db, workspace_id, project_id, **kwargs)
+        # finalizer 首写：commit=False；禁止依赖 dirty/flag_modified
+        if k.get("commit") is False:
+            db = a[0] if a else None
+            ws = a[1] if len(a) > 1 else None
+            proj = a[2] if len(a) > 2 else None
+            if worker_gate["db"] is None:
+                worker_gate["db"] = db
+                worker_gate["workspace_id"] = ws
+                worker_gate["project_id"] = proj
+            if (
+                db is worker_gate["db"]
+                and proj == worker_gate["project_id"]
+                and ws == worker_gate["workspace_id"]
+            ):
+                window_hits["n"] += 1
+                in_window.set()
+                assert cancel_done.wait(timeout=15), (
+                    "业务红：cancel 未在 finalizer 首写 helper 前窗口完成"
+                )
+            # 尚未调用 real helper 时 cancel 已真实 commit
+        return real_upsert(*a, **k)
+
+    monkeypatch.setattr(task_service, "_upsert_editor_state_for_task", spy_upsert)
+
+    try:
+        pid = _create_project(client, "V1N-Q4-cw")
+        _upload(client, pid, "c.pdf", b"%PDF-Q4-CW", "application/pdf")
+        before = _snapshot_domains(client, pid)
+
+        body0 = _parse_remote(client, pid, sync=False)
+        tid = body0["id"]
+        assert in_window.wait(timeout=15), (
+            "业务红：必须进入 finalizer _upsert_editor_state_for_task 首写前窗口"
+        )
+
+        # 第二真实 Session：HTTP cancel（独立会话；worker 尚未进入五域首写）
+        cancel_res = client.post(f"/api/projects/{pid}/tasks/{tid}/cancel")
+        assert cancel_res.status_code == 200, (
+            f"业务红：窗口内 cancel 必须 200，"
+            f"actual={cancel_res.status_code} {cancel_res.text}"
+        )
+        # cancel 已真实 commit 后再放行 worker 调用 real helper
+        cancel_done.set()
+
+        matched = [w for w in workers if w.name == f"task-{tid}"]
+        assert len(matched) == 1, (
+            f"业务红：必须唯一 worker task-{tid}，"
+            f"workers={[w.name for w in workers]}"
+        )
+        matched[0].join(timeout=15)
+        assert not matched[0].is_alive(), "业务红：worker 必须结束"
+
+        final = client.get(f"/api/projects/{pid}/tasks/{tid}")
+        assert final.status_code == 200
+        body = final.json()
+        assert body["status"] == "cancelled", (
+            f"业务红：cancel 胜出最终必须 cancelled，"
+            f"actual={body['status']} body={body}"
+        )
+        assert body.get("result") is None, (
+            f"业务红：cancelled result 必须 None，actual={body.get('result')!r}"
+        )
+        # 五域：不得留下成功正文/修订/项目步进/success event
+        assert md.strip() not in (_editor_md(client, pid) or ""), (
+            "业务红：cancel 胜出不得写回 finalizer 正文"
+        )
+        assert BODY_CANARY not in (_editor_md(client, pid) or "")
+        after = _snapshot_domains(client, pid, task_id=tid)
+        assert after["rev"] == before["rev"], (
+            f"业务红：cancel 胜出 revision 不得增加，"
+            f"{before['rev']}->{after['rev']}"
+        )
+        assert after["status"] == before["status"], (
+            f"业务红：cancel 胜出 project.status 不得被 success 包改写，"
+            f"{before['status']}->{after['status']}"
+        )
+        assert after["step"] == before["step"], (
+            f"业务红：cancel 胜出 technical_plan_step 不得改写，"
+            f"{before['step']}->{after['step']}"
+        )
+        assert _success_event_count(pid, tid) == 0, (
+            "业务红：cancel 胜出 success event 必须为 0"
+        )
+        assert window_hits["n"] >= 1, (
+            "业务红：必须真实经过 finalizer 首写 helper 前窗口 barrier"
+        )
+    finally:
+        # 无条件 release：断言失败/cancel 异常也不得挂死 worker 或污染 teardown
+        cancel_done.set()
+        for w in matched:
+            if w.is_alive():
+                w.join(timeout=15)
+        for w in workers:
+            if w.is_alive():
+                w.join(timeout=5)
+        get_settings.cache_clear()
+
+
+def test_v1n_task_release_gate_q4_finalizer_wins_cancel_cannot_overwrite_success(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    Q4-G3b：反向——finalizer 已合法抢占 success 后，cancel 不得覆盖 success。
+    两 Session + barrier：cancel 在 ACTIVE 检查后写库前挂起；finalizer 先提交 success；
+    再放行 cancel；终态必须保持 success + 五域成功包。
+    """
+    from app.core import database as dbmod
+    from app.services import editor_state_service
+
+    _enable_fake_token(monkeypatch)
+    mod = _load_client()
+    out_cls = _require_attr(mod, "RemoteParseOutput")
+    md = f"# Q4_FINALIZER_WINS\n{BODY_CANARY}\n"
+
+    def fake_run(*a, **k):
+        return out_cls(markdown=md, file_count=1, chars=len(md))
+
+    _patch_remote_run(monkeypatch, mod, fake_run)
+
+    cancel_in_write_path = threading.Event()
+    finalizer_committed = threading.Event()
+    allow_cancel_commit = threading.Event()
+    workers: list[threading.Thread] = []
+    real_thread = threading.Thread
+
+    class _Track(real_thread):  # type: ignore[valid-type,misc]
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            workers.append(self)
+
+    monkeypatch.setattr(threading, "Thread", _Track)
+    import app.services.task_service as _ts
+
+    monkeypatch.setattr(_ts.threading, "Thread", _Track)
+
+    real_up = editor_state_service.upsert_editor_state
+    real_maybe = task_service._maybe_record_task_status_event
+    real_commit = dbmod.Session.commit
+    # Q8：按 Session 身份拦 commit，删除对 production dirty/flag_modified 的依赖
+    worker_sess: dict[str, Any] = {"db": None}
+
+    def spy_up(*a, **k):
+        # finalizer 入口：捕获 worker Session；等 cancel 已进入写路径
+        if k.get("commit") is False:
+            worker_sess["db"] = a[0] if a else None
+            assert cancel_in_write_path.wait(timeout=15), (
+                "业务红：finalizer 等待 cancel 进入写路径超时"
+            )
+        return real_up(*a, **k)
+
+    def spy_commit(self, *a, **k):
+        wdb = worker_sess.get("db")
+        # cancel Session（非 worker）：须等 finalizer 已提交 success 后再放行
+        if wdb is not None and self is not wdb:
+            assert finalizer_committed.wait(timeout=15), (
+                "业务红：cancel 提交前 finalizer 必须已合法 success"
+            )
+            assert allow_cancel_commit.wait(timeout=10)
+            return real_commit(self, *a, **k)
+        result = real_commit(self, *a, **k)
+        # worker Session 提交后标记 finalizer 已抢占
+        if wdb is not None and self is wdb:
+            finalizer_committed.set()
+        return result
+
+    def gated_maybe(db, *a, **k):
+        t = k.get("task")
+        if t is not None and getattr(t, "status", None) == "cancelled":
+            cancel_in_write_path.set()
+            assert finalizer_committed.wait(timeout=15), (
+                "业务红：cancel 写路径等待 finalizer success 超时"
+            )
+        return real_maybe(db, *a, **k)
+
+    monkeypatch.setattr(editor_state_service, "upsert_editor_state", spy_up)
+    monkeypatch.setattr(dbmod.Session, "commit", spy_commit)
+    monkeypatch.setattr(task_service, "_maybe_record_task_status_event", gated_maybe)
+
+    pid = _create_project(client, "V1N-Q4-fw")
+    _upload(client, pid, "f.pdf", b"%PDF-Q4-FW", "application/pdf")
+
+    body0 = _parse_remote(client, pid, sync=False)
+    tid = body0["id"]
+
+    cancel_holder: dict[str, Any] = {}
+
+    def _cancel_thread():
+        try:
+            r = client.post(f"/api/projects/{pid}/tasks/{tid}/cancel")
+            cancel_holder["status_code"] = r.status_code
+            cancel_holder["body"] = r.text
+        except Exception as exc:  # noqa: BLE001
+            cancel_holder["exc"] = repr(exc)
+
+    t_cancel = real_thread(target=_cancel_thread, name="q4-cancel-racer")
+    t_cancel.start()
+
+    matched = [w for w in workers if w.name == f"task-{tid}"]
+    assert len(matched) == 1, (
+        f"业务红：必须唯一 worker task-{tid}，"
+        f"workers={[w.name for w in workers]}"
+    )
+    matched[0].join(timeout=20)
+    assert finalizer_committed.is_set(), (
+        f"业务红：finalizer 必须提交 success；cancel_holder={cancel_holder}"
+    )
+    allow_cancel_commit.set()
+    t_cancel.join(timeout=15)
+    # Q8：cancel 线程结束 / 无异常 / 确定 HTTP 结果
+    assert not t_cancel.is_alive(), (
+        f"业务红：cancel 线程必须结束；cancel_holder={cancel_holder}"
+    )
+    assert "exc" not in cancel_holder, (
+        f"业务红：cancel 线程不得抛异常；cancel_holder={cancel_holder}"
+    )
+    assert isinstance(cancel_holder.get("status_code"), int), (
+        f"业务红：cancel 必须产生确定 HTTP status_code；cancel_holder={cancel_holder}"
+    )
+    assert cancel_holder["status_code"] in {200, 400, 409}, (
+        f"业务红：cancel HTTP 状态须为契约终态码 200/400/409，"
+        f"actual={cancel_holder['status_code']}"
+    )
+    assert not matched[0].is_alive(), "业务红：worker 必须结束"
+
+    final = client.get(f"/api/projects/{pid}/tasks/{tid}")
+    assert final.status_code == 200
+    body = final.json()
+    assert body["status"] == "success", (
+        f"业务红：finalizer 已抢占后 cancel 不得覆盖 success，"
+        f"actual={body['status']} cancel_http={cancel_holder}"
+    )
+    assert isinstance(body.get("result"), dict)
+    assert body["result"].get("engine") == ENGINE
+    assert BODY_CANARY in (_editor_md(client, pid) or ""), (
+        "业务红：success 正文必须保留"
+    )
+    assert _success_event_count(pid, tid) == 1, (
+        "业务红：success event 必须精确 1"
+    )
+    get_settings.cache_clear()

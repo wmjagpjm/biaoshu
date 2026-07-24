@@ -149,6 +149,89 @@ git diff --check
 **退出标准：** py_compile 通过；helper 定向门通过；`git diff --check` 对 tracked 无错误；变更文件集合 **精确等于** 四白名单；Codex 侧 collect-only + 两文件合并 failure-first **可收集**且存在真实 **failed**（业务红）；发送 **一个** `review_request`。
 状态保持：**production 未授权**；真实外网 / Token **did-not-run**。
 
+### 阶段 1.E：V1 发布高风险门 failure-first（TEST-Q3，本任务）
+
+前置确认：六项边界全 YES（`msg_d5699a2489e84998b8c274c70c55b85c` / `msg_2b226ff3bc534ba1b3413ccd3c51ba52`）；全局 `_raise` 回归全 YES（`msg_4f0cf83b325c4738921c090ecd4858c0` / `msg_c781a179da2640588329fbdbede66230`）。
+
+| 节点 | 关键字 / 测试 | 发布门要点（不得后置） |
+| --- | --- | --- |
+| Q1 | `test_v1n_release_gate_q1_*` | `_json_or_invalid` + OSError + UTF-8 正文 marker；公开异常可达图零 marker |
+| Q2 | `test_v1n_release_gate_q2_*` | 累计=expected_size、Content-Length、禁 `FILE_SHARE_WRITE`、持句柄同尺寸改写行为门 |
+| Q3 | `test_v1n_release_gate_q3_*` | POST/PUT/poll canary stream；JSON 1MiB / PUT 64KiB cap；阶段码；**ZIP 压缩单块前门**（`Accept-Encoding: identity` 拒非 identity **或** `iter_raw`+每块 `remaining+1`；`as_bytes_lens`/`buffer_full_lens` 任一 `>remaining+1` 完整物化否决 partial_ok；超大单块后 canary 零读） |
+| Q4 | `test_v1n_release_gate_q4_*` | resolve/open 后重算 PUT remaining |
+| Q5 | `test_v1n_release_gate_q5_*` | `trusted_upload_root` + `_v1n_final_path_for_fd`；越界零 PUT（仅测/契约冻结） |
+| Q6 | `test_v1n_release_gate_q6_*` | EOCD/ZIP64 前门；真实一致 >4096 空成员 CD/EOCD；ZipFile 构造=0；夹具 spy 前构造/run 前清零；合法小 ZIP production hit；ZIP 3xx/坏 ZIP 错误码语义不回退 |
+| Q7 | `test_v1n_release_gate_q7_*` | 普通 `RuntimeError(marker)` → `RemoteMineruError`/`internal_error`；零链；可达图零 marker；`boom_hits=1`、HTTP hits=0；禁 `except RuntimeError: raise` 自缚 |
+
+**本切片命令（禁止完整 174 项）：**
+
+```powershell
+cd C:\Users\Administrator\biaoshu-v1n-prod\backend
+.\.venv\Scripts\python.exe -m py_compile tests\test_v1n_remote_mineru_client.py tests\test_v1n_remote_mineru_parse_task.py
+.\.venv\Scripts\python.exe -m pytest tests\test_v1n_remote_mineru_client.py -k "v1n_release_gate" -q --tb=short
+```
+
+生产四文件哈希必须与 task 基线一致（逐字节保留）；仅 test/docs 可变。**同尺寸稳定不得后置。**
+
+### 阶段 1.E-Q8：ZIP 块 / RuntimeError 测试集中返修（TEST-Q8，本任务）
+
+前置：Codex question `msg_342a4905f7ad45d696d9d49600385a28`；Grok B Q1–Q4 全 YES `msg_7f6614c9ddfe41fc91aa797806003655`；授权 task `msg_ec9c5957154a44fcb6c941d362d63c5f`。HEAD `14ca28a`；四 production 逐字节冻结。
+
+| 项 | 反假绿关闭点 |
+| --- | --- |
+| Q6 夹具 | spy 前构造或每次 run 前 constructs 清零；合法小 ZIP run 前清零后 `constructs > 0`；超限真实一致 4097 空成员 CD/EOCD；ZIP64=真实 4097 CD + ZIP64 EOCD/locator + classic 0xFFFF |
+| Q3 partial_ok | 同时拒绝 `as_bytes_lens` 与 `buffer_full_lens` 任一 `> remaining+1` 完整物化 |
+| Q7 可见计数 | `boom_hits==1`、`http_hits==0`；保留 internal_error / 零链 / marker |
+| 文档 | 契约 §8.4 与计划登记 Q7 + 确认链；不改写历史其它门 |
+
+**白名单（仅四文件；parse_task 仅保持既有 G3a，本切片不再改）：**
+
+1. `backend/tests/test_v1n_remote_mineru_client.py`
+2. `backend/tests/test_v1n_remote_mineru_parse_task.py`（只读保持）
+3. `docs/v1n-remote-mineru-api-contract.md`
+4. `docs/plans/2026-07-23-v1n-remote-mineru-api-plan.md`
+
+**本切片命令（禁止完整 7 门 / 174 / 并发 / 真实网络 Token）：**
+
+```powershell
+cd C:\Users\Administrator\biaoshu-v1n-prod\backend
+python -m py_compile tests\test_v1n_remote_mineru_client.py tests\test_v1n_remote_mineru_parse_task.py
+python -m pytest tests\test_v1n_remote_mineru_client.py -k "v1n_release_gate_q3_zip_compress_single_chunk_gate or v1n_release_gate_q6_eocd_members_before_zipfile or v1n_release_gate_q7_runtime_error_fold_internal_privacy" -q --tb=short
+```
+
+预期当前 production：**3 failed**；无夹具/收集 error。G3a 无需重复。
+
+### 阶段 1.F：任务接线路径/取消/事务红门（TEST-Q4-TASK，本任务）
+
+前置：Codex question `msg_8e33e60747a34973b40f17528577e5fb`；Grok Q1–Q3 全 YES `msg_6d28cf5ddb514cab9587b01ff65b4348`；承接 TEST-Q3 review `msg_3ebf66819b0d48bcb29fa5d3a092314d`。生产仍未授权。
+
+| 组 | 关键字 / 测试 | 要点 |
+| --- | --- | --- |
+| G1 | `test_v1n_task_release_gate_q4_upload_root_parent_chain_fail_closed` | upload_dir 静态 reparse / project_dir 替换 / lstat OSError / nofollow OSError → fail-closed、runner=0 |
+| G1 | `test_v1n_task_release_gate_q4_remote_source_trusted_root_final_handle_contract` | 冻结 `trusted_upload_root` + `_v1n_final_path_for_fd`；task 必传冻结根 |
+| G2 | `test_v1n_task_release_gate_q4_cancel_refresh_fail_closed_interrupted_zero_external` | remote `cancel_check` refresh 失败 → interrupted；零后续外部动作；marker 零泄漏 |
+| G2 | `test_v1n_task_release_gate_q4_managed_cancel_refresh_fail_closed_representative` | managed 同类闭包代表门（不扩生产文件） |
+| G3 | `test_v1n_task_release_gate_q4_cancel_wins_finalizer_window_zero_partial` | 两 Session barrier：窗口前移至 `_upsert_editor_state_for_task` 首写前（禁 `_set_task`/refresh barrier）；cancel 真实 commit 胜出 → cancelled / result None / 零部分写；try/finally 无条件 release |
+| G3 | `test_v1n_task_release_gate_q4_finalizer_wins_cancel_cannot_overwrite_success` | 反向独立门：finalizer 已 success 后 cancel 不得覆盖 |
+
+**白名单（仅三文件）：**
+
+1. `backend/tests/test_v1n_remote_mineru_parse_task.py`
+2. `docs/v1n-remote-mineru-api-contract.md`
+3. `docs/plans/2026-07-23-v1n-remote-mineru-api-plan.md`
+
+禁止：client 测试（已冻结）、四 production、其它测试、Git 写、真实网络/Token/数据。
+
+**本切片命令：**
+
+```powershell
+cd C:\Users\Administrator\biaoshu-v1n-prod\backend
+python -m py_compile tests\test_v1n_remote_mineru_parse_task.py
+python -m pytest tests\test_v1n_remote_mineru_parse_task.py -k "v1n_task_release_gate_q4" -q --tb=short
+```
+
+必须真实 **failed**；禁止 client 7 门 / 完整 174。
+
 ### 阶段 2：Codex 审查测试（本任务后）
 
 1. 排除假绿：常量自指、条件成功、复制 production、真实 sleep、外网、真实 Token。
@@ -193,6 +276,12 @@ app.services.remote_mineru_client
   REMOTE_MAX_SINGLE_SOURCE_BYTES = 200_000_000
   MAX_MD_CODEPOINTS / MAX_MD_UTF8_BYTES
 
+  MAX_HTTP_JSON_RESPONSE_BYTES = 1_048_576   # V1 发布门 Q3：POST/poll
+  MAX_HTTP_PUT_RESPONSE_BYTES = 65_536       # V1 发布门 Q3：PUT 响应丢弃
+  # Windows 打开 share 不得含 FILE_SHARE_WRITE（Q2）
+  # ZipFile 前 EOCD/ZIP64 entries 前门（Q6）；_raise 全局断链（Q1）
+  # _v1n_final_path_for_fd(fd) seam + trusted_upload_root kwarg（Q5，契约先冻结）
+
   def run_remote_mineru_parse(
         sources,
         *,
@@ -202,6 +291,7 @@ app.services.remote_mineru_client
         sleep_fn=None,
         clock_fn=None,
         resolve_addresses_fn=None,  # 可注入；禁止测试真实 DNS
+        trusted_upload_root=None,  # V1 发布门 Q5：最终句柄路径须落在此根下
   ) -> RemoteParseOutput
 ```
 

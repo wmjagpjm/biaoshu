@@ -52,7 +52,7 @@
 | 顺序对应 | 官方示例按序 PUT | **集成假设（待真实烟测确认，不冒充官方保证）**：`file_urls[i]` 与申请 `files[i]`/本地 sources 顺序一一对应；实现按序 PUT，但对账主路径仍以 `data_id` 为准 |
 | 轮询 | `GET /api/v4/extract-results/batch/{batch_id}`，Bearer；状态含 `waiting-file\|pending\|running\|converting\|done\|failed` | 状态集合精确同上；**未知状态=协议失败**；任一 `failed`=整批失败；**全部 `done` 才下载**；禁止部分写回；3xx → `api_request_failed` 且零跟随 |
 | 轮询节奏 | 文档示例常见 interval≈3s；**无公开 SLA** | 本系统策略：**3 秒间隔 / 30 分钟总墙钟**（含信号量等待）；`sleep`/`clock` 可注入；**不得声称官方 SLA** |
-| 结果 ZIP | `full_zip_url` 下载后含 `full.md` 等 | **仅公网 HTTPS**（同 PUT URL 门：无 userinfo/fragment、443/默认端口、可注入 resolver 全地址 global public）；非法形态 → `api_response_invalid` 且 **零 ZIP GET**；3xx → `zip_download_failed` 且零跟随；下载须 **stream/iter_bytes 累计** `MAX_ZIP_BYTES`；**安全**查找唯一 basename=`full.md`；读取/解码/聚合过程中同步执行单文件与累计 **2MiB UTF-8 / 1,000,000 码点** cap（禁止 content/read 后再限）；UTF-8 **严格**解码；**空白 full.md → `output_invalid`**；非 UTF-8 → **`output_invalid`（唯一码，禁止二选一）** |
+| 结果 ZIP | `full_zip_url` 下载后含 `full.md` 等 | **仅公网 HTTPS**（同 PUT URL 门：无 userinfo/fragment、443/默认端口、可注入 resolver 全地址 global public）；非法形态 → `api_response_invalid` 且 **零 ZIP GET**；3xx → `zip_download_failed` 且零跟随；下载须 **stream 累计** `MAX_ZIP_BYTES`；**压缩单块前门（V1）**：ZIP GET 须显式 `Accept-Encoding: identity` 并拒绝非 identity/`Content-Encoding`，**或** `iter_raw` 且每块只接受 `remaining+1`（禁止 `iter_bytes` 透明解压后先完整 `extend` 再判 cap）；超 cap 后不得继续读 canary；**安全**查找唯一 basename=`full.md`；读取/解码/聚合过程中同步执行单文件与累计 **2MiB UTF-8 / 1,000,000 码点** cap（禁止 content/read 后再限）；UTF-8 **严格**解码；**空白 full.md → `output_invalid`**；非 UTF-8 → **`output_invalid`（唯一码，禁止二选一）** |
 | `data_id` | 可选业务标识（≤128，字母数字._-） | **每文件必填**；随机源冻结为单一 **`uuid.uuid4().hex`**（32 小写 hex）；**仅用于结果对账**；缺键/空结果/本地缺失/重复/未知均 `api_response_invalid` 且零 ZIP GET |
 | `file_name` | 结果项可含 `file_name` | **禁止只信 file_name 或结果顺序**；必须 `data_id` 完整一一对账 |
 | 文件名出站 | 官方示例可用真实文件名 | **必须**合成 `source-001.<后缀>`…；禁止原文件名/路径/项目名/正文进入 JSON |
@@ -335,6 +335,47 @@ git diff --check
 
 生产未实现时：收集成功、断言 **业务红**（failed>0）；**不得**为变绿改 production。
 状态保持：**production 未授权**；真实外网 / Token **did-not-run**。
+
+### 8.4 V1 发布高风险门（Q1–Q7，不可后置）
+
+> 本节为 **V1 发布门**：双方已确认 YES（Codex `msg_d5699a2489e84998b8c274c70c55b85c` / Grok `msg_2b226ff3bc534ba1b3413ccd3c51ba52`；全局 `_raise` 回归 `msg_4f0cf83b325c4738921c090ecd4858c0` / `msg_c781a179da2640588329fbdbede66230`）。**禁止**把「同尺寸内容稳定」或下列任一门后置到 V1 之后。测试节点关键字：`v1n_release_gate`。
+>
+> **Q6/Q3/Q7 反假绿返修确认链（TEST-Q8）：** Codex question `msg_342a4905f7ad45d696d9d49600385a28` → Grok B Q1–Q4 全 YES `msg_7f6614c9ddfe41fc91aa797806003655` → 授权 task `msg_ec9c5957154a44fcb6c941d362d63c5f`。仅 test/docs；四 production 逐字节冻结。
+
+| 门 | 冻结要求 | 失败码（典型） |
+| --- | --- | --- |
+| **Q1 异常链** | 至少覆盖 `_json_or_invalid`、上传读 `OSError`、`full.md` `UnicodeDecodeError` 正文 marker；公开 `RemoteMineruError` 的 `__cause__`/`__context__`/args/traceback **可达图零 marker**；`diagnosticCode` 与固定中文不变。`_raise` 无论是否处于 active except 均须真正断链（推荐内部 `from None` 后显式清空 context/cause 再 bare raise）；网络路径继续 except 外折叠。 | 既有阶段码（如 `api_response_invalid` / `upload_failed` / `output_invalid`） |
+| **Q2 源稳定** | 上传流累计字节 **精确等于** `expected_size`（增长/缩短必红）；PUT **`Content-Length=expected_size`**；Windows `CreateFileW` **禁止 `FILE_SHARE_WRITE`**，并用行为门证明**持有上传句柄时同尺寸改写不能成功**（禁止只断常量）。同尺寸内容稳定为 V1 发布门，不得后置。 | `source_identity_mismatch` / `upload_failed` |
+| **Q3 响应 OOM** | POST / PUT / poll **均** `stream=True` 有界读；cap 冻结：`MAX_HTTP_JSON_RESPONSE_BYTES=1_048_576`（POST/poll）、`MAX_HTTP_PUT_RESPONSE_BYTES=65_536`（PUT 丢弃）；超 cap 后 **不得继续读 canary**；保持阶段错误码；合法小响应仍通。ZIP 流式 cap 既有门不回退。**ZIP 压缩单块前门（TEST-Q3-ADD）**：ZIP GET 须显式 `Accept-Encoding: identity` 并拒绝非 identity `Content-Encoding`，**或** `iter_raw` 且每块只接受 `remaining+1`（禁止 `iter_bytes` 透明解压 + 先完整 `extend` 再判 cap）；超大单块后 canary 不可再读。**策略 B 反假绿**：`as_bytes_lens` 与 `buffer_full_lens` 任一出现 `> remaining+1` 完整物化 → 否决 `partial_ok`（禁止 `bytes(chunk)` 整段物化后再切片冒充有界）。 | POST→`api_response_invalid`；PUT→`upload_failed`；poll→`api_response_invalid` 或 `api_request_failed`；ZIP 超限→`zip_unsafe`；编码策略失败→`zip_download_failed`/`zip_unsafe` |
+| **Q4 deadline** | PUT 在 JIT resolve 与 `_open_verified_fd` **之后**重新 `_require_remaining`，`timeout=_timeout_for(新 remaining)`；禁止使用 resolve/open 前的旧 rem。 | `poll_budget_exceeded`（耗尽时） |
+| **Q5 父目录 reparse** | 以**最终已打开句柄路径**对可信 upload root 做边界校验；可注入 seam **`_v1n_final_path_for_fd(fd)->str`**；`run_remote_mineru_parse(..., trusted_upload_root=...)` 关键字冻结。final-path 越界 → **零 PUT** + `source_identity_mismatch`。禁止仅重复 Path 字符串检查冒充关闭 TOCTOU。RemoteSource 字段集 V1 可保持三字段；根边界经入口 kwarg + seam，**本任务不改 production**。 | `source_identity_mismatch` |
+| **Q6 ZIP EOCD** | 在 `ZipFile` **构造前**解析 EOCD / ZIP64 声明 entries；声明成员数 **> 4096** → `zip_unsafe` 且 **ZipFile 构造次数=0**；合法小 ZIP 与坏 ZIP 语义不弱化。**反假绿夹具**：超限必须用**真实一致** 4097 空成员 central directory/EOCD（ZIP64 路径保留真实 4097 CD + ZIP64 EOCD/locator + 经典 0xFFFF sentinel）；禁止仅改 EOCD 声明而真实 CD 仍 1 项；夹具在 ZipFile spy **前**构造或每次 run 前 constructs 清零；合法小 ZIP 须在 run 前清零后证明 production 路径 `constructs > 0`。禁止仅靠 `PK\x01\x02` 字符串计数冒充前门。与 Q3 追加共享：ZIP 3xx→`zip_download_failed`、坏 ZIP→`zip_unsafe` 语义不回退。 | `zip_unsafe` / `zip_download_failed` |
+| **Q7 RuntimeError 折叠** | 主路径普通 `RuntimeError(marker)`（经可注入 seam，如 `_synthetic_name`）必须折叠为公开 `RemoteMineruError` + **`internal_error`** 固定中文；`__cause__`/`__context__` 为 None；异常可达图 **零 marker / Token**。**反假绿**：注入 `boom_hits` 精确 **=1**；HTTP hits 精确 **=0**（折叠发生在任何网络请求之前）。网络熔断须用非 `RuntimeError` 基类（如 `_V1NNetFuseError(BaseException)`），**禁止** `except RuntimeError: raise` 把业务异常自缚透传。 | `internal_error` |
+
+**验收（本切片 test-only）：** 仅 `py_compile` + 聚焦 Q3-ZIP / Q6 / Q7 failure-first **一次**；必须保留真实 **failed**；禁止完整 174 项全量。生产修复另授权。
+
+### 8.5 任务接线发布门（路径 / 取消 / 事务，Q4-TASK）
+
+> 前置双方确认 YES：Codex `msg_8e33e60747a34973b40f17528577e5fb` / Grok `msg_6d28cf5ddb514cab9587b01ff65b4348`。
+> 测试节点关键字：**`v1n_task_release_gate_q4`**（仅 `test_v1n_remote_mineru_parse_task.py`）。
+> **本切片 test-only**；生产 `task_service` 修复另授权。
+
+| 组 | 冻结要求 | 期望观测 |
+| --- | --- | --- |
+| **G1 上传根/父链** | 上传根→项目目录→叶 **每一级** reparse/symlink 探测失败或 `OSError` 均 **fail-closed**；`upload_dir` 静态 reparse、`project_dir` 检查后被替换为 junction/reparse、任一层 `lstat`/`is_symlink` `OSError`、`nofollow stat` `OSError`（禁止回退 follow stat）一律拒绝。**runner / 外网 HTTP = 0**；`result is None`；五域零写。 | `status=failed`；固定中文 `error`（叶/父 reparse 等既有文案或等价路径拒绝）；公开表面零敏感 marker |
+| **G1 协作契约** | `run_remote_mineru_parse(..., trusted_upload_root=...)` + `_v1n_final_path_for_fd(fd)->str` seam；task 接线必须把 **启动时冻结的可信非 reparse upload 根** 传入 client；最终句柄路径须落在该根下，**禁止**仅重复 `Path.resolve` 字符串边界冒充关闭 TOCTOU。RemoteSource 字段集 V1 可保持三字段。 | 缺参/错根 → 业务红；越界 → 零 PUT（client 门） |
+| **G2 cancel refresh** | remote（及 managed 代表门）`cancel_check` 内 `db.refresh(task)` **任意失败** 必须 fail-closed：视为 **interrupted**（`cancel_check() is True` 或等价停止），**禁止** `except: return False` 继续 POST/PUT/poll/ZIP/CLI。公开 `error` 固定中文；合成异常 marker / Token / 路径 **零泄漏**。 | remote：`failed` + 二键 `interrupted`；managed：`failed` + `diagnosticCode=interrupted`；fake runner 在 check 后 **外部动作列表精确空** |
+| **G3 cancel/finalizer 仲裁** | 两 **真实 Session** + 可控 **barrier**（禁止真实 `sleep` / 宽 `OR` / `autoflush`/`session.dirty`/`flag_modified` / 仅 monkeypatch 返回值自证）：(a) G3a 窗口=**`_upsert_editor_state_for_task` 首写 helper 调用之前**（捕获 worker Session/目标 project 身份后、调用 real helper 前），cancel 独立 Session **真实 commit** 胜出 → 最终精确 **`cancelled`**、`result is None`、editor/revision/project/success event **零部分写回**；harness 须 try/finally 无条件 release + worker join，失败不污染 teardown；(b) finalizer 已合法提交 **success** 后 cancel **不得覆盖** success（反向门独立；需同事务条件更新/CAS 抢终态）。 | (a) `cancelled` + 五域与成功包隔离；(b) 终态保持 `success` + 正文/event 保留 |
+
+**验收（本切片 test-only）：**
+
+```powershell
+cd C:\Users\Administrator\biaoshu-v1n-prod\backend
+python -m py_compile tests\test_v1n_remote_mineru_parse_task.py
+python -m pytest tests\test_v1n_remote_mineru_parse_task.py -k "v1n_task_release_gate_q4" -q --tb=short
+```
+
+必须真实 **failed**；禁止再跑 client 7 门或完整 174；生产未授权。
 
 ## 9. 生产候选白名单（仅计划引用，本任务禁止写入）
 

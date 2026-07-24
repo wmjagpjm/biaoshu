@@ -122,6 +122,14 @@ _DATA_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 # 外网熔断计数（autouse 写入）
 _NET_GUARD_HITS: list[str] = []
 
+
+class _V1NNetFuseError(BaseException):
+    """
+    测试专用网络熔断异常（BaseException 子类，非 Exception）。
+    用途：自证真实 guard；避免 production 广义 except RuntimeError 透传特例自缚。
+    """
+
+
 def _fixed_message(code: str) -> str:
     return FIXED_MESSAGES.get(code, FIXED_MESSAGES["internal_error"])
 
@@ -132,7 +140,7 @@ def _fixed_message(code: str) -> str:
 def _net_guard_fail(where: str, *a: Any, **k: Any) -> None:
     msg = f"外网熔断：禁止真实网络 ({where})"
     _NET_GUARD_HITS.append(msg)
-    raise RuntimeError(msg)
+    raise _V1NNetFuseError(msg)
 
 @pytest.fixture(autouse=True)
 def _v1n_client_network_fuse(monkeypatch: pytest.MonkeyPatch):
@@ -2470,7 +2478,7 @@ def test_f5_ignore_transport_must_trip_fuse_not_go_network(tmp_path: Path):
             resolve_addresses_fn=_default_public_resolver,
         )
         raise AssertionError("业务红：忽略 transport 必须失败")
-    except RuntimeError as exc:
+    except _V1NNetFuseError as exc:
         assert "外网熔断" in str(exc)
         assert phases == [], f"业务红：熔断路径 handler 必须零请求，phases={phases}"
         assert len(_NET_GUARD_HITS) > guard_hits_before
@@ -4409,14 +4417,14 @@ def _v1n_transport_safety_helper_self_proof() -> None:
     # 类型名可被伪造，但缺哨兵仍拒绝
     type(forged).__name__ = "_NoPrereadSyncTransport"
     assert getattr(forged, "_v1n_safe_transport_mark", None) is not _V1N_SAFE_TRANSPORT_MARK
-    with pytest.raises(RuntimeError, match="外网熔断|安全 transport"):
+    with pytest.raises(_V1NNetFuseError, match="外网熔断|安全 transport"):
         httpx.Client(transport=forged)  # type: ignore[arg-type]
 
     class _UnknownNetTransport(httpx.BaseTransport):
         def handle_request(self, request: httpx.Request) -> httpx.Response:
             return httpx.Response(200)
 
-    with pytest.raises(RuntimeError, match="外网熔断|安全 transport"):
+    with pytest.raises(_V1NNetFuseError, match="外网熔断|安全 transport"):
         httpx.Client(transport=_UnknownNetTransport())
 
 
@@ -11304,3 +11312,1685 @@ def test_g13_httpx_log_suppress_and_restore(
                 prev_hc_http11["handlers"]
             ), "业务红：httpcore.http11 handlers 必须 finally 恢复"
         # 若已有业务红，仅尽力清理，不再抛清理断言掩盖首错
+
+# ===========================================================================
+# V1 发布高风险门（TEST-Q3 / Q1-Q6）— failure-first 行为门
+# 节点关键字：v1n_release_gate（仅本批新增节点可 -k 定向）
+# 生产未授权修复；本节点必须在当前生产上真实 failed。
+# ===========================================================================
+
+# 测试侧冻结：HTTP 响应有界 cap（不得用 production 自指）
+MAX_HTTP_JSON_RESPONSE_BYTES = 1_048_576  # POST/poll JSON 响应
+MAX_HTTP_PUT_RESPONSE_BYTES = 65_536  # PUT 响应丢弃 cap
+# 唯一合成 marker（禁止真实 Token/路径/正文）
+_RQ_JSON_MARKER = "SYNTH_JSON_BODY_MARKER_V1N_RQ1_NOT_REAL"
+_RQ_OS_PATH_MARKER = "SYNTH_OSERROR_PATH_V1N_RQ1_C_FAKE_ABS_NOT_REAL"
+_RQ_UTF8_BODY_MARKER = b"SYNTH_UTF8_BODY_MARKER_V1N_RQ1_FULLMD_NOT_REAL\xff\xfe"
+
+
+def _rq_is_test_frame(fr: Any) -> bool:
+    """Q1：识别调用者测试帧，避免 f_locals 中合成 marker 造成假红。"""
+    code = getattr(fr, "f_code", None)
+    if code is None:
+        return False
+    name = str(getattr(code, "co_name", "") or "")
+    if name.startswith("test_"):
+        return True
+    fn = str(getattr(code, "co_filename", "") or "").replace("\\", "/")
+    if "/tests/" in fn or fn.endswith("/conftest.py"):
+        return True
+    return False
+
+
+def _rq_walk_exc_graph(exc: BaseException) -> str:
+    """遍历 cause/context/args/traceback 可达文本，供零 marker 断言。"""
+    import traceback as _tb
+
+    parts: list[str] = []
+    stack: list[BaseException] = [exc]
+    seen: set[int] = set()
+    while stack:
+        cur = stack.pop()
+        if cur is None or id(cur) in seen:
+            continue
+        seen.add(id(cur))
+        parts.append(type(cur).__name__)
+        parts.append(str(cur))
+        parts.append(repr(cur))
+        parts.append(repr(getattr(cur, "args", ())))
+        parts.append(str(getattr(cur, "message", "")))
+        parts.append(str(getattr(cur, "diagnostic_code", "")))
+        try:
+            parts.append("".join(_tb.format_exception(type(cur), cur, cur.__traceback__)))
+        except Exception:
+            pass
+        tb = cur.__traceback__
+        depth = 0
+        while tb is not None and depth < 32:
+            fr = tb.tb_frame
+            # Q1：跳过测试帧 f_locals（仍扫 args/cause/context/format_exception）
+            if not _rq_is_test_frame(fr):
+                try:
+                    for k, v in list(fr.f_locals.items())[:64]:
+                        if isinstance(v, (str, bytes, bytearray)):
+                            parts.append(f"{k}={v!r}")
+                        elif isinstance(v, BaseException):
+                            parts.append(repr(getattr(v, "args", ())))
+                except Exception:
+                    pass
+            tb = tb.tb_next
+            depth += 1
+        cause = getattr(cur, "__cause__", None)
+        ctx = getattr(cur, "__context__", None)
+        if cause is not None:
+            stack.append(cause)
+        if ctx is not None:
+            stack.append(ctx)
+    return "\n".join(parts)
+
+
+def _rq_assert_zero_markers(exc: BaseException, markers: list) -> None:
+    blob = _rq_walk_exc_graph(exc)
+    for m in markers:
+        if not m:
+            continue
+        if isinstance(m, (bytes, bytearray)):
+            s = bytes(m).decode("latin-1", errors="replace")
+            assert s not in blob and repr(bytes(m)) not in blob, (
+                f"业务红：异常可达图泄漏字节 marker {bytes(m)!r}"
+            )
+        else:
+            assert str(m) not in blob, f"业务红：异常可达图泄漏 marker {m!r}"
+
+
+def _rq_count_zip_central_entries(raw: bytes) -> int:
+    """用途：统计 central directory 签名条数；夹具自证 only。"""
+    n = 0
+    i = 0
+    while True:
+        j = raw.find(b"PK\x01\x02", i)
+        if j < 0:
+            break
+        n += 1
+        i = j + 4
+    return n
+
+
+def _rq_make_zip_consistent_empty_members(total_entries: int) -> bytes:
+    """
+    Q6 超限夹具内核：真实一致 N 个空成员。
+    local headers + central directory + 经典 EOCD 计数全部 = N；
+    禁止「仅改 EOCD 声明、真实 CD 仍 1 项」假绿。
+    """
+    n = int(total_entries)
+    assert 1 <= n <= 0xFFFF, f"经典一致空成员夹具：n 须在 1..65535，got {n}"
+    buf = io.BytesIO()
+    # ZIP_STORED 加速；短名空载荷，避免巨量分配
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_STORED) as zf:
+        for i in range(n):
+            zf.writestr(f"e{i:04x}", b"")
+    raw = buf.getvalue()
+    eocd = raw.rfind(b"PK\x05\x06")
+    assert eocd >= 0, "夹具：必须含经典 EOCD"
+    disk_n = struct.unpack_from("<H", raw, eocd + 8)[0]
+    total_n = struct.unpack_from("<H", raw, eocd + 10)[0]
+    assert disk_n == n and total_n == n, (
+        f"夹具：EOCD 声明须={n}，got disk={disk_n} total={total_n}"
+    )
+    cd_n = _rq_count_zip_central_entries(raw)
+    assert cd_n == n, f"夹具：central 条目须={n}，got {cd_n}"
+    return raw
+
+
+def _rq_make_zip_eocd_total_entries(total_entries: int) -> bytes:
+    """
+    Q6 经典超限路径：真实一致 total_entries 空成员 CD/EOCD。
+    与「仅改 EOCD 计数」假夹具相对；ZipFile 前前门须在 constructs=0 时拒绝。
+    """
+    return _rq_make_zip_consistent_empty_members(total_entries)
+
+
+def _rq_make_zip64_eocd_total_entries(total_entries: int) -> bytes:
+    """
+    Q6 ZIP64 超限路径：真实 total_entries 个 central directory 空成员，
+    再挂 ZIP64 EOCD + locator + 经典 EOCD 0xFFFF sentinel。
+    禁止真实 CD 仅 1 项却 ZIP64 声明超限的假绿。
+    """
+    n = int(total_entries)
+    assert n > MAX_ZIP_MEMBERS, (
+        f"ZIP64 夹具：entries 须 > MAX_ZIP_MEMBERS={MAX_ZIP_MEMBERS} 以触发契约门，got {n}"
+    )
+    assert 1 <= n <= 0xFFFFFFFFFFFFFFFF, (
+        "ZIP64 夹具：entries 须为正整数且可 pack 为 uint64"
+    )
+    # 先构造真实一致 n 空成员，再升级为 ZIP64 尾部
+    raw = _rq_make_zip_consistent_empty_members(n)
+    data = bytearray(raw)
+    idx = data.rfind(b"PK\x05\x06")
+    assert idx >= 0, "夹具：必须含经典 EOCD"
+    cd_size = struct.unpack_from("<I", data, idx + 12)[0]
+    cd_offset = struct.unpack_from("<I", data, idx + 16)[0]
+    classic_tail = bytearray(data[idx:])
+    # ZIP64 end of central directory record（固定 44 字节可扩展区）
+    zip64_eocd = struct.pack(
+        "<IQHHIIQQQQ",
+        0x06064B50,
+        44,
+        45,
+        45,
+        0,
+        0,
+        n,
+        n,
+        int(cd_size),
+        int(cd_offset),
+    )
+    # ZIP64 EOCD locator：relative offset = 插入点（原经典 EOCD 起点）
+    zip64_locator = struct.pack("<IIQI", 0x07064B50, 0, int(idx), 1)
+    struct.pack_into("<H", classic_tail, 8, 0xFFFF)
+    struct.pack_into("<H", classic_tail, 10, 0xFFFF)
+    out = bytes(data[:idx]) + zip64_eocd + zip64_locator + bytes(classic_tail)
+    assert b"PK\x06\x06" in out and b"PK\x06\x07" in out, (
+        "夹具：必须含 ZIP64 EOCD 与 locator 签名"
+    )
+    # 真实 central 仍为 n 条（插入仅发生在 EOCD 前）
+    assert _rq_count_zip_central_entries(out) == n, (
+        f"夹具：ZIP64 路径 central 须保持 {n} 条"
+    )
+    return out
+
+
+def test_v1n_release_gate_q1_exception_chain_json_oserror_utf8_zero_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    Q1 发布门：_json_or_invalid / OSError 上传读 / UnicodeDecodeError 正文 marker
+    断 RemoteMineruError 的 cause/context/args/traceback 可达图零 marker；
+    diagnosticCode 与固定中文不变。
+    """
+    mod = _load_client()
+    err_cls = _require_attr(mod, "RemoteMineruError")
+    msg_fn = _require_attr(mod, "message_for_code")
+    run = _get_run_fn(mod)
+
+    # --- A) _json_or_invalid 非网络 active-except ---
+    json_fn = getattr(mod, "_json_or_invalid", None)
+    assert callable(json_fn), "业务红：必须暴露 _json_or_invalid 供断链门（或等价可测入口）"
+
+    class _BadJsonResp:
+        status_code = 200
+
+        def json(self) -> Any:
+            raise ValueError(_RQ_JSON_MARKER)
+
+    with pytest.raises(err_cls) as ei_json:
+        json_fn(_BadJsonResp())  # type: ignore[arg-type]
+    _assert_remote_error(ei_json.value, "api_response_invalid", msg_fn=msg_fn)
+    assert ei_json.value.__cause__ is None, "业务红：__cause__ 必须为 None"
+    assert ei_json.value.__context__ is None, (
+        "业务红：__context__ 必须为 None（active except 内 _raise 会挂链）"
+    )
+    _rq_assert_zero_markers(ei_json.value, [_RQ_JSON_MARKER])
+
+    # --- B) OSError 路径（上传读）---
+    p = _write_temp_source(tmp_path, "q1-os.pdf", b"OSDATA-OK-12")
+    holder: dict[str, str] = {}
+    base = _post_ok_single(holder)
+    real_read = os.read
+    read_hits = {"n": 0}
+
+    def boom_read(fd: int, n: int, *a: Any, **k: Any) -> bytes:
+        read_hits["n"] += 1
+        if read_hits["n"] == 1:
+            raise OSError(22, "synthetic-os-read", _RQ_OS_PATH_MARKER)
+        return real_read(fd, n, *a, **k)
+
+    monkeypatch.setattr(os, "read", boom_read)
+
+    def handler_os(request: httpx.Request) -> httpx.Response:
+        early = base(request)
+        if early is not None:
+            return early
+        raise AssertionError("OSError 后不得进入 poll/ZIP")
+
+    with pytest.raises(err_cls) as ei_os:
+        run(
+            _build_sources(mod, [p]),
+            transport=httpx.MockTransport(handler_os),
+            **_run_kwargs(),
+        )
+    _assert_remote_error(ei_os.value, "upload_failed", msg_fn=msg_fn)
+    assert ei_os.value.__cause__ is None
+    assert ei_os.value.__context__ is None
+    _rq_assert_zero_markers(
+        ei_os.value, [_RQ_OS_PATH_MARKER, "synthetic-os-read", str(tmp_path)]
+    )
+
+    # --- C) UnicodeDecodeError 正文 marker（full.md 非 UTF-8）---
+    monkeypatch.setattr(os, "read", real_read)
+    bad_zip = _make_zip_bytes({"full.md": _RQ_UTF8_BODY_MARKER})
+    holder2: dict[str, str] = {}
+    base2 = _post_ok_single(holder2)
+    p2 = _write_temp_source(tmp_path, "q1-utf8.pdf", b"1")
+
+    def handler_u(request: httpx.Request) -> httpx.Response:
+        early = base2(request)
+        if early is not None:
+            return early
+        if request.method == "GET" and PATH_EXTRACT_RESULTS_PREFIX in str(request.url):
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "extract_result": [
+                            {
+                                "data_id": holder2["id"],
+                                "state": "done",
+                                "full_zip_url": ZIP_URL_A,
+                            }
+                        ]
+                    },
+                },
+            )
+        if request.method == "GET" and str(request.url) == ZIP_URL_A:
+            return httpx.Response(200, content=bad_zip)
+        raise AssertionError("unexpected")
+
+    with pytest.raises(err_cls) as ei_u:
+        run(
+            _build_sources(mod, [p2]),
+            transport=httpx.MockTransport(handler_u),
+            **_run_kwargs(),
+        )
+    _assert_remote_error(ei_u.value, "output_invalid", msg_fn=msg_fn)
+    assert ei_u.value.__cause__ is None
+    assert ei_u.value.__context__ is None
+    _rq_assert_zero_markers(
+        ei_u.value,
+        [
+            "SYNTH_UTF8_BODY_MARKER_V1N_RQ1_FULLMD_NOT_REAL",
+            _RQ_UTF8_BODY_MARKER,
+        ],
+    )
+
+
+def test_v1n_release_gate_q2_source_size_share_content_length(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    Q2 发布门：上传流累计必须精确等于 expected_size（增长/缩短必红）；
+    Content-Length 精确；Windows 打开禁止 FILE_SHARE_WRITE，并用行为门证明
+    持有上传句柄时同尺寸改写不能成功（禁止只断常量）。
+    """
+    mod = _load_client()
+    err_cls = _require_attr(mod, "RemoteMineruError")
+    run = _get_run_fn(mod)
+
+    # --- Content-Length + 累计增长必红 ---
+    content = b"ABCDEFGH" * 8  # 64 bytes
+    p = _write_temp_source(tmp_path, "q2-size.pdf", content)
+    expected = len(content)
+    src_cls = _require_attr(mod, "RemoteSource")
+    sources = [src_cls(path=p, filename=p.name, expected_size=expected)]
+    holder: dict[str, str] = {}
+    put_meta: dict[str, Any] = {
+        "content_length": None,
+        "body_len": None,
+        "put_n": 0,
+    }
+
+    real_read = os.read
+    read_state = {"sent": 0, "inflated": False}
+
+    def grow_read(fd: int, n: int, *a: Any, **k: Any) -> bytes:
+        if read_state["sent"] < expected:
+            chunk = real_read(fd, min(n, expected - read_state["sent"]))
+            read_state["sent"] += len(chunk)
+            if chunk:
+                return chunk
+        if not read_state["inflated"]:
+            read_state["inflated"] = True
+            read_state["sent"] += 1
+            return b"X"
+        return b""
+
+    monkeypatch.setattr(os, "read", grow_read)
+
+    def handler_grow(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            body = json.loads(request.content.decode("utf-8"))
+            holder["id"] = body["files"][0]["data_id"]
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "batch_id": FAKE_BATCH_ID,
+                        "file_urls": [PRESIGNED_PUT_A],
+                    },
+                },
+            )
+        if request.method == "PUT":
+            put_meta["put_n"] += 1
+            put_meta["content_length"] = request.headers.get("Content-Length")
+            raw = request.content
+            put_meta["body_len"] = len(raw) if raw is not None else None
+            return httpx.Response(200)
+        raise AssertionError("增长失败后不得 poll")
+
+    with pytest.raises(err_cls) as ei_g:
+        run(
+            sources,
+            transport=httpx.MockTransport(handler_grow),
+            **_run_kwargs(),
+        )
+    assert ei_g.value.diagnostic_code in {
+        "source_identity_mismatch",
+        "upload_failed",
+    }, f"业务红：增长须 identity/upload 失败，actual={ei_g.value.diagnostic_code}"
+    assert ei_g.value.message == _fixed_message(ei_g.value.diagnostic_code)
+    if put_meta["put_n"] > 0:
+        assert put_meta["content_length"] == str(expected), (
+            f"业务红：Content-Length 必须精确 {expected}，actual={put_meta['content_length']!r}"
+        )
+        assert put_meta["body_len"] is None or put_meta["body_len"] == expected, (
+            f"业务红：上传体累计不得 > expected，body_len={put_meta['body_len']}"
+        )
+
+    # --- 缩短：EOF 累计 < expected_size 必红 ---
+    monkeypatch.setattr(os, "read", real_read)
+    p_short = _write_temp_source(tmp_path, "q2-short.pdf", b"short-data-16b!")
+    true_sz = p_short.stat().st_size
+    sources_s = [src_cls(path=p_short, filename=p_short.name, expected_size=true_sz)]
+    short_state = {"n": 0}
+
+    def short_read(fd: int, n: int, *a: Any, **k: Any) -> bytes:
+        short_state["n"] += 1
+        if short_state["n"] == 1:
+            return real_read(fd, max(1, true_sz // 2))
+        return b""
+
+    monkeypatch.setattr(os, "read", short_read)
+    put_s = {"n": 0, "cl": None, "blen": None}
+
+    def handler_short(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            body = json.loads(request.content.decode("utf-8"))
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "batch_id": FAKE_BATCH_ID,
+                        "file_urls": [PRESIGNED_PUT_A],
+                    },
+                },
+            )
+        if request.method == "PUT":
+            put_s["n"] += 1
+            put_s["cl"] = request.headers.get("Content-Length")
+            put_s["blen"] = len(request.content) if request.content is not None else -1
+            return httpx.Response(200)
+        raise AssertionError("缩短后不得 poll")
+
+    with pytest.raises(err_cls) as ei_s:
+        run(
+            sources_s,
+            transport=httpx.MockTransport(handler_short),
+            **_run_kwargs(),
+        )
+    assert ei_s.value.diagnostic_code in {
+        "source_identity_mismatch",
+        "upload_failed",
+    }, f"业务红：缩短须失败，actual={ei_s.value.diagnostic_code}"
+    if put_s["n"] > 0:
+        assert put_s["cl"] == str(true_sz), (
+            f"业务红：缩短场景 Content-Length 仍须为 expected={true_sz} actual={put_s['cl']!r}"
+        )
+
+    # --- 合法路径：Content-Length 精确且 body==expected ---
+    monkeypatch.setattr(os, "read", real_read)
+    p_ok = _write_temp_source(tmp_path, "q2-ok.pdf", b"OK-CONTENT-LENGTH-32-BYTES!!")
+    exp_ok = p_ok.stat().st_size
+    holder_ok: dict[str, str] = {}
+    put_ok = {"cl": None, "blen": None}
+
+    def handler_ok(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            body = json.loads(request.content.decode("utf-8"))
+            holder_ok["id"] = body["files"][0]["data_id"]
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "batch_id": FAKE_BATCH_ID,
+                        "file_urls": [PRESIGNED_PUT_A],
+                    },
+                },
+            )
+        if request.method == "PUT":
+            put_ok["cl"] = request.headers.get("Content-Length")
+            put_ok["blen"] = len(request.content) if request.content is not None else -1
+            return httpx.Response(200)
+        if request.method == "GET" and PATH_EXTRACT_RESULTS_PREFIX in str(request.url):
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "extract_result": [
+                            {
+                                "data_id": holder_ok["id"],
+                                "state": "done",
+                                "full_zip_url": ZIP_URL_A,
+                            }
+                        ]
+                    },
+                },
+            )
+        if request.method == "GET" and str(request.url) == ZIP_URL_A:
+            return httpx.Response(
+                200, content=_make_zip_bytes({"full.md": b"# q2-ok\n"})
+            )
+        raise AssertionError("unexpected")
+
+    out = run(
+        _build_sources(mod, [p_ok]),
+        transport=httpx.MockTransport(handler_ok),
+        **_run_kwargs(),
+    )
+    assert "# q2-ok" in out.markdown
+    assert put_ok["cl"] == str(exp_ok), (
+        f"业务红：合法 PUT Content-Length 必须 {exp_ok}，actual={put_ok['cl']!r}"
+    )
+    assert put_ok["blen"] == exp_ok, (
+        f"业务红：合法 PUT body 必须精确 expected，actual={put_ok['blen']}"
+    )
+
+    # --- Windows：禁止 FILE_SHARE_WRITE + 持句柄同尺寸改写行为门 ---
+    if os.name == "nt":
+        ops = getattr(mod, "_v1n_winapi_ops", None)
+        assert ops is not None, "业务红：Windows 必须暴露 _v1n_winapi_ops seam"
+        share_seen: list[int] = []
+        real_cf = ops.CreateFileW
+
+        def spy_cf(path, access, share, *rest):
+            share_seen.append(int(share))
+            return real_cf(path, access, share, *rest)
+
+        monkeypatch.setattr(ops, "CreateFileW", spy_cf)
+        p_w = _write_temp_source(tmp_path, "q2-share.pdf", b"SHARE-WRITE-GATE-CONTENT-32b")
+        rewrite_ok = {"v": None}
+        holder_w: dict[str, str] = {}
+
+        def handler_w(request: httpx.Request) -> httpx.Response:
+            if request.method == "POST":
+                body = json.loads(request.content.decode("utf-8"))
+                holder_w["id"] = body["files"][0]["data_id"]
+                return httpx.Response(
+                    200,
+                    json={
+                        "code": 0,
+                        "data": {
+                            "batch_id": FAKE_BATCH_ID,
+                            "file_urls": [PRESIGNED_PUT_A],
+                        },
+                    },
+                )
+            if request.method == "PUT":
+                try:
+                    with open(p_w, "r+b", buffering=0) as wf:
+                        wf.write(b"Z" * p_w.stat().st_size)
+                    rewrite_ok["v"] = True
+                except OSError:
+                    rewrite_ok["v"] = False
+                _ = request.content
+                return httpx.Response(200)
+            if request.method == "GET" and PATH_EXTRACT_RESULTS_PREFIX in str(
+                request.url
+            ):
+                return httpx.Response(
+                    200,
+                    json={
+                        "code": 0,
+                        "data": {
+                            "extract_result": [
+                                {
+                                    "data_id": holder_w["id"],
+                                    "state": "done",
+                                    "full_zip_url": ZIP_URL_A,
+                                }
+                            ]
+                        },
+                    },
+                )
+            if request.method == "GET" and str(request.url) == ZIP_URL_A:
+                return httpx.Response(
+                    200, content=_make_zip_bytes({"full.md": b"# share\n"})
+                )
+            raise AssertionError("unexpected")
+
+        try:
+            run(
+                _build_sources(mod, [p_w]),
+                transport=httpx.MockTransport(handler_w),
+                **_run_kwargs(),
+            )
+        except err_cls:
+            pass
+        assert share_seen, "业务红：必须经 CreateFileW 打开源"
+        for sh in share_seen:
+            assert (int(sh) & _FILE_SHARE_WRITE) == 0, (
+                f"业务红：Windows 打开禁止 FILE_SHARE_WRITE，share={sh:#x}"
+            )
+        assert rewrite_ok["v"] is False, (
+            "业务红：持有上传句柄时同尺寸改写不得成功（行为门，非常量）"
+        )
+
+
+def test_v1n_release_gate_q3_response_oom_canary_post_put_poll(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    Q3 发布门：POST/PUT/poll 各用可观测 canary stream；超 cap 后不得继续读；
+    保持阶段错误码；合法小响应仍通。
+    """
+    mod = _load_client()
+    err_cls = _require_attr(mod, "RemoteMineruError")
+    msg_fn = _require_attr(mod, "message_for_code")
+    run = _get_run_fn(mod)
+    p = _write_temp_source(tmp_path, "q3.pdf", b"1")
+
+    # Q9：禁止 getattr 默认回退测试常量；必须暴露 production 公开 cap 且精确相等
+    assert hasattr(mod, "MAX_HTTP_JSON_RESPONSE_BYTES"), (
+        "业务红：production 必须暴露 MAX_HTTP_JSON_RESPONSE_BYTES（禁止测试常量回退）"
+    )
+    assert hasattr(mod, "MAX_HTTP_PUT_RESPONSE_BYTES"), (
+        "业务红：production 必须暴露 MAX_HTTP_PUT_RESPONSE_BYTES（禁止测试常量回退）"
+    )
+    json_cap = int(mod.MAX_HTTP_JSON_RESPONSE_BYTES)
+    put_cap = int(mod.MAX_HTTP_PUT_RESPONSE_BYTES)
+    assert json_cap == MAX_HTTP_JSON_RESPONSE_BYTES, (
+        f"业务红：JSON 响应 cap 必须冻结 {MAX_HTTP_JSON_RESPONSE_BYTES}，actual={json_cap}"
+    )
+    assert put_cap == MAX_HTTP_PUT_RESPONSE_BYTES, (
+        f"业务红：PUT 响应 cap 必须冻结 {MAX_HTTP_PUT_RESPONSE_BYTES}，actual={put_cap}"
+    )
+
+    def _canary_stream(
+        limit: int, canary: bytes, log: dict[str, Any]
+    ) -> httpx.SyncByteStream:
+        exact = (b"{" + b"A" * max(0, limit - 2))[:limit]
+        if len(exact) < limit:
+            exact = exact + b"X" * (limit - len(exact))
+        overflow = b"O"
+        chunks = [exact, overflow, canary]
+
+        class _S(httpx.SyncByteStream):
+            def __iter__(self):  # type: ignore[override]
+                log["iter"] += 1
+                for ch in chunks:
+                    if ch == canary and log["bytes"] >= limit:
+                        log["saw_canary"] = True
+                    if ch == overflow:
+                        log["saw_overflow"] = True
+                    log["bytes"] += len(ch)
+                    log["n"] += 1
+                    yield ch
+
+            def close(self) -> None:
+                log["close"] += 1
+
+        return _S()
+
+    # --- POST 超 cap ---
+    post_log = {
+        "n": 0,
+        "bytes": 0,
+        "saw_canary": False,
+        "saw_overflow": False,
+        "iter": 0,
+        "close": 0,
+    }
+    canary_post = b"POST_CANARY_AFTER_CAP_MUST_NOT_READ"
+    real_send = httpx.Client.send
+
+    def spy_send_post(self, request, **kwargs):
+        if request.method == "POST":
+            assert kwargs.get("stream") is True, (
+                f"业务红：POST 必须 stream=True，kwargs={kwargs!r}"
+            )
+            return httpx.Response(
+                200,
+                request=request,
+                stream=_canary_stream(json_cap, canary_post, post_log),
+                headers={"content-type": "application/json"},
+            )
+        return real_send(self, request, **kwargs)
+
+    monkeypatch.setattr(httpx.Client, "send", spy_send_post)
+
+    def handler_block(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            raise AssertionError("业务红：POST 不得非 stream Mock 整包")
+        raise AssertionError("unexpected")
+
+    with pytest.raises(err_cls) as ei_post:
+        run(
+            _build_sources(mod, [p]),
+            transport=httpx.MockTransport(handler_block),
+            **_run_kwargs(),
+        )
+    _assert_remote_error(ei_post.value, "api_response_invalid", msg_fn=msg_fn)
+    assert post_log["saw_overflow"] is True
+    assert post_log["saw_canary"] is False, (
+        f"业务红：POST 超 cap 后不得读 canary log={post_log}"
+    )
+    assert post_log["bytes"] == json_cap + 1
+
+    # --- PUT 超 cap ---
+    monkeypatch.setattr(httpx.Client, "send", real_send)
+    put_log = {
+        "n": 0,
+        "bytes": 0,
+        "saw_canary": False,
+        "saw_overflow": False,
+        "iter": 0,
+        "close": 0,
+    }
+    canary_put = b"PUT_CANARY_AFTER_CAP_MUST_NOT_READ"
+    holder_put: dict[str, str] = {}
+
+    def spy_send_put(self, request, **kwargs):
+        if request.method == "PUT":
+            assert kwargs.get("stream") is True, "业务红：PUT 必须 stream=True 读响应"
+            return httpx.Response(
+                200,
+                request=request,
+                stream=_canary_stream(put_cap, canary_put, put_log),
+                headers={"content-type": "application/octet-stream"},
+            )
+        return real_send(self, request, **kwargs)
+
+    monkeypatch.setattr(httpx.Client, "send", spy_send_put)
+
+    def handler_put(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            body = json.loads(request.content.decode("utf-8"))
+            holder_put["id"] = body["files"][0]["data_id"]
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "batch_id": FAKE_BATCH_ID,
+                        "file_urls": [PRESIGNED_PUT_A],
+                    },
+                },
+            )
+        if request.method == "PUT":
+            raise AssertionError("业务红：PUT 响应须走 stream spy，不得 Mock 整包")
+        raise AssertionError("PUT OOM 后不得 poll")
+
+    with pytest.raises(err_cls) as ei_put:
+        run(
+            _build_sources(mod, [p]),
+            transport=httpx.MockTransport(handler_put),
+            **_run_kwargs(),
+        )
+    _assert_remote_error(ei_put.value, "upload_failed", msg_fn=msg_fn)
+    assert put_log["saw_canary"] is False, f"业务红：PUT 超 cap 零 canary log={put_log}"
+    assert put_log["bytes"] == put_cap + 1
+
+    # --- poll 超 cap ---
+    monkeypatch.setattr(httpx.Client, "send", real_send)
+    poll_log = {
+        "n": 0,
+        "bytes": 0,
+        "saw_canary": False,
+        "saw_overflow": False,
+        "iter": 0,
+        "close": 0,
+    }
+    canary_poll = b"POLL_CANARY_AFTER_CAP_MUST_NOT_READ"
+    holder_poll: dict[str, str] = {}
+
+    def spy_send_poll(self, request, **kwargs):
+        url = str(request.url)
+        if request.method == "GET" and PATH_EXTRACT_RESULTS_PREFIX in url:
+            assert kwargs.get("stream") is True, "业务红：poll 必须 stream=True"
+            return httpx.Response(
+                200,
+                request=request,
+                stream=_canary_stream(json_cap, canary_poll, poll_log),
+                headers={"content-type": "application/json"},
+            )
+        return real_send(self, request, **kwargs)
+
+    monkeypatch.setattr(httpx.Client, "send", spy_send_poll)
+
+    def handler_poll(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            body = json.loads(request.content.decode("utf-8"))
+            holder_poll["id"] = body["files"][0]["data_id"]
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "batch_id": FAKE_BATCH_ID,
+                        "file_urls": [PRESIGNED_PUT_A],
+                    },
+                },
+            )
+        if request.method == "PUT":
+            return httpx.Response(200)
+        if request.method == "GET" and PATH_EXTRACT_RESULTS_PREFIX in str(request.url):
+            raise AssertionError("业务红：poll 须 stream spy")
+        raise AssertionError("poll OOM 后不得 ZIP")
+
+    with pytest.raises(err_cls) as ei_poll:
+        run(
+            _build_sources(mod, [p]),
+            transport=httpx.MockTransport(handler_poll),
+            **_run_kwargs(),
+        )
+    assert ei_poll.value.diagnostic_code in {
+        "api_response_invalid",
+        "api_request_failed",
+    }, f"业务红：poll OOM 阶段码，actual={ei_poll.value.diagnostic_code}"
+    assert ei_poll.value.message == _fixed_message(ei_poll.value.diagnostic_code)
+    assert poll_log["saw_canary"] is False
+    assert poll_log["bytes"] == json_cap + 1
+
+    # --- 合法小响应仍通 ---
+    monkeypatch.setattr(httpx.Client, "send", real_send)
+    holder_ok: dict[str, str] = {}
+    base = _post_ok_single(holder_ok)
+
+    def handler_ok(request: httpx.Request) -> httpx.Response:
+        early = base(request)
+        if early is not None:
+            return early
+        if request.method == "GET" and PATH_EXTRACT_RESULTS_PREFIX in str(request.url):
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "extract_result": [
+                            {
+                                "data_id": holder_ok["id"],
+                                "state": "done",
+                                "full_zip_url": ZIP_URL_A,
+                            }
+                        ]
+                    },
+                },
+            )
+        if request.method == "GET" and str(request.url) == ZIP_URL_A:
+            return httpx.Response(
+                200, content=_make_zip_bytes({"full.md": b"# q3-small-ok\n"})
+            )
+        raise AssertionError("unexpected")
+
+    out = run(
+        _build_sources(mod, [p]),
+        transport=httpx.MockTransport(handler_ok),
+        **_run_kwargs(),
+    )
+    assert "# q3-small-ok" in out.markdown
+
+
+def test_v1n_release_gate_q4_put_timeout_recompute_after_resolve_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    Q4 发布门：resolver/open 消耗假时钟后，PUT timeout 必须使用重新计算的 remaining。
+    """
+    mod = _load_client()
+    run = _get_run_fn(mod)
+    p = _write_temp_source(tmp_path, "q4.pdf", b"1")
+    t0 = 50_000.0
+    clock = {"t": t0}
+    holder: dict[str, str] = {}
+    put_timeouts: list[float] = []
+    rem_at_put: list[float] = []
+
+    def slow_resolve(host: str) -> list[str]:
+        clock["t"] += 120.0
+        return [FAKE_PUBLIC_IP_A]
+
+    open_fn = getattr(mod, "_open_verified_fd", None)
+    assert callable(open_fn), "业务红：必须有 _open_verified_fd"
+
+    def slow_open(*a: Any, **k: Any) -> int:
+        clock["t"] += 80.0
+        return open_fn(*a, **k)
+
+    monkeypatch.setattr(mod, "_open_verified_fd", slow_open)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            body = json.loads(request.content.decode("utf-8"))
+            holder["id"] = body["files"][0]["data_id"]
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "batch_id": FAKE_BATCH_ID,
+                        "file_urls": [PRESIGNED_PUT_A],
+                    },
+                },
+            )
+        if request.method == "PUT":
+            rem_now = float(POLL_BUDGET_SEC) - (float(clock["t"]) - t0)
+            rem_at_put.append(rem_now)
+            ext = getattr(request, "extensions", None) or {}
+            to = ext.get("timeout")
+            vals: list[float] = []
+            if isinstance(to, dict):
+                vals = [float(to[k]) for k in ("connect", "read", "write", "pool")]
+            else:
+                for attr in ("connect", "read", "write", "pool"):
+                    vals.append(float(getattr(to, attr)))
+            put_timeouts.extend(vals)
+            for v in vals:
+                assert v <= rem_now + 1e-6, (
+                    f"业务红：PUT timeout={v} 必须 ≤ resolve/open 后 remaining={rem_now}"
+                )
+            return httpx.Response(200)
+        if request.method == "GET" and PATH_EXTRACT_RESULTS_PREFIX in str(request.url):
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "extract_result": [
+                            {
+                                "data_id": holder["id"],
+                                "state": "done",
+                                "full_zip_url": ZIP_URL_A,
+                            }
+                        ]
+                    },
+                },
+            )
+        if request.method == "GET" and str(request.url) == ZIP_URL_A:
+            return httpx.Response(
+                200, content=_make_zip_bytes({"full.md": b"# q4-ok\n"})
+            )
+        raise AssertionError("unexpected")
+
+    out = run(
+        _build_sources(mod, [p]),
+        transport=httpx.MockTransport(handler),
+        **_run_kwargs(
+            clock_fn=lambda: clock["t"],
+            resolve_addresses_fn=slow_resolve,
+        ),
+    )
+    assert "# q4-ok" in out.markdown
+    assert put_timeouts, "业务红：必须捕获 PUT timeout"
+    assert rem_at_put and rem_at_put[0] <= float(POLL_BUDGET_SEC) - 200.0 + 1e-6, (
+        f"业务红：resolve+open 后 remaining 须收缩，rem={rem_at_put}"
+    )
+    for v in put_timeouts:
+        assert v <= float(POLL_BUDGET_SEC) - 200.0 + 1.0, (
+            f"业务红：PUT timeout 不得使用 resolve/open 前的旧 remaining，v={v}"
+        )
+
+
+def test_v1n_release_gate_q5_final_path_upload_root_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    Q5 发布门：以最终已打开句柄路径对可信 upload root 做边界校验；
+    用可注入 final-path seam 证明 junction 切到边界外时零 PUT。
+    若需 trusted_upload_root 字段，仅在测试/契约冻结，不改 production。
+    """
+    mod = _load_client()
+    err_cls = _require_attr(mod, "RemoteMineruError")
+    msg_fn = _require_attr(mod, "message_for_code")
+    run = _get_run_fn(mod)
+    sig = inspect.signature(run)
+    assert "trusted_upload_root" in sig.parameters, (
+        "业务红：run_remote_mineru_parse 必须接受 trusted_upload_root（契约冻结）"
+    )
+
+    upload_root = tmp_path / "upload_root"
+    upload_root.mkdir()
+    outside = tmp_path / "outside_escape"
+    outside.mkdir()
+    leaf = upload_root / "doc.pdf"
+    leaf.write_bytes(b"IN-ROOT-CONTENT")
+    bait = outside / "doc.pdf"
+    bait.write_bytes(b"OUT-OF-ROOT!!!!")
+    assert leaf.stat().st_size == bait.stat().st_size
+
+    assert hasattr(mod, "_v1n_final_path_for_fd"), (
+        "业务红：必须提供可注入 final-path seam _v1n_final_path_for_fd(fd)->str"
+    )
+
+    def escape_final(fd: int) -> str:
+        return str(bait.resolve())
+
+    monkeypatch.setattr(mod, "_v1n_final_path_for_fd", escape_final)
+
+    put_n = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            body = json.loads(request.content.decode("utf-8"))
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "batch_id": FAKE_BATCH_ID,
+                        "file_urls": [PRESIGNED_PUT_A],
+                    },
+                },
+            )
+        if request.method == "PUT":
+            put_n["n"] += 1
+            return httpx.Response(200)
+        raise AssertionError("越界后不得 poll/ZIP")
+
+    src_cls = _require_attr(mod, "RemoteSource")
+    sources = [
+        src_cls(
+            path=leaf,
+            filename=leaf.name,
+            expected_size=leaf.stat().st_size,
+        )
+    ]
+    with pytest.raises(err_cls) as ei:
+        run(
+            sources,
+            transport=httpx.MockTransport(handler),
+            trusted_upload_root=upload_root.resolve(),
+            **_run_kwargs(),
+        )
+    _assert_remote_error(ei.value, "source_identity_mismatch", msg_fn=msg_fn)
+    assert put_n["n"] == 0, f"业务红：final-path 越界必须零 PUT，put_n={put_n['n']}"
+
+
+def test_v1n_release_gate_q6_eocd_members_before_zipfile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    Q6 发布门：ZipFile 构造前解析 EOCD/ZIP64 entries；声明成员数超 4096 时
+    证明 ZipFile 未构造；合法小 ZIP、坏 ZIP 语义不弱化。
+
+    反假绿：夹具在 ZipFile spy 前构造；每次 run 前 constructs 清零；
+    超限夹具真实一致 4097 空成员 CD/EOCD（ZIP64 另含 locator/classic sentinel）；
+    合法小 ZIP 的 constructs 增长必须来自 production 路径。
+    """
+    mod = _load_client()
+    err_cls = _require_attr(mod, "RemoteMineruError")
+    msg_fn = _require_attr(mod, "message_for_code")
+    run = _get_run_fn(mod)
+    p = _write_temp_source(tmp_path, "q6.pdf", b"1")
+
+    # --- 夹具在 spy 前构造，避免 _make_zip_bytes / 自证打开污染 constructs ---
+    over = _rq_make_zip_eocd_total_entries(MAX_ZIP_MEMBERS + 1)
+    over64 = _rq_make_zip64_eocd_total_entries(MAX_ZIP_MEMBERS + 1)
+    small = _make_zip_bytes({"full.md": b"# q6-small\n"})
+    bad = b"not-a-zip-at-all-PK-missing"
+
+    # 自证：真实一致 4097 central + EOCD；禁止仅改声明
+    assert _rq_count_zip_central_entries(over) == MAX_ZIP_MEMBERS + 1
+    _eocd_over = over.rfind(b"PK\x05\x06")
+    assert _eocd_over >= 0
+    assert struct.unpack_from("<H", over, _eocd_over + 8)[0] == MAX_ZIP_MEMBERS + 1
+    assert struct.unpack_from("<H", over, _eocd_over + 10)[0] == MAX_ZIP_MEMBERS + 1
+    assert b"PK\x06\x06" in over64 and b"PK\x06\x07" in over64, (
+        "夹具：必须含 ZIP64 EOCD 与 locator 签名"
+    )
+    assert _rq_count_zip_central_entries(over64) == MAX_ZIP_MEMBERS + 1
+    _eocd_i = over64.rfind(b"PK\x05\x06")
+    assert _eocd_i >= 0
+    assert struct.unpack_from("<H", over64, _eocd_i + 8)[0] == 0xFFFF
+    assert struct.unpack_from("<H", over64, _eocd_i + 10)[0] == 0xFFFF
+
+    constructs = {"n": 0}
+    real_zf = zipfile.ZipFile
+
+    class _CountingZipFile(real_zf):  # type: ignore[misc,valid-type]
+        def __init__(self, *a: Any, **k: Any) -> None:
+            constructs["n"] += 1
+            super().__init__(*a, **k)
+
+    monkeypatch.setattr(zipfile, "ZipFile", _CountingZipFile)
+    if hasattr(mod, "zipfile"):
+        monkeypatch.setattr(mod.zipfile, "ZipFile", _CountingZipFile)
+
+    # A) 真实一致 4097 → zip_unsafe 且 run 时 ZipFile 构造 0
+    constructs["n"] = 0
+    holder: dict[str, str] = {}
+    base = _post_ok_single(holder)
+
+    def handler_over(request: httpx.Request) -> httpx.Response:
+        early = base(request)
+        if early is not None:
+            return early
+        if request.method == "GET" and PATH_EXTRACT_RESULTS_PREFIX in str(request.url):
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "extract_result": [
+                            {
+                                "data_id": holder["id"],
+                                "state": "done",
+                                "full_zip_url": ZIP_URL_A,
+                            }
+                        ]
+                    },
+                },
+            )
+        if request.method == "GET" and str(request.url) == ZIP_URL_A:
+            return httpx.Response(200, content=over)
+        raise AssertionError("unexpected")
+
+    with pytest.raises(err_cls) as ei:
+        run(
+            _build_sources(mod, [p]),
+            transport=httpx.MockTransport(handler_over),
+            **_run_kwargs(),
+        )
+    _assert_remote_error(ei.value, "zip_unsafe", msg_fn=msg_fn)
+    assert constructs["n"] == 0, (
+        f"业务红：真实一致成员>{MAX_ZIP_MEMBERS} 时 ZipFile 不得构造，"
+        f"n={constructs['n']}"
+    )
+
+    # A2) ZIP64：真实 4097 CD + ZIP64 EOCD/locator/classic sentinel → 构造 0
+    constructs["n"] = 0
+    holder64: dict[str, str] = {}
+    base64 = _post_ok_single(holder64)
+
+    def handler_over64(request: httpx.Request) -> httpx.Response:
+        early = base64(request)
+        if early is not None:
+            return early
+        if request.method == "GET" and PATH_EXTRACT_RESULTS_PREFIX in str(request.url):
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "extract_result": [
+                            {
+                                "data_id": holder64["id"],
+                                "state": "done",
+                                "full_zip_url": ZIP_URL_A,
+                            }
+                        ]
+                    },
+                },
+            )
+        if request.method == "GET" and str(request.url) == ZIP_URL_A:
+            return httpx.Response(200, content=over64)
+        raise AssertionError("unexpected")
+
+    with pytest.raises(err_cls) as ei64:
+        run(
+            _build_sources(mod, [p]),
+            transport=httpx.MockTransport(handler_over64),
+            **_run_kwargs(),
+        )
+    _assert_remote_error(ei64.value, "zip_unsafe", msg_fn=msg_fn)
+    assert constructs["n"] == 0, (
+        f"业务红：ZIP64 真实一致成员>{MAX_ZIP_MEMBERS} 时 ZipFile 不得构造，"
+        f"n={constructs['n']}"
+    )
+
+    # B) 合法小 ZIP：run 前精确清零，constructs 增长必须来自 production
+    constructs["n"] = 0
+    holder2: dict[str, str] = {}
+    base2 = _post_ok_single(holder2)
+
+    def handler_ok(request: httpx.Request) -> httpx.Response:
+        early = base2(request)
+        if early is not None:
+            return early
+        if request.method == "GET" and PATH_EXTRACT_RESULTS_PREFIX in str(request.url):
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "extract_result": [
+                            {
+                                "data_id": holder2["id"],
+                                "state": "done",
+                                "full_zip_url": ZIP_URL_A,
+                            }
+                        ]
+                    },
+                },
+            )
+        if request.method == "GET" and str(request.url) == ZIP_URL_A:
+            return httpx.Response(200, content=small)
+        raise AssertionError("unexpected")
+
+    out = run(
+        _build_sources(mod, [p]),
+        transport=httpx.MockTransport(handler_ok),
+        **_run_kwargs(),
+    )
+    assert "# q6-small" in out.markdown
+    assert constructs["n"] > 0, (
+        "业务红：合法小 ZIP 须证明 production 路径构造 ZipFile（run 前已清零）"
+    )
+
+    # C) 坏 ZIP 语义不弱化
+    constructs["n"] = 0
+    holder3: dict[str, str] = {}
+    base3 = _post_ok_single(holder3)
+
+    def handler_bad(request: httpx.Request) -> httpx.Response:
+        early = base3(request)
+        if early is not None:
+            return early
+        if request.method == "GET" and PATH_EXTRACT_RESULTS_PREFIX in str(request.url):
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "extract_result": [
+                            {
+                                "data_id": holder3["id"],
+                                "state": "done",
+                                "full_zip_url": ZIP_URL_A,
+                            }
+                        ]
+                    },
+                },
+            )
+        if request.method == "GET" and str(request.url) == ZIP_URL_A:
+            return httpx.Response(200, content=bad)
+        raise AssertionError("unexpected")
+
+    with pytest.raises(err_cls) as ei_bad:
+        run(
+            _build_sources(mod, [p]),
+            transport=httpx.MockTransport(handler_bad),
+            **_run_kwargs(),
+        )
+    _assert_remote_error(ei_bad.value, "zip_unsafe", msg_fn=msg_fn)
+
+
+def test_v1n_release_gate_q3_zip_compress_single_chunk_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    Q3/Q6 追加（TEST-Q3-ADD）：ZIP 压缩单块前门。
+
+    当前生产风险：iter_bytes 透明解 gzip/br/zstd，且先 buf.extend(chunk) 再判总 cap，
+    单个压缩炸弹/超大 chunk 可在门前巨量分配。
+
+    failure-first 必须证明下列 **其一**：
+      A) ZIP GET 显式 Accept-Encoding: identity，且拒绝 Content-Encoding 非 identity/空；
+      B) 使用 iter_raw，且每块只接受 remaining+1，不得先完整 extend 超大单块。
+    另：超大单块后 canary 不可再读；3xx→zip_download_failed；坏 ZIP→zip_unsafe。
+    """
+    mod = _load_client()
+    err_cls = _require_attr(mod, "RemoteMineruError")
+    msg_fn = _require_attr(mod, "message_for_code")
+    run = _get_run_fn(mod)
+    p = _write_temp_source(tmp_path, "q3-zip-ce.pdf", b"1")
+
+    limit = 64
+    monkeypatch.setattr(mod, "MAX_ZIP_BYTES", limit)
+    canary = b"ZIP_COMPRESS_SINGLE_CHUNK_CANARY_MUST_NOT_READ"
+    # 单块远超 remaining+1；其后 canary 不得被消费
+    oversize_single = b"H" * (limit + 200)
+    assert len(oversize_single) > limit + 1
+
+    zip_req: dict[str, Any] = {
+        "accept_encoding": None,
+        "stream_true": 0,
+        "got_zip": 0,
+    }
+    stream_log = {
+        "n": 0,
+        "bytes": 0,
+        "saw_canary": False,
+        "first_chunk_len": 0,
+        "close": 0,
+    }
+    iter_hits = {"iter_bytes": 0, "iter_raw": 0}
+    # 观测超大块是否被完整 buffer 消费，或仅切片 remaining+1
+    probe_log: dict[str, Any] = {
+        "buffer_full_lens": [],
+        "slice_lens": [],
+        "as_bytes_lens": [],
+    }
+
+    class _SliceProbe:
+        """
+        可观测 chunk：完整 buffer 协议消费 vs 切片后小块消费。
+        production 若 buf.extend(整块) 会走 buffer 并记录 full；
+        若 chunk[:remaining+1] 再 extend 则记录 slice_lens。
+        """
+
+        __slots__ = ("_raw",)
+
+        def __init__(self, raw: bytes) -> None:
+            self._raw = raw
+
+        def __len__(self) -> int:
+            return len(self._raw)
+
+        def __getitem__(self, item: Any) -> Any:
+            out = self._raw[item]
+            if isinstance(item, slice):
+                probe_log["slice_lens"].append(
+                    len(out) if isinstance(out, (bytes, bytearray)) else 1
+                )
+            return out
+
+        def __bytes__(self) -> bytes:
+            probe_log["as_bytes_lens"].append(len(self._raw))
+            return self._raw
+
+        def __buffer__(self, flags: int):  # noqa: ARG002 — PEP 688
+            probe_log["buffer_full_lens"].append(len(self._raw))
+            return memoryview(self._raw)
+
+    real_send = httpx.Client.send
+    real_iter_bytes = httpx.Response.iter_bytes
+    real_iter_raw = httpx.Response.iter_raw
+
+    def _wrap_zip_chunks(real_fn: Any, hit_key: str):  # type: ignore[no-untyped-def]
+        def spy(self, *a: Any, **k: Any):  # type: ignore[no-untyped-def]
+            try:
+                url_s = str(self.request.url)
+            except Exception:
+                return real_fn(self, *a, **k)
+            if url_s != ZIP_URL_A:
+                return real_fn(self, *a, **k)
+
+            def gen():  # type: ignore[no-untyped-def]
+                iter_hits[hit_key] += 1
+                for chunk in real_fn(self, *a, **k):
+                    if not chunk:
+                        yield chunk
+                        continue
+                    raw = (
+                        bytes(chunk)
+                        if not isinstance(chunk, (bytes, bytearray))
+                        else bytes(chunk)
+                    )
+                    yield _SliceProbe(raw)
+
+            return gen()
+
+        return spy
+
+    monkeypatch.setattr(
+        httpx.Response, "iter_bytes", _wrap_zip_chunks(real_iter_bytes, "iter_bytes")
+    )
+    monkeypatch.setattr(
+        httpx.Response, "iter_raw", _wrap_zip_chunks(real_iter_raw, "iter_raw")
+    )
+
+    class _SingleBombStream(httpx.SyncByteStream):
+        def __iter__(self):  # type: ignore[override]
+            for ch in (oversize_single, canary):
+                if ch is canary and stream_log["bytes"] >= limit:
+                    stream_log["saw_canary"] = True
+                if stream_log["n"] == 0:
+                    stream_log["first_chunk_len"] = len(ch)
+                stream_log["n"] += 1
+                stream_log["bytes"] += len(ch)
+                yield ch
+
+        def close(self) -> None:
+            stream_log["close"] += 1
+
+    def spy_send_bomb(self, request, **kwargs):  # type: ignore[no-untyped-def]
+        url_s = str(request.url)
+        if request.method == "GET" and url_s == ZIP_URL_A:
+            zip_req["got_zip"] += 1
+            zip_req["accept_encoding"] = request.headers.get("Accept-Encoding")
+            if kwargs.get("stream") is not True:
+                raise AssertionError(
+                    "业务红：ZIP GET 必须 send(..., stream=True)，"
+                    f"kwargs.stream={kwargs.get('stream')!r}"
+                )
+            zip_req["stream_true"] += 1
+            return httpx.Response(
+                200,
+                request=request,
+                stream=_SingleBombStream(),
+                headers={"content-type": "application/zip"},
+            )
+        return real_send(self, request, **kwargs)
+
+    monkeypatch.setattr(httpx.Client, "send", spy_send_bomb)
+    holder: dict[str, str] = {}
+    base = _post_ok_single(holder)
+
+    def handler_bomb(request: httpx.Request) -> httpx.Response:
+        early = base(request)
+        if early is not None:
+            return early
+        if request.method == "GET" and PATH_EXTRACT_RESULTS_PREFIX in str(request.url):
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "extract_result": [
+                            {
+                                "data_id": holder["id"],
+                                "state": "done",
+                                "full_zip_url": ZIP_URL_A,
+                            }
+                        ]
+                    },
+                },
+            )
+        if request.method == "GET" and str(request.url) == ZIP_URL_A:
+            raise AssertionError("业务红：ZIP 超大单块须走 stream spy，不得 Mock 整包")
+        raise AssertionError("unexpected")
+
+    with pytest.raises(err_cls) as ei_bomb:
+        run(
+            _build_sources(mod, [p]),
+            transport=httpx.MockTransport(handler_bomb),
+            **_run_kwargs(),
+        )
+    _assert_remote_error(ei_bomb.value, "zip_unsafe", msg_fn=msg_fn)
+    assert zip_req["got_zip"] >= 1, "业务红：必须发起 ZIP GET"
+    assert zip_req["stream_true"] >= 1
+    assert stream_log["first_chunk_len"] == len(oversize_single)
+    assert stream_log["saw_canary"] is False, (
+        f"业务红：超大单块触发 cap 后不得再读 canary log={stream_log}"
+    )
+
+    # --- 策略判定：A identity 拒绝 或 B iter_raw+remaining+1 ---
+    ae_raw = zip_req["accept_encoding"]
+    ae_norm = (ae_raw or "").strip().casefold()
+    has_identity_header = ae_norm == "identity"
+
+    full_buffers = [
+        n for n in probe_log["buffer_full_lens"] if n > limit + 1
+    ]
+    # 完整物化门：bytes(chunk)/buffer 协议任一对超大块整段消费均否决 partial_ok
+    full_as_bytes = [
+        n for n in probe_log["as_bytes_lens"] if n > limit + 1
+    ]
+    # 策略 B：iter_raw、无 iter_bytes；超大块未完整物化；存在 <=remaining+1 的切片
+    partial_slices = [n for n in probe_log["slice_lens"] if 1 <= n <= limit + 1]
+    partial_ok = (
+        iter_hits["iter_raw"] >= 1
+        and iter_hits["iter_bytes"] == 0
+        and not full_buffers
+        and not full_as_bytes
+        and len(partial_slices) >= 1
+    )
+
+    # --- 策略 A 补充：Content-Encoding 非 identity 必须拒绝 ---
+    # Q5：真 gzip 压缩合法 ZIP（可正确解码）；identity 分支须 body 迭代次数=0；
+    # 错误码精确冻结 zip_download_failed（禁止三选一宽放 / 解压失败假绿）。
+    import gzip as _gzip_ce
+
+    monkeypatch.setattr(httpx.Client, "send", real_send)
+    # 重置 iter 计数，专观 CE 路径 body 消费
+    iter_hits["iter_bytes"] = 0
+    iter_hits["iter_raw"] = 0
+    holder_ce: dict[str, str] = {}
+    base_ce = _post_ok_single(holder_ce)
+    valid_zip = _make_zip_bytes({"full.md": b"# ce-gate-should-not-succeed\n"})
+    gzipped_zip = _gzip_ce.compress(valid_zip)
+    assert gzipped_zip != valid_zip and len(gzipped_zip) > 0
+    # 自证：真 gzip 可正确解码回合法 ZIP
+    assert _gzip_ce.decompress(gzipped_zip) == valid_zip
+    ce_seen: dict[str, Any] = {"ae": None, "zip_n": 0, "body_bytes": 0}
+
+    class _CountingGzipStream(httpx.SyncByteStream):
+        def __iter__(self):  # type: ignore[override]
+            # 整包可解码 gzip；若 production 迭代 body 则计数可见
+            ce_seen["body_bytes"] += len(gzipped_zip)
+            yield gzipped_zip
+
+        def close(self) -> None:
+            return None
+
+    def spy_send_ce(self, request, **kwargs):  # type: ignore[no-untyped-def]
+        url_s = str(request.url)
+        if request.method == "GET" and url_s == ZIP_URL_A:
+            ce_seen["zip_n"] += 1
+            ce_seen["ae"] = request.headers.get("Accept-Encoding")
+            return httpx.Response(
+                200,
+                request=request,
+                stream=_CountingGzipStream(),
+                headers={
+                    "content-type": "application/zip",
+                    "content-encoding": "gzip",
+                },
+            )
+        return real_send(self, request, **kwargs)
+
+    monkeypatch.setattr(httpx.Client, "send", spy_send_ce)
+
+    def handler_ce(request: httpx.Request) -> httpx.Response:
+        early = base_ce(request)
+        if early is not None:
+            return early
+        if request.method == "GET" and PATH_EXTRACT_RESULTS_PREFIX in str(request.url):
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "extract_result": [
+                            {
+                                "data_id": holder_ce["id"],
+                                "state": "done",
+                                "full_zip_url": ZIP_URL_A,
+                            }
+                        ]
+                    },
+                },
+            )
+        if request.method == "GET" and str(request.url) == ZIP_URL_A:
+            raise AssertionError("业务红：CE 门 ZIP GET 须走 stream spy")
+        raise AssertionError("unexpected")
+
+    ce_exc: BaseException | None = None
+    ce_out_ok = False
+    try:
+        out_ce = run(
+            _build_sources(mod, [p]),
+            transport=httpx.MockTransport(handler_ce),
+            **_run_kwargs(),
+        )
+        ce_out_ok = "# ce-gate-should-not-succeed" in getattr(out_ce, "markdown", "")
+    except err_cls as exc:
+        ce_exc = exc
+    except Exception as exc:  # pragma: no cover - 非契约异常亦记
+        ce_exc = exc
+
+    ce_rejected = False
+    if ce_exc is not None and isinstance(ce_exc, err_cls):
+        code = getattr(ce_exc, "diagnostic_code", "")
+        # 精确冻结：非 identity Content-Encoding → zip_download_failed
+        if code == "zip_download_failed":
+            ce_rejected = True
+            assert ce_exc.message == _fixed_message("zip_download_failed")
+    assert ce_out_ok is False, (
+        "业务红：Content-Encoding=gzip 真压缩合法 ZIP 时不得成功解析 full.md"
+    )
+
+    body_iters = int(iter_hits["iter_bytes"]) + int(iter_hits["iter_raw"])
+    # 策略 A：显式 identity + 拒绝非 identity CE，且拒绝时不得消费 body
+    identity_ok = (
+        has_identity_header
+        and ce_rejected
+        and body_iters == 0
+        and int(ce_seen["body_bytes"]) == 0
+    )
+    assert identity_ok or partial_ok, (
+        "业务红：ZIP 压缩单块前门必须满足其一——"
+        "A) Accept-Encoding: identity 且拒绝非 identity Content-Encoding"
+        "（真压缩可解码载荷、错误码 zip_download_failed、body 迭代=0）；"
+        "B) iter_raw 且每块只接受 remaining+1"
+        "（as_bytes_lens/buffer_full_lens 均不得 >remaining+1 完整物化）。"
+        f" ae={ae_raw!r} ce_rejected={ce_rejected}"
+        f" ce_code={getattr(ce_exc, 'diagnostic_code', ce_exc)!r}"
+        f" body_iters={body_iters} body_bytes={ce_seen['body_bytes']}"
+        f" iter_hits={iter_hits} full_buffers={full_buffers}"
+        f" full_as_bytes={full_as_bytes}"
+        f" as_bytes_lens={probe_log['as_bytes_lens'][:8]}"
+        f" slice_lens={probe_log['slice_lens'][:8]}"
+    )
+    monkeypatch.setattr(httpx.Client, "send", real_send)
+
+    # --- 语义保留：3xx → zip_download_failed；坏 ZIP → zip_unsafe ---
+    monkeypatch.setattr(httpx.Response, "iter_bytes", real_iter_bytes)
+    monkeypatch.setattr(httpx.Response, "iter_raw", real_iter_raw)
+
+    holder_3xx: dict[str, str] = {}
+    base_3xx = _post_ok_single(holder_3xx)
+
+    def handler_3xx(request: httpx.Request) -> httpx.Response:
+        early = base_3xx(request)
+        if early is not None:
+            return early
+        if request.method == "GET" and PATH_EXTRACT_RESULTS_PREFIX in str(request.url):
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "extract_result": [
+                            {
+                                "data_id": holder_3xx["id"],
+                                "state": "done",
+                                "full_zip_url": ZIP_URL_A,
+                            }
+                        ]
+                    },
+                },
+            )
+        if request.method == "GET" and str(request.url) == ZIP_URL_A:
+            return httpx.Response(
+                302, headers={"Location": "https://cdn.example.test/result/other.zip"}
+            )
+        raise AssertionError("unexpected")
+
+    with pytest.raises(err_cls) as ei_3xx:
+        run(
+            _build_sources(mod, [p]),
+            transport=httpx.MockTransport(handler_3xx),
+            **_run_kwargs(),
+        )
+    _assert_remote_error(ei_3xx.value, "zip_download_failed", msg_fn=msg_fn)
+
+    holder_bad: dict[str, str] = {}
+    base_bad = _post_ok_single(holder_bad)
+    bad_zip = b"not-a-real-zip-payload-for-ce-gate"
+
+    def handler_bad2(request: httpx.Request) -> httpx.Response:
+        early = base_bad(request)
+        if early is not None:
+            return early
+        if request.method == "GET" and PATH_EXTRACT_RESULTS_PREFIX in str(request.url):
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "extract_result": [
+                            {
+                                "data_id": holder_bad["id"],
+                                "state": "done",
+                                "full_zip_url": ZIP_URL_A,
+                            }
+                        ]
+                    },
+                },
+            )
+        if request.method == "GET" and str(request.url) == ZIP_URL_A:
+            return httpx.Response(
+                200,
+                content=bad_zip,
+                headers={"content-type": "application/zip"},
+            )
+        raise AssertionError("unexpected")
+
+    with pytest.raises(err_cls) as ei_bad2:
+        run(
+            _build_sources(mod, [p]),
+            transport=httpx.MockTransport(handler_bad2),
+            **_run_kwargs(),
+        )
+    _assert_remote_error(ei_bad2.value, "zip_unsafe", msg_fn=msg_fn)
+
+
+def test_v1n_release_gate_q7_runtime_error_fold_internal_privacy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    Q7 发布门：普通 RuntimeError(marker) 必须折叠为 RemoteMineruError/internal_error；
+    异常链/可达图零 marker 泄漏。网络熔断已改用 _V1NNetFuseError（BaseException），
+    禁止 production 以广义 except RuntimeError: raise 自缚透传。
+
+    反假绿：boom_hits 精确=1（注入 seam 真实触发）；HTTP hits 精确=0
+    （折叠发生在任何网络请求之前）；禁止仅靠字段断言、未证明注入路径。
+    """
+    mod = _load_client()
+    err_cls = _require_attr(mod, "RemoteMineruError")
+    msg_fn = _require_attr(mod, "message_for_code")
+    run = _get_run_fn(mod)
+    p = _write_temp_source(tmp_path, "q7-rt.pdf", b"1")
+    marker = "SYNTH_RUNTIME_ERR_MARKER_V1N_Q7_NOT_REAL"
+    assert hasattr(mod, "_synthetic_name"), (
+        "业务红：须存在 _synthetic_name 注入点以触发主路径 RuntimeError"
+    )
+
+    boom_hits = {"n": 0}
+    http_hits = {"n": 0}
+
+    def _boom_synthetic(*a: Any, **k: Any) -> str:
+        boom_hits["n"] += 1
+        raise RuntimeError(f"{marker} {FAKE_TOKEN}")
+
+    monkeypatch.setattr(mod, "_synthetic_name", _boom_synthetic)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # 任何 HTTP 均计次；折叠须在 HTTP 前完成
+        http_hits["n"] += 1
+        raise AssertionError(
+            "业务红：RuntimeError 折叠须在 HTTP 前触发，不得发出后续请求"
+            f" method={request.method!r} url={request.url!r}"
+        )
+
+    with pytest.raises(err_cls) as ei:
+        run(
+            _build_sources(mod, [p]),
+            transport=httpx.MockTransport(handler),
+            **_run_kwargs(),
+        )
+    assert boom_hits["n"] == 1, (
+        f"业务红：_synthetic_name 注入须精确触发 1 次，boom_hits={boom_hits['n']}"
+    )
+    assert http_hits["n"] == 0, (
+        f"业务红：RuntimeError 折叠前 HTTP 须精确 0，http_hits={http_hits['n']}"
+    )
+    _assert_remote_error(ei.value, "internal_error", msg_fn=msg_fn)
+    assert ei.value.__cause__ is None
+    assert ei.value.__context__ is None
+    _rq_assert_zero_markers(ei.value, [marker, FAKE_TOKEN])
