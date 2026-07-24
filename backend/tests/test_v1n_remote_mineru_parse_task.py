@@ -3022,8 +3022,19 @@ def test_t5b_path_replace_runner_zero(
 
     # --- A) leaf reparse/symlink seam（M2 风格 FakeStat）---
     pid = _create_project(client, "V1N-path-leaf")
-    up = _upload(client, pid, "p.pdf", b"%PDF-PATH", "application/pdf")
-    stored = Path(file_service.resolve_path(settings, pid, up["storedName"])).resolve()
+    _upload(client, pid, "p.pdf", b"%PDF-PATH", "application/pdf")
+    # 服务端真值 stored_name（隔离 TEMP 库），不以响应 storedName 作为 path/seam 真源
+    db = SessionLocal()
+    try:
+        row = db.scalars(
+            select(ProjectFileRow).where(ProjectFileRow.project_id == pid)
+        ).one()
+        server_stored_name = row.stored_name
+    finally:
+        db.close()
+    stored = Path(
+        file_service.resolve_path(settings, pid, server_stored_name)
+    ).resolve()
     assert stored.exists()
 
     class _LeafReparseStat:
@@ -3042,7 +3053,7 @@ def test_t5b_path_replace_runner_zero(
     real_os_lstat = os.lstat
 
     def _leaf_lstat(path, *a, **k):
-        if str(stored) in str(path) or up["storedName"] in str(path):
+        if str(stored) in str(path) or server_stored_name in str(path):
             return _LeafReparseStat()
         return real_os_lstat(path, *a, **k)
 
@@ -3050,7 +3061,7 @@ def test_t5b_path_replace_runner_zero(
     real_path_lstat = Path.lstat
 
     def _path_leaf_lstat(self, *a, **k):
-        if Path(self).resolve() == stored or str(self).endswith(up["storedName"]):
+        if Path(self).resolve() == stored or str(self).endswith(server_stored_name):
             return _LeafReparseStat()
         return real_path_lstat(self, *a, **k)
 
@@ -3072,9 +3083,17 @@ def test_t5b_path_replace_runner_zero(
     monkeypatch.setattr(os, "lstat", real_os_lstat)
     monkeypatch.setattr(Path, "lstat", real_path_lstat, raising=False)
     pid2 = _create_project(client, "V1N-path-parent")
-    up2 = _upload(client, pid2, "q.pdf", b"%PDF-PAR", "application/pdf")
+    _upload(client, pid2, "q.pdf", b"%PDF-PAR", "application/pdf")
+    db2 = SessionLocal()
+    try:
+        row2 = db2.scalars(
+            select(ProjectFileRow).where(ProjectFileRow.project_id == pid2)
+        ).one()
+        server_stored_name2 = row2.stored_name
+    finally:
+        db2.close()
     stored2 = Path(
-        file_service.resolve_path(settings, pid2, up2["storedName"])
+        file_service.resolve_path(settings, pid2, server_stored_name2)
     ).resolve()
     parent = stored2.parent
     before2 = _snapshot_domains(client, pid2)
