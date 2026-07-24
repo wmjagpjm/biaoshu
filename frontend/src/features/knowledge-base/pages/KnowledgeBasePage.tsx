@@ -5,7 +5,14 @@
  * 二次开发：图片禁止回退 localStorage/data URL；语义索引禁止模型 URL/Token/缓存路径输入；AI 注入与融合属阶段 3。
  */
 
-import { useMemo, useRef, useState, type DragEvent, type FormEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+  type FormEvent,
+} from "react";
 import {
   BookOpen,
   Cpu,
@@ -41,13 +48,22 @@ import {
 } from "../types";
 import "./KnowledgeBase.css";
 
-/** 用途：格式化完成时间（本地可读）；空则 —。 */
+/**
+ * 用途：格式化语义索引完成时间（本地可读）。
+ * 仅接受可解析合法时间；invalid / 路径 / apiKey / NaN 一律精确「—」，
+ * 禁止将原始脏串写入 text/title/aria/data/value/placeholder 或历史 DOM。
+ */
 function formatFinishedAt(iso: string | null | undefined): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
+  if (iso == null || typeof iso !== "string") return "—";
+  const trimmed = iso.trim();
+  if (!trimmed) return "—";
+  const d = new Date(trimmed);
+  if (Number.isNaN(d.getTime())) return "—";
   return d.toLocaleString("zh-CN", { hour12: false });
 }
+
+/** 文档表最终列数（含服务端 category）；loading/error/empty 的 colSpan 必须一致 */
+const DOC_TABLE_COL_COUNT = 9;
 
 function statusClass(status: DocParseStatus): string {
   if (status === "ready") return "is-ready";
@@ -83,12 +99,26 @@ export function KnowledgeBasePage() {
   const [createError, setCreateError] = useState<string | null>(null);
   const [detail, setDetail] = useState<KnowledgeCard | null>(null);
 
+  const docsReady = kb.docStatus === "ready";
+  const docsLocked = !docsReady || kb.busy;
+
   const allFilteredSelected =
     kb.filteredDocs.length > 0 &&
     kb.filteredDocs.every((d) => kb.selectedIds.includes(d.id));
 
+  // 非 ready 时清空 moveTarget；ready 后若目标 folder 已不存在也置 ""，禁止自动改到另一 folder
+  useEffect(() => {
+    if (kb.docStatus !== "ready") {
+      setMoveTarget("");
+      return;
+    }
+    if (moveTarget && !kb.folders.some((f) => f.id === moveTarget)) {
+      setMoveTarget("");
+    }
+  }, [kb.docStatus, kb.folders, moveTarget]);
+
   function handleBatchMove() {
-    if (!moveTarget || !kb.selectedIds.length) return;
+    if (docsLocked || !moveTarget || !kb.selectedIds.length) return;
     kb.moveDocs(kb.selectedIds, moveTarget);
     setMoveTarget("");
   }
@@ -147,7 +177,6 @@ export function KnowledgeBasePage() {
           <h1>知识库</h1>
           <p>
             文档按文件夹管理；素材卡片统一沉淀文档片段、资质、业绩与图片，供章节安全引用。
-            {kb.source === "api" ? "（已接后端）" : "（文档当前离线本地演示）"}
           </p>
         </div>
         <div className="page-actions">
@@ -160,6 +189,7 @@ export function KnowledgeBasePage() {
                 multiple
                 hidden
                 onChange={(e) => {
+                  // 非 ready 时 Hook 亦零请求；此处仍避免无意义派发
                   if (e.target.files?.length) {
                     void kb.uploadFiles(e.target.files);
                   }
@@ -178,7 +208,7 @@ export function KnowledgeBasePage() {
               <button
                 type="button"
                 className="btn btn-primary"
-                disabled={kb.busy}
+                disabled={docsLocked}
                 onClick={() => docFileRef.current?.click()}
                 title="上传并同步解析分块"
               >
@@ -255,16 +285,27 @@ export function KnowledgeBasePage() {
 
       {tab === "documents" && (
         <div className="kb-docs-layout">
-          <FolderTree
-            folders={kb.folders}
-            counts={kb.folderCounts}
-            totalCount={kb.totalDocCount}
-            selectedId={kb.selectedFolderId}
-            onSelect={kb.setSelectedFolderId}
-            onCreate={(name) => {
-              void kb.createFolder(name);
+          {/* FolderTree 无 disabled prop：用原生 fieldset 禁用，覆盖 onCreate 不足的路径 */}
+          <fieldset
+            disabled={docsLocked}
+            style={{
+              border: "none",
+              margin: 0,
+              padding: 0,
+              minInlineSize: 0,
             }}
-          />
+          >
+            <FolderTree
+              folders={kb.folders}
+              counts={kb.folderCounts}
+              totalCount={kb.totalDocCount}
+              selectedId={kb.selectedFolderId}
+              onSelect={kb.setSelectedFolderId}
+              onCreate={(name) => {
+                void kb.createFolder(name);
+              }}
+            />
+          </fieldset>
 
           <div className="kb-docs-main">
             {kb.error && (
@@ -290,17 +331,13 @@ export function KnowledgeBasePage() {
                   data-testid="semantic-index-rebuild"
                   aria-label={semanticActionLabel(kb.semanticIndex)}
                   disabled={
-                    kb.source !== "api" ||
+                    !docsReady ||
                     kb.semanticBusy ||
                     kb.semanticBuilding ||
                     kb.busy
                   }
                   onClick={() => void kb.rebuildSemanticIndex()}
-                  title={
-                    kb.source !== "api"
-                      ? "本地演示模式不可构建"
-                      : "仅使用本机固定模型，不外发正文"
-                  }
+                  title="仅使用本机固定模型，不外发正文"
                 >
                   {kb.semanticBusy || kb.semanticBuilding
                     ? "构建中…"
@@ -318,9 +355,7 @@ export function KnowledgeBasePage() {
                 <div>
                   <dt>状态</dt>
                   <dd data-testid="semantic-index-status">
-                    {kb.source !== "api"
-                      ? "本地演示 · 不可构建"
-                      : semanticStatusLabel(kb.semanticIndex)}
+                    {semanticStatusLabel(kb.semanticIndex)}
                   </dd>
                 </div>
                 <div>
@@ -345,45 +380,32 @@ export function KnowledgeBasePage() {
                   </dd>
                 </div>
               </dl>
-              {kb.source !== "api" ? (
+              {semanticDegradeReason(kb.semanticIndex) ? (
                 <p
                   className="kb-semantic-panel__hint"
                   data-testid="semantic-index-degrade"
                   role="status"
                 >
-                  文档当前为本地演示模式，无法构建离线语义索引；连接后端 API 后可使用固定模型{" "}
-                  {SEMANTIC_FIXED_MODEL_ID}。
+                  {semanticDegradeReason(kb.semanticIndex)}
                 </p>
               ) : (
-                <>
-                  {semanticDegradeReason(kb.semanticIndex) ? (
-                    <p
-                      className="kb-semantic-panel__hint"
-                      data-testid="semantic-index-degrade"
-                      role="status"
-                    >
-                      {semanticDegradeReason(kb.semanticIndex)}
-                    </p>
-                  ) : (
-                    <p
-                      className="kb-semantic-panel__hint is-ok"
-                      data-testid="semantic-index-degrade"
-                      role="status"
-                    >
-                      语义索引已就绪，检索将混合关键词与本机向量。
-                    </p>
-                  )}
-                  {kb.semanticError ? (
-                    <p
-                      className="kb-semantic-panel__error"
-                      role="alert"
-                      data-testid="semantic-index-error"
-                    >
-                      {kb.semanticError}
-                    </p>
-                  ) : null}
-                </>
+                <p
+                  className="kb-semantic-panel__hint is-ok"
+                  data-testid="semantic-index-degrade"
+                  role="status"
+                >
+                  语义索引已就绪，检索将混合关键词与本机向量。
+                </p>
               )}
+              {kb.semanticError ? (
+                <p
+                  className="kb-semantic-panel__error"
+                  role="alert"
+                  data-testid="semantic-index-error"
+                >
+                  {kb.semanticError}
+                </p>
+              ) : null}
             </section>
 
             <div className="kb-docs-toolbar card card-pad">
@@ -429,7 +451,7 @@ export function KnowledgeBasePage() {
               </div>
             </div>
 
-            {kb.selectedIds.length > 0 && (
+            {docsReady && kb.selectedIds.length > 0 && (
               <div className="kb-batch-bar">
                 <span>
                   已选 <strong>{kb.selectedIds.length}</strong> 项
@@ -439,6 +461,7 @@ export function KnowledgeBasePage() {
                     value={moveTarget}
                     onChange={(e) => setMoveTarget(e.target.value)}
                     aria-label="移入文件夹"
+                    disabled={docsLocked}
                   >
                     <option value="">移入文件夹…</option>
                     {kb.folders.map((f) => (
@@ -450,7 +473,7 @@ export function KnowledgeBasePage() {
                   <button
                     type="button"
                     className="btn btn-soft btn-sm"
-                    disabled={!moveTarget}
+                    disabled={docsLocked || !moveTarget}
                     onClick={handleBatchMove}
                   >
                     <FolderInput size={14} /> 移动
@@ -458,7 +481,7 @@ export function KnowledgeBasePage() {
                   <button
                     type="button"
                     className="btn btn-ghost btn-sm"
-                    disabled={kb.busy}
+                    disabled={docsLocked}
                     onClick={() => void kb.retryParse(kb.selectedIds)}
                   >
                     <RefreshCw size={14} /> 重试索引
@@ -466,7 +489,7 @@ export function KnowledgeBasePage() {
                   <button
                     type="button"
                     className="btn btn-ghost btn-sm"
-                    disabled={kb.busy}
+                    disabled={docsLocked}
                     onClick={() => {
                       if (
                         window.confirm(
@@ -500,6 +523,7 @@ export function KnowledgeBasePage() {
                         checked={allFilteredSelected}
                         onChange={kb.toggleSelectAllFiltered}
                         aria-label="全选当前列表"
+                        disabled={!docsReady}
                       />
                     </th>
                     <th>资料</th>
@@ -507,14 +531,34 @@ export function KnowledgeBasePage() {
                     <th>文件夹</th>
                     <th>标签</th>
                     <th>分块</th>
+                    <th>分类</th>
                     <th>更新</th>
                     <th />
                   </tr>
                 </thead>
                 <tbody>
-                  {kb.filteredDocs.length === 0 ? (
+                  {kb.docStatus === "loading" ? (
                     <tr>
-                      <td colSpan={8} style={{ padding: 0 }}>
+                      <td colSpan={DOC_TABLE_COL_COUNT} style={{ padding: 24 }}>
+                        正在加载知识库文档…
+                      </td>
+                    </tr>
+                  ) : kb.docStatus === "error" ? (
+                    <tr>
+                      <td colSpan={DOC_TABLE_COL_COUNT} style={{ padding: 0 }} />
+                    </tr>
+                  ) : kb.docs.length === 0 ? (
+                    <tr>
+                      <td colSpan={DOC_TABLE_COL_COUNT} style={{ padding: 0 }}>
+                        <EmptyState
+                          title="知识库暂无文档"
+                          description="上传文档后可在这里查看解析和索引状态。"
+                        />
+                      </td>
+                    </tr>
+                  ) : kb.filteredDocs.length === 0 ? (
+                    <tr>
+                      <td colSpan={DOC_TABLE_COL_COUNT} style={{ padding: 0 }}>
                         <EmptyState
                           title="当前筛选下无文档"
                           description="切换文件夹、状态或关键词后再试。"
@@ -523,9 +567,9 @@ export function KnowledgeBasePage() {
                     </tr>
                   ) : (
                     kb.filteredDocs.map((d) => {
+                      // 文件夹列仅展示 folder 名；category 独立列展示服务端真值
                       const folderName =
-                        kb.folders.find((f) => f.id === d.folderId)?.name ??
-                        d.category;
+                        kb.folders.find((f) => f.id === d.folderId)?.name ?? "";
                       return (
                         <tr key={d.id}>
                           <td>
@@ -547,7 +591,8 @@ export function KnowledgeBasePage() {
                               <BookOpen size={16} color="var(--primary)" />
                               <div>
                                 <strong>{d.name}</strong>
-                                {d.sizeLabel && (
+                                {/* sizeLabel===null/undefined 不生成 div.mono */}
+                                {d.sizeLabel != null ? (
                                   <div
                                     className="mono"
                                     style={{
@@ -557,20 +602,17 @@ export function KnowledgeBasePage() {
                                   >
                                     {d.sizeLabel}
                                   </div>
-                                )}
+                                ) : null}
                               </div>
                             </div>
                           </td>
                           <td>
+                            {/* 禁止 statusMessage 原文进入 text/title/aria；仅固定 DOC_STATUS_LABEL */}
                             <span
                               className={`kb-status-pill ${statusClass(d.status)}`}
-                              title={d.statusMessage}
                             >
                               {DOC_STATUS_LABEL[d.status]}
                             </span>
-                            {d.statusMessage && (
-                              <div className="kb-status-msg">{d.statusMessage}</div>
-                            )}
                           </td>
                           <td>{folderName}</td>
                           <td>
@@ -588,7 +630,9 @@ export function KnowledgeBasePage() {
                               ))}
                             </div>
                           </td>
-                          <td className="mono">{d.chunks || "—"}</td>
+                          {/* chunks=0 必须显示「0」，禁止用 — 吞掉；列序 chunks@nth(5) */}
+                          <td className="mono">{d.chunks}</td>
+                          <td>{d.category}</td>
                           <td>{d.updated}</td>
                           <td>
                             <div style={{ display: "flex", gap: 4 }}>
@@ -598,7 +642,7 @@ export function KnowledgeBasePage() {
                                 <button
                                   type="button"
                                   className="btn btn-ghost btn-sm"
-                                  disabled={kb.busy}
+                                  disabled={docsLocked}
                                   onClick={() => void kb.retryParse([d.id])}
                                   title="重新索引"
                                 >
@@ -608,7 +652,7 @@ export function KnowledgeBasePage() {
                               <button
                                 type="button"
                                 className="btn btn-ghost btn-sm"
-                                disabled={kb.busy}
+                                disabled={docsLocked}
                                 title="删除"
                                 onClick={() => {
                                   if (window.confirm(`确定删除「${d.name}」？`)) {
