@@ -232,6 +232,50 @@ python -m pytest tests\test_v1n_remote_mineru_parse_task.py -k "v1n_task_release
 
 必须真实 **failed**；禁止 client 7 门 / 完整 174。
 
+### 阶段 1.G：P0 active-except 异常断链红门（TEST-P0，本任务）
+
+前置：Codex P0 question `msg_36e9d115617541c9ae86c02e0ea574a0`；Grok Q1–Q4 全 YES；有效 task `msg_6239d583469749b79ab892216e3a702c`；review `msg_2a826a4c47384aa6b2df93717d3e3f80`。重复 task `msg_00b2aecab90e4a07b54943ae2e32da46` 不作为授权真值。工作树 `C:\Users\Administrator\biaoshu-v1n-prod`，分支 `collab/v1n-production`，HEAD `1d24d1a`。**生产仍未授权**；四 production 逐字节冻结。
+
+| 红门 | 关键字 / 测试 | 要点 |
+| --- | --- | --- |
+| A | `test_v1n_p0_active_except_valueerror_raise_zero_chain_marker` | active except `ValueError(唯一 marker)` 内调真实 `module._raise`；`internal_error` code/message/args；cause/context 均为 None；`_rq_walk_exc_graph` 零 marker；`_raise` 命中精确 1；marker 正反自证 |
+| B | `test_v1n_p0_capture_baseline_lstat_oserror_zero_chain_marker` | `monkeypatch module.os.lstat` → 带 marker 的 `OSError`；真实 `_capture_baseline`；`source_identity_mismatch`；lstat=1；断链 + 零 marker；无真实路径/数据 |
+
+**白名单（仅三文件）：**
+
+1. `backend/tests/test_v1n_remote_mineru_client.py`
+2. `docs/v1n-remote-mineru-api-contract.md`
+3. `docs/plans/2026-07-23-v1n-remote-mineru-api-plan.md`
+
+禁止：四 production、parse_task 测试、其它文件、Git 写、真实网络/Token/数据。不得修改原 Q1 三路或弱化任何现有门。
+
+**本切片命令（禁止完整 7 门 / 174 / 并发 / 真实网络 Token）：**
+
+```powershell
+cd C:\Users\Administrator\biaoshu-v1n-prod\backend
+python -m py_compile tests\test_v1n_remote_mineru_client.py
+python -m pytest tests\test_v1n_remote_mineru_client.py -k "test_v1n_p0_active_except_valueerror_raise_zero_chain_marker or test_v1n_p0_capture_baseline_lstat_oserror_zero_chain_marker" -q --tb=short
+```
+
+预期当前 production：**2 failed**；0 collection/fixture/teardown error。**production 修复后置**（阶段 3 另授权）。
+
+**P0 证据登记：** failure-first 两红门真实 failed；`py_compile` 通过；`git diff --check` 对 tracked 变更检查；三白名单 bytes+SHA；四 production 哈希与基线对照；`git add/commit/push/stash/reset/checkout` 与真实网络/Token **did-not-run**。
+
+### 阶段 1.H：最终增量发布红门（本任务）
+
+在阶段 1.G 后一次关闭八个增量门，仍不修改 production：
+
+1. public entry 前置隐私两门：unsupported suffix、baseline lstat；
+2. public entry 内部隐私两门：PUT failure、ZIP failure，递归扫描全部 production locals；
+3. task 晚期显式 `os.lstat` fail-closed；
+4. client 多源 Markdown 累计 cap 第二份超限即停，第三 ZIP=0；
+5. freeze 后 trusted root 不得再次 resolve/follow；
+6. ZIP EOCD 成员少报必须在 `ZipFile` 构造前拒绝。
+
+消息链、精确测试名和 Codex failure-first 数字见契约 §8.7。最终五门 task 为 `msg_98067da7ba3941e8a946b9ab3022143d`，review 为 `msg_9eac35567f2a463aab77b782fd21a96f`。Codex 使用正常 `conftest` 复验：入口前置 `2 failed / 125 deselected`、最终五门 `5 failed / 122 deselected`、晚期 lstat `1 failed / 70 deselected`；全部 0 collection/fixture/teardown error。
+
+**生产修复方向冻结：** 公开 wrapper + 私有 impl 形成结构化异常隐私边界并独立修 `_raise`；删除 task 的 follow 回退；聚合时逐份计数；比较 frozen canonical root 时不再次 follow；有界核对中央目录实际数与声明数。生产仅允许 `remote_mineru_client.py` 与 `task_service.py`，另行授权。
+
 ### 阶段 2：Codex 审查测试（本任务后）
 
 1. 排除假绿：常量自指、条件成功、复制 production、真实 sleep、外网、真实 Token。

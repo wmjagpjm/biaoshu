@@ -377,6 +377,53 @@ python -m pytest tests\test_v1n_remote_mineru_parse_task.py -k "v1n_task_release
 
 必须真实 **failed**；禁止再跑 client 7 门或完整 174；生产未授权。
 
+### 8.6 P0 active-except 异常断链红门（TEST-P0，本任务）
+
+> **确认链：** Codex P0 question `msg_36e9d115617541c9ae86c02e0ea574a0` → Grok Q1–Q4 全 YES → 有效 task `msg_6239d583469749b79ab892216e3a702c` → review `msg_2a826a4c47384aa6b2df93717d3e3f80`。重复 task `msg_00b2aecab90e4a07b54943ae2e32da46` 及其重复回执仅保留历史，不作为本节点授权真值。
+> **范围：** 仅 test/docs failure-first；四 production（`remote_mineru_client.py` / `task_service.py` / `config.py` / `.env.example`）**逐字节冻结**；禁止 Git 写、真实网络/Token/数据。
+> **测试节点关键字：** `v1n_p0_active_except` / `v1n_p0_capture_baseline_lstat`（实现名：`test_v1n_p0_active_except_valueerror_raise_zero_chain_marker`、`test_v1n_p0_capture_baseline_lstat_oserror_zero_chain_marker`）。
+> **生产修复后置：** 须另授权；本切片不得为变绿改 production。
+
+| 红门 | 冻结要求 | 期望观测（当前 production） |
+| --- | --- | --- |
+| **A active-except `_raise`** | 在 `except ValueError(唯一合成 marker)` 内调用**真实** `module._raise`；捕获 `RemoteMineruError`；断固定 `internal_error` 的 code / message / args；`__cause__ is None` 且 `__context__ is None`；复用 `_rq_walk_exc_graph` 遍历 args/cause/context/traceback/f_locals 公开异常图**零 marker**；真实 `_raise` 命中精确 **1** 次。禁止复制 production 实现、禁止测试内手工清链、禁止 skip/xfail/提前 return/宽 OR。marker 正反自证。 | 业务红：`__context__` 被 active except 重挂 + marker 可达（failed） |
+| **B `_capture_baseline` lstat seam** | `monkeypatch module.os.lstat` 抛带唯一合成 marker 的 `OSError`；调用真实 `_capture_baseline`；断固定 `source_identity_mismatch` 码/中文/args；`lstat` 精确 **1** 次；同一异常断链（cause/context 均为 None）+ 公开异常图零 marker。禁止真实路径/数据。 | 业务红：OSError 经 active except 重挂 + marker 可达（failed） |
+
+**验收（本切片 test-only，仅一次）：**
+
+```powershell
+cd C:\Users\Administrator\biaoshu-v1n-prod\backend
+python -m py_compile tests\test_v1n_remote_mineru_client.py
+python -m pytest tests\test_v1n_remote_mineru_client.py -k "test_v1n_p0_active_except_valueerror_raise_zero_chain_marker or test_v1n_p0_capture_baseline_lstat_oserror_zero_chain_marker" -q --tb=short
+```
+
+预期当前 production：**2 failed**；0 collection/fixture/teardown error。禁止再跑 Q1–Q7 / task 门 / 完整 174。不得修改原 Q1 三路或弱化任何现有门。
+
+### 8.7 最终入口隐私、路径、累计上限与 ZIP 前门（增量 test-only）
+
+> **范围：** 仅两个 V1-N 测试文件与本契约/计划；四个 production 继续冻结。全部输入、凭据、路径和 URL 均为合成值，测试零 DNS、零外网、零真实数据。
+
+| 门 | 测试 | 冻结要求 |
+| --- | --- | --- |
+| P0 入口前置 A/B | `test_v1n_p0_entry_unsupported_suffix_privacy_zero_marker`、`test_v1n_p0_entry_baseline_lstat_privacy_zero_marker` | 从真实公开入口进入；生产 traceback 局部、cause/context/args 零合成 Token/路径/文件名/OSError marker；固定诊断码；HTTP=0 |
+| P0 入口内部 C/D | `test_v1n_final_p0_put_failure_locals_zero_marker`、`test_v1n_final_p0_zip_failure_locals_zero_marker` | PUT/ZIP 阶段动作精确；递归扫描全部非测试生产 locals，不截前 64；零 source/PUT URL/poll item/ZIP URL/transport marker |
+| P1 晚期 lstat | `test_v1n_p1_late_explicit_os_lstat_oserror_fail_closed_no_follow_fallback` | 前置 reparse 检查通过，仅晚期 `os.lstat` 失败；`path.is_file`、nofollow size、runner、HTTP 均为 0；固定 fail-closed 错误与零部分写 |
+| P1 多源累计 cap | `test_v1n_final_p1_multi_source_aggregate_cap_fail_fast` | 第二份正文含 separator 后累计超限即 `output_invalid`；第三 ZIP 下载精确 0 |
+| P1 冻结根 | `test_v1n_final_p1_frozen_trusted_root_reresolve` | client 不得再次跟随启动时冻结的 canonical root；切换 seam 下须 `source_identity_mismatch` 且 PUT=0 |
+| P2 ZIP 少报 | `test_v1n_final_p2_zip_declared_undercount_pre_zipfile` | 实际中央目录 4、EOCD 声明 1、cap 3 时在 `ZipFile` 构造前 `zip_unsafe`；构造计数 0 |
+
+**确认链：**
+
+- 入口前置：`msg_3358a01db4fd4ec8932e24414f51eace` → `msg_c07712a80d4e42cf8985cecb9a8722a8` → task `msg_59535539bfa84d3ba65cfeb58d1c34c1` → review `msg_2f46984015004abd9a98c89ca397f436`。
+- 循环局部：`msg_7b0fbd925515466184fabc6977417254` → `msg_2df0573b48574fa1951742812f7ba5be`。
+- 累计 cap：`msg_fee8f86bb7234655bda9d04ce30f9128` → `msg_b1a8a6404e75490badcd4a54370216d9`。
+- 冻结根：`msg_885651b897964597a25723fabb157cda` → `msg_a7347ff18a624e818bd5988c6202c603`。
+- ZIP 少报：`msg_11918ef136c74d5390bf24e66d12aa45` → `msg_1a99dfa61a20436c93de6d40b8085f54`。
+- 五门集中 task `msg_98067da7ba3941e8a946b9ab3022143d` → review `msg_9eac35567f2a463aab77b782fd21a96f`。
+- 晚期 lstat：`msg_275b1c756f0848ccbe04951106f2b2bc` → `msg_6af6a026595d4a8c85232626a6220158` → task `msg_bd17883902394be691dabe9126e5a347` → review `msg_e82945c8d6a4405cada3cbe59cdf8044`。
+
+Codex 正常 `conftest` failure-first 证据：入口前置 **2 failed / 125 deselected**；最终五门 **5 failed / 122 deselected**；晚期 lstat **1 failed / 70 deselected**。均为目标业务断言，0 collection/fixture/teardown error。production 修复必须另授权。
+
 ## 9. 生产候选白名单（仅计划引用，本任务禁止写入）
 
 见计划文档精确列表。候选：

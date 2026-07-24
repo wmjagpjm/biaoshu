@@ -4487,3 +4487,197 @@ def test_v1n_task_release_gate_q4_finalizer_wins_cancel_cannot_overwrite_success
         "业务红：success event 必须精确 1"
     )
     get_settings.cache_clear()
+
+
+# ===========================================================================
+# V1-N P1：晚期显式 os.lstat 失败关闭红门（关键字 v1n_p1_late_explicit_os_lstat）
+# failure-first：不得复用 G1-C 早期 Path.lstat 失败；仅打晚期 os.lstat(str(leaf))。
+# 当前 production 吞 OSError → path.is_file / _stat_nofollow_size 跟随回退 → 业务红。
+# ===========================================================================
+
+_P1_LATE_LSTAT_MARKER = "P1_SYNTH_LATE_OS_LSTAT_OSERROR_SENSITIVE_MARKER_v1n"
+
+
+def test_v1n_p1_late_explicit_os_lstat_oserror_fail_closed_no_follow_fallback(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    """
+    P1 独立红门：精确覆盖 task_service._validate_parse_sources 晚期 os.lstat(str(leaf))。
+
+    约束：
+    - 前置 Path.lstat / reparse 检查必须真实通过（不 patch Path.lstat 为失败）
+    - 只让晚期 os.lstat(str(leaf)) 抛带合成 marker 的 OSError
+    - 修复后：晚期 lstat 精确 1 次；path.is_file=0；_stat_nofollow_size=0；
+      remote runner=0；HTTP=0；五域零部分写；公开 error 固定脱敏；
+      异常链/事件/API/SSE/caplog 零 marker
+    - 禁止复用 G1-C 早期 Path.lstat 失败；禁止宽 OR / skip / 提前 return
+    """
+    _enable_fake_token(monkeypatch)
+    mod = _load_client()
+    out_cls = _require_attr(mod, "RemoteParseOutput")
+    runner_calls: list[str] = []
+    http_hits_before = len(_NET_GUARD_HITS)
+
+    def fake_run(*a, **k):
+        # 若 production 接受源并进入 runner，证明 fail-open；目标断言 runner=0
+        runner_calls.append("run")
+        md = "# P1_LATE_LSTAT_MUST_NOT_ACCEPT\n"
+        return out_cls(markdown=md, file_count=1, chars=len(md))
+
+    _patch_remote_run(monkeypatch, mod, fake_run)
+
+    pid = _create_project(client, "V1N-P1-late-lstat")
+    content = b"%PDF-P1-LATE-LSTAT-16B"
+    _upload(client, pid, "late-lstat.pdf", content, "application/pdf")
+    before = _snapshot_domains(client, pid)
+
+    settings = get_settings()
+    from app.services import file_service
+
+    db = SessionLocal()
+    try:
+        row = db.scalars(
+            select(ProjectFileRow).where(ProjectFileRow.project_id == pid)
+        ).one()
+        stored = row.stored_name
+        declared = int(row.size_bytes or 0)
+    finally:
+        db.close()
+    assert declared == len(content)
+
+    # 字面叶路径（与 production _literal_source_path 同构）；resolve 后路径仅用于 spy 匹配
+    leaf_literal = (
+        Path(settings.upload_dir).resolve() / pid / Path(stored).name
+    )
+    leaf_resolved = Path(
+        file_service.resolve_path(settings, pid, stored)
+    ).resolve()
+    assert leaf_literal.is_file() or leaf_resolved.is_file()
+
+    # --- 计数：前置 Path.lstat（真实通过） vs 晚期 os.lstat（唯一失败点）---
+    path_lstat_leaf_hits = {"n": 0}
+    late_os_lstat_hits = {"n": 0}
+    is_file_hits = {"n": 0}
+    nofollow_size_hits = {"n": 0}
+
+    real_path_lstat = Path.lstat
+    real_os_lstat = os.lstat
+    real_is_file = Path.is_file
+    real_nofollow_size = task_service._stat_nofollow_size
+
+    def _is_target_leaf(path_like: object) -> bool:
+        try:
+            p = Path(path_like)
+        except (TypeError, ValueError):
+            return False
+        s = str(path_like)
+        if stored and stored in s:
+            # 精确到 stored_name 叶，避免父目录/根误命中
+            try:
+                if p.name == Path(stored).name:
+                    return True
+            except OSError:
+                pass
+        try:
+            rp = p.resolve()
+        except OSError:
+            rp = None
+        if rp is not None and (rp == leaf_resolved or rp == leaf_literal.resolve()):
+            return True
+        try:
+            if p == leaf_literal or str(p) == str(leaf_literal):
+                return True
+        except OSError:
+            pass
+        return False
+
+    def _count_path_lstat(self, *a, **k):
+        # 仅计数；真实执行 → 前置 reparse 必须通过
+        if _is_target_leaf(self):
+            path_lstat_leaf_hits["n"] += 1
+        return real_path_lstat(self, *a, **k)
+
+    def _late_only_os_lstat(path, *a, **k):
+        if _is_target_leaf(path):
+            late_os_lstat_hits["n"] += 1
+            raise OSError(f"{_P1_LATE_LSTAT_MARKER} {FAKE_TOKEN}")
+        return real_os_lstat(path, *a, **k)
+
+    def _spy_is_file(self) -> bool:
+        if _is_target_leaf(self):
+            is_file_hits["n"] += 1
+        return real_is_file(self)
+
+    def _spy_nofollow_size(path: Path) -> int:
+        nofollow_size_hits["n"] += 1
+        return real_nofollow_size(path)
+
+    # 不 patch Path.lstat 为失败；仅包装计数，保持前置检查真实通过
+    monkeypatch.setattr(Path, "lstat", _count_path_lstat, raising=False)
+    monkeypatch.setattr(os, "lstat", _late_only_os_lstat)
+    monkeypatch.setattr(Path, "is_file", _spy_is_file, raising=False)
+    monkeypatch.setattr(task_service, "_stat_nofollow_size", _spy_nofollow_size)
+
+    with caplog.at_level(logging.DEBUG):
+        body = _parse_remote(client, pid)
+
+    # 前置 reparse/Path.lstat 必须真实发生（叶至少 resolve 前后各一次）
+    assert path_lstat_leaf_hits["n"] >= 2, (
+        f"业务红：前置 Path.lstat/reparse 叶检查必须保持，"
+        f"actual={path_lstat_leaf_hits['n']}"
+    )
+    # 晚期显式 os.lstat 精确命中一次（不得 0=未覆盖、不得 >1 重复吞/回退再 lstat）
+    assert late_os_lstat_hits["n"] == 1, (
+        f"业务红：晚期 os.lstat(str(leaf)) 必须精确命中 1 次，"
+        f"actual={late_os_lstat_hits['n']}"
+    )
+    # 修复目标：禁止 path.is_file 跟随回退与 _stat_nofollow_size 继续
+    assert is_file_hits["n"] == 0, (
+        f"业务红：晚期 lstat OSError 后 path.is_file 必须为 0（禁止跟随回退），"
+        f"actual={is_file_hits['n']}"
+    )
+    assert nofollow_size_hits["n"] == 0, (
+        f"业务红：晚期 lstat OSError 后 _stat_nofollow_size 必须为 0，"
+        f"actual={nofollow_size_hits['n']}"
+    )
+    assert runner_calls == [], (
+        f"业务红：晚期 lstat fail-closed 后 remote runner 必须为 0，"
+        f"actual={runner_calls}"
+    )
+    http_delta = len(_NET_GUARD_HITS) - http_hits_before
+    assert http_delta == 0, (
+        f"业务红：HTTP/外网熔断命中必须为 0，delta={http_delta} hits={_NET_GUARD_HITS}"
+    )
+
+    assert body["status"] == "failed", (
+        f"业务红：晚期 lstat OSError 必须 fail-closed failed，"
+        f"actual={body['status']!r} body={body}"
+    )
+    assert body.get("result") is None, (
+        f"业务红：路径门 result 必须 is None，actual={body.get('result')!r}"
+    )
+    err = body.get("error")
+    assert err == FIXED_ERR_LEAF_REPARSE, (
+        f"业务红：公开 error 必须固定脱敏 {FIXED_ERR_LEAF_REPARSE!r}，actual={err!r}"
+    )
+    assert _P1_LATE_LSTAT_MARKER not in str(err or "")
+    assert FAKE_TOKEN not in str(err or "")
+
+    _assert_domains_unchanged(
+        client, pid, before, label="p1-late-os-lstat", task_id=body["id"]
+    )
+    _assert_post_get_error_consistent(client, pid, body)
+    _scan_task_surfaces(
+        client,
+        pid,
+        body,
+        extra=[_P1_LATE_LSTAT_MARKER, FAKE_TOKEN, str(leaf_literal), str(leaf_resolved)],
+        caplog_text=caplog.text,
+    )
+    # caplog / 公开面零 marker（_scan 已扫 surfaces；此处再钉 caplog 本体）
+    assert _P1_LATE_LSTAT_MARKER not in (caplog.text or "")
+    assert FAKE_TOKEN not in (caplog.text or "")
+
+    get_settings.cache_clear()

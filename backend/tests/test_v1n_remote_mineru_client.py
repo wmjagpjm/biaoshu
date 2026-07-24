@@ -12994,3 +12994,1170 @@ def test_v1n_release_gate_q7_runtime_error_fold_internal_privacy(
     assert ei.value.__cause__ is None
     assert ei.value.__context__ is None
     _rq_assert_zero_markers(ei.value, [marker, FAKE_TOKEN])
+
+# ===========================================================================
+# V1-N P0 active-except 异常断链红门（test-only failure-first）
+# 节点关键字：v1n_p0_active_except / v1n_p0_capture_baseline_lstat
+# 前置：Codex P0 question msg_36e9d115617541c9ae86c02e0ea574a0；Grok Q1-Q4 全 YES。
+# 生产未授权修复；本节点必须在当前生产上真实 failed（__context__ 重挂 + marker 可达）。
+# 禁止 skip/xfail/提前 return/宽 OR/except Exception:pass；禁止复制 production 或手工清链。
+# ===========================================================================
+
+_P0_ACTIVE_EXCEPT_MARKER = "SYNTH_P0_ACTIVE_EXCEPT_VALUEERROR_MARKER_V1N_NOT_REAL"
+_P0_LSTAT_OSERROR_MARKER = "SYNTH_P0_LSTAT_OSERROR_MARKER_V1N_NOT_REAL"
+_P0_LSTAT_OSERROR_STR = "synthetic-p0-lstat-not-real"
+_P0_LSTAT_FAKE_PATH_MARKER = "p0_lstat_not_real_upload"
+
+
+def test_v1n_p0_active_except_valueerror_raise_zero_chain_marker(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """
+    P0 红门-A：active except ValueError(唯一合成 marker) 内直接调用真实 module._raise；
+    捕获 RemoteMineruError；断固定 internal_error 的 code/message/args，且
+    __cause__ is None、__context__ is None；复用 _rq_walk_exc_graph 遍历
+    args/cause/context/traceback/f_locals 公开异常图零 marker。
+    必须证明真实 _raise 命中精确一次；禁止复制 production 实现或测试内手工清链。
+
+    当前 production 在 active except 内 bare raise 会重挂 __context__，必须真实失败。
+    """
+    mod = _load_client()
+    err_cls = _require_attr(mod, "RemoteMineruError")
+    msg_fn = _require_attr(mod, "message_for_code")
+    real_raise = _require_attr(mod, "_raise")
+    assert callable(real_raise), "业务红：必须暴露 _raise 供 active-except 断链门"
+    code = "internal_error"
+    expected_msg = _fixed_message(code)
+
+    # 正反自证（正）：唯一 marker 在合成 ValueError 可达图中必现
+    synth_ve = ValueError(_P0_ACTIVE_EXCEPT_MARKER)
+    synth_blob = _rq_walk_exc_graph(synth_ve)
+    assert _P0_ACTIVE_EXCEPT_MARKER in synth_blob, (
+        "夹具自证失败：ValueError 可达图必须含唯一 marker（正）"
+    )
+    assert _P0_ACTIVE_EXCEPT_MARKER in repr(synth_ve.args), (
+        "夹具自证失败：ValueError.args 必须含唯一 marker（正）"
+    )
+    # 正反自证（反）：无关串不得误命中 marker 字面量
+    assert "SYNTH_P0_ACTIVE_EXCEPT_VALUEERROR_MARKER_V1N_NOT_REAL_X" not in synth_blob
+    assert _P0_ACTIVE_EXCEPT_MARKER + "_X" not in synth_blob
+
+    raise_hits = {"n": 0}
+
+    def counting_raise(c: str) -> None:
+        """仅计数后委托真实 production _raise；禁止在此清链或改写异常。"""
+        raise_hits["n"] += 1
+        return real_raise(c)
+
+    # 模块入口与局部均指向同一计数包装，证明命中真实 _raise 路径
+    monkeypatch.setattr(mod, "_raise", counting_raise)
+
+    with pytest.raises(err_cls) as ei:
+        try:
+            raise ValueError(_P0_ACTIVE_EXCEPT_MARKER)
+        except ValueError:
+            # 经 module._raise 入口调用真实实现（计数包装不复制 production）
+            mod._raise(code)
+
+    assert raise_hits["n"] == 1, (
+        f"业务红：真实 _raise 须精确命中 1 次，hits={raise_hits['n']}"
+    )
+    exc = ei.value
+    _assert_remote_error(exc, code, msg_fn=msg_fn if callable(msg_fn) else None)
+    assert exc.args == (expected_msg,), (
+        f"业务红：args 必须精确为 (message,)，actual={exc.args!r}"
+    )
+    assert exc.__cause__ is None, "业务红：__cause__ 必须为 None（真正断链）"
+    assert exc.__context__ is None, (
+        "业务红：__context__ 必须为 None（active except 内 _raise 不得重挂原异常）"
+    )
+    # 反：公开异常图零 marker（walker 复用既有 _rq_walk_exc_graph）
+    _rq_assert_zero_markers(exc, [_P0_ACTIVE_EXCEPT_MARKER])
+
+
+def test_v1n_p0_capture_baseline_lstat_oserror_zero_chain_marker(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """
+    P0 红门-B：monkeypatch module.os.lstat 抛带唯一合成 marker 的 OSError；
+    调用真实 _capture_baseline；断固定 source_identity_mismatch 码/中文/args，
+    lstat 精确一次；__cause__/__context__ 均为 None；公开异常图零 marker。
+    禁止真实路径/数据；禁止手工清链或复制 production。
+
+    当前 production active except OSError → _raise 会重挂 __context__，必须真实失败。
+    """
+    mod = _load_client()
+    err_cls = _require_attr(mod, "RemoteMineruError")
+    msg_fn = _require_attr(mod, "message_for_code")
+    capture = _require_attr(mod, "_capture_baseline")
+    assert callable(capture), "业务红：必须暴露 _capture_baseline 供 lstat 断链门"
+    code = "source_identity_mismatch"
+    expected_msg = _fixed_message(code)
+
+    # 正反自证（正）：合成 OSError 可达图必含唯一 marker
+    synth_os = OSError(22, _P0_LSTAT_OSERROR_STR, _P0_LSTAT_OSERROR_MARKER)
+    synth_blob = _rq_walk_exc_graph(synth_os)
+    assert _P0_LSTAT_OSERROR_MARKER in synth_blob, (
+        "夹具自证失败：OSError 可达图必须含唯一 marker（正）"
+    )
+    assert _P0_LSTAT_OSERROR_STR in synth_blob, (
+        "夹具自证失败：OSError 可达图必须含 strerror 合成串（正）"
+    )
+    # 正反自证（反）：无关串不得误命中
+    assert _P0_LSTAT_OSERROR_MARKER + "_X" not in synth_blob
+
+    lstat_hits = {"n": 0}
+
+    def boom_lstat(path: object, *a: Any, **k: Any) -> Any:
+        lstat_hits["n"] += 1
+        # 第三参 filename 位嵌入唯一 marker（OSError 可达 args）；无真实路径/数据
+        raise OSError(22, _P0_LSTAT_OSERROR_STR, _P0_LSTAT_OSERROR_MARKER)
+
+    # 精确补丁 production 使用的 module.os.lstat（及同对象 os.lstat）
+    assert hasattr(mod, "os"), "业务红：production 必须绑定 os 模块供 lstat seam"
+    monkeypatch.setattr(mod.os, "lstat", boom_lstat)
+    monkeypatch.setattr(os, "lstat", boom_lstat)
+
+    fake_path = Path(f"C:/synth/{_P0_LSTAT_FAKE_PATH_MARKER}/source.pdf")
+    with pytest.raises(err_cls) as ei:
+        capture(fake_path)
+
+    assert lstat_hits["n"] == 1, (
+        f"业务红：module.os.lstat 注入须精确触发 1 次，hits={lstat_hits['n']}"
+    )
+    exc = ei.value
+    _assert_remote_error(exc, code, msg_fn=msg_fn if callable(msg_fn) else None)
+    assert exc.args == (expected_msg,), (
+        f"业务红：args 必须精确为 (message,)，actual={exc.args!r}"
+    )
+    assert exc.__cause__ is None, "业务红：__cause__ 必须为 None（真正断链）"
+    assert exc.__context__ is None, (
+        "业务红：__context__ 必须为 None（lstat OSError 不得挂入 RemoteMineruError 链）"
+    )
+    # 反：公开异常图零 marker / 合成 strerror / 假路径片段
+    _rq_assert_zero_markers(
+        exc,
+        [
+            _P0_LSTAT_OSERROR_MARKER,
+            _P0_LSTAT_OSERROR_STR,
+            _P0_LSTAT_FAKE_PATH_MARKER,
+        ],
+    )
+
+
+# ===========================================================================
+# V1-N P0 public-entry 隐私红门（test-only failure-first）
+# 节点关键字：v1n_p0_entry_unsupported_suffix / v1n_p0_entry_baseline_lstat
+# 前置：Codex ref_question msg_3358a01db4fd4ec8932e24414f51eace；
+#       ref_yes msg_c07712a80d4e42cf8985cecb9a8722a8；task msg_59535539bfa84d3ba65cfeb58d1c34c1。
+# 生产未授权修复；本节点必须在当前 production 上真实 failed：
+#   A) run_remote_mineru_parse 帧 f_locals 保留 token/tok/src；
+#   B) 入口 locals + active-except __context__ 挂 OSError。
+# 禁止 skip/xfail/提前 return/宽 OR/except Exception:pass；禁止复制 production 或手工清链。
+# 禁止真实路径/Token/网络；仅合成 marker；HTTP 客户端与 transport 必须零命中。
+# ===========================================================================
+
+_P0_ENTRY_UNSUP_TOKEN_MARKER = "SYNTH_P0_ENTRY_UNSUP_TOKEN_MARKER_V1N_NOT_REAL"
+_P0_ENTRY_UNSUP_PATH_MARKER = "SYNTH_P0_ENTRY_UNSUP_PATH_MARKER_V1N_NOT_REAL"
+_P0_ENTRY_UNSUP_FN_MARKER = "SYNTH_P0_ENTRY_UNSUP_FN_MARKER_V1N_NOT_REAL"
+
+_P0_ENTRY_LSTAT_TOKEN_MARKER = "SYNTH_P0_ENTRY_LSTAT_TOKEN_MARKER_V1N_NOT_REAL"
+_P0_ENTRY_LSTAT_PATH_MARKER = "SYNTH_P0_ENTRY_LSTAT_PATH_MARKER_V1N_NOT_REAL"
+_P0_ENTRY_LSTAT_FN_MARKER = "SYNTH_P0_ENTRY_LSTAT_FN_MARKER_V1N_NOT_REAL"
+_P0_ENTRY_LSTAT_OSERROR_MARKER = "SYNTH_P0_ENTRY_LSTAT_OSERROR_MARKER_V1N_NOT_REAL"
+_P0_ENTRY_LSTAT_OSERROR_STR = "synthetic-p0-entry-lstat-not-real"
+
+
+def test_v1n_p0_entry_unsupported_suffix_privacy_zero_marker(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """
+    P0 入口红门-A：真实 public entry run_remote_mineru_parse；
+    RemoteSource 的 path/filename 与 token 均嵌唯一合成 marker，后缀不受支持；
+    cancel_check 恒 False（未取消）。断固定 source_type_unsupported
+    code/message/args，__cause__/__context__ 均为 None；
+    默认/注入 HTTP 客户端与 transport 零命中；
+    复用 _rq_walk_exc_graph（跳过测试帧）断 token/tok/path/filename marker 全零可达。
+
+    当前 production 在 run_remote_mineru_parse 帧 locals 保留 token/tok/src，必须真实失败。
+    禁止真实路径/数据；禁止手工清链或复制 production。
+    """
+    mod = _load_client()
+    err_cls = _require_attr(mod, "RemoteMineruError")
+    msg_fn = _require_attr(mod, "message_for_code")
+    run = _get_run_fn(mod)
+    src_cls = _require_attr(mod, "RemoteSource")
+    code = "source_type_unsupported"
+    expected_msg = _fixed_message(code)
+
+    # 合成 RemoteSource：path/filename/credential 均含唯一 marker；非法后缀 .txt
+    synth_path = Path(
+        f"C:/synth/{_P0_ENTRY_UNSUP_PATH_MARKER}/not_real_upload.txt"
+    )
+    synth_filename = f"{_P0_ENTRY_UNSUP_FN_MARKER}.txt"
+    synth_token = _P0_ENTRY_UNSUP_TOKEN_MARKER
+    assert synth_path.suffix.lower() == ".txt"
+    assert Path(synth_filename).suffix.lower() not in ALLOWED_SOURCE_SUFFIXES
+
+    # 正反自证（正）：合成对象字面量必含各唯一 marker
+    assert _P0_ENTRY_UNSUP_PATH_MARKER in str(synth_path), (
+        "夹具自证失败：path 必须含唯一 path marker（正）"
+    )
+    assert _P0_ENTRY_UNSUP_FN_MARKER in synth_filename, (
+        "夹具自证失败：filename 必须含唯一 filename marker（正）"
+    )
+    assert _P0_ENTRY_UNSUP_TOKEN_MARKER in synth_token, (
+        "夹具自证失败：token 必须含唯一 credential marker（正）"
+    )
+    # 正反自证（反）：无关串不得误命中
+    assert _P0_ENTRY_UNSUP_PATH_MARKER + "_X" not in str(synth_path)
+    assert _P0_ENTRY_UNSUP_FN_MARKER + "_X" not in synth_filename
+    assert _P0_ENTRY_UNSUP_TOKEN_MARKER + "_X" not in synth_token
+
+    source = src_cls(
+        path=synth_path,
+        filename=synth_filename,
+        expected_size=1,
+    )
+    # RemoteSource 字段正自证
+    assert _P0_ENTRY_UNSUP_PATH_MARKER in str(source.path)
+    assert _P0_ENTRY_UNSUP_FN_MARKER in source.filename
+
+    transport_hits = {"n": 0}
+    client_hits = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        transport_hits["n"] += 1
+        raise AssertionError(
+            "业务红：unsupported suffix 须在 HTTP 前拒绝，"
+            f"不得命中 transport method={request.method!r} url={request.url!r}"
+        )
+
+    real_client_init = httpx.Client.__init__
+
+    def counting_client_init(self: Any, *a: Any, **k: Any) -> Any:
+        client_hits["n"] += 1
+        return real_client_init(self, *a, **k)
+
+    monkeypatch.setattr(httpx.Client, "__init__", counting_client_init)
+
+    with pytest.raises(err_cls) as ei:
+        run(
+            [source],
+            token=synth_token,
+            cancel_check=lambda: False,
+            transport=httpx.MockTransport(handler),
+            sleep_fn=lambda _s: None,
+            clock_fn=lambda: 0.0,
+            resolve_addresses_fn=_default_public_resolver,
+        )
+
+    assert transport_hits["n"] == 0, (
+        f"业务红：注入 transport 必须零命中，hits={transport_hits['n']}"
+    )
+    assert client_hits["n"] == 0, (
+        f"业务红：httpx.Client 默认/注入构造必须零命中，hits={client_hits['n']}"
+    )
+
+    exc = ei.value
+    _assert_remote_error(exc, code, msg_fn=msg_fn if callable(msg_fn) else None)
+    assert exc.args == (expected_msg,), (
+        f"业务红：args 必须精确为 (message,)，actual={exc.args!r}"
+    )
+    assert exc.__cause__ is None, "业务红：__cause__ 必须为 None（真正断链）"
+    assert exc.__context__ is None, (
+        "业务红：__context__ 必须为 None（suffix 门不得挂链）"
+    )
+    # 反：生产异常图（跳过测试帧）token/tok/path/filename marker 全零
+    _rq_assert_zero_markers(
+        exc,
+        [
+            _P0_ENTRY_UNSUP_TOKEN_MARKER,
+            _P0_ENTRY_UNSUP_PATH_MARKER,
+            _P0_ENTRY_UNSUP_FN_MARKER,
+        ],
+    )
+
+
+def test_v1n_p0_entry_baseline_lstat_privacy_zero_marker(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """
+    P0 入口红门-B：合法 .pdf RemoteSource，合成 token/path/filename；
+    仅让 production module.os.lstat 抛含唯一合成 marker 的 OSError，精确一次；
+    调真实 public entry run_remote_mineru_parse；断固定 source_identity_mismatch
+    code/message/args，__cause__/__context__ 均为 None；HTTP 客户端与 transport=0；
+    同一生产异常图断 credential/path/filename/OSError marker 全零。
+
+    当前 production 同时暴露入口 locals 与 active-except context，必须真实失败。
+    禁止真实路径/数据；禁止手工清链或复制 production。
+    """
+    mod = _load_client()
+    err_cls = _require_attr(mod, "RemoteMineruError")
+    msg_fn = _require_attr(mod, "message_for_code")
+    run = _get_run_fn(mod)
+    src_cls = _require_attr(mod, "RemoteSource")
+    code = "source_identity_mismatch"
+    expected_msg = _fixed_message(code)
+
+    synth_path = Path(
+        f"C:/synth/{_P0_ENTRY_LSTAT_PATH_MARKER}/not_real_upload.pdf"
+    )
+    synth_filename = f"{_P0_ENTRY_LSTAT_FN_MARKER}.pdf"
+    synth_token = _P0_ENTRY_LSTAT_TOKEN_MARKER
+    assert Path(synth_filename).suffix.lower() in ALLOWED_SOURCE_SUFFIXES
+    assert synth_path.suffix.lower() == ".pdf"
+
+    # 正反自证（正）：path/filename/token 与合成 OSError 可达图
+    assert _P0_ENTRY_LSTAT_PATH_MARKER in str(synth_path), (
+        "夹具自证失败：path 必须含唯一 path marker（正）"
+    )
+    assert _P0_ENTRY_LSTAT_FN_MARKER in synth_filename, (
+        "夹具自证失败：filename 必须含唯一 filename marker（正）"
+    )
+    assert _P0_ENTRY_LSTAT_TOKEN_MARKER in synth_token, (
+        "夹具自证失败：token 必须含唯一 credential marker（正）"
+    )
+    synth_os = OSError(
+        22, _P0_ENTRY_LSTAT_OSERROR_STR, _P0_ENTRY_LSTAT_OSERROR_MARKER
+    )
+    synth_blob = _rq_walk_exc_graph(synth_os)
+    assert _P0_ENTRY_LSTAT_OSERROR_MARKER in synth_blob, (
+        "夹具自证失败：OSError 可达图必须含唯一 OSError marker（正）"
+    )
+    assert _P0_ENTRY_LSTAT_OSERROR_STR in synth_blob, (
+        "夹具自证失败：OSError 可达图必须含 strerror 合成串（正）"
+    )
+    # 正反自证（反）
+    assert _P0_ENTRY_LSTAT_PATH_MARKER + "_X" not in str(synth_path)
+    assert _P0_ENTRY_LSTAT_FN_MARKER + "_X" not in synth_filename
+    assert _P0_ENTRY_LSTAT_TOKEN_MARKER + "_X" not in synth_token
+    assert _P0_ENTRY_LSTAT_OSERROR_MARKER + "_X" not in synth_blob
+
+    source = src_cls(
+        path=synth_path,
+        filename=synth_filename,
+        expected_size=12,
+    )
+
+    lstat_hits = {"n": 0}
+    transport_hits = {"n": 0}
+    client_hits = {"n": 0}
+
+    def boom_lstat(path: object, *a: Any, **k: Any) -> Any:
+        lstat_hits["n"] += 1
+        # filename 位嵌入唯一 marker；无真实路径/数据
+        raise OSError(
+            22, _P0_ENTRY_LSTAT_OSERROR_STR, _P0_ENTRY_LSTAT_OSERROR_MARKER
+        )
+
+    assert hasattr(mod, "os"), "业务红：production 必须绑定 os 模块供 lstat seam"
+    monkeypatch.setattr(mod.os, "lstat", boom_lstat)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        transport_hits["n"] += 1
+        raise AssertionError(
+            "业务红：baseline lstat 失败须在 HTTP 前折叠，"
+            f"不得命中 transport method={request.method!r} url={request.url!r}"
+        )
+
+    real_client_init = httpx.Client.__init__
+
+    def counting_client_init(self: Any, *a: Any, **k: Any) -> Any:
+        client_hits["n"] += 1
+        return real_client_init(self, *a, **k)
+
+    monkeypatch.setattr(httpx.Client, "__init__", counting_client_init)
+
+    with pytest.raises(err_cls) as ei:
+        run(
+            [source],
+            token=synth_token,
+            cancel_check=lambda: False,
+            transport=httpx.MockTransport(handler),
+            sleep_fn=lambda _s: None,
+            clock_fn=lambda: 0.0,
+            resolve_addresses_fn=_default_public_resolver,
+        )
+
+    assert lstat_hits["n"] == 1, (
+        f"业务红：module.os.lstat 注入须精确触发 1 次，hits={lstat_hits['n']}"
+    )
+    assert transport_hits["n"] == 0, (
+        f"业务红：注入 transport 必须零命中，hits={transport_hits['n']}"
+    )
+    assert client_hits["n"] == 0, (
+        f"业务红：httpx.Client 默认/注入构造必须零命中，hits={client_hits['n']}"
+    )
+
+    exc = ei.value
+    _assert_remote_error(exc, code, msg_fn=msg_fn if callable(msg_fn) else None)
+    assert exc.args == (expected_msg,), (
+        f"业务红：args 必须精确为 (message,)，actual={exc.args!r}"
+    )
+    assert exc.__cause__ is None, "业务红：__cause__ 必须为 None（真正断链）"
+    assert exc.__context__ is None, (
+        "业务红：__context__ 必须为 None（lstat OSError 不得挂入入口异常链）"
+    )
+    # 反：credential/path/filename/OSError marker 全零
+    _rq_assert_zero_markers(
+        exc,
+        [
+            _P0_ENTRY_LSTAT_TOKEN_MARKER,
+            _P0_ENTRY_LSTAT_PATH_MARKER,
+            _P0_ENTRY_LSTAT_FN_MARKER,
+            _P0_ENTRY_LSTAT_OSERROR_MARKER,
+            _P0_ENTRY_LSTAT_OSERROR_STR,
+        ],
+    )
+
+
+# ===========================================================================
+# V1-N FINAL-TEST-GATES：五条最终发布红门（test-only failure-first）
+# 节点关键字：v1n_final_p0_put_locals / v1n_final_p0_zip_locals /
+#            v1n_final_p1_aggcap / v1n_final_p1_frozen_root / v1n_final_p2_zip_undercount
+# 前置双方确认：
+#   P0 loop locals msg_7b0fbd… → msg_2df057…；P1 aggcap msg_fee8f8… → msg_b1a8a6…；
+#   P1 frozen root msg_885651… → msg_a7347f…；P2 undercount msg_11918e… → msg_1a99df…
+# 任务：msg_98067da7ba3941e8a946b9ab3022143d
+# 生产未授权修复；五门必须在当前 production 上真实 failed。
+# 禁止 skip/xfail/提前 return/宽 OR/except Exception:pass；禁止复制 production 或清链。
+# ===========================================================================
+
+_FINAL_P0_PUT_TOKEN = "SYNTH_FINAL_P0_PUT_TOKEN_MARKER_V1N_NOT_REAL"
+_FINAL_P0_PUT_PATH = "SYNTH_FINAL_P0_PUT_PATH_MARKER_V1N_NOT_REAL"
+_FINAL_P0_PUT_FN = "SYNTH_FINAL_P0_PUT_FN_MARKER_V1N_NOT_REAL"
+_FINAL_P0_PUT_URL = (
+    "https://upload.example.test/presign/SYNTH_FINAL_P0_PUT_URL_MARKER_V1N_NOT_REAL"
+)
+
+_FINAL_P0_ZIP_TOKEN = "SYNTH_FINAL_P0_ZIP_TOKEN_MARKER_V1N_NOT_REAL"
+_FINAL_P0_ZIP_PATH = "SYNTH_FINAL_P0_ZIP_PATH_MARKER_V1N_NOT_REAL"
+_FINAL_P0_ZIP_FN = "SYNTH_FINAL_P0_ZIP_FN_MARKER_V1N_NOT_REAL"
+_FINAL_P0_ZIP_PUT_URL = (
+    "https://upload.example.test/presign/SYNTH_FINAL_P0_ZIP_PUT_URL_MARKER_V1N_NOT_REAL"
+)
+_FINAL_P0_ZIP_URL = (
+    "https://cdn.example.test/result/SYNTH_FINAL_P0_ZIP_URL_MARKER_V1N_NOT_REAL.zip"
+)
+_FINAL_P0_ZIP_ITEM_EXTRA = "SYNTH_FINAL_P0_ZIP_ITEM_EXTRA_MARKER_V1N_NOT_REAL"
+
+_FINAL_P1_AGGCAP_BODY_MARKER = "SYNTH_FINAL_P1_AGGCAP_BODY_MARKER_V1N_NOT_REAL"
+_FINAL_P1_AGGCAP_ZIP_A = "https://cdn.example.test/result/final-aggcap-a.zip"
+_FINAL_P1_AGGCAP_ZIP_B = "https://cdn.example.test/result/final-aggcap-b.zip"
+_FINAL_P1_AGGCAP_ZIP_C = "https://cdn.example.test/result/final-aggcap-c.zip"
+_FINAL_P1_AGGCAP_PUT_A = "https://upload.example.test/presign/final-aggcap-a"
+_FINAL_P1_AGGCAP_PUT_B = "https://upload.example.test/presign/final-aggcap-b"
+_FINAL_P1_AGGCAP_PUT_C = "https://upload.example.test/presign/final-aggcap-c"
+
+_FINAL_P1_FROZEN_ROOT = "C:/trusted"
+_FINAL_P1_OUTSIDE_FILE = "D:/outside/file"
+_FINAL_P1_OUTSIDE_ROOT = "D:/outside"
+
+_FINAL_P2_ZIP_URL = "https://cdn.example.test/result/final-undercount.zip"
+
+
+def _rq_deep_collect(obj: Any, parts: list[str], seen: set[int], depth: int = 0) -> None:
+    """
+    递归采集对象可达文本：Mapping/Sequence/Path/RemoteSource/str/bytes/BaseException。
+    循环引用保护；深度有界；不截断 f_locals 条目数（由调用方全量传入）。
+    """
+    if obj is None or depth > 16:
+        return
+    if isinstance(obj, (bool, int, float, complex)):
+        return
+    if isinstance(obj, str):
+        parts.append(obj)
+        return
+    if isinstance(obj, (bytes, bytearray)):
+        b = bytes(obj)
+        parts.append(b.decode("latin-1", errors="replace"))
+        parts.append(repr(b))
+        return
+    oid = id(obj)
+    if oid in seen:
+        return
+    seen.add(oid)
+    if isinstance(obj, BaseException):
+        parts.append(type(obj).__name__)
+        try:
+            parts.append(str(obj))
+        except Exception:
+            pass
+        try:
+            parts.append(repr(obj))
+        except Exception:
+            pass
+        try:
+            parts.append(repr(getattr(obj, "args", ())))
+        except Exception:
+            pass
+        for attr in ("message", "diagnostic_code", "filename", "strerror"):
+            try:
+                v = getattr(obj, attr, None)
+            except Exception:
+                v = None
+            if v is not None:
+                _rq_deep_collect(v, parts, seen, depth + 1)
+        for a in getattr(obj, "args", ()) or ():
+            _rq_deep_collect(a, parts, seen, depth + 1)
+        cause = getattr(obj, "__cause__", None)
+        ctx = getattr(obj, "__context__", None)
+        if cause is not None:
+            _rq_deep_collect(cause, parts, seen, depth + 1)
+        if ctx is not None:
+            _rq_deep_collect(ctx, parts, seen, depth + 1)
+        return
+    # Path / pathlib
+    if isinstance(obj, Path) or type(obj).__name__ in {"WindowsPath", "PosixPath", "PurePath", "PureWindowsPath", "PurePosixPath"}:
+        try:
+            parts.append(str(obj))
+            parts.append(repr(obj))
+        except Exception:
+            pass
+        return
+    # RemoteSource 或带 path/filename 的冻结记录
+    tname = type(obj).__name__
+    if tname == "RemoteSource" or hasattr(obj, "__dataclass_fields__"):
+        for attr in ("path", "filename", "expected_size", "name", "markdown"):
+            if hasattr(obj, attr):
+                try:
+                    _rq_deep_collect(getattr(obj, attr), parts, seen, depth + 1)
+                except Exception:
+                    pass
+        try:
+            parts.append(repr(obj))
+        except Exception:
+            pass
+        return
+    from collections.abc import Mapping as _Mapping
+    from collections.abc import Sequence as _Sequence
+
+    if isinstance(obj, _Mapping):
+        try:
+            items = list(obj.items())
+        except Exception:
+            items = []
+        for k, v in items:
+            _rq_deep_collect(k, parts, seen, depth + 1)
+            _rq_deep_collect(v, parts, seen, depth + 1)
+        return
+    if isinstance(obj, (set, frozenset)):
+        try:
+            vals = list(obj)
+        except Exception:
+            vals = []
+        for v in vals:
+            _rq_deep_collect(v, parts, seen, depth + 1)
+        return
+    if isinstance(obj, _Sequence) and not isinstance(obj, (str, bytes, bytearray)):
+        try:
+            vals = list(obj)
+        except Exception:
+            vals = []
+        for v in vals:
+            _rq_deep_collect(v, parts, seen, depth + 1)
+        return
+    # 其它：有限 repr（避免巨型对象撑爆）
+    try:
+        r = repr(obj)
+        if len(r) > 800:
+            r = r[:800]
+        parts.append(r)
+    except Exception:
+        pass
+
+
+def _rq_walk_exc_graph_deep(exc: BaseException) -> str:
+    """
+    FINAL 门专用：扫描全部 production f_locals（不得截前 64），
+    递归 Mapping/Sequence/Path/RemoteSource/str/bytes/BaseException；
+    跳过测试帧；循环引用保护。
+    """
+    import traceback as _tb
+
+    parts: list[str] = []
+    stack: list[BaseException] = [exc]
+    seen_exc: set[int] = set()
+    while stack:
+        cur = stack.pop()
+        if cur is None or id(cur) in seen_exc:
+            continue
+        seen_exc.add(id(cur))
+        value_seen: set[int] = set()
+        _rq_deep_collect(cur, parts, value_seen, 0)
+        try:
+            parts.append(
+                "".join(_tb.format_exception(type(cur), cur, cur.__traceback__))
+            )
+        except Exception:
+            pass
+        tb = cur.__traceback__
+        depth = 0
+        while tb is not None and depth < 64:
+            fr = tb.tb_frame
+            if not _rq_is_test_frame(fr):
+                try:
+                    # 全量 locals，禁止 [:64]
+                    for k, v in list(fr.f_locals.items()):
+                        parts.append(str(k))
+                        _rq_deep_collect(v, parts, value_seen, 0)
+                except Exception:
+                    pass
+            tb = tb.tb_next
+            depth += 1
+        cause = getattr(cur, "__cause__", None)
+        ctx = getattr(cur, "__context__", None)
+        if cause is not None:
+            stack.append(cause)
+        if ctx is not None:
+            stack.append(ctx)
+    return "\n".join(parts)
+
+
+def _rq_assert_zero_markers_deep(exc: BaseException, markers: list) -> None:
+    """FINAL 门：深 walker 零 marker；禁止测试内清生产异常。"""
+    blob = _rq_walk_exc_graph_deep(exc)
+    for m in markers:
+        if not m:
+            continue
+        if isinstance(m, (bytes, bytearray)):
+            s = bytes(m).decode("latin-1", errors="replace")
+            assert s not in blob and repr(bytes(m)) not in blob, (
+                f"业务红：异常可达图泄漏字节 marker {bytes(m)!r}"
+            )
+        else:
+            assert str(m) not in blob, f"业务红：异常可达图泄漏 marker {m!r}"
+
+
+def test_v1n_final_p0_put_failure_locals_zero_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    FINAL-P0-C：真实 public entry；tmp_path 合成 PDF；MockTransport + resolver 零 DNS；
+    合成 token/source path+filename/预签 PUT URL marker；POST 成功、PUT 固定失败；
+    断 upload_failed 与阶段计数；production 异常图（深 walker 全 locals）零全部 marker。
+    当前因 for-loop 局部 src/u/put_url 稳定红。
+    """
+    mod = _load_client()
+    err_cls = _require_attr(mod, "RemoteMineruError")
+    msg_fn = _require_attr(mod, "message_for_code")
+    run = _get_run_fn(mod)
+    src_cls = _require_attr(mod, "RemoteSource")
+    code = "upload_failed"
+    expected_msg = _fixed_message(code)
+
+    sub = tmp_path / _FINAL_P0_PUT_PATH
+    sub.mkdir(parents=True, exist_ok=True)
+    leaf = sub / f"{_FINAL_P0_PUT_FN}.pdf"
+    leaf.write_bytes(b"%PDF-1.4 synth-put-fail-not-real\n")
+    synth_filename = f"{_FINAL_P0_PUT_FN}.pdf"
+    source = src_cls(
+        path=leaf,
+        filename=synth_filename,
+        expected_size=leaf.stat().st_size,
+    )
+
+    # 正反自证
+    assert _FINAL_P0_PUT_TOKEN in _FINAL_P0_PUT_TOKEN
+    assert _FINAL_P0_PUT_PATH in str(leaf)
+    assert _FINAL_P0_PUT_FN in synth_filename
+    assert "SYNTH_FINAL_P0_PUT_URL_MARKER_V1N_NOT_REAL" in _FINAL_P0_PUT_URL
+    assert _FINAL_P0_PUT_PATH + "_X" not in str(leaf)
+
+    counts = {"post": 0, "put": 0, "poll": 0, "zip": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and PATH_FILE_URLS_BATCH in str(request.url):
+            counts["post"] += 1
+            body = json.loads(request.content.decode("utf-8"))
+            assert len(body.get("files") or []) == 1
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "batch_id": FAKE_BATCH_ID,
+                        "file_urls": [_FINAL_P0_PUT_URL],
+                    },
+                },
+            )
+        if request.method == "PUT":
+            counts["put"] += 1
+            # 固定失败：非 200
+            return httpx.Response(500, content=b"put-fail-synth")
+        if request.method == "GET" and PATH_EXTRACT_RESULTS_PREFIX in str(request.url):
+            counts["poll"] += 1
+            raise AssertionError("业务红：PUT 失败后不得进入 poll")
+        if request.method == "GET":
+            counts["zip"] += 1
+            raise AssertionError("业务红：PUT 失败后不得 ZIP GET")
+        raise AssertionError(f"unexpected {request.method} {request.url}")
+
+    with pytest.raises(err_cls) as ei:
+        run(
+            [source],
+            token=_FINAL_P0_PUT_TOKEN,
+            cancel_check=lambda: False,
+            transport=httpx.MockTransport(handler),
+            sleep_fn=lambda _s: None,
+            clock_fn=lambda: 0.0,
+            resolve_addresses_fn=_default_public_resolver,
+        )
+
+    assert counts["post"] == 1, f"业务红：POST 须精确 1，counts={counts}"
+    assert counts["put"] == 1, f"业务红：PUT 须精确 1（失败），counts={counts}"
+    assert counts["poll"] == 0, f"业务红：PUT 失败后 poll 须 0，counts={counts}"
+    assert counts["zip"] == 0, f"业务红：PUT 失败后 zip 须 0，counts={counts}"
+
+    exc = ei.value
+    _assert_remote_error(exc, code, msg_fn=msg_fn if callable(msg_fn) else None)
+    assert exc.args == (expected_msg,), (
+        f"业务红：args 必须精确为 (message,)，actual={exc.args!r}"
+    )
+    # 深 walker：token / path / filename / put_url 全零
+    _rq_assert_zero_markers_deep(
+        exc,
+        [
+            _FINAL_P0_PUT_TOKEN,
+            _FINAL_P0_PUT_PATH,
+            _FINAL_P0_PUT_FN,
+            "SYNTH_FINAL_P0_PUT_URL_MARKER_V1N_NOT_REAL",
+            _FINAL_P0_PUT_URL,
+        ],
+    )
+
+
+def test_v1n_final_p0_zip_failure_locals_zero_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    FINAL-P0-D：POST/PUT/poll 成功；poll item 带合成 extra marker 与 ZIP URL marker；
+    ZIP GET 固定失败；断 zip_download_failed、动作精确；
+    全 production 异常图零 token/source/PUT URL/item extra/ZIP URL marker。
+    当前因 item/zip_url/u/put_url/src/client_kwargs 稳定红。
+    """
+    mod = _load_client()
+    err_cls = _require_attr(mod, "RemoteMineruError")
+    msg_fn = _require_attr(mod, "message_for_code")
+    run = _get_run_fn(mod)
+    src_cls = _require_attr(mod, "RemoteSource")
+    code = "zip_download_failed"
+    expected_msg = _fixed_message(code)
+
+    sub = tmp_path / _FINAL_P0_ZIP_PATH
+    sub.mkdir(parents=True, exist_ok=True)
+    leaf = sub / f"{_FINAL_P0_ZIP_FN}.pdf"
+    leaf.write_bytes(b"%PDF-1.4 synth-zip-fail-not-real\n")
+    synth_filename = f"{_FINAL_P0_ZIP_FN}.pdf"
+    source = src_cls(
+        path=leaf,
+        filename=synth_filename,
+        expected_size=leaf.stat().st_size,
+    )
+
+    assert _FINAL_P0_ZIP_ITEM_EXTRA + "_X" not in _FINAL_P0_ZIP_ITEM_EXTRA
+    assert "SYNTH_FINAL_P0_ZIP_URL_MARKER_V1N_NOT_REAL" in _FINAL_P0_ZIP_URL
+
+    holder: dict[str, str] = {}
+    counts = {"post": 0, "put": 0, "poll": 0, "zip": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and PATH_FILE_URLS_BATCH in str(request.url):
+            counts["post"] += 1
+            body = json.loads(request.content.decode("utf-8"))
+            holder["id"] = body["files"][0]["data_id"]
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "batch_id": FAKE_BATCH_ID,
+                        "file_urls": [_FINAL_P0_ZIP_PUT_URL],
+                    },
+                },
+            )
+        if request.method == "PUT":
+            counts["put"] += 1
+            return httpx.Response(200, content=b"")
+        if request.method == "GET" and PATH_EXTRACT_RESULTS_PREFIX in str(request.url):
+            counts["poll"] += 1
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "extract_result": [
+                            {
+                                "data_id": holder["id"],
+                                "state": "done",
+                                "full_zip_url": _FINAL_P0_ZIP_URL,
+                                # 合成 extra：应出现在 item 局部；生产不得泄漏
+                                "extra": _FINAL_P0_ZIP_ITEM_EXTRA,
+                            }
+                        ]
+                    },
+                },
+            )
+        if request.method == "GET" and str(request.url) == _FINAL_P0_ZIP_URL:
+            counts["zip"] += 1
+            # 固定 ZIP 下载失败
+            return httpx.Response(503, content=b"zip-unavailable-synth")
+        raise AssertionError(f"unexpected {request.method} {request.url}")
+
+    with pytest.raises(err_cls) as ei:
+        run(
+            [source],
+            token=_FINAL_P0_ZIP_TOKEN,
+            cancel_check=lambda: False,
+            transport=httpx.MockTransport(handler),
+            sleep_fn=lambda _s: None,
+            clock_fn=lambda: 0.0,
+            resolve_addresses_fn=_default_public_resolver,
+        )
+
+    assert counts["post"] == 1, f"业务红：POST 须精确 1，counts={counts}"
+    assert counts["put"] == 1, f"业务红：PUT 须精确 1，counts={counts}"
+    assert counts["poll"] >= 1, f"业务红：poll 须至少 1，counts={counts}"
+    assert counts["zip"] == 1, f"业务红：ZIP GET 须精确 1（失败），counts={counts}"
+
+    exc = ei.value
+    _assert_remote_error(exc, code, msg_fn=msg_fn if callable(msg_fn) else None)
+    assert exc.args == (expected_msg,), (
+        f"业务红：args 必须精确为 (message,)，actual={exc.args!r}"
+    )
+    _rq_assert_zero_markers_deep(
+        exc,
+        [
+            _FINAL_P0_ZIP_TOKEN,
+            _FINAL_P0_ZIP_PATH,
+            _FINAL_P0_ZIP_FN,
+            "SYNTH_FINAL_P0_ZIP_PUT_URL_MARKER_V1N_NOT_REAL",
+            _FINAL_P0_ZIP_PUT_URL,
+            "SYNTH_FINAL_P0_ZIP_URL_MARKER_V1N_NOT_REAL",
+            _FINAL_P0_ZIP_URL,
+            _FINAL_P0_ZIP_ITEM_EXTRA,
+        ],
+    )
+
+
+def test_v1n_final_p1_multi_source_aggregate_cap_fail_fast(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    FINAL-P1 多源累计 cap fail-fast：3 个 done item，每份 full.md 单独合法；
+    冻结小 codepoint cap；第 2 份加精确 separator 后累计超；
+    ZIP 下载精确 2，第三 URL 精确 0；output_invalid、零部分返回、零 marker。
+    当前下载 3 份后才红。
+    """
+    mod = _load_client()
+    err_cls = _require_attr(mod, "RemoteMineruError")
+    msg_fn = _require_attr(mod, "message_for_code")
+    run = _get_run_fn(mod)
+
+    sep = SOURCE_SEPARATOR
+    assert sep == "\n\n<!-- BIAOSHU_SOURCE_SEPARATOR -->\n\n"
+    # 每份 10 码点合法；两份 + sep = 10+37+10=57；cap=50 → 第二份后超
+    body_a = "A" * 10
+    body_b = "B" * 10
+    body_c = "C" * 10 + _FINAL_P1_AGGCAP_BODY_MARKER
+    assert len(body_a) == 10 and len(body_b) == 10
+    assert len(body_a) + len(sep) + len(body_b) == 57
+    cap_cp = 50
+    assert len(body_a) <= cap_cp and len(body_b) <= cap_cp and len(body_c) <= 200
+    assert len(body_a) + len(sep) + len(body_b) > cap_cp
+
+    monkeypatch.setattr(mod, "MAX_MD_CODEPOINTS", cap_cp)
+    # UTF-8 放宽，确保只触发累计 codepoint 门
+    monkeypatch.setattr(mod, "MAX_MD_UTF8_BYTES", 2 * 1024 * 1024)
+
+    paths = []
+    for i, name in enumerate(("a.pdf", "b.pdf", "c.pdf"), start=1):
+        p = _write_temp_source(tmp_path, name, f"%PDF synth-agg-{i}\n".encode("ascii"))
+        paths.append(p)
+    sources = _build_sources(mod, paths)
+
+    z_a = _make_zip_bytes({"full.md": body_a.encode("utf-8")})
+    z_b = _make_zip_bytes({"full.md": body_b.encode("utf-8")})
+    z_c = _make_zip_bytes({"full.md": body_c.encode("utf-8")})
+
+    holder: dict[str, list[str]] = {"ids": []}
+    zip_gets = {
+        _FINAL_P1_AGGCAP_ZIP_A: 0,
+        _FINAL_P1_AGGCAP_ZIP_B: 0,
+        _FINAL_P1_AGGCAP_ZIP_C: 0,
+    }
+    put_n = {"n": 0}
+    post_n = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and PATH_FILE_URLS_BATCH in str(request.url):
+            post_n["n"] += 1
+            body = json.loads(request.content.decode("utf-8"))
+            ids = [f["data_id"] for f in body["files"]]
+            holder["ids"] = ids
+            assert len(ids) == 3
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "batch_id": FAKE_BATCH_ID,
+                        "file_urls": [
+                            _FINAL_P1_AGGCAP_PUT_A,
+                            _FINAL_P1_AGGCAP_PUT_B,
+                            _FINAL_P1_AGGCAP_PUT_C,
+                        ],
+                    },
+                },
+            )
+        if request.method == "PUT":
+            put_n["n"] += 1
+            return httpx.Response(200, content=b"")
+        if request.method == "GET" and PATH_EXTRACT_RESULTS_PREFIX in str(request.url):
+            ids = holder["ids"]
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "extract_result": [
+                            {
+                                "data_id": ids[0],
+                                "state": "done",
+                                "full_zip_url": _FINAL_P1_AGGCAP_ZIP_A,
+                            },
+                            {
+                                "data_id": ids[1],
+                                "state": "done",
+                                "full_zip_url": _FINAL_P1_AGGCAP_ZIP_B,
+                            },
+                            {
+                                "data_id": ids[2],
+                                "state": "done",
+                                "full_zip_url": _FINAL_P1_AGGCAP_ZIP_C,
+                            },
+                        ]
+                    },
+                },
+            )
+        u = str(request.url)
+        if request.method == "GET" and u in zip_gets:
+            zip_gets[u] += 1
+            if u == _FINAL_P1_AGGCAP_ZIP_A:
+                return httpx.Response(200, content=z_a)
+            if u == _FINAL_P1_AGGCAP_ZIP_B:
+                return httpx.Response(200, content=z_b)
+            if u == _FINAL_P1_AGGCAP_ZIP_C:
+                return httpx.Response(200, content=z_c)
+        raise AssertionError(f"unexpected {request.method} {request.url}")
+
+    with pytest.raises(err_cls) as ei:
+        run(
+            sources,
+            transport=httpx.MockTransport(handler),
+            **_run_kwargs(),
+        )
+
+    # 不得部分返回成功
+    assert not hasattr(ei, "value") or ei.value is not None
+    _assert_remote_error(ei.value, "output_invalid", msg_fn=msg_fn)
+    assert put_n["n"] == 3, f"业务红：三源 PUT 均应成功，put={put_n['n']}"
+    assert post_n["n"] == 1
+    assert zip_gets[_FINAL_P1_AGGCAP_ZIP_A] == 1, (
+        f"业务红：ZIP-A 须精确 1，got={zip_gets}"
+    )
+    assert zip_gets[_FINAL_P1_AGGCAP_ZIP_B] == 1, (
+        f"业务红：ZIP-B 须精确 1（累计超限发生在 B 后），got={zip_gets}"
+    )
+    assert zip_gets[_FINAL_P1_AGGCAP_ZIP_C] == 0, (
+        f"业务红：累计超限后第三 ZIP 必须精确 0，got={zip_gets}"
+    )
+    # 零 marker（body marker 仅在第三份，不应被下载；异常图亦不得泄漏）
+    _rq_assert_zero_markers_deep(
+        ei.value,
+        [_FINAL_P1_AGGCAP_BODY_MARKER, FAKE_TOKEN],
+    )
+
+
+def test_v1n_final_p1_frozen_trusted_root_reresolve(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    FINAL-P1 冻结可信根再 resolve：freeze 值 C:/trusted，final handle D:/outside/file；
+    仅当 production 再次 resolve 冻结根时 seam 映射为 D:/outside；
+    必须 source_identity_mismatch、PUT=0。
+    当前错误接受路径并继续而红。
+    不得依赖真实 junction/reparse 或真实盘外路径。
+    """
+    mod = _load_client()
+    err_cls = _require_attr(mod, "RemoteMineruError")
+    msg_fn = _require_attr(mod, "message_for_code")
+    run = _get_run_fn(mod)
+    sig = inspect.signature(run)
+    assert "trusted_upload_root" in sig.parameters, (
+        "业务红：run_remote_mineru_parse 必须接受 trusted_upload_root"
+    )
+    assert hasattr(mod, "_v1n_final_path_for_fd"), (
+        "业务红：必须提供可注入 final-path seam"
+    )
+
+    # 真实可读文件仅作 open 目标；final-path 与 root 全由 seam 合成
+    leaf = _write_temp_source(tmp_path, "trusted-leaf.pdf", b"%PDF-in-tmp-not-outside\n")
+
+    def escape_final(fd: int) -> str:
+        return _FINAL_P1_OUTSIDE_FILE
+
+    monkeypatch.setattr(mod, "_v1n_final_path_for_fd", escape_final)
+
+    real_resolve = Path.resolve
+    resolve_hits = {"trusted": 0, "other": 0}
+
+    def _norm_path_str(p: object) -> str:
+        s = str(p).replace("\\", "/").rstrip("/")
+        # 去掉 Windows \\?\ 前缀
+        if s.startswith("//?/") or s.startswith("\\\\?\\"):
+            s = s[4:] if s.startswith("\\\\?\\") else s[4:]
+            s = s.replace("\\", "/")
+        return s.lower()
+
+    def seam_resolve(self: Path, *a: Any, **k: Any) -> Path:
+        norm = _norm_path_str(self)
+        # 冻结根 C:/trusted：production 再次 resolve 时映射到 D:/outside
+        if norm == "c:/trusted" or norm.endswith("/trusted") and norm.startswith("c:"):
+            resolve_hits["trusted"] += 1
+            return Path(_FINAL_P1_OUTSIDE_ROOT)
+        if "d:/outside" in norm or norm.startswith("d:/outside"):
+            resolve_hits["other"] += 1
+            # 不跟随真实盘：直接规范化字符串
+            return Path(str(self).replace("\\", "/"))
+        resolve_hits["other"] += 1
+        try:
+            return real_resolve(self, *a, **k)
+        except Exception:
+            return Path(str(self).replace("\\", "/"))
+
+    monkeypatch.setattr(Path, "resolve", seam_resolve)
+
+    put_n = {"n": 0}
+    post_n = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            post_n["n"] += 1
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "batch_id": FAKE_BATCH_ID,
+                        "file_urls": [PRESIGNED_PUT_A],
+                    },
+                },
+            )
+        if request.method == "PUT":
+            put_n["n"] += 1
+            return httpx.Response(200)
+        raise AssertionError(
+            f"业务红：冻结根越界后不得继续 poll/ZIP method={request.method}"
+        )
+
+    sources = _build_sources(mod, [leaf])
+    with pytest.raises(err_cls) as ei:
+        run(
+            sources,
+            transport=httpx.MockTransport(handler),
+            trusted_upload_root=_FINAL_P1_FROZEN_ROOT,
+            **_run_kwargs(),
+        )
+
+    _assert_remote_error(ei.value, "source_identity_mismatch", msg_fn=msg_fn)
+    assert put_n["n"] == 0, (
+        f"业务红：冻结根再 resolve 绕过必须零 PUT，put_n={put_n['n']} "
+        f"resolve_hits={resolve_hits} post={post_n}"
+    )
+
+
+def test_v1n_final_p2_zip_declared_undercount_pre_zipfile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    FINAL-P2 ZIP 声明少报前门：真实 4 项中央目录合法小 ZIP 后仅篡改 classic EOCD 声明=1；
+    cap=3；固定 zip_unsafe，ZipFile 构造精确 0。
+    当前 constructs=1 后才拒而红。保留合法 classic/ZIP64 既有门，不改旧测试。
+    """
+    mod = _load_client()
+    err_cls = _require_attr(mod, "RemoteMineruError")
+    msg_fn = _require_attr(mod, "message_for_code")
+    run = _get_run_fn(mod)
+    p = _write_temp_source(tmp_path, "final-undercount.pdf", b"1")
+
+    # 夹具在 ZipFile spy 前构造：真实 4 CD + 一致 EOCD，再仅改 EOCD 声明为 1
+    raw4 = _rq_make_zip_consistent_empty_members(4)
+    assert _rq_count_zip_central_entries(raw4) == 4
+    eocd = raw4.rfind(b"PK\x05\x06")
+    assert eocd >= 0
+    data = bytearray(raw4)
+    # classic EOCD：disk entries @+8，total entries @+10 → 均改为 1（少报）
+    struct.pack_into("<H", data, eocd + 8, 1)
+    struct.pack_into("<H", data, eocd + 10, 1)
+    under = bytes(data)
+    # 自证：CD 仍 4，声明 1
+    assert _rq_count_zip_central_entries(under) == 4
+    assert struct.unpack_from("<H", under, eocd + 8)[0] == 1
+    assert struct.unpack_from("<H", under, eocd + 10)[0] == 1
+
+    # 冻结 cap=3：声明 1 放行、实际 4 应在 ZipFile 前拒
+    monkeypatch.setattr(mod, "MAX_ZIP_MEMBERS", 3)
+
+    constructs = {"n": 0}
+    real_zf = zipfile.ZipFile
+
+    class _CountingZipFile(real_zf):  # type: ignore[misc,valid-type]
+        def __init__(self, *a: Any, **k: Any) -> None:
+            constructs["n"] += 1
+            super().__init__(*a, **k)
+
+    monkeypatch.setattr(zipfile, "ZipFile", _CountingZipFile)
+    if hasattr(mod, "zipfile"):
+        monkeypatch.setattr(mod.zipfile, "ZipFile", _CountingZipFile)
+
+    holder: dict[str, str] = {}
+    base = _post_ok_single(holder, put_url=PRESIGNED_PUT_A)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        early = base(request)
+        if early is not None:
+            return early
+        if request.method == "GET" and PATH_EXTRACT_RESULTS_PREFIX in str(request.url):
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "extract_result": [
+                            {
+                                "data_id": holder["id"],
+                                "state": "done",
+                                "full_zip_url": _FINAL_P2_ZIP_URL,
+                            }
+                        ]
+                    },
+                },
+            )
+        if request.method == "GET" and str(request.url) == _FINAL_P2_ZIP_URL:
+            return httpx.Response(200, content=under)
+        raise AssertionError(f"unexpected {request.method} {request.url}")
+
+    constructs["n"] = 0
+    with pytest.raises(err_cls) as ei:
+        run(
+            _build_sources(mod, [p]),
+            transport=httpx.MockTransport(handler),
+            **_run_kwargs(),
+        )
+    _assert_remote_error(ei.value, "zip_unsafe", msg_fn=msg_fn)
+    assert constructs["n"] == 0, (
+        f"业务红：声明少报(CD=4,declared=1,cap=3) 时 ZipFile 不得构造，"
+        f"constructs={constructs['n']}"
+    )
